@@ -1,0 +1,15 @@
+[Unit]
+Description=terminal-mcp service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/
+EnvironmentFile=/etc/terminal-mcp/terminal-mcp.env
+ExecStart=/opt/terminal-mcp/venv/bin/terminal-mcp
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
