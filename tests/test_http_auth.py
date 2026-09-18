@@ -58,12 +58,9 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert client.get("/actions/health").status_code == 401
         headers = {"Authorization": "Bearer alpha"}
         agent_id = start_agent(client, headers)
-        assert (
-            client.get(
-                "/actions/health", params={"agent_id": agent_id}, headers=headers
-            ).status_code
-            == 200
-        )
+        health = client.get("/actions/health", headers=headers)
+        assert health.status_code == 200
+        assert health.json()["agent_id"] == "anonymous"
 
         run = client.post(
             "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
@@ -97,6 +94,14 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
         assert set(run_request["required"]) == {"agent_id", "cmd"}
+        recovery_request = schema["components"]["schemas"]["RecoveryRequest"]
+        assert set(recovery_request["required"]) == {"cmd"}
+        cancel_request = schema["components"]["schemas"]["CancelRequest"]
+        assert set(cancel_request["required"]) == {"cmd_hash"}
+        read_request = schema["components"]["schemas"]["ReadRequest"]
+        assert "required" not in read_request or read_request["required"] == []
+        health_operation = schema["paths"]["/actions/health"]["get"]
+        assert health_operation.get("parameters", []) == []
         start_request = schema["components"]["schemas"]["AgentStartRequest"]
         assert start_request["properties"]["task_summary"]["maxLength"] == 120
         assert start_request["properties"]["work_scope"]["maxItems"] == 4
@@ -107,7 +112,32 @@ def test_bearer_actions_and_openapi(tmp_path):
             headers=headers,
         ).json()
         assert recovery["ok"] is True
+        assert recovery["agent_id"] == agent_id
         assert recovery["lines"][0].endswith("action-recovery")
+
+        anonymous_recovery = client.post(
+            "/actions/recovery",
+            json={"cmd": "printf anonymous-action-recovery"},
+            headers=headers,
+        ).json()
+        assert anonymous_recovery["ok"] is True
+        assert anonymous_recovery["agent_id"] == "anonymous"
+        assert anonymous_recovery["lines"][0].endswith("anonymous-action-recovery")
+
+        global_read = client.post("/actions/read", json={}, headers=headers)
+        assert global_read.status_code == 200
+        assert global_read.json()["agent_id"] == "anonymous"
+        one_sided_read = client.post(
+            "/actions/read", json={"cmd_hash": cmd_hash}, headers=headers
+        )
+        assert one_sided_read.status_code == 422
+
+        anonymous_cancel = client.post(
+            "/actions/cancel", json={"cmd_hash": "deadbeef"}, headers=headers
+        )
+        assert anonymous_cancel.status_code == 200
+        assert anonymous_cancel.json()["agent_id"] == "anonymous"
+
         rejected = client.post(
             "/actions/recovery",
             json={"agent_id": agent_id, "cmd": "printf old", "timeout_ms": 1000},
@@ -186,11 +216,9 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
         assert reused_code.json() == {"error": "invalid_grant"}
 
         headers = {"Authorization": f"Bearer {tokens['access_token']}"}
-        agent_id = start_agent(client, headers)
+        start_agent(client, headers)
         assert (
-            client.get(
-                "/actions/health", params={"agent_id": agent_id}, headers=headers
-            ).status_code
+            client.get("/actions/health", headers=headers).status_code
             == 200
         )
         refreshed = client.post(
@@ -213,9 +241,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
         assert reused.status_code == 400
         asyncio.run(app.state.oauth_store.delete_client(client_id))
         assert (
-            client.get(
-                "/actions/health", params={"agent_id": agent_id}, headers=headers
-            ).status_code
+            client.get("/actions/health", headers=headers).status_code
             == 401
         )
 
