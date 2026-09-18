@@ -55,16 +55,13 @@ metadata:
 
 ### `run` + `read`
 
-Это штатный поток выполнения команд, включая короткие проверки, чтение файлов, тесты, сборку и deployment. Для agent-aware Terminal MCP сначала вызови `agent_start`; он открывает task lease на 180 секунд. Перед новым этапом работы и при `task_context_expired=true` обновляй его через `agent_task`.
+Это штатный поток выполнения команд. Сначала вызови `agent_start`. При смене ближайшей задачи или `task_context_expired=true` вызывай `agent_task(agent_id, intent)`, где `intent` — одна короткая фраза до 160 символов. Не передавай туда `work_scope` или `detail`: scope фиксируется при `agent_start`.
 
-1. Вызови `run(agent_id, cmd)`. Успех означает `ok=true`, непустой `cmd_hash` и `error=null`.
-2. Читай конкретную команду через `read(agent_id, cmd_hash, lines_count, offset)`. Global terminal stream читается через `read()` без `agent_id` и `cmd_hash`. По умолчанию возвращаются последние 500 строк; максимум — 1000.
-3. Для чтения новых строк указывай `offset=next_offset`. Для последних строк используй отрицательный offset или пропускай его.
-4. Продолжай до конечного статуса из `read`: `completed`, `failed` или `cancelled`.
-5. При `failed` анализируй `exit_code` и `lines`. Ненулевой exit code команды не заполняет plugin-поле `error`.
-6. При `ok=false` или непустом `error` учитывай этап `<method>.<stage>` и сначала установи, была ли команда поставлена в очередь.
+1. Вызови `run(agent_id, cmd)`.
+2. Читай конкретную команду через `read(agent_id, cmd_hash, lines_count, offset)`. Global stream — `read()` без `agent_id` и `cmd_hash`.
+3. Всегда просматривай `active_agents`: это компактные строки `HH:MM:SS name hash|started|finished — intent`.
+4. Active-awareness использует тот же 300-секундный Session TTL, который продлевается любым действием с живым `agent_id`. До первой команды активный агент показывается как `started`; после `agent_finish` событие `finished` видно 180 секунд.
 
-Используй scoped `read` только с парой `agent_id + cmd_hash`. Для диагностики потерянного хэша или общего лога используй global `read()` без обоих параметров; операции без agent context обозначаются как `anonymous`.
 
 ### `cancel`
 

@@ -6,6 +6,7 @@ import pytest
 
 import terminal_mcp.core.service as service_module
 from terminal_mcp.auth.storage import OAuthStore
+from terminal_mcp.core.models import Line
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
@@ -30,11 +31,11 @@ async def wait_finished(service, cmd_hash, attempts=500):
 
 
 def scoped_text(line):
-    return line.split("] ", 1)[1]
+    return line.split(" ", 1)[1]
 
 
 def global_text(line):
-    return line.rsplit("] ", 1)[1]
+    return line.split(" ", 3)[3]
 
 
 @pytest.mark.asyncio
@@ -51,6 +52,37 @@ async def test_database_and_parent_are_root_only(tmp_path):
     await oauth.initialize()
     assert stat.S_IMODE(database.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(database.stat().st_mode) == 0o600
+
+
+@pytest.mark.asyncio
+async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path):
+    database = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "CREATE TABLE commands("
+            "hash TEXT PRIMARY KEY,cmd TEXT,status TEXT,pid INTEGER,exit_code INTEGER,error TEXT)"
+        )
+        db.execute(
+            "INSERT INTO commands VALUES(?,?,?,?,?,?)",
+            ("deadbeef", "sleep 30", "running", 123, None, None),
+        )
+        db.execute("PRAGMA user_version=1")
+        db.commit()
+
+    repo = SqliteRepository(database)
+    await repo.initialize()
+
+    with sqlite3.connect(database) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
+        assert {"started_at", "finished_at"} <= columns
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        status, error, started_at, finished_at = db.execute(
+            "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
+        ).fetchone()
+    assert status == "failed"
+    assert error == "startup.recover: application restarted"
+    assert started_at is None
+    assert finished_at
 
 
 @pytest.mark.asyncio
@@ -210,3 +242,11 @@ async def test_health_runs_optional_configured_command(tmp_path):
     assert custom["exit_code"] == 0
     assert custom["lines"][0].endswith("health-output")
     await terminal.stop()
+
+
+def test_render_normalizes_legacy_z_timestamp():
+    lines = [Line(1, "deadbeef", "12:34:56Z", "legacy")]
+    assert TerminalService._render(lines, scoped=True) == ["12:34:56 legacy"]
+    assert TerminalService._render(
+        lines, scoped=False, agent_map={"deadbeef": "India-1111"}
+    ) == ["12:34:56 India deadbeef legacy"]

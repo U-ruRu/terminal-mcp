@@ -9,6 +9,7 @@ class FakeService:
         return {
             "ok": True,
             "self": {
+                "name": "Kilo",
                 "agent_id": "Kilo-7K2M",
                 "ttl_seconds": 300,
                 "task_lease_seconds": 180,
@@ -21,28 +22,27 @@ class FakeService:
             "additional_active_agents": 0,
         }
 
-    async def agent_task(self, agent_id, intent, work_scope, detail=None):
+    async def agent_task(self, agent_id, intent):
         return {
             "ok": True,
             "self": {
-                "agent_id": agent_id,
+                "name": "Kilo",
                 "ttl_seconds": 300,
                 "task_lease_seconds": 180,
                 "task_summary": "task",
                 "intent": intent,
-                "work_scope": work_scope,
+                "work_scope": ["repo:mcp"],
             },
             "active": [],
             "overlaps": [],
             "additional_active_agents": 0,
-            "detail": detail,
         }
 
     async def agents(self, agent_id):
         return {
             "ok": True,
             "self": {
-                "agent_id": agent_id,
+                "name": "Kilo",
                 "ttl_seconds": 300,
                 "task_lease_seconds": 180,
                 "task_summary": "task",
@@ -55,10 +55,28 @@ class FakeService:
         }
 
     async def agent_finish(self, agent_id):
-        return {"ok": True, "agent_id": agent_id, "finished": True}
+        return {"ok": True, "agent_name": "Kilo", "finished": True}
+
+    async def awareness(self, agent_id=None):
+        return {
+            "agent_name": "Kilo" if agent_id else "anonymous",
+            "active_agents": [
+                "23:00:01Z India deadbeef — Inspect tests",
+                "22:59:58Z India started — Inspect tests",
+            ],
+        }
 
     async def run(self, cmd, agent_id=None):
-        return {"ok": True, "cmd_hash": "1234abcd", "error": None, "agent_id": agent_id}
+        return {
+            "ok": True,
+            "cmd_hash": "1234abcd",
+            "error": None,
+            "agent_name": "Kilo",
+            "active_agents": [
+                "23:00:01Z India deadbeef — Inspect tests",
+                "22:59:58Z India started — Inspect tests",
+            ],
+        }
 
     async def recovery(self, cmd, agent_id=None):
         return {
@@ -70,7 +88,7 @@ class FakeService:
             "exit_code": 0,
             "error": None,
             "duration_ms": 1,
-            "agent_id": agent_id,
+            "agent_name": "Kilo" if agent_id else "anonymous",
         }
 
     async def read(self, cmd_hash=None, lines_count=500, offset=None, agent_id=None):
@@ -84,11 +102,20 @@ class FakeService:
             "status": "completed" if cmd_hash else None,
             "exit_code": 0 if cmd_hash else None,
             "error": None,
-            "agent_id": agent_id,
+            "agent_name": "Kilo" if agent_id else "anonymous",
+            "active_agents": [
+                "23:00:01Z India deadbeef — Inspect tests",
+                "22:59:58Z India started — Inspect tests",
+            ],
         }
 
     async def cancel(self, cmd_hash, agent_id=None):
-        return {"ok": True, "cmd_hash": cmd_hash, "error": None, "agent_id": agent_id}
+        return {
+            "ok": True,
+            "cmd_hash": cmd_hash,
+            "error": None,
+            "agent_name": "Kilo" if agent_id else "anonymous",
+        }
 
     async def health(self, auth_mode):
         return {
@@ -144,6 +171,11 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert start["intent"]["maxLength"] == 160
     assert start["work_scope"]["maxItems"] == 4
     assert start["work_scope"]["items"]["maxLength"] == 80
+    assert tools["agent_task"].parameters["required"] == ["agent_id", "intent"]
+    task = tools["agent_task"].parameters["properties"]
+    assert task["intent"]["maxLength"] == 160
+    assert "work_scope" not in task
+    assert "detail" not in task
 
 
 @pytest.mark.asyncio
@@ -161,9 +193,18 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert isinstance(started, CallToolResult)
     assert started.structuredContent["self"]["agent_id"] == "Kilo-7K2M"
 
+    task_update = await tools["agent_task"].run(
+        {"agent_id": "Kilo-7K2M", "intent": "Inspect the next test"},
+        convert_result=True,
+    )
+    assert task_update.structuredContent["self"]["intent"] == "Inspect the next test"
+    assert task_update.structuredContent["self"]["work_scope"] == ["repo:mcp"]
+
     run = await tools["run"].run({"agent_id": "Kilo-7K2M", "cmd": "printf ok"}, convert_result=True)
     assert run.content[0].text == "Command 1234abcd queued."
-    assert run.structuredContent["agent_id"] == "Kilo-7K2M"
+    assert run.structuredContent["agent_name"] == "Kilo"
+    assert "India deadbeef — Inspect tests" in run.structuredContent["active_agents"][0]
+    assert "7K2M" not in str(run.structuredContent)
 
     recovery = await tools["recovery"].run(
         {"cmd": "printf recovery-ready", "agent_id": "Kilo-7K2M"}, convert_result=True
@@ -177,11 +218,11 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     health = await tools["health"].run({}, convert_result=True)
     assert health.structuredContent["ok"] is True
-    assert health.structuredContent["agent_id"] == "anonymous"
+    assert health.structuredContent["agent_name"] == "anonymous"
     recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)
-    assert recovery.structuredContent["agent_id"] == "anonymous"
+    assert recovery.structuredContent["agent_name"] == "anonymous"
     cancelled = await tools["cancel"].run({"cmd_hash": "1234abcd"}, convert_result=True)
-    assert cancelled.structuredContent["agent_id"] == "anonymous"
+    assert cancelled.structuredContent["agent_name"] == "anonymous"
 
 @pytest.mark.asyncio
 async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
@@ -189,13 +230,16 @@ async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
     read = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["read"]
     global_read = await read.run({}, convert_result=True)
     assert global_read.structuredContent["ok"] is True
-    assert global_read.structuredContent["agent_id"] == "anonymous"
+    assert global_read.structuredContent["agent_name"] == "anonymous"
     scoped = await read.run(
         {"agent_id": "Kilo-7K2M", "cmd_hash": "1234abcd"},
         convert_result=True,
     )
     assert scoped.structuredContent["ok"] is True
     assert scoped.structuredContent["status"] == "completed"
+    assert scoped.structuredContent["agent_name"] == "Kilo"
+    assert "India deadbeef — Inspect tests" in scoped.structuredContent["active_agents"][0]
+    assert "7K2M" not in str(scoped.structuredContent)
     one_sided = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
     assert one_sided.structuredContent["ok"] is False
     assert one_sided.structuredContent["error"].startswith("read.scope:")

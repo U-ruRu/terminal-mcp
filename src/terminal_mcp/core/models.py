@@ -12,6 +12,8 @@ class Command:
     pid: int | None = None
     exit_code: int | None = None
     error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 @dataclass(slots=True)

@@ -6,15 +6,30 @@
 
 ## Agent coordination
 
-`AgentCoordinator` manages 300-second sessions identified by compact NATO call signs and a separate 180-second task lease used only by `run`. `agent_start` and `agent_task` create or refresh the lease from persisted `agent_task_events`; no schema migration is required. `AgentStore` persists sessions, task transitions, activity audit and recent-command lookup. SQLite schema version 1 contains `agent_sessions`, `agent_task_events`, `agent_activity_events` and `command_agent_attribution` plus lookup indexes.
+`AgentCoordinator` разделяет три временных понятия:
 
-Command creation and attribution share one SQLite transaction. Attribution stores only `agent_id`, command hash, type, timestamp and a whitespace-normalized 100-character preview. Full commands remain in `commands`. Global read resolves ownership in one batch query.
+- Agent Session TTL — 300 секунд; любой вызов с живым `agent_id` продлевает его и одновременно продлевает active-awareness visibility;
+- task lease для `run` — 180 секунд; его обновляют только `agent_start` и `agent_task`.
 
-Work scopes are cooperative metadata. Exact scopes and parent/child directory scopes overlap. The coordinator reports overlaps without serializing execution. This model is the extension point for future coarse-grained leases.
+Отдельного active-awareness window нет. Lifecycle-сигнал `finished` показывается ещё 180 секунд.
 
-## Compactness and observability
+`agent_start` хранит полный внутренний `agent_id`, но публичные ответы после регистрации используют только NATO-имя без suffix. `agent_task(agent_id, intent)` обновляет только короткий `intent` (до 160 символов) и task lease; исходный `work_scope` сессии сохраняется.
 
-Standard overview returns self, up to 8 active peers, up to 3 recent commands per peer and an overflow count. Prometheus metrics expose aggregate active/session/task/overlap/command counts without agent IDs as labels, keeping cardinality bounded. Agent-specific detail remains in SQLite and structured logs.
+`run` и `read` не возвращают раздутое дерево объектов для фоновой координации. Поле `active_agents` — массив готовых строк вида:
+
+```text
+23:32:38 November 10de68b3 — current intent
+23:31:02 India started — current intent
+23:34:15 Juliett finished — current intent
+```
+
+Активная строка содержит последнюю команду агента. Lifecycle `started`/`finished` хранится как короткий сигнал на 180 секунд. Полная команда и внутренний suffix в awareness не попадают.
+
+Global terminal output использует тот же компактный принцип: `HH:MM:SS name cmd_hash text`; scoped output — `HH:MM:SS text`.
+
+`AgentStore` и SQLite сохраняют структурированные данные: sessions, task transitions, activity audit, command attribution и command start/finish timestamps. Компактность является transport/presentation contract, а не потерей внутренней структуры.
+
+Work scopes остаются cooperative metadata. Exact scopes и parent/child directory scopes пересекаются; coordinator сообщает overlap, но не сериализует исполнение.
 
 ## Lifecycle
 

@@ -73,7 +73,8 @@ class SqliteRepository:
                 """
                 CREATE TABLE IF NOT EXISTS commands(
                     hash TEXT PRIMARY KEY, cmd TEXT, status TEXT,
-                    pid INTEGER, exit_code INTEGER, error TEXT
+                    pid INTEGER, exit_code INTEGER, error TEXT,
+                    started_at TEXT, finished_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS lines(
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,10 +106,20 @@ class SqliteRepository:
                 PRAGMA user_version=1;
                 """
             )
+            columns = {
+                row[1] for row in await (await db.execute("PRAGMA table_info(commands)")).fetchall()
+            }
+            if "started_at" not in columns:
+                await db.execute("ALTER TABLE commands ADD COLUMN started_at TEXT")
+            if "finished_at" not in columns:
+                await db.execute("ALTER TABLE commands ADD COLUMN finished_at TEXT")
+            recovered_at = utc_text()
             await db.execute(
-                "UPDATE commands SET status='failed', error='startup.recover: application restarted' "
-                "WHERE status IN ('queued', 'running')"
+                "UPDATE commands SET status='failed', error='startup.recover: application restarted', "
+                "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
+                (recovered_at,),
             )
+            await db.execute("PRAGMA user_version=2")
             await db.commit()
 
     async def create(
@@ -124,12 +135,30 @@ class SqliteRepository:
         attempts = 1 if cmd_hash is not None else 32
         for _ in range(attempts):
             h = cmd_hash or secrets.token_hex(4)
-            command = Command(h, cmd, status)
+            now = utc_text()
+            command = Command(
+                h,
+                cmd,
+                status,
+                started_at=now if status == "running" else None,
+                finished_at=now if status in {"completed", "failed", "cancelled"} else None,
+            )
             try:
                 async with self._connect() as db:
                     await db.execute(
-                        "INSERT INTO commands VALUES(?,?,?,?,?,?)",
-                        (h, cmd, status, None, None, None),
+                        "INSERT INTO commands("
+                        "hash,cmd,status,pid,exit_code,error,started_at,finished_at"
+                        ") VALUES(?,?,?,?,?,?,?,?)",
+                        (
+                            h,
+                            cmd,
+                            status,
+                            None,
+                            None,
+                            None,
+                            command.started_at,
+                            command.finished_at,
+                        ),
                     )
                     if agent_id:
                         await db.execute(
@@ -145,14 +174,22 @@ class SqliteRepository:
         raise RuntimeError("unable to allocate unique command hash")
 
     async def update(self, command):
+        now = utc_text()
+        if command.status == "running" and command.started_at is None:
+            command.started_at = now
+        if command.status in {"completed", "failed", "cancelled"} and command.finished_at is None:
+            command.finished_at = now
         async with self._connect() as db:
             await db.execute(
-                "UPDATE commands SET status=?,pid=?,exit_code=?,error=? WHERE hash=?",
+                "UPDATE commands SET status=?,pid=?,exit_code=?,error=?,started_at=?,finished_at=? "
+                "WHERE hash=?",
                 (
                     command.status,
                     command.pid,
                     command.exit_code,
                     command.error,
+                    command.started_at,
+                    command.finished_at,
                     command.cmd_hash,
                 ),
             )
@@ -171,14 +208,15 @@ class SqliteRepository:
         async with self._connect() as db:
             row = await (
                 await db.execute(
-                    "SELECT hash,cmd,status,pid,exit_code,error FROM commands WHERE hash=?",
+                    "SELECT hash,cmd,status,pid,exit_code,error,started_at,finished_at "
+                    "FROM commands WHERE hash=?",
                     (cmd_hash,),
                 )
             ).fetchone()
         return Command(*row) if row else None
 
     async def append_line(self, cmd_hash, text):
-        appeared_at = datetime.now(UTC).strftime("%H:%M:%SZ")
+        appeared_at = datetime.now(UTC).strftime("%H:%M:%S")
         async with self._connect() as db:
             await db.execute(
                 "INSERT INTO lines(hash,appeared_at,text) VALUES(?,?,?)",

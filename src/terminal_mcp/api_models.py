@@ -13,7 +13,7 @@ CommandStatus = Literal[
 
 
 class SessionStatus(BaseModel):
-    agent_id: str | None = None
+    agent_name: str | None = None
     session_expired: bool | None = None
     registration_required: bool | None = None
     task_context_expired: bool | None = None
@@ -24,11 +24,13 @@ class SessionStatus(BaseModel):
 class RunResponse(SessionStatus):
     ok: bool
     cmd_hash: str | None = None
+    active_agents: list[str] = []
     error: str | None = None
 
 
 class ReadResponse(SessionStatus):
     ok: bool
+    active_agents: list[str] = []
     lines: list[str]
     next_offset: int
     overall_lines_count: int | None = None
@@ -99,7 +101,8 @@ class RecentCommand(BaseModel):
 
 
 class AgentSelf(BaseModel):
-    agent_id: str
+    name: str
+    agent_id: str | None = None
     ttl_seconds: int
     task_lease_seconds: int
     task_summary: str
@@ -108,7 +111,7 @@ class AgentSelf(BaseModel):
 
 
 class ActiveAgent(BaseModel):
-    agent_id: str
+    name: str
     idle_seconds: int
     task_summary: str
     intent: str
@@ -117,7 +120,7 @@ class ActiveAgent(BaseModel):
 
 
 class ScopeOverlap(BaseModel):
-    agent_id: str
+    name: str
     scope: str
 
 

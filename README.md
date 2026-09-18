@@ -31,24 +31,35 @@
 
 ## MCP
 
-Endpoint: `/mcp`. Каждый рабочий проход начинается с `agent_start`. Активная Agent Session живёт 300 секунд после последнего session-bound вызова. `agent_start` и `agent_task` создают 180-секундный task lease для `run`.
+Endpoint: `/mcp`. Каждый рабочий проход начинается с `agent_start`.
 
-- `agent_start(task_summary, intent, work_scope)` создаёт NATO call sign вида `Foxtrot-7K2M`, открывает первый task lease и возвращает компактный обзор свежих агентов.
-- `agent_task(agent_id, intent, work_scope, detail?)` обновляет ближайшую задачу, сохраняет transition history, показывает scope overlap и обновляет task lease.
-- `agents(agent_id)` показывает до 8 свежих коллег и до 3 последних команд каждого.
-- `agent_finish(agent_id)` явно завершает сессию; штатный lifecycle также завершается через TTL.
-- `run(agent_id, cmd)` требует активную Agent Session и task lease не старше 180 секунд. При истёкшем lease возвращается `task_context_expired=true`; достаточно вызвать `agent_task`.
+- `agent_start(task_summary, intent, work_scope)` создаёт внутренний NATO call sign вида `Foxtrot-7K2M`, открывает 180-секундный task lease и единственный раз возвращает полный `agent_id`.
+- Во всех последующих выводах показывается только публичное имя без suffix: `Foxtrot`, `India`, `Juliett`.
+- `agent_task(agent_id, intent)` принимает только короткий `intent` до 160 символов. `work_scope`, объявленный при `agent_start`, сохраняется; `detail` отсутствует.
+- `run(agent_id, cmd)` требует активную Agent Session и свежий task lease. `agent_start` и `agent_task` обновляют task lease.
 - `health()` не требует Agent Session.
-- `recovery(cmd, agent_id?)` и `cancel(cmd_hash, agent_id?)` доступны без Agent Session. При отсутствии `agent_id` caller/command attribution обозначается как `anonymous`.
-- `read(agent_id?, cmd_hash?, ...)` работает в двух режимах: `agent_id + cmd_hash` вместе для scoped command read либо оба параметра отсутствуют для global terminal stream. Команды без владельца отображаются как `[anonymous]`.
+- `recovery(cmd, agent_id?)` и `cancel(cmd_hash, agent_id?)` доступны без Agent Session; отсутствие `agent_id` обозначается как `anonymous`.
+- `read(agent_id?, cmd_hash?, ...)` работает либо с парой `agent_id + cmd_hash`, либо без обоих параметров как global terminal stream.
 
-`task_summary` ограничен 120 символами, `intent` и optional `detail` — 160, `work_scope` — четырьмя элементами по 80 символов. Scope является cooperative metadata. Parent/child пути пересекаются, sibling scopes считаются раздельными. Модель оставляет extension point для coarse-grained leases.
+Agent Session TTL — 300 секунд и продлевается любым действием с живым `agent_id`. Отдельного active-awareness TTL нет: активный агент виден те же 300 секунд. Task lease для `run` — 180 секунд и обновляется только `agent_start`/`agent_task`. `finished` остаётся видимым 180 секунд.
 
-Command attribution сохраняет `agent_id`, восьмизначный `cmd_hash`, command type, status и нормализованный preview до 100 символов. Полная команда остаётся в основной command model. Global `read` показывает строки как `[time] [agent_id] [cmd_hash] ...`; scoped `read` сохраняет компактный прежний формат.
+`run` и `read` возвращают `active_agents` как компактный массив строк, а не массив объектов:
 
-Expired session исчезает из active overview. Следующий вызов со старым ID возвращает `session_expired=true` и `registration_required=true`; агент регистрирует новую сессию через `agent_start`. Session, task history, activity audit и command attribution сохраняются в SQLite.
+```text
+23:32:38 November 10de68b3 — Проверить regression suite
+23:31:02 India started — Обновить storage
+23:34:15 Juliett finished — Проверить HTTP contract
+```
 
-Рекомендуемый workflow: `agent_start` → inspect active agents → `run/read` → при смене этапа или истечении 180 секунд `agent_task` → `run/read`. `recovery`, `cancel`, global `read` и `health` остаются доступны без task lease.
+Формат строки: `HH:MM:SS <public-name> <cmd_hash|started|finished> — <intent>`. Для активного агента используется hash последней команды; timestamp берётся из её завершения, запуска или регистрации. Полная команда в awareness не выводится.
+
+Terminal output также компактный:
+- scoped `read`: `HH:MM:SS <output>`;
+- global `read`: `HH:MM:SS <public-name|anonymous> <cmd_hash> <output>`.
+
+`task_summary` в `agent_start` ограничен 120 символами, `intent` — 160, `work_scope` — четырьмя элементами по 80 символов. Scope остаётся cooperative metadata для обнаружения конфликтов. Agent Session, task history, activity audit и command attribution сохраняются в SQLite.
+
+Рекомендуемый workflow: `agent_start` → `run/read` → при смене ближайшей задачи или истечении task lease `agent_task` → `run/read` → `agent_finish`.
 
 ## OpenAPI Actions
 

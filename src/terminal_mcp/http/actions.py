@@ -13,7 +13,8 @@ from terminal_mcp.api_models import (
     RecoveryResponse,
     RunResponse,
 )
-from terminal_mcp.core.service import ANONYMOUS_AGENT_ID, DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.core.orchestration import public_agent_name
+from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
 from terminal_mcp.telemetry import observed
 
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
@@ -39,8 +40,6 @@ class AgentStartRequest(StrictRequest):
 
 class AgentTaskRequest(AgentRequest):
     intent: str = Field(min_length=1, max_length=160)
-    work_scope: list[ScopeItem] = Field(min_length=1, max_length=4)
-    detail: str | None = Field(default=None, max_length=160)
 
 
 class RunRequest(AgentRequest):
@@ -73,7 +72,10 @@ def build_actions_router(service, auth_mode="none"):
     router = APIRouter(prefix="/actions", tags=["terminal-actions"])
 
     @router.post(
-        "/agent/start", operation_id="startAgentSession", response_model=AgentOverviewResponse
+        "/agent/start",
+        operation_id="startAgentSession",
+        response_model=AgentOverviewResponse,
+        response_model_exclude_none=True,
     )
     async def agent_start(body: AgentStartRequest):
         return await observed(
@@ -84,22 +86,33 @@ def build_actions_router(service, auth_mode="none"):
         )
 
     @router.post(
-        "/agent/task", operation_id="updateAgentTask", response_model=AgentOverviewResponse
+        "/agent/task",
+        operation_id="updateAgentTask",
+        response_model=AgentOverviewResponse,
+        response_model_exclude_none=True,
     )
     async def agent_task(body: AgentTaskRequest):
         return await observed(
             service,
             "rest",
             "agent_task",
-            service.agent_task(body.agent_id, body.intent, body.work_scope, body.detail),
+            service.agent_task(body.agent_id, body.intent),
         )
 
-    @router.post("/agents", operation_id="listActiveAgents", response_model=AgentOverviewResponse)
+    @router.post(
+        "/agents",
+        operation_id="listActiveAgents",
+        response_model=AgentOverviewResponse,
+        response_model_exclude_none=True,
+    )
     async def agents(body: AgentRequest):
         return await observed(service, "rest", "agents", service.agents(body.agent_id))
 
     @router.post(
-        "/agent/finish", operation_id="finishAgentSession", response_model=AgentFinishResponse
+        "/agent/finish",
+        operation_id="finishAgentSession",
+        response_model=AgentFinishResponse,
+        response_model_exclude_none=True,
     )
     async def agent_finish(body: AgentRequest):
         return await observed(service, "rest", "agent_finish", service.agent_finish(body.agent_id))
@@ -113,7 +126,8 @@ def build_actions_router(service, auth_mode="none"):
         result = await observed(
             service, "rest", "recovery", service.recovery(body.cmd, agent_id=body.agent_id)
         )
-        result["agent_id"] = body.agent_id or ANONYMOUS_AGENT_ID
+        result.pop("agent_id", None)
+        result["agent_name"] = public_agent_name(body.agent_id)
         return result
 
     @router.post("/read", operation_id="readTerminal", response_model=ReadResponse)
@@ -124,7 +138,8 @@ def build_actions_router(service, auth_mode="none"):
             "read",
             service.read(body.cmd_hash, body.lines_count, body.offset, agent_id=body.agent_id),
         )
-        result["agent_id"] = body.agent_id or ANONYMOUS_AGENT_ID
+        result.pop("agent_id", None)
+        result["agent_name"] = public_agent_name(body.agent_id)
         return result
 
     @router.post("/cancel", operation_id="cancelCommand", response_model=CancelResponse)
@@ -132,7 +147,8 @@ def build_actions_router(service, auth_mode="none"):
         result = await observed(
             service, "rest", "cancel", service.cancel(body.cmd_hash, agent_id=body.agent_id)
         )
-        result["agent_id"] = body.agent_id or ANONYMOUS_AGENT_ID
+        result.pop("agent_id", None)
+        result["agent_name"] = public_agent_name(body.agent_id)
         return result
 
     @router.get(
@@ -143,7 +159,8 @@ def build_actions_router(service, auth_mode="none"):
     )
     async def terminal_health():
         result = await observed(service, "rest", "health", service.health(auth_mode))
-        result["agent_id"] = ANONYMOUS_AGENT_ID
+        result.pop("agent_id", None)
+        result["agent_name"] = public_agent_name(None)
         return result
 
     return router

@@ -112,7 +112,7 @@ async def test_recovery_bypasses_fifo_is_persisted_and_visible_globally(tmp_path
     assert stored["status"] == "completed"
     assert stored["lines"] == result["lines"]
     global_lines = await service.read()
-    assert any(f"[{result['cmd_hash']}]" in line for line in global_lines["lines"])
+    assert any(f" {result['cmd_hash']} " in line for line in global_lines["lines"])
 
     await service.cancel(busy["cmd_hash"])
     await terminal.stop()

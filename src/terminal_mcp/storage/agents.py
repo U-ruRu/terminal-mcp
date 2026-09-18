@@ -37,7 +37,7 @@ class AgentStore:
     async def touch(self, agent_id, now):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             cur = await db.execute(
-                "UPDATE agent_sessions SET last_activity_at=?,state='active' WHERE agent_id=?",
+                "UPDATE agent_sessions SET last_activity_at=? WHERE agent_id=? AND state='active'",
                 (now, agent_id),
             )
             await db.commit()
@@ -61,8 +61,8 @@ class AgentStore:
         scope = json.dumps(work_scope, separators=(",", ":"))
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             await db.execute(
-                "UPDATE agent_sessions SET last_activity_at=?,intent=?,work_scope=?,state='active' WHERE agent_id=?",
-                (now, intent, scope, agent_id),
+                "UPDATE agent_sessions SET intent=?,work_scope=? WHERE agent_id=? AND state='active'",
+                (intent, scope, agent_id),
             )
             await db.execute(
                 "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope) VALUES(?,?,?,?)",
@@ -101,6 +101,18 @@ class AgentStore:
             ).fetchall()
         return [self._session(row) for row in rows]
 
+    async def recent_sessions(self, cutoff):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state "
+                    "FROM agent_sessions WHERE last_activity_at>=? "
+                    "ORDER BY last_activity_at DESC",
+                    (cutoff,),
+                )
+            ).fetchall()
+        return [self._session(row) for row in rows]
+
     async def count_active(self, cutoff):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             row = await (
@@ -110,6 +122,72 @@ class AgentStore:
                 )
             ).fetchone()
         return int(row[0])
+
+    async def active_with_latest_command(self, cutoff, exclude_agent_id=None, limit=8):
+        params = [cutoff]
+        exclusion = ""
+        if exclude_agent_id:
+            exclusion = "AND s.agent_id<>? "
+            params.append(exclude_agent_id)
+        params.append(limit)
+        query = (
+            "SELECT s.agent_id,s.intent,s.registered_at,a.command_hash,c.started_at,c.finished_at "
+            "FROM agent_sessions s "
+            "LEFT JOIN command_agent_attribution a ON a.rowid=("
+            "SELECT a2.rowid FROM command_agent_attribution a2 "
+            "WHERE a2.agent_id=s.agent_id ORDER BY a2.created_at DESC,a2.rowid DESC LIMIT 1"
+            ") "
+            "LEFT JOIN commands c ON c.hash=a.command_hash "
+            "WHERE s.state='active' AND s.last_activity_at>=? "
+            f"{exclusion}"
+            "ORDER BY s.last_activity_at DESC LIMIT ?"
+        )
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (await db.execute(query, params)).fetchall()
+        return [
+            {
+                "agent_id": row[0],
+                "intent": row[1],
+                "registered_at": row[2],
+                "last_command_hash": row[3],
+                "last_command_started_at": row[4],
+                "last_command_finished_at": row[5],
+            }
+            for row in rows
+        ]
+
+    async def recent_lifecycle(self, cutoff, exclude_agent_id=None, limit=16):
+        params = [cutoff]
+        start_exclusion = ""
+        finish_exclusion = ""
+        if exclude_agent_id:
+            start_exclusion = "AND s.agent_id<>? "
+            finish_exclusion = "AND s.agent_id<>? "
+            params.append(exclude_agent_id)
+        params.append(cutoff)
+        if exclude_agent_id:
+            params.append(exclude_agent_id)
+        params.append(limit)
+        query = (
+            "SELECT agent_id,event,event_at,intent FROM ("
+            "SELECT s.agent_id,'started' AS event,s.registered_at AS event_at,"
+            "COALESCE((SELECT e.intent FROM agent_task_events e "
+            "WHERE e.agent_id=s.agent_id ORDER BY e.id ASC LIMIT 1),s.intent) AS intent "
+            "FROM agent_sessions s WHERE s.registered_at>=? "
+            f"{start_exclusion}"
+            "UNION ALL "
+            "SELECT s.agent_id,'finished' AS event,a.timestamp AS event_at,s.intent "
+            "FROM agent_activity_events a JOIN agent_sessions s ON s.agent_id=a.agent_id "
+            "WHERE a.tool='agent_finish' AND a.timestamp>=? "
+            f"{finish_exclusion}"
+            ") ORDER BY event_at DESC LIMIT ?"
+        )
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (await db.execute(query, params)).fetchall()
+        return [
+            {"agent_id": row[0], "event": row[1], "event_at": row[2], "intent": row[3]}
+            for row in rows
+        ]
 
     async def recent_commands(self, agent_id, limit=3):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:

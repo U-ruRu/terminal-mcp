@@ -60,7 +60,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         agent_id = start_agent(client, headers)
         health = client.get("/actions/health", headers=headers)
         assert health.status_code == 200
-        assert health.json()["agent_id"] == "anonymous"
+        assert health.json()["agent_name"] == "anonymous"
 
         run = client.post(
             "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
@@ -105,6 +105,25 @@ def test_bearer_actions_and_openapi(tmp_path):
         start_request = schema["components"]["schemas"]["AgentStartRequest"]
         assert start_request["properties"]["task_summary"]["maxLength"] == 120
         assert start_request["properties"]["work_scope"]["maxItems"] == 4
+        task_request = schema["components"]["schemas"]["AgentTaskRequest"]
+        assert set(task_request["required"]) == {"agent_id", "intent"}
+        assert task_request["properties"]["intent"]["maxLength"] == 160
+        assert "work_scope" not in task_request["properties"]
+        assert "detail" not in task_request["properties"]
+
+        accepted_task = client.post(
+            "/actions/agent/task",
+            json={"agent_id": agent_id, "intent": "x" * 160},
+            headers=headers,
+        )
+        assert accepted_task.status_code == 200
+        assert accepted_task.json()["self"]["intent"] == "x" * 160
+        rejected_task = client.post(
+            "/actions/agent/task",
+            json={"agent_id": agent_id, "intent": "x" * 161},
+            headers=headers,
+        )
+        assert rejected_task.status_code == 422
 
         recovery = client.post(
             "/actions/recovery",
@@ -112,7 +131,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             headers=headers,
         ).json()
         assert recovery["ok"] is True
-        assert recovery["agent_id"] == agent_id
+        assert recovery["agent_name"] == agent_id.rsplit("-", 1)[0]
         assert recovery["lines"][0].endswith("action-recovery")
 
         anonymous_recovery = client.post(
@@ -121,12 +140,12 @@ def test_bearer_actions_and_openapi(tmp_path):
             headers=headers,
         ).json()
         assert anonymous_recovery["ok"] is True
-        assert anonymous_recovery["agent_id"] == "anonymous"
+        assert anonymous_recovery["agent_name"] == "anonymous"
         assert anonymous_recovery["lines"][0].endswith("anonymous-action-recovery")
 
         global_read = client.post("/actions/read", json={}, headers=headers)
         assert global_read.status_code == 200
-        assert global_read.json()["agent_id"] == "anonymous"
+        assert global_read.json()["agent_name"] == "anonymous"
         one_sided_read = client.post(
             "/actions/read", json={"cmd_hash": cmd_hash}, headers=headers
         )
@@ -136,7 +155,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/cancel", json={"cmd_hash": "deadbeef"}, headers=headers
         )
         assert anonymous_cancel.status_code == 200
-        assert anonymous_cancel.json()["agent_id"] == "anonymous"
+        assert anonymous_cancel.json()["agent_name"] == "anonymous"
 
         rejected = client.post(
             "/actions/recovery",

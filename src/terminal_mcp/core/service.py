@@ -3,7 +3,7 @@ import secrets
 from sqlite3 import IntegrityError
 
 from terminal_mcp.core.agents import AgentCoordinator
-from terminal_mcp.core.orchestration import normalize_preview
+from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.storage.agents import AgentStore
 
 DEFAULT_READ_LINES = 500
@@ -51,6 +51,17 @@ class TerminalService:
             AgentCoordinator(AgentStore(repo.path), metrics) if hasattr(repo, "path") else None
         )
 
+    async def awareness(self, agent_id=None):
+        active_agents = (
+            await self.agent_coordinator.active_snapshot(exclude_agent_id=agent_id)
+            if self.agent_coordinator
+            else []
+        )
+        return {
+            "agent_name": public_agent_name(agent_id),
+            "active_agents": active_agents,
+        }
+
     async def _create_with_hash(self, cmd, status, agent_id=None, command_type="run"):
         attribution_agent_id = agent_id or ANONYMOUS_AGENT_ID
         for _ in range(32):
@@ -77,7 +88,15 @@ class TerminalService:
                     if gate.get("task_context_expired")
                     else "run.agent: agent session expired; call agent_start"
                 )
-                return {"ok": False, "cmd_hash": None, "error": error, **gate}
+                return {
+                    "ok": False,
+                    "cmd_hash": None,
+                    "error": error,
+                    **gate,
+                    "active_agents": (
+                        await self.agent_coordinator.active_snapshot(exclude_agent_id=agent_id)
+                    ),
+                }
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -91,7 +110,12 @@ class TerminalService:
                 enqueued = True
             if agent_id and self.agent_coordinator:
                 await self.agent_coordinator.record_command(agent_id, "run", command.cmd_hash)
-            return {"ok": True, "cmd_hash": command.cmd_hash, "error": None}
+            return {
+                "ok": True,
+                "cmd_hash": command.cmd_hash,
+                "error": None,
+                **(await self.awareness(agent_id) if agent_id else {}),
+            }
         except asyncio.CancelledError:
             if command is not None and not enqueued:
                 await self.terminal.discard_queued(command.cmd_hash)
@@ -113,33 +137,43 @@ class TerminalService:
                 "ok": False,
                 "cmd_hash": None,
                 "error": f"run.{stage}: timed out after 2000 ms",
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
         except Exception as exc:
             if command is not None:
                 await self.terminal.discard_queued(command.cmd_hash)
                 await self.repo.delete_command(command.cmd_hash)
-            return {"ok": False, "cmd_hash": None, "error": _error("run", stage, exc)}
+            return {
+                "ok": False,
+                "cmd_hash": None,
+                "error": _error("run", stage, exc),
+                **(await self.awareness(agent_id) if agent_id else {}),
+            }
 
     @staticmethod
     def _render(lines, scoped, agent_map=None):
         agent_map = agent_map or {}
         return [
-            f"[{line.appeared_at}] {line.text}"
+            f"{line.appeared_at.removesuffix(chr(90))} {line.text}"
             if scoped
             else (
-                f"[{line.appeared_at}] [{agent_map.get(line.cmd_hash, ANONYMOUS_AGENT_ID)}] "
-                f"[{line.cmd_hash}] {line.text}"
+                f"{line.appeared_at.removesuffix(chr(90))} "
+                f"{public_agent_name(agent_map.get(line.cmd_hash, ANONYMOUS_AGENT_ID))} "
+                f"{line.cmd_hash} {line.text}"
             )
             for line in lines
         ]
 
     async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            await self.agent_coordinator.touch_if_active(agent_id, "read")
         if self.runtime:
             await self.runtime.before_tool_call()
         limit = max(1, min(int(lines_count), MAX_READ_LINES))
+        awareness = await self.awareness(agent_id)
         result = {
             "ok": True,
-            "agent_id": agent_id or ANONYMOUS_AGENT_ID,
+            **awareness,
             "lines": [],
             "next_offset": 0,
             "overall_lines_count": None,
@@ -214,6 +248,8 @@ class TerminalService:
 
     async def recovery(self, cmd, agent_id=None):
         caller_agent_id = agent_id or ANONYMOUS_AGENT_ID
+        if agent_id and self.agent_coordinator:
+            await self.agent_coordinator.touch_if_active(agent_id, "recovery")
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -238,7 +274,7 @@ class TerminalService:
             plugin_error = current.error
             return {
                 "ok": plugin_error is None and current.status in {"completed", "failed"},
-                "agent_id": caller_agent_id,
+                "agent_name": public_agent_name(caller_agent_id),
                 "cmd_hash": command.cmd_hash,
                 "lines": self._render(lines, scoped=True),
                 "overall_lines_count": total,
@@ -266,7 +302,7 @@ class TerminalService:
                 await self.repo.update(current)
             return {
                 "ok": False,
-                "agent_id": caller_agent_id,
+                "agent_name": public_agent_name(caller_agent_id),
                 "cmd_hash": command.cmd_hash if command else None,
                 "lines": [],
                 "overall_lines_count": 0,
@@ -277,6 +313,8 @@ class TerminalService:
             }
 
     async def cancel(self, cmd_hash, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            await self.agent_coordinator.touch_if_active(agent_id, "cancel")
         if self.runtime:
             await self.runtime.before_tool_call()
         stage = "lookup"
@@ -333,7 +371,7 @@ class TerminalService:
                 )
                 result = {
                     "ok": terminal.get("ok", False) and internal_ok,
-                    "agent_id": agent_id or ANONYMOUS_AGENT_ID,
+                    "agent_name": public_agent_name(agent_id),
                     "application": "terminal-mcp",
                     "storage": "ok" if storage_ok else "error",
                     "auth_mode": auth_mode,
@@ -359,7 +397,7 @@ class TerminalService:
             terminal["ok"] = False
             return {
                 "ok": False,
-                "agent_id": agent_id or ANONYMOUS_AGENT_ID,
+                "agent_name": public_agent_name(agent_id),
                 "application": "terminal-mcp",
                 "storage": "error",
                 "auth_mode": auth_mode,
@@ -371,10 +409,10 @@ class TerminalService:
             return {"ok": False, "error": "agent coordination unavailable"}
         return await self.agent_coordinator.start(task_summary, intent, work_scope)
 
-    async def agent_task(self, agent_id, intent, work_scope, detail=None):
+    async def agent_task(self, agent_id, intent):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.task(agent_id, intent, work_scope, detail)
+        return await self.agent_coordinator.task(agent_id, intent)
 
     async def agents(self, agent_id):
         if not self.agent_coordinator:

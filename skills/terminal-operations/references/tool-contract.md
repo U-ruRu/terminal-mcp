@@ -123,3 +123,27 @@ MCP и REST Actions могут использовать общий service layer
 - stdout и stderr сохраняют порядок, установленный реализацией;
 - structured MCP tools могут возвращать типизированный объект в `structuredContent`;
 - полный вывод команды может сохраняться в серверном storage независимо от размера response window.
+
+## Compact agent awareness
+
+`agent_task` принимает только `agent_id` и `intent` (1–160 символов). Scope берётся из `agent_start`.
+
+`RunResponse.active_agents` и `ReadResponse.active_agents` — `string[]`. Каждая строка:
+
+```text
+HH:MM:SS <public-name> <cmd_hash|started|finished> — <intent>
+```
+
+Active-awareness использует Session TTL 300 секунд; любой вызов с живым `agent_id` продлевает этот TTL. До первой команды активный агент отображается как `started`. После завершения сессии `finished` остаётся видимым 180 секунд. Внутренний suffix agent ID в этих строках не публикуется.
+
+Scoped terminal line:
+
+```text
+HH:MM:SS <output>
+```
+
+Global terminal line:
+
+```text
+HH:MM:SS <public-name|anonymous> <cmd_hash> <output>
+```

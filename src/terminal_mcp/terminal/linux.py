@@ -235,7 +235,7 @@ class LinuxTerminalAdapter:
         finally:
             self.capture_processes.discard(process)
         status = "completed" if process.returncode == 0 and error is None else "failed"
-        timestamp = datetime.now(UTC).strftime("%H:%M:%SZ")
+        timestamp = datetime.now(UTC).strftime("%H:%M:%S")
         lines = [
             f"[{timestamp}] {line.rstrip(chr(13))}"
             for line in output.decode(errors="replace").splitlines()[:max_output_lines]

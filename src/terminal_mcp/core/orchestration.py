@@ -34,6 +34,7 @@ NATO_WORDS = (
 )
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 AGENT_TTL_SECONDS = 300
+AGENT_EVENT_WINDOW_SECONDS = 180
 TASK_LEASE_SECONDS = 180
 MAX_ACTIVE_AGENTS = 8
 MAX_RECENT_COMMANDS = 3
@@ -51,12 +52,29 @@ def parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def short_time(value: str | None) -> str:
+    if not value:
+        return "--:--:--Z"
+    return parse_utc(value).strftime("%H:%M:%S")
+
+
 def generate_suffix() -> str:
     return "".join(secrets.choice(CROCKFORD) for _ in range(4))
 
 
 def generate_agent_id() -> str:
     return f"{secrets.choice(NATO_WORDS)}-{generate_suffix()}"
+
+
+def public_agent_name(agent_id: str | None) -> str:
+    if not agent_id:
+        return "anonymous"
+    if agent_id == "anonymous":
+        return agent_id
+    name, separator, suffix = agent_id.rpartition("-")
+    if separator and len(suffix) == 4 and all(ch in CROCKFORD for ch in suffix):
+        return name
+    return agent_id
 
 
 def normalize_preview(command: str, limit: int = 100) -> str:
@@ -76,5 +94,6 @@ def find_scope_overlaps(own_scopes: list[str], sessions: list[dict]) -> list[dic
             match = next(
                 b for a in own_scopes for b in session.get("work_scope", []) if scopes_overlap(a, b)
             )
-            found.append({"agent_id": session["agent_id"], "scope": match})
+            name = session.get("name") or public_agent_name(session.get("agent_id"))
+            found.append({"name": name, "scope": match})
     return found
