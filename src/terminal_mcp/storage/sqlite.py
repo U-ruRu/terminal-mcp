@@ -1,5 +1,8 @@
 # ruff: noqa: E501
 import secrets
+import sqlite3
+import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from sqlite3 import IntegrityError
 
@@ -12,10 +15,59 @@ from terminal_mcp.storage.permissions import secure_database_path
 class SqliteRepository:
     def __init__(self, path):
         self.path = path
+        self.events = None
+        self.metrics = None
+
+    def configure_observability(self, events, metrics):
+        self.events = events
+        self.metrics = metrics
+
+    @asynccontextmanager
+    async def _connect(self, operation="unknown"):
+        started = time.monotonic()
+        try:
+            db = await aiosqlite.connect(self.path, timeout=1.0)
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA synchronous=NORMAL")
+            await db.execute("PRAGMA busy_timeout=1000")
+            await db.execute("PRAGMA foreign_keys=ON")
+            if self.metrics:
+                self.metrics.inc(
+                    "terminal_mcp_sqlite_operations_total",
+                    (("operation", operation), ("outcome", "success")),
+                )
+                self.metrics.observe(
+                    "terminal_mcp_sqlite_operation_duration_seconds",
+                    time.monotonic() - started,
+                    (("operation", operation),),
+                )
+            yield db
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                if self.metrics:
+                    self.metrics.inc("terminal_mcp_sqlite_busy_total")
+                if self.events:
+                    self.events.emit(
+                        "sqlite_busy", level="WARNING", outcome="error", operation=operation
+                    )
+                raise RuntimeError(f"sqlite.{operation}: database busy after 1000 ms") from exc
+            if self.events:
+                self.events.emit(
+                    "sqlite_error", level="ERROR", outcome="error", operation=operation
+                )
+            raise
+        finally:
+            if "db" in locals():
+                await db.close()
+
+    async def ping(self):
+        async with self._connect("health") as db:
+            await (await db.execute("SELECT 1")).fetchone()
+        return True
 
     async def initialize(self):
         secure_database_path(self.path)
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS commands(
@@ -27,6 +79,7 @@ class SqliteRepository:
                     hash TEXT, appeared_at TEXT, text TEXT
                 );
                 CREATE INDEX IF NOT EXISTS ix_lines_hash_seq ON lines(hash, seq);
+                CREATE INDEX IF NOT EXISTS idx_lines_hash_seq ON lines(hash, seq);
                 """
             )
             await db.execute(
@@ -41,7 +94,7 @@ class SqliteRepository:
             h = cmd_hash or secrets.token_hex(4)
             command = Command(h, cmd, status)
             try:
-                async with aiosqlite.connect(self.path) as db:
+                async with self._connect() as db:
                     await db.execute(
                         "INSERT INTO commands VALUES(?,?,?,?,?,?)",
                         (h, cmd, status, None, None, None),
@@ -55,7 +108,7 @@ class SqliteRepository:
         raise RuntimeError("unable to allocate unique command hash")
 
     async def update(self, command):
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             await db.execute(
                 "UPDATE commands SET status=?,pid=?,exit_code=?,error=? WHERE hash=?",
                 (
@@ -69,13 +122,13 @@ class SqliteRepository:
             await db.commit()
 
     async def delete_command(self, cmd_hash):
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             await db.execute("DELETE FROM lines WHERE hash=?", (cmd_hash,))
             await db.execute("DELETE FROM commands WHERE hash=?", (cmd_hash,))
             await db.commit()
 
     async def get(self, cmd_hash):
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             row = await (
                 await db.execute(
                     "SELECT hash,cmd,status,pid,exit_code,error FROM commands WHERE hash=?",
@@ -86,7 +139,7 @@ class SqliteRepository:
 
     async def append_line(self, cmd_hash, text):
         appeared_at = datetime.now(UTC).strftime("%H:%M:%SZ")
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             await db.execute(
                 "INSERT INTO lines(hash,appeared_at,text) VALUES(?,?,?)",
                 (cmd_hash, appeared_at, text),
@@ -94,7 +147,7 @@ class SqliteRepository:
             await db.commit()
 
     async def count_lines(self, cmd_hash):
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             row = await (
                 await db.execute("SELECT COUNT(*) FROM lines WHERE hash=?", (cmd_hash,))
             ).fetchone()
@@ -104,13 +157,13 @@ class SqliteRepository:
         query = (
             "SELECT seq,hash,appeared_at,text FROM lines WHERE hash=? ORDER BY seq LIMIT ? OFFSET ?"
         )
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             rows = await (await db.execute(query, (cmd_hash, limit, offset))).fetchall()
         return [Line(*row) for row in rows]
 
     async def read_global_after_cursor(self, limit, cursor):
         query = "SELECT seq,hash,appeared_at,text FROM lines WHERE seq>? ORDER BY seq LIMIT ?"
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             rows = await (await db.execute(query, (cursor, limit))).fetchall()
         return [Line(*row) for row in rows]
 
@@ -125,7 +178,7 @@ class SqliteRepository:
         if take == 0:
             return []
         query = "SELECT seq,hash,appeared_at,text FROM lines ORDER BY seq DESC LIMIT ? OFFSET ?"
-        async with aiosqlite.connect(self.path) as db:
+        async with self._connect() as db:
             rows = await (await db.execute(query, (take, skip))).fetchall()
             if distance_from_end is not None and skip > 0 and len(rows) < take:
                 rows = await (

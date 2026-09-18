@@ -5,7 +5,16 @@ from sqlite3 import IntegrityError
 DEFAULT_READ_LINES = 500
 MAX_READ_LINES = 1000
 OPERATION_TIMEOUT_SECONDS = 45
+RUN_TIMEOUT_SECONDS = 2
+READ_TIMEOUT_SECONDS = 5
+CANCEL_TIMEOUT_SECONDS = 10
+RECOVERY_TIMEOUT_SECONDS = 20
+HEALTH_TIMEOUT_SECONDS = 3
 RECOVERY_OUTPUT_LINES = 500
+
+
+def _budget(seconds):
+    return min(seconds, OPERATION_TIMEOUT_SECONDS)
 
 
 def _error(method, stage, exc):
@@ -14,12 +23,25 @@ def _error(method, stage, exc):
 
 
 class TerminalService:
-    def __init__(self, repo, terminal, max_lines, auth_mode="none", health_command=""):
+    def __init__(
+        self,
+        repo,
+        terminal,
+        max_lines,
+        auth_mode="none",
+        health_command="",
+        runtime=None,
+        events=None,
+        metrics=None,
+    ):
         self.repo = repo
         self.terminal = terminal
         self.max_lines = max_lines
         self.auth_mode = auth_mode
         self.health_command = health_command
+        self.runtime = runtime
+        self.events = events
+        self.metrics = metrics
 
     async def _create_with_hash(self, cmd, status):
         for _ in range(32):
@@ -31,14 +53,31 @@ class TerminalService:
         raise RuntimeError("unable to allocate unique command hash")
 
     async def run(self, cmd):
+        if self.runtime:
+            await self.runtime.before_tool_call()
         command = None
+        enqueued = False
         stage = "persist"
         try:
-            async with asyncio.timeout(OPERATION_TIMEOUT_SECONDS):
+            async with asyncio.timeout(_budget(RUN_TIMEOUT_SECONDS)):
                 command = await self._create_with_hash(cmd, "queued")
                 stage = "enqueue"
                 await self.terminal.submit(command)
+                enqueued = True
             return {"ok": True, "cmd_hash": command.cmd_hash, "error": None}
+        except asyncio.CancelledError:
+            if command is not None and not enqueued:
+                await self.terminal.discard_queued(command.cmd_hash)
+                await self.repo.delete_command(command.cmd_hash)
+            if self.events:
+                self.events.emit(
+                    "client_disconnected",
+                    transport="unknown",
+                    tool="run",
+                    outcome="cancelled",
+                    cmd_hash=command.cmd_hash if command else None,
+                )
+            raise
         except TimeoutError:
             if command is not None:
                 await self.terminal.discard_queued(command.cmd_hash)
@@ -46,7 +85,7 @@ class TerminalService:
             return {
                 "ok": False,
                 "cmd_hash": None,
-                "error": f"run.{stage}: timed out after 45000 ms",
+                "error": f"run.{stage}: timed out after 2000 ms",
             }
         except Exception as exc:
             if command is not None:
@@ -64,6 +103,8 @@ class TerminalService:
         ]
 
     async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None):
+        if self.runtime:
+            await self.runtime.before_tool_call()
         limit = max(1, min(int(lines_count), MAX_READ_LINES))
         result = {
             "ok": True,
@@ -78,7 +119,7 @@ class TerminalService:
         }
         stage = "load_command" if cmd_hash else "load_lines"
         try:
-            async with asyncio.timeout(OPERATION_TIMEOUT_SECONDS):
+            async with asyncio.timeout(_budget(READ_TIMEOUT_SECONDS)):
                 if cmd_hash:
                     command = await self.repo.get(cmd_hash)
                     if command is None:
@@ -115,9 +156,19 @@ class TerminalService:
                     result["lines"] = self._render(lines, scoped=False)
                 result["displayed_lines_count"] = len(result["lines"])
                 return result
+        except asyncio.CancelledError:
+            if self.events:
+                self.events.emit(
+                    "client_disconnected",
+                    transport="unknown",
+                    tool="read",
+                    outcome="cancelled",
+                    cmd_hash=cmd_hash,
+                )
+            raise
         except TimeoutError:
             result["ok"] = False
-            result["error"] = f"read.{stage}: timed out after 45000 ms"
+            result["error"] = f"read.{stage}: timed out after 5000 ms"
             return result
         except Exception as exc:
             result["ok"] = False
@@ -125,6 +176,8 @@ class TerminalService:
             return result
 
     async def recovery(self, cmd):
+        if self.runtime:
+            await self.runtime.before_tool_call()
         command = None
         stage = "persist"
         started_at = asyncio.get_running_loop().time()
@@ -132,7 +185,7 @@ class TerminalService:
             command = await self._create_with_hash(cmd, "running")
             stage = "execute"
             duration_ms = await self.terminal.recovery(
-                command, timeout_seconds=OPERATION_TIMEOUT_SECONDS
+                command, timeout_seconds=_budget(RECOVERY_TIMEOUT_SECONDS)
             )
             current = await self.repo.get(command.cmd_hash) or command
             stage = "count_lines"
@@ -153,6 +206,16 @@ class TerminalService:
                 "error": plugin_error,
                 "duration_ms": duration_ms,
             }
+        except asyncio.CancelledError:
+            if self.events:
+                self.events.emit(
+                    "client_disconnected",
+                    transport="unknown",
+                    tool="recovery",
+                    outcome="cancelled",
+                    cmd_hash=command.cmd_hash if command else None,
+                )
+            raise
         except Exception as exc:
             elapsed = round((asyncio.get_running_loop().time() - started_at) * 1000)
             if command is not None:
@@ -172,9 +235,11 @@ class TerminalService:
             }
 
     async def cancel(self, cmd_hash):
+        if self.runtime:
+            await self.runtime.before_tool_call()
         stage = "lookup"
         try:
-            async with asyncio.timeout(OPERATION_TIMEOUT_SECONDS):
+            async with asyncio.timeout(_budget(CANCEL_TIMEOUT_SECONDS)):
                 command = await self.repo.get(cmd_hash)
                 if command is None:
                     return {
@@ -184,30 +249,75 @@ class TerminalService:
                     }
                 stage = "stop"
                 ok, error = await self.terminal.cancel(
-                    command, timeout_seconds=OPERATION_TIMEOUT_SECONDS
+                    command, timeout_seconds=_budget(CANCEL_TIMEOUT_SECONDS)
                 )
                 return {"ok": ok, "cmd_hash": cmd_hash, "error": error}
+        except asyncio.CancelledError:
+            if self.events:
+                self.events.emit(
+                    "client_disconnected",
+                    transport="unknown",
+                    tool="cancel",
+                    outcome="cancelled",
+                    cmd_hash=cmd_hash,
+                )
+            raise
         except TimeoutError:
             return {
                 "ok": False,
                 "cmd_hash": cmd_hash,
-                "error": f"cancel.{stage}: timed out after 45000 ms",
+                "error": f"cancel.{stage}: timed out after 10000 ms",
             }
         except Exception as exc:
             return {"ok": False, "cmd_hash": cmd_hash, "error": _error("cancel", stage, exc)}
 
     async def health(self, auth_mode):
-        terminal = await self.terminal.health()
-        result = {
-            "ok": terminal.get("ok", False),
-            "application": "terminal-mcp",
-            "storage": "ok",
-            "auth_mode": auth_mode,
-            "terminal": terminal,
-        }
-        if self.health_command:
-            custom = await self.terminal.capture(
-                self.health_command, timeout_ms=5000, max_output_lines=min(1000, self.max_lines)
-            )
-            result["custom_command"] = {"command": self.health_command, **custom}
-        return result
+        if self.runtime:
+            await self.runtime.before_tool_call()
+        timeout = 5 if self.health_command else HEALTH_TIMEOUT_SECONDS
+        try:
+            async with asyncio.timeout(_budget(timeout)):
+                terminal = await self.terminal.health()
+                storage_ok = await self.repo.ping()
+                internal_ok = bool(
+                    storage_ok
+                    and (self.runtime is None or self.runtime.alive)
+                    and (self.events is None or self.events.alive)
+                    and (
+                        self.metrics is None
+                        or not self.runtime.current.metrics_enabled
+                        or self.metrics.alive
+                    )
+                )
+                result = {
+                    "ok": terminal.get("ok", False) and internal_ok,
+                    "application": "terminal-mcp",
+                    "storage": "ok" if storage_ok else "error",
+                    "auth_mode": auth_mode,
+                    "terminal": terminal,
+                }
+                if self.health_command:
+                    custom = await self.terminal.capture(
+                        self.health_command,
+                        timeout_ms=5000,
+                        max_output_lines=min(1000, self.max_lines),
+                    )
+                    result["custom_command"] = {"command": self.health_command, **custom}
+                    result["ok"] = result["ok"] and custom["ok"]
+                return result
+        except asyncio.CancelledError:
+            if self.events:
+                self.events.emit(
+                    "client_disconnected", transport="unknown", tool="health", outcome="cancelled"
+                )
+            raise
+        except TimeoutError:
+            terminal = await self.terminal.health()
+            terminal["ok"] = False
+            return {
+                "ok": False,
+                "application": "terminal-mcp",
+                "storage": "error",
+                "auth_mode": auth_mode,
+                "terminal": terminal,
+            }

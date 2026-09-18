@@ -1,31 +1,11 @@
 import base64
 import hmac
-import json
 from html import escape
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-NO_STORE_HEADERS = {
-    "Cache-Control": "no-store, max-age=0",
-    "Pragma": "no-cache",
-    "Referrer-Policy": "no-referrer",
-}
-FORM = """<!doctype html><html><body><h1>terminal-mcp</h1><form method="post"><input type="hidden" name="client_id" value="{client_id}"><input type="hidden" name="redirect_uri" value="{redirect_uri}"><input type="hidden" name="scope" value="{scope}"><input type="hidden" name="state" value="{state}"><input type="hidden" name="code_challenge" value="{code_challenge}"><input type="hidden" name="code_challenge_method" value="S256"><label>Username <input name="username"></label><label>Password <input type="password" name="password"></label><button>Authorize</button></form><script>addEventListener("pageshow",event=>{{if(event.persisted)location.reload()}});</script></body></html>"""  # noqa: E501
-COMPLETED = """<!doctype html><html><body><h1>terminal-mcp</h1><p>This authorization request has already been completed. This window can be closed.</p><script>window.close();</script></body></html>"""  # noqa: E501
-
-
-def _authorization_request_hash(store, client_id, redirect_uri, scope, state, code_challenge):
-    payload = json.dumps(
-        ["v1", client_id, redirect_uri, scope, state, code_challenge],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return store.digest(payload)
-
-
-def _no_store_html(content, status_code=200):
-    return HTMLResponse(content, status_code=status_code, headers=NO_STORE_HEADERS)
+FORM = """<!doctype html><html><body><h1>terminal-mcp</h1><form method="post"><input type="hidden" name="client_id" value="{client_id}"><input type="hidden" name="redirect_uri" value="{redirect_uri}"><input type="hidden" name="scope" value="{scope}"><input type="hidden" name="state" value="{state}"><input type="hidden" name="code_challenge" value="{code_challenge}"><input type="hidden" name="code_challenge_method" value="S256"><label>Username <input name="username"></label><label>Password <input type="password" name="password"></label><button>Authorize</button></form></body></html>"""  # noqa: E501
 
 
 def build_oauth_router(settings, auth, store):
@@ -106,13 +86,8 @@ def build_oauth_router(settings, auth, store):
             or code_challenge_method != "S256"
             or not code_challenge
         ):
-            return _no_store_html("invalid authorization request", 400)
-        request_hash = _authorization_request_hash(
-            store, client_id, redirect_uri, scope, state, code_challenge
-        )
-        if await store.authorization_request_used(request_hash):
-            return _no_store_html(COMPLETED, 410)
-        return _no_store_html(
+            return HTMLResponse("invalid authorization request", 400)
+        return HTMLResponse(
             FORM.format(
                 client_id=escape(client_id),
                 redirect_uri=escape(redirect_uri),
@@ -145,25 +120,15 @@ def build_oauth_router(settings, auth, store):
         )
         valid = valid and auth.oauth_user_valid(username, password)
         if not valid:
-            return _no_store_html("authorization denied", 403)
-        request_hash = _authorization_request_hash(
-            store, client_id, redirect_uri, scope, state, code_challenge
-        )
-        code = await store.create_code_once(
-            request_hash,
+            return HTMLResponse("authorization denied", 403)
+        code = await store.create_code(
             client_id,
             redirect_uri,
             " ".join(sorted(requested)),
             code_challenge,
             settings.oauth_code_ttl_sec,
         )
-        if code is None:
-            return _no_store_html(COMPLETED, 410)
-        return RedirectResponse(
-            auth.redirect(redirect_uri, {"code": code, "state": state}),
-            303,
-            headers=NO_STORE_HEADERS,
-        )
+        return RedirectResponse(auth.redirect(redirect_uri, {"code": code, "state": state}), 303)
 
     async def authenticate_client(request: Request, client_id, client_secret):
         header = request.headers.get("authorization", "")

@@ -15,6 +15,7 @@ from terminal_mcp.api_models import (
     RunResponse,
 )
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.telemetry import observed
 
 _SAFE_READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -76,7 +77,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         ),
     )
     async def run(cmd: str) -> Annotated[CallToolResult, RunResponse]:
-        data = RunResponse.model_validate(await service.run(cmd))
+        data = RunResponse.model_validate(await observed(service, "mcp", "run", service.run(cmd)))
         summary = (
             f"Command {data.cmd_hash} queued."
             if data.ok
@@ -94,7 +95,9 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         ),
     )
     async def recovery(cmd: str) -> Annotated[CallToolResult, RecoveryResponse]:
-        data = RecoveryResponse.model_validate(await service.recovery(cmd))
+        data = RecoveryResponse.model_validate(
+            await observed(service, "mcp", "recovery", service.recovery(cmd))
+        )
         return _structured_result(
             data,
             f"Recovery command {data.cmd_hash or 'unallocated'} returned "
@@ -114,7 +117,9 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         lines_count: Annotated[int, Field(ge=1, le=MAX_READ_LINES)] = DEFAULT_READ_LINES,
         offset: int | None = None,
     ) -> Annotated[CallToolResult, ReadResponse]:
-        data = ReadResponse.model_validate(await service.read(cmd_hash, lines_count, offset))
+        data = ReadResponse.model_validate(
+            await observed(service, "mcp", "read", service.read(cmd_hash, lines_count, offset))
+        )
         scope = f"command {cmd_hash}" if cmd_hash else "global log"
         return _structured_result(
             data,
@@ -130,7 +135,9 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         ),
     )
     async def cancel(cmd_hash: str) -> Annotated[CallToolResult, CancelResponse]:
-        data = CancelResponse.model_validate(await service.cancel(cmd_hash))
+        data = CancelResponse.model_validate(
+            await observed(service, "mcp", "cancel", service.cancel(cmd_hash))
+        )
         summary = (
             f"Command {data.cmd_hash} was cancelled."
             if data.ok
@@ -147,7 +154,9 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         ),
     )
     async def health() -> Annotated[CallToolResult, HealthResponse]:
-        data = HealthResponse.model_validate(await service.health(auth_mode))
+        data = HealthResponse.model_validate(
+            await observed(service, "mcp", "health", service.health(auth_mode))
+        )
         return _structured_result(
             data,
             "Terminal service is healthy." if data.ok else "Terminal service is unhealthy.",

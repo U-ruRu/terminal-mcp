@@ -185,6 +185,16 @@ class LinuxTerminalAdapter:
                 command.status = "cancelled"
             else:
                 command.status = "completed" if process.returncode == 0 else "failed"
+        except asyncio.CancelledError:
+            if process and process.returncode is None:
+                self.cancel_requested.add(command.cmd_hash)
+                await self._terminate(process, grace_seconds=0.5)
+                if pipe_task and not pipe_task.done():
+                    await asyncio.gather(pipe_task, return_exceptions=True)
+                command.exit_code = process.returncode
+            command.status = "cancelled"
+            command.error = f"{method}.cancelled: upstream disconnected"
+            raise
         except Exception as exc:
             command.status = "failed"
             command.error = f"{method}.execute: {exc}"
@@ -199,7 +209,7 @@ class LinuxTerminalAdapter:
             self.cancel_requested.discard(command.cmd_hash)
         return round((time.monotonic() - started) * 1000)
 
-    async def recovery(self, command, timeout_seconds=45):
+    async def recovery(self, command, timeout_seconds=20):
         return await self._execute(
             command,
             method="recovery",
@@ -239,7 +249,7 @@ class LinuxTerminalAdapter:
             "duration_ms": round((time.monotonic() - started) * 1000),
         }
 
-    async def cancel(self, command, timeout_seconds=45):
+    async def cancel(self, command, timeout_seconds=10):
         started = time.monotonic()
         deadline = started + timeout_seconds
         if command.status == "queued":
@@ -274,20 +284,29 @@ class LinuxTerminalAdapter:
 
         if process is None:
             self.cancel_requested.discard(command.cmd_hash)
-            return False, "cancel.wait_process: process did not become available within 45000 ms"
+            return (
+                False,
+                "cancel.wait_process: process did not become available within "
+                f"{round(timeout_seconds * 1000)} ms",
+            )
 
-        remaining = max(0.0, deadline - time.monotonic())
         if process.returncode is None:
             os.killpg(process.pid, signal.SIGTERM)
             try:
-                await asyncio.wait_for(process.wait(), max(0.0, remaining - 0.5))
+                term_wait = min(5.0, max(0.0, timeout_seconds - 0.5))
+                await asyncio.wait_for(process.wait(), term_wait)
             except TimeoutError:
                 os.killpg(process.pid, signal.SIGKILL)
                 try:
-                    await asyncio.wait_for(process.wait(), max(0.0, deadline - time.monotonic()))
+                    kill_wait = min(3.0, max(0.0, deadline - time.monotonic()))
+                    await asyncio.wait_for(process.wait(), kill_wait)
                 except TimeoutError:
                     self.cancel_requested.discard(command.cmd_hash)
-                    return False, "cancel.wait_process: process did not stop within 45000 ms"
+                    return (
+                        False,
+                        "cancel.wait_process: process did not stop within "
+                        f"{round(timeout_seconds * 1000)} ms",
+                    )
 
         command = await self.repo.get(command.cmd_hash) or command
         command.status = "cancelled"

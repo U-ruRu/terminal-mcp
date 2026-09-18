@@ -15,7 +15,7 @@ class OAuthStore:
         secure_database_path(self.path)
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(
-                """CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY,client_secret_hash TEXT,redirect_uris TEXT NOT NULL,client_name TEXT NOT NULL,auth_method TEXT NOT NULL,created_at INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS oauth_codes(code_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,redirect_uri TEXT NOT NULL,scope TEXT NOT NULL,code_challenge TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS oauth_refresh_tokens(token_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,scope TEXT NOT NULL,expires_at INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS oauth_authorization_requests(request_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,consumed_at INTEGER NOT NULL);"""  # noqa: E501
+                """CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY,client_secret_hash TEXT,redirect_uris TEXT NOT NULL,client_name TEXT NOT NULL,auth_method TEXT NOT NULL,created_at INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS oauth_codes(code_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,redirect_uri TEXT NOT NULL,scope TEXT NOT NULL,code_challenge TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS oauth_refresh_tokens(token_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,scope TEXT NOT NULL,expires_at INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);"""  # noqa: E501
             )
             await db.commit()
 
@@ -64,34 +64,12 @@ class OAuthStore:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("DELETE FROM oauth_refresh_tokens WHERE client_id=?", (client_id,))
             await db.execute("DELETE FROM oauth_codes WHERE client_id=?", (client_id,))
-            await db.execute(
-                "DELETE FROM oauth_authorization_requests WHERE client_id=?", (client_id,)
-            )
             await db.execute("DELETE FROM oauth_clients WHERE client_id=?", (client_id,))
-
             await db.commit()
 
-    async def authorization_request_used(self, request_hash):
-        async with aiosqlite.connect(self.path) as db:
-            row = await (
-                await db.execute(
-                    "SELECT 1 FROM oauth_authorization_requests WHERE request_hash=?",
-                    (request_hash,),
-                )
-            ).fetchone()
-        return row is not None
-
-    async def create_code_once(self, request_hash, cid, redirect_uri, scope, challenge, ttl):
+    async def create_code(self, cid, redirect_uri, scope, challenge, ttl):
         code = secrets.token_urlsafe(32)
         async with aiosqlite.connect(self.path) as db:
-            await db.execute("BEGIN IMMEDIATE")
-            claimed = await db.execute(
-                "INSERT OR IGNORE INTO oauth_authorization_requests VALUES(?,?,?)",
-                (request_hash, cid, int(time.time())),
-            )
-            if claimed.rowcount != 1:
-                await db.rollback()
-                return None
             await db.execute(
                 "INSERT INTO oauth_codes VALUES(?,?,?,?,?,?,0)",
                 (self.digest(code), cid, redirect_uri, scope, challenge, int(time.time()) + ttl),

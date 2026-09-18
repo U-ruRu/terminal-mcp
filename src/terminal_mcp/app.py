@@ -16,8 +16,12 @@ from terminal_mcp.http.admin import build_admin_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.server import build_mcp
+from terminal_mcp.metrics import Metrics
+from terminal_mcp.observability import EventLogger
+from terminal_mcp.runtime import RuntimeConfigProvider
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
+from terminal_mcp.trace import TraceMiddleware
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,17 +29,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repo = SqliteRepository(settings.database_path)
     oauth_store = OAuthStore(settings.database_path)
     credentials = CredentialManager(settings)
+    runtime = RuntimeConfigProvider(settings.runtime_config_path)
+    metrics = Metrics(runtime, settings.metrics_host, settings.metrics_port)
+    events = EventLogger(settings.log_path, runtime, metrics)
+    repo.configure_observability(events, metrics)
+    runtime.warning_callback = lambda error: events.emit(
+        "runtime_config_invalid", level="WARNING", outcome="invalid", error=error
+    )
+    runtime.reload_callback = lambda config: events.emit(
+        "runtime_config_reloaded", outcome="success"
+    )
     terminal = LinuxTerminalAdapter(
         repo, settings.shell, settings.cwd, settings.cancel_grace_sec, settings.terminal_user
     )
     service = TerminalService(
-        repo, terminal, settings.max_read_lines, settings.auth_mode, settings.health_command
+        repo,
+        terminal,
+        settings.max_read_lines,
+        settings.auth_mode,
+        settings.health_command,
+        runtime,
+        events,
+        metrics,
     )
     auth = AuthService(settings, oauth_store, credentials)
     mcp = build_mcp(service, settings.public_base_url, settings.mode_for("mcp"))
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
+        events.start()
+        await runtime.start()
+        await metrics.start()
+        events.emit("application_started", outcome="success")
         await repo.initialize()
         await oauth_store.initialize()
         await terminal.start()
@@ -44,12 +69,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 yield
         finally:
             await terminal.stop()
+            events.emit("application_stopped", outcome="success")
+            await metrics.stop()
+            await runtime.stop()
+            events.stop()
 
     app = FastAPI(title="terminal-mcp", version="0.5.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store
     app.state.credentials = credentials
+    app.state.runtime_config = runtime
+    app.state.metrics = metrics
+    app.state.events = events
     app.include_router(build_public_router())
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
@@ -86,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.openapi = custom_openapi
     app.add_middleware(AuthMiddleware, settings=settings, auth_service=auth)
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(TraceMiddleware)
     return app
 
 

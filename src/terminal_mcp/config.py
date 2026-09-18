@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     oauth_code_ttl_sec: int = 300
     max_read_lines: int = 5000
     cancel_grace_sec: float = 2.0
+    runtime_config_path: Path = Path("/etc/terminal-mcp/runtime.env")
+    log_path: Path = Path("/var/log/terminal-mcp/terminal-mcp.log")
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = 8081
 
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode

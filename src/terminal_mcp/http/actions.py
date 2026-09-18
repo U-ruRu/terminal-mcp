@@ -10,6 +10,7 @@ from terminal_mcp.api_models import (
     RunResponse,
 )
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.telemetry import observed
 
 
 class StrictRequest(BaseModel):
@@ -61,7 +62,7 @@ def build_actions_router(service, auth_mode="none"):
         response_model=RunResponse,
     )
     async def run_command(body: RunRequest):
-        return await service.run(body.cmd)
+        return await observed(service, "rest", "run", service.run(body.cmd))
 
     @router.post(
         "/recovery",
@@ -71,7 +72,7 @@ def build_actions_router(service, auth_mode="none"):
         response_model=RecoveryResponse,
     )
     async def recovery_command(body: RecoveryRequest):
-        return await service.recovery(body.cmd)
+        return await observed(service, "rest", "recovery", service.recovery(body.cmd))
 
     @router.post(
         "/read",
@@ -81,7 +82,9 @@ def build_actions_router(service, auth_mode="none"):
         response_model=ReadResponse,
     )
     async def read_terminal(body: ReadRequest):
-        return await service.read(body.cmd_hash, body.lines_count, body.offset)
+        return await observed(
+            service, "rest", "read", service.read(body.cmd_hash, body.lines_count, body.offset)
+        )
 
     @router.get("/read", include_in_schema=False)
     async def read_terminal_compat(
@@ -89,7 +92,7 @@ def build_actions_router(service, auth_mode="none"):
         lines_count: int = DEFAULT_READ_LINES,
         offset: int | None = None,
     ):
-        return await service.read(cmd_hash, lines_count, offset)
+        return await observed(service, "rest", "read", service.read(cmd_hash, lines_count, offset))
 
     @router.post(
         "/cancel",
@@ -99,7 +102,7 @@ def build_actions_router(service, auth_mode="none"):
         response_model=CancelResponse,
     )
     async def cancel_command(body: CancelRequest):
-        return await service.cancel(body.cmd_hash)
+        return await observed(service, "rest", "cancel", service.cancel(body.cmd_hash))
 
     @router.get(
         "/health",
@@ -109,6 +112,6 @@ def build_actions_router(service, auth_mode="none"):
         response_model_exclude_none=True,
     )
     async def terminal_health():
-        return await service.health(auth_mode)
+        return await observed(service, "rest", "health", service.health(auth_mode))
 
     return router
