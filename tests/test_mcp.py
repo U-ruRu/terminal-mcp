@@ -11,6 +11,7 @@ class FakeService:
             "self": {
                 "agent_id": "Kilo-7K2M",
                 "ttl_seconds": 300,
+                "task_lease_seconds": 180,
                 "task_summary": task_summary,
                 "intent": intent,
                 "work_scope": work_scope,
@@ -26,6 +27,7 @@ class FakeService:
             "self": {
                 "agent_id": agent_id,
                 "ttl_seconds": 300,
+                "task_lease_seconds": 180,
                 "task_summary": "task",
                 "intent": intent,
                 "work_scope": work_scope,
@@ -42,6 +44,7 @@ class FakeService:
             "self": {
                 "agent_id": agent_id,
                 "ttl_seconds": 300,
+                "task_lease_seconds": 180,
                 "task_summary": "task",
                 "intent": "work",
                 "work_scope": ["repo:mcp"],
@@ -87,13 +90,12 @@ class FakeService:
     async def cancel(self, cmd_hash, agent_id=None):
         return {"ok": True, "cmd_hash": cmd_hash, "error": None, "agent_id": agent_id}
 
-    async def health(self, auth_mode, agent_id=None):
+    async def health(self, auth_mode):
         return {
             "ok": True,
             "application": "terminal-mcp",
             "storage": "ok",
             "auth_mode": auth_mode,
-            "agent_id": agent_id,
             "terminal": {
                 "ok": True,
                 "user": "root",
@@ -133,7 +135,10 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert tools["health"].annotations.readOnlyHint is True
     assert tools["read"].annotations.readOnlyHint is True
     assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
-    assert tools["recovery"].parameters["required"] == ["agent_id", "cmd"]
+    assert tools["recovery"].parameters["required"] == ["cmd"]
+    assert tools["cancel"].parameters["required"] == ["cmd_hash"]
+    assert tools["health"].parameters.get("required", []) == []
+    assert tools["read"].parameters.get("required", []) == []
     start = tools["agent_start"].parameters["properties"]
     assert start["task_summary"]["maxLength"] == 120
     assert start["intent"]["maxLength"] == 160
@@ -161,7 +166,36 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert run.structuredContent["agent_id"] == "Kilo-7K2M"
 
     recovery = await tools["recovery"].run(
-        {"agent_id": "Kilo-7K2M", "cmd": "printf recovery-ready"}, convert_result=True
+        {"cmd": "printf recovery-ready", "agent_id": "Kilo-7K2M"}, convert_result=True
     )
     assert recovery.structuredContent["cmd_hash"] == "abcd1234"
     assert recovery.structuredContent["displayed_lines_count"] == 1
+
+@pytest.mark.asyncio
+async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
+    mcp = build_mcp(FakeService())
+    tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
+    health = await tools["health"].run({}, convert_result=True)
+    assert health.structuredContent["ok"] is True
+    assert health.structuredContent["agent_id"] == "anonymous"
+    recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)
+    assert recovery.structuredContent["agent_id"] == "anonymous"
+    cancelled = await tools["cancel"].run({"cmd_hash": "1234abcd"}, convert_result=True)
+    assert cancelled.structuredContent["agent_id"] == "anonymous"
+
+@pytest.mark.asyncio
+async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
+    mcp = build_mcp(FakeService())
+    read = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["read"]
+    global_read = await read.run({}, convert_result=True)
+    assert global_read.structuredContent["ok"] is True
+    assert global_read.structuredContent["agent_id"] == "anonymous"
+    scoped = await read.run(
+        {"agent_id": "Kilo-7K2M", "cmd_hash": "1234abcd"},
+        convert_result=True,
+    )
+    assert scoped.structuredContent["ok"] is True
+    assert scoped.structuredContent["status"] == "completed"
+    one_sided = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
+    assert one_sided.structuredContent["ok"] is False
+    assert one_sided.structuredContent["error"].startswith("read.scope:")

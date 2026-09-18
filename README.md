@@ -31,13 +31,16 @@
 
 ## MCP
 
-Endpoint: `/mcp`. Каждый рабочий проход начинается с `agent_start`. Активная Agent Session живёт 300 секунд после последнего вызова с её `agent_id`.
+Endpoint: `/mcp`. Каждый рабочий проход начинается с `agent_start`. Активная Agent Session живёт 300 секунд после последнего session-bound вызова. `agent_start` и `agent_task` создают 180-секундный task lease для `run`.
 
-- `agent_start(task_summary, intent, work_scope)` создаёт NATO call sign вида `Foxtrot-7K2M` и возвращает компактный обзор свежих агентов.
-- `agent_task(agent_id, intent, work_scope, detail?)` обновляет ближайшую задачу, сохраняет transition history и показывает scope overlap.
+- `agent_start(task_summary, intent, work_scope)` создаёт NATO call sign вида `Foxtrot-7K2M`, открывает первый task lease и возвращает компактный обзор свежих агентов.
+- `agent_task(agent_id, intent, work_scope, detail?)` обновляет ближайшую задачу, сохраняет transition history, показывает scope overlap и обновляет task lease.
 - `agents(agent_id)` показывает до 8 свежих коллег и до 3 последних команд каждого.
 - `agent_finish(agent_id)` явно завершает сессию; штатный lifecycle также завершается через TTL.
-- `run(agent_id, cmd)`, `recovery(agent_id, cmd)`, `read(agent_id, ...)`, `cancel(agent_id, cmd_hash)` и `health(agent_id)` требуют активную сессию и обновляют её activity.
+- `run(agent_id, cmd)` требует активную Agent Session и task lease не старше 180 секунд. При истёкшем lease возвращается `task_context_expired=true`; достаточно вызвать `agent_task`.
+- `health()` не требует Agent Session.
+- `recovery(cmd, agent_id?)` и `cancel(cmd_hash, agent_id?)` доступны без Agent Session. При отсутствии `agent_id` caller/command attribution обозначается как `anonymous`.
+- `read(agent_id?, cmd_hash?, ...)` работает в двух режимах: `agent_id + cmd_hash` вместе для scoped command read либо оба параметра отсутствуют для global terminal stream. Команды без владельца отображаются как `[anonymous]`.
 
 `task_summary` ограничен 120 символами, `intent` и optional `detail` — 160, `work_scope` — четырьмя элементами по 80 символов. Scope является cooperative metadata. Parent/child пути пересекаются, sibling scopes считаются раздельными. Модель оставляет extension point для coarse-grained leases.
 
@@ -45,7 +48,7 @@ Command attribution сохраняет `agent_id`, восьмизначный `c
 
 Expired session исчезает из active overview. Следующий вызов со старым ID возвращает `session_expired=true` и `registration_required=true`; агент регистрирует новую сессию через `agent_start`. Session, task history, activity audit и command attribution сохраняются в SQLite.
 
-Рекомендуемый workflow: `agent_start` → inspect active agents → `agent_task` → work → `agent_task` → work.
+Рекомендуемый workflow: `agent_start` → inspect active agents → `run/read` → при смене этапа или истечении 180 секунд `agent_task` → `run/read`. `recovery`, `cancel`, global `read` и `health` остаются доступны без task lease.
 
 ## OpenAPI Actions
 
@@ -59,7 +62,7 @@ Schema: `/openapi.json`. Actions используют тот же service layer 
 - `POST /actions/recovery`
 - `POST /actions/read`
 - `POST /actions/cancel`
-- `GET /actions/health?agent_id=...`
+- `GET /actions/health`
 
 Все published Actions содержат `x-openai-isConsequential: false`. MCP tools публикуют `destructiveHint=false` и `openWorldHint=false`; `agents`, `health` и `read` помечены read-only.
 

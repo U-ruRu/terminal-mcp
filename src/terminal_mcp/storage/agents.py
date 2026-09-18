@@ -78,6 +78,17 @@ class AgentStore:
             )
             await db.commit()
 
+    async def latest_task_at(self, agent_id):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            row = await (
+                await db.execute(
+                    "SELECT timestamp FROM agent_task_events "
+                    "WHERE agent_id=? ORDER BY id DESC LIMIT 1",
+                    (agent_id,),
+                )
+            ).fetchone()
+        return row[0] if row else None
+
     async def active(self, cutoff, limit):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             rows = await (

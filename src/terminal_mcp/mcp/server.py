@@ -16,7 +16,7 @@ from terminal_mcp.api_models import (
     RecoveryResponse,
     RunResponse,
 )
-from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.core.service import ANONYMOUS_AGENT_ID, DEFAULT_READ_LINES, MAX_READ_LINES
 from terminal_mcp.telemetry import observed
 
 _SAFE_READ_ONLY = ToolAnnotations(
@@ -137,7 +137,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Queue a shell command for FIFO execution. agent_id is required; use agent_start first.",
+        description="Queue a shell command for FIFO execution. Requires an active agent session and a task context refreshed by agent_start or agent_task within the last 180 seconds.",
     )
     async def run(agent_id: str, cmd: str) -> Annotated[CallToolResult, RunResponse]:
         data = RunResponse.model_validate(
@@ -147,9 +147,13 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             f"Command {data.cmd_hash} queued."
             if data.ok
             else (
-                "Agent session expired. Call agent_start."
-                if data.registration_required
-                else f"Command was not queued: {data.error}"
+                "Task context expired. Call agent_task before run."
+                if data.task_context_expired
+                else (
+                    "Agent session expired. Call agent_start."
+                    if data.registration_required
+                    else f"Command was not queued: {data.error}"
+                )
             )
         )
         return _structured_result(data, summary)
@@ -157,80 +161,93 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Run one persisted emergency command outside FIFO. agent_id is required; use agent_start first.",
+        description="Run one persisted emergency command outside FIFO. agent_id is optional and used only for attribution when available.",
     )
-    async def recovery(agent_id: str, cmd: str) -> Annotated[CallToolResult, RecoveryResponse]:
-        data = RecoveryResponse.model_validate(
-            await observed(service, "mcp", "recovery", service.recovery(cmd, agent_id=agent_id))
-        )
+    async def recovery(
+        cmd: str,
+        agent_id: str | None = None,
+    ) -> Annotated[CallToolResult, RecoveryResponse]:
+        raw = await observed(service, "mcp", "recovery", service.recovery(cmd, agent_id=agent_id))
+        raw["agent_id"] = agent_id or ANONYMOUS_AGENT_ID
+        data = RecoveryResponse.model_validate(raw)
         return _structured_result(
             data,
-            "Agent session expired. Call agent_start."
-            if data.registration_required
-            else f"Recovery {data.cmd_hash or 'unallocated'} returned {data.displayed_lines_count} line(s).",
+            f"Recovery {data.cmd_hash or 'unallocated'} returned {data.displayed_lines_count} line(s).",
         )
 
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Read stored terminal output or the global attributed activity stream. agent_id is required.",
+        description="Read terminal output. Provide agent_id and cmd_hash together for one command, or omit both for the global terminal stream.",
     )
     async def read(
-        agent_id: str,
+        agent_id: str | None = None,
         cmd_hash: str | None = None,
         lines_count: Annotated[int, Field(ge=1, le=MAX_READ_LINES)] = DEFAULT_READ_LINES,
         offset: int | None = None,
     ) -> Annotated[CallToolResult, ReadResponse]:
-        data = ReadResponse.model_validate(
-            await observed(
+        if bool(agent_id) != bool(cmd_hash):
+            data = ReadResponse(
+                ok=False,
+                lines=[],
+                next_offset=0,
+                overall_lines_count=None,
+                displayed_lines_count=0,
+                cmd_hash=cmd_hash,
+                status=None,
+                exit_code=None,
+                error="read.scope: provide agent_id and cmd_hash together, or omit both for global terminal",
+            )
+        else:
+            raw = await observed(
                 service,
                 "mcp",
                 "read",
                 service.read(cmd_hash, lines_count, offset, agent_id=agent_id),
             )
-        )
+            raw["agent_id"] = agent_id or ANONYMOUS_AGENT_ID
+            data = ReadResponse.model_validate(raw)
         scope = f"command {cmd_hash}" if cmd_hash else "global log"
         return _structured_result(
             data,
-            "Agent session expired. Call agent_start."
-            if data.registration_required
-            else f"Returned {data.displayed_lines_count} line(s) from {scope}.",
+            (
+                f"Returned {data.displayed_lines_count} line(s) from {scope}."
+                if data.ok
+                else f"Read failed: {data.error}"
+            ),
         )
 
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Cancel a queued or running command. agent_id is required; use read for final status.",
+        description="Cancel a queued or running command. agent_id is optional and used only as caller metadata; use read for final status.",
     )
-    async def cancel(agent_id: str, cmd_hash: str) -> Annotated[CallToolResult, CancelResponse]:
-        data = CancelResponse.model_validate(
-            await observed(service, "mcp", "cancel", service.cancel(cmd_hash, agent_id=agent_id))
-        )
+    async def cancel(
+        cmd_hash: str,
+        agent_id: str | None = None,
+    ) -> Annotated[CallToolResult, CancelResponse]:
+        raw = await observed(service, "mcp", "cancel", service.cancel(cmd_hash, agent_id=agent_id))
+        raw["agent_id"] = agent_id or ANONYMOUS_AGENT_ID
+        data = CancelResponse.model_validate(raw)
         summary = (
-            "Agent session expired. Call agent_start."
-            if data.registration_required
-            else (
-                f"Command {data.cmd_hash} was cancelled."
-                if data.ok
-                else f"Command {data.cmd_hash} was not cancelled: {data.error}"
-            )
+            f"Command {data.cmd_hash} was cancelled."
+            if data.ok
+            else f"Command {data.cmd_hash} was not cancelled: {data.error}"
         )
         return _structured_result(data, summary)
 
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Return terminal service health. agent_id is required and refreshes session activity.",
+        description="Return terminal service health. No agent session is required.",
     )
-    async def health(agent_id: str) -> Annotated[CallToolResult, HealthResponse]:
-        data = HealthResponse.model_validate(
-            await observed(service, "mcp", "health", service.health(auth_mode, agent_id=agent_id))
-        )
+    async def health() -> Annotated[CallToolResult, HealthResponse]:
+        raw = await observed(service, "mcp", "health", service.health(auth_mode))
+        raw["agent_id"] = ANONYMOUS_AGENT_ID
+        data = HealthResponse.model_validate(raw)
         return _structured_result(
             data,
-            "Agent session expired. Call agent_start."
-            if data.registration_required
-            else ("Terminal service is healthy." if data.ok else "Terminal service is unhealthy."),
+            "Terminal service is healthy." if data.ok else "Terminal service is unhealthy.",
         )
 
     return mcp

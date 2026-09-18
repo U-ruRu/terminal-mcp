@@ -2,7 +2,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from terminal_mcp.api_models import (
     AgentFinishResponse,
@@ -13,7 +13,7 @@ from terminal_mcp.api_models import (
     RecoveryResponse,
     RunResponse,
 )
-from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.core.service import ANONYMOUS_AGENT_ID, DEFAULT_READ_LINES, MAX_READ_LINES
 from terminal_mcp.telemetry import observed
 
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
@@ -25,6 +25,10 @@ class StrictRequest(BaseModel):
 
 class AgentRequest(StrictRequest):
     agent_id: str = Field(min_length=1, max_length=64)
+
+
+class OptionalAgentRequest(StrictRequest):
+    agent_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class AgentStartRequest(StrictRequest):
@@ -43,17 +47,25 @@ class RunRequest(AgentRequest):
     cmd: str = Field(min_length=1, description="Shell script passed to /bin/bash -s through stdin.")
 
 
-class ReadRequest(AgentRequest):
-    cmd_hash: str | None = None
+class ReadRequest(OptionalAgentRequest):
+    cmd_hash: str | None = Field(default=None, min_length=8, max_length=8)
     lines_count: int = Field(default=DEFAULT_READ_LINES, ge=1, le=MAX_READ_LINES)
     offset: int | None = None
 
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if bool(self.agent_id) != bool(self.cmd_hash):
+            raise ValueError(
+                "agent_id and cmd_hash must be provided together, or both omitted for global terminal"
+            )
+        return self
 
-class RecoveryRequest(AgentRequest):
+
+class RecoveryRequest(OptionalAgentRequest):
     cmd: str = Field(min_length=1)
 
 
-class CancelRequest(AgentRequest):
+class CancelRequest(OptionalAgentRequest):
     cmd_hash: str = Field(min_length=8, max_length=8)
 
 
@@ -98,24 +110,30 @@ def build_actions_router(service, auth_mode="none"):
 
     @router.post("/recovery", operation_id="recoveryCommand", response_model=RecoveryResponse)
     async def recovery_command(body: RecoveryRequest):
-        return await observed(
+        result = await observed(
             service, "rest", "recovery", service.recovery(body.cmd, agent_id=body.agent_id)
         )
+        result["agent_id"] = body.agent_id or ANONYMOUS_AGENT_ID
+        return result
 
     @router.post("/read", operation_id="readTerminal", response_model=ReadResponse)
     async def read_terminal(body: ReadRequest):
-        return await observed(
+        result = await observed(
             service,
             "rest",
             "read",
             service.read(body.cmd_hash, body.lines_count, body.offset, agent_id=body.agent_id),
         )
+        result["agent_id"] = body.agent_id or ANONYMOUS_AGENT_ID
+        return result
 
     @router.post("/cancel", operation_id="cancelCommand", response_model=CancelResponse)
     async def cancel_command(body: CancelRequest):
-        return await observed(
+        result = await observed(
             service, "rest", "cancel", service.cancel(body.cmd_hash, agent_id=body.agent_id)
         )
+        result["agent_id"] = body.agent_id or ANONYMOUS_AGENT_ID
+        return result
 
     @router.get(
         "/health",
@@ -123,9 +141,9 @@ def build_actions_router(service, auth_mode="none"):
         response_model=HealthResponse,
         response_model_exclude_none=True,
     )
-    async def terminal_health(agent_id: str):
-        return await observed(
-            service, "rest", "health", service.health(auth_mode, agent_id=agent_id)
-        )
+    async def terminal_health():
+        result = await observed(service, "rest", "health", service.health(auth_mode))
+        result["agent_id"] = ANONYMOUS_AGENT_ID
+        return result
 
     return router

@@ -16,6 +16,9 @@ class SessionStatus(BaseModel):
     agent_id: str | None = None
     session_expired: bool | None = None
     registration_required: bool | None = None
+    task_context_expired: bool | None = None
+    task_age_seconds: int | None = None
+    max_task_age_seconds: int | None = None
 
 
 class RunResponse(SessionStatus):
@@ -98,6 +101,7 @@ class RecentCommand(BaseModel):
 class AgentSelf(BaseModel):
     agent_id: str
     ttl_seconds: int
+    task_lease_seconds: int
     task_summary: str
     intent: str
     work_scope: list[str]

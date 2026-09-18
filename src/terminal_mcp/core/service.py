@@ -15,6 +15,7 @@ CANCEL_TIMEOUT_SECONDS = 10
 RECOVERY_TIMEOUT_SECONDS = 20
 HEALTH_TIMEOUT_SECONDS = 3
 RECOVERY_OUTPUT_LINES = 500
+ANONYMOUS_AGENT_ID = "anonymous"
 
 
 def _budget(seconds):
@@ -51,6 +52,7 @@ class TerminalService:
         )
 
     async def _create_with_hash(self, cmd, status, agent_id=None, command_type="run"):
+        attribution_agent_id = agent_id or ANONYMOUS_AGENT_ID
         for _ in range(32):
             cmd_hash = secrets.token_hex(4)
             try:
@@ -58,7 +60,7 @@ class TerminalService:
                     cmd,
                     status=status,
                     cmd_hash=cmd_hash,
-                    agent_id=agent_id,
+                    agent_id=attribution_agent_id,
                     command_type=command_type,
                     command_preview=normalize_preview(cmd),
                 )
@@ -68,9 +70,14 @@ class TerminalService:
 
     async def run(self, cmd, agent_id=None):
         if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.validate(agent_id, "run")
+            gate = await self.agent_coordinator.validate_run(agent_id)
             if gate:
-                return {"ok": False, "cmd_hash": None, "error": "agent session expired", **gate}
+                error = (
+                    "run.task: task context expired; call agent_task"
+                    if gate.get("task_context_expired")
+                    else "run.agent: agent session expired; call agent_start"
+                )
+                return {"ok": False, "cmd_hash": None, "error": error, **gate}
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -120,33 +127,19 @@ class TerminalService:
             f"[{line.appeared_at}] {line.text}"
             if scoped
             else (
-                f"[{line.appeared_at}] [{agent_map.get(line.cmd_hash, '-')}] "
+                f"[{line.appeared_at}] [{agent_map.get(line.cmd_hash, ANONYMOUS_AGENT_ID)}] "
                 f"[{line.cmd_hash}] {line.text}"
             )
             for line in lines
         ]
 
     async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None, agent_id=None):
-        if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.validate(agent_id, "read")
-            if gate:
-                return {
-                    "ok": False,
-                    "lines": [],
-                    "next_offset": 0,
-                    "overall_lines_count": None,
-                    "displayed_lines_count": 0,
-                    "cmd_hash": cmd_hash,
-                    "status": None,
-                    "exit_code": None,
-                    "error": "agent session expired",
-                    **gate,
-                }
         if self.runtime:
             await self.runtime.before_tool_call()
         limit = max(1, min(int(lines_count), MAX_READ_LINES))
         result = {
             "ok": True,
+            "agent_id": agent_id or ANONYMOUS_AGENT_ID,
             "lines": [],
             "next_offset": 0,
             "overall_lines_count": None,
@@ -220,27 +213,14 @@ class TerminalService:
             return result
 
     async def recovery(self, cmd, agent_id=None):
-        if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.validate(agent_id, "recovery")
-            if gate:
-                return {
-                    "ok": False,
-                    "cmd_hash": None,
-                    "lines": [],
-                    "overall_lines_count": 0,
-                    "displayed_lines_count": 0,
-                    "exit_code": None,
-                    "error": "agent session expired",
-                    "duration_ms": 0,
-                    **gate,
-                }
+        caller_agent_id = agent_id or ANONYMOUS_AGENT_ID
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
         stage = "persist"
         started_at = asyncio.get_running_loop().time()
         try:
-            command = await self._create_with_hash(cmd, "running", agent_id, "recovery")
+            command = await self._create_with_hash(cmd, "running", caller_agent_id, "recovery")
             if agent_id and self.agent_coordinator:
                 await self.agent_coordinator.record_command(agent_id, "recovery", command.cmd_hash)
             stage = "execute"
@@ -258,6 +238,7 @@ class TerminalService:
             plugin_error = current.error
             return {
                 "ok": plugin_error is None and current.status in {"completed", "failed"},
+                "agent_id": caller_agent_id,
                 "cmd_hash": command.cmd_hash,
                 "lines": self._render(lines, scoped=True),
                 "overall_lines_count": total,
@@ -285,6 +266,7 @@ class TerminalService:
                 await self.repo.update(current)
             return {
                 "ok": False,
+                "agent_id": caller_agent_id,
                 "cmd_hash": command.cmd_hash if command else None,
                 "lines": [],
                 "overall_lines_count": 0,
@@ -295,10 +277,6 @@ class TerminalService:
             }
 
     async def cancel(self, cmd_hash, agent_id=None):
-        if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.validate(agent_id, "cancel")
-            if gate:
-                return {"ok": False, "cmd_hash": cmd_hash, "error": "agent session expired", **gate}
         if self.runtime:
             await self.runtime.before_tool_call()
         stage = "lookup"
@@ -336,30 +314,6 @@ class TerminalService:
             return {"ok": False, "cmd_hash": cmd_hash, "error": _error("cancel", stage, exc)}
 
     async def health(self, auth_mode, agent_id=None):
-        if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.validate(agent_id, "health")
-            if gate:
-                return {
-                    "ok": False,
-                    "application": "terminal-mcp",
-                    "storage": "unknown",
-                    "auth_mode": auth_mode,
-                    "terminal": {
-                        "ok": False,
-                        "user": "",
-                        "uid": 0,
-                        "gid": 0,
-                        "cwd": "",
-                        "privilege": "",
-                        "shell": "",
-                        "terminal_user": "",
-                        "scheduler": "fifo",
-                        "parallelism": 1,
-                        "queue_size": 0,
-                        "running_commands": [],
-                    },
-                    **gate,
-                }
         if self.runtime:
             await self.runtime.before_tool_call()
         timeout = 5 if self.health_command else HEALTH_TIMEOUT_SECONDS
@@ -379,6 +333,7 @@ class TerminalService:
                 )
                 result = {
                     "ok": terminal.get("ok", False) and internal_ok,
+                    "agent_id": agent_id or ANONYMOUS_AGENT_ID,
                     "application": "terminal-mcp",
                     "storage": "ok" if storage_ok else "error",
                     "auth_mode": auth_mode,
@@ -404,6 +359,7 @@ class TerminalService:
             terminal["ok"] = False
             return {
                 "ok": False,
+                "agent_id": agent_id or ANONYMOUS_AGENT_ID,
                 "application": "terminal-mcp",
                 "storage": "error",
                 "auth_mode": auth_mode,

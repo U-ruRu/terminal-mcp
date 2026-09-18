@@ -7,6 +7,7 @@ from terminal_mcp.core.orchestration import (
     AGENT_TTL_SECONDS,
     MAX_ACTIVE_AGENTS,
     MAX_RECENT_COMMANDS,
+    TASK_LEASE_SECONDS,
     find_scope_overlaps,
     generate_agent_id,
     parse_utc,
@@ -16,10 +17,17 @@ from terminal_mcp.core.orchestration import (
 
 
 class AgentCoordinator:
-    def __init__(self, store, metrics=None, ttl_seconds=AGENT_TTL_SECONDS):
+    def __init__(
+        self,
+        store,
+        metrics=None,
+        ttl_seconds=AGENT_TTL_SECONDS,
+        task_lease_seconds=TASK_LEASE_SECONDS,
+    ):
         self.store = store
         self.metrics = metrics
         self.ttl_seconds = ttl_seconds
+        self.task_lease_seconds = task_lease_seconds
 
     async def start(self, task_summary, intent, work_scope):
         now = utc_text()
@@ -49,6 +57,28 @@ class AgentCoordinator:
         stamp = utc_text(now)
         await self.store.touch(agent_id, stamp)
         await self.store.activity(agent_id, tool, stamp)
+        return None
+
+    async def validate_run(self, agent_id):
+        gate = await self.validate(agent_id, "run")
+        if gate:
+            return gate
+        latest_task_at = await self.store.latest_task_at(agent_id)
+        now = utc_now()
+        task_age = (
+            (now - parse_utc(latest_task_at)).total_seconds()
+            if latest_task_at
+            else float("inf")
+        )
+        if task_age > self.task_lease_seconds:
+            self._inc("terminal_mcp_agent_task_lease_expired_total")
+            return {
+                "ok": False,
+                "agent_id": agent_id,
+                "task_context_expired": True,
+                "task_age_seconds": None if latest_task_at is None else max(0, int(task_age)),
+                "max_task_age_seconds": self.task_lease_seconds,
+            }
         return None
 
     async def record_command(self, agent_id, tool, command_hash):
@@ -112,6 +142,7 @@ class AgentCoordinator:
             "self": {
                 "agent_id": agent_id,
                 "ttl_seconds": self.ttl_seconds,
+                "task_lease_seconds": self.task_lease_seconds,
                 "task_summary": own["task_summary"] if own else "",
                 "intent": own["intent"] if own else "",
                 "work_scope": own["work_scope"] if own else [],

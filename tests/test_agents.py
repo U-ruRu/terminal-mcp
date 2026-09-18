@@ -95,10 +95,10 @@ async def test_activity_refresh_expiry_and_reregistration(tmp_path):
     before = (await AgentStore(repo.path).get_session(agent_id))["last_activity_at"]
     await terminal.start()
     await asyncio.sleep(0.01)
-    health = await service.health("none", agent_id=agent_id)
+    health = await service.health("none")
     assert health["ok"] is True
     after = (await AgentStore(repo.path).get_session(agent_id))["last_activity_at"]
-    assert after >= before
+    assert after == before
 
     service.agent_coordinator.ttl_seconds = 0.01
     await asyncio.sleep(0.03)
@@ -121,7 +121,7 @@ async def test_command_attribution_recent_order_and_global_read(tmp_path):
     recent = await AgentStore(repo.path).recent_commands(agent_id, 3)
     assert [item["command_hash"] for item in recent[:2]] == [second["cmd_hash"], first["cmd_hash"]]
     assert recent[0]["preview"] == "printf 'two\\n'"
-    global_read = await service.read(None, 20, 0, agent_id=agent_id)
+    global_read = await service.read(None, 20, 0)
     assert any(f"[{agent_id}] [{first['cmd_hash']}]" in line for line in global_read["lines"])
     assert any(f"[{agent_id}] [{second['cmd_hash']}]" in line for line in global_read["lines"])
     busy = await service.run("sleep 30", agent_id=agent_id)
@@ -150,7 +150,7 @@ async def test_multi_agent_overlap_compact_limits_and_persistence(tmp_path):
     overlap = await service.agent_task(bid, "Edit storage adapter", ["repo:storage"])
     assert overlap["overlaps"] == [{"agent_id": aid, "scope": "repo:storage"}]
 
-    global_read = await service.read(None, 20, 0, agent_id=bid)
+    global_read = await service.read(None, 20, 0)
     assert any(f"[{aid}] [{command['cmd_hash']}]" in line for line in global_read["lines"])
     assert len(overlap["active"]) <= 8
     assert all(len(item["recent_commands"]) <= 3 for item in overlap["active"])
@@ -197,4 +197,40 @@ async def test_active_overview_enforces_eight_agent_limit(tmp_path):
     overview = await service.agents(caller_id)
     assert len(overview["active"]) == 8
     assert overview["additional_active_agents"] == 2
+    await terminal.stop()
+
+@pytest.mark.asyncio
+async def test_run_requires_fresh_task_lease_and_agent_task_refreshes_it(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    started = await service.agent_start("Lease test", "Initial task", ["repo:tests"])
+    agent_id = started["self"]["agent_id"]
+    assert started["self"]["task_lease_seconds"] == 180
+    service.agent_coordinator.task_lease_seconds = 0.01
+    await asyncio.sleep(0.03)
+    blocked = await service.run("printf stale", agent_id=agent_id)
+    assert blocked["ok"] is False
+    assert blocked["task_context_expired"] is True
+    assert blocked["max_task_age_seconds"] == 0.01
+    assert "agent_task" in blocked["error"]
+    refreshed = await service.agent_task(agent_id, "Refreshed task", ["repo:tests"])
+    assert refreshed["ok"] is True
+    submitted = await service.run("printf 'fresh\\n'", agent_id=agent_id)
+    assert submitted["ok"] is True
+    finished = await wait_finished(service, agent_id, submitted["cmd_hash"])
+    assert finished["status"] == "completed"
+    await terminal.stop()
+
+@pytest.mark.asyncio
+async def test_anonymous_command_attribution_is_persisted(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    result = await service.recovery("printf 'anonymous-recovery\\n'")
+    assert result["agent_id"] == "anonymous"
+    global_read = await service.read(None, 20, 0)
+    assert any(f"[anonymous] [{result['cmd_hash']}]" in line for line in global_read["lines"])
+    with sqlite3.connect(repo.path) as db:
+        owner = db.execute(
+            "SELECT agent_id FROM command_agent_attribution WHERE command_hash=?",
+            (result["cmd_hash"],),
+        ).fetchone()[0]
+    assert owner == "anonymous"
     await terminal.stop()
