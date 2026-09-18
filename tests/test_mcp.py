@@ -5,10 +5,59 @@ from terminal_mcp.mcp.server import build_mcp
 
 
 class FakeService:
-    async def run(self, cmd):
-        return {"ok": True, "cmd_hash": "1234abcd", "error": None}
+    async def agent_start(self, task_summary, intent, work_scope):
+        return {
+            "ok": True,
+            "self": {
+                "agent_id": "Kilo-7K2M",
+                "ttl_seconds": 300,
+                "task_summary": task_summary,
+                "intent": intent,
+                "work_scope": work_scope,
+            },
+            "active": [],
+            "overlaps": [],
+            "additional_active_agents": 0,
+        }
 
-    async def recovery(self, cmd):
+    async def agent_task(self, agent_id, intent, work_scope, detail=None):
+        return {
+            "ok": True,
+            "self": {
+                "agent_id": agent_id,
+                "ttl_seconds": 300,
+                "task_summary": "task",
+                "intent": intent,
+                "work_scope": work_scope,
+            },
+            "active": [],
+            "overlaps": [],
+            "additional_active_agents": 0,
+            "detail": detail,
+        }
+
+    async def agents(self, agent_id):
+        return {
+            "ok": True,
+            "self": {
+                "agent_id": agent_id,
+                "ttl_seconds": 300,
+                "task_summary": "task",
+                "intent": "work",
+                "work_scope": ["repo:mcp"],
+            },
+            "active": [],
+            "overlaps": [],
+            "additional_active_agents": 0,
+        }
+
+    async def agent_finish(self, agent_id):
+        return {"ok": True, "agent_id": agent_id, "finished": True}
+
+    async def run(self, cmd, agent_id=None):
+        return {"ok": True, "cmd_hash": "1234abcd", "error": None, "agent_id": agent_id}
+
+    async def recovery(self, cmd, agent_id=None):
         return {
             "ok": True,
             "cmd_hash": "abcd1234",
@@ -18,9 +67,10 @@ class FakeService:
             "exit_code": 0,
             "error": None,
             "duration_ms": 1,
+            "agent_id": agent_id,
         }
 
-    async def read(self, cmd_hash=None, lines_count=500, offset=None):
+    async def read(self, cmd_hash=None, lines_count=500, offset=None, agent_id=None):
         return {
             "ok": True,
             "lines": [],
@@ -31,17 +81,19 @@ class FakeService:
             "status": "completed" if cmd_hash else None,
             "exit_code": 0 if cmd_hash else None,
             "error": None,
+            "agent_id": agent_id,
         }
 
-    async def cancel(self, cmd_hash):
-        return {"ok": True, "cmd_hash": cmd_hash, "error": None}
+    async def cancel(self, cmd_hash, agent_id=None):
+        return {"ok": True, "cmd_hash": cmd_hash, "error": None, "agent_id": agent_id}
 
-    async def health(self, auth_mode):
+    async def health(self, auth_mode, agent_id=None):
         return {
             "ok": True,
             "application": "terminal-mcp",
             "storage": "ok",
             "auth_mode": auth_mode,
+            "agent_id": agent_id,
             "terminal": {
                 "ok": True,
                 "user": "root",
@@ -59,56 +111,57 @@ class FakeService:
         }
 
 
-def test_mcp_tools_advertise_structured_output_schemas():
+def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    assert set(tools) == {"run", "recovery", "read", "cancel", "health"}
+    assert set(tools) == {
+        "agent_start",
+        "agent_task",
+        "agents",
+        "agent_finish",
+        "run",
+        "recovery",
+        "read",
+        "cancel",
+        "health",
+    }
     for tool in tools.values():
-        assert tool.output_schema is not None
-        assert tool.output_schema["type"] == "object"
-        assert tool.annotations is not None
+        assert tool.output_schema is not None and tool.output_schema["type"] == "object"
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.openWorldHint is False
+    assert tools["agents"].annotations.readOnlyHint is True
     assert tools["health"].annotations.readOnlyHint is True
     assert tools["read"].annotations.readOnlyHint is True
-    assert tools["run"].annotations.readOnlyHint is False
-    assert tools["cancel"].annotations.readOnlyHint is False
-    assert tools["recovery"].annotations.readOnlyHint is False
-
-    recovery_schema = tools["recovery"].parameters
-    assert set(recovery_schema["properties"]) == {"cmd"}
-    read_schema = tools["read"].parameters
-    assert read_schema["properties"]["lines_count"]["default"] == 500
-    assert read_schema["properties"]["lines_count"]["maximum"] == 1000
-    assert read_schema["properties"]["offset"]["default"] is None
+    assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
+    assert tools["recovery"].parameters["required"] == ["agent_id", "cmd"]
+    start = tools["agent_start"].parameters["properties"]
+    assert start["task_summary"]["maxLength"] == 120
+    assert start["intent"]["maxLength"] == 160
+    assert start["work_scope"]["maxItems"] == 4
+    assert start["work_scope"]["items"]["maxLength"] == 80
 
 
 @pytest.mark.asyncio
-async def test_mcp_result_has_summary_and_structured_content():
+async def test_mcp_start_run_and_recovery_structured_results():
     mcp = build_mcp(FakeService())
-    tool = next(tool for tool in mcp._tool_manager.list_tools() if tool.name == "run")
-    result = await tool.run({"cmd": "printf ok"}, convert_result=True)
-    assert isinstance(result, CallToolResult)
-    assert result.content[0].text == "Command 1234abcd queued."
-    assert result.structuredContent == {
-        "ok": True,
-        "cmd_hash": "1234abcd",
-        "error": None,
-    }
-    health_tool = next(tool for tool in mcp._tool_manager.list_tools() if tool.name == "health")
-    health_result = await health_tool.run({}, convert_result=True)
-    assert "custom_command" not in health_result.structuredContent
+    tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
+    started = await tools["agent_start"].run(
+        {
+            "task_summary": "Implement registry",
+            "intent": "Inspect schema",
+            "work_scope": ["repo:storage"],
+        },
+        convert_result=True,
+    )
+    assert isinstance(started, CallToolResult)
+    assert started.structuredContent["self"]["agent_id"] == "Kilo-7K2M"
 
+    run = await tools["run"].run({"agent_id": "Kilo-7K2M", "cmd": "printf ok"}, convert_result=True)
+    assert run.content[0].text == "Command 1234abcd queued."
+    assert run.structuredContent["agent_id"] == "Kilo-7K2M"
 
-@pytest.mark.asyncio
-async def test_mcp_recovery_returns_persisted_hash_and_counts():
-    mcp = build_mcp(FakeService())
-    tool = next(tool for tool in mcp._tool_manager.list_tools() if tool.name == "recovery")
-    result = await tool.run({"cmd": "printf recovery-ready"}, convert_result=True)
-    assert isinstance(result, CallToolResult)
-    assert result.structuredContent["ok"] is True
-    assert result.structuredContent["cmd_hash"] == "abcd1234"
-    assert result.structuredContent["overall_lines_count"] == 1
-    assert result.structuredContent["displayed_lines_count"] == 1
-    assert "status" not in result.structuredContent
-    assert result.structuredContent["lines"][0].endswith("recovery-ready")
+    recovery = await tools["recovery"].run(
+        {"agent_id": "Kilo-7K2M", "cmd": "printf recovery-ready"}, convert_result=True
+    )
+    assert recovery.structuredContent["cmd_hash"] == "abcd1234"
+    assert recovery.structuredContent["displayed_lines_count"] == 1

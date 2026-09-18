@@ -2,6 +2,10 @@ import asyncio
 import secrets
 from sqlite3 import IntegrityError
 
+from terminal_mcp.core.agents import AgentCoordinator
+from terminal_mcp.core.orchestration import normalize_preview
+from terminal_mcp.storage.agents import AgentStore
+
 DEFAULT_READ_LINES = 500
 MAX_READ_LINES = 1000
 OPERATION_TIMEOUT_SECONDS = 45
@@ -42,17 +46,31 @@ class TerminalService:
         self.runtime = runtime
         self.events = events
         self.metrics = metrics
+        self.agent_coordinator = (
+            AgentCoordinator(AgentStore(repo.path), metrics) if hasattr(repo, "path") else None
+        )
 
-    async def _create_with_hash(self, cmd, status):
+    async def _create_with_hash(self, cmd, status, agent_id=None, command_type="run"):
         for _ in range(32):
             cmd_hash = secrets.token_hex(4)
             try:
-                return await self.repo.create(cmd, status=status, cmd_hash=cmd_hash)
+                return await self.repo.create(
+                    cmd,
+                    status=status,
+                    cmd_hash=cmd_hash,
+                    agent_id=agent_id,
+                    command_type=command_type,
+                    command_preview=normalize_preview(cmd),
+                )
             except IntegrityError:
                 continue
         raise RuntimeError("unable to allocate unique command hash")
 
-    async def run(self, cmd):
+    async def run(self, cmd, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            gate = await self.agent_coordinator.validate(agent_id, "run")
+            if gate:
+                return {"ok": False, "cmd_hash": None, "error": "agent session expired", **gate}
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -60,10 +78,12 @@ class TerminalService:
         stage = "persist"
         try:
             async with asyncio.timeout(_budget(RUN_TIMEOUT_SECONDS)):
-                command = await self._create_with_hash(cmd, "queued")
+                command = await self._create_with_hash(cmd, "queued", agent_id, "run")
                 stage = "enqueue"
                 await self.terminal.submit(command)
                 enqueued = True
+            if agent_id and self.agent_coordinator:
+                await self.agent_coordinator.record_command(agent_id, "run", command.cmd_hash)
             return {"ok": True, "cmd_hash": command.cmd_hash, "error": None}
         except asyncio.CancelledError:
             if command is not None and not enqueued:
@@ -94,15 +114,34 @@ class TerminalService:
             return {"ok": False, "cmd_hash": None, "error": _error("run", stage, exc)}
 
     @staticmethod
-    def _render(lines, scoped):
+    def _render(lines, scoped, agent_map=None):
+        agent_map = agent_map or {}
         return [
             f"[{line.appeared_at}] {line.text}"
             if scoped
-            else f"[{line.appeared_at}] [{line.cmd_hash}] {line.text}"
+            else (
+                f"[{line.appeared_at}] [{agent_map.get(line.cmd_hash, '-')}] "
+                f"[{line.cmd_hash}] {line.text}"
+            )
             for line in lines
         ]
 
-    async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None):
+    async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            gate = await self.agent_coordinator.validate(agent_id, "read")
+            if gate:
+                return {
+                    "ok": False,
+                    "lines": [],
+                    "next_offset": 0,
+                    "overall_lines_count": None,
+                    "displayed_lines_count": 0,
+                    "cmd_hash": cmd_hash,
+                    "status": None,
+                    "exit_code": None,
+                    "error": "agent session expired",
+                    **gate,
+                }
         if self.runtime:
             await self.runtime.before_tool_call()
         limit = max(1, min(int(lines_count), MAX_READ_LINES))
@@ -153,7 +192,12 @@ class TerminalService:
                     else:
                         lines = await self.repo.read_global_after_cursor(limit, offset)
                         result["next_offset"] = lines[-1].seq if lines else offset
-                    result["lines"] = self._render(lines, scoped=False)
+                    agent_map = {}
+                    if self.agent_coordinator:
+                        agent_map = await self.agent_coordinator.store.command_agents(
+                            [line.cmd_hash for line in lines]
+                        )
+                    result["lines"] = self._render(lines, scoped=False, agent_map=agent_map)
                 result["displayed_lines_count"] = len(result["lines"])
                 return result
         except asyncio.CancelledError:
@@ -175,14 +219,30 @@ class TerminalService:
             result["error"] = _error("read", stage, exc)
             return result
 
-    async def recovery(self, cmd):
+    async def recovery(self, cmd, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            gate = await self.agent_coordinator.validate(agent_id, "recovery")
+            if gate:
+                return {
+                    "ok": False,
+                    "cmd_hash": None,
+                    "lines": [],
+                    "overall_lines_count": 0,
+                    "displayed_lines_count": 0,
+                    "exit_code": None,
+                    "error": "agent session expired",
+                    "duration_ms": 0,
+                    **gate,
+                }
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
         stage = "persist"
         started_at = asyncio.get_running_loop().time()
         try:
-            command = await self._create_with_hash(cmd, "running")
+            command = await self._create_with_hash(cmd, "running", agent_id, "recovery")
+            if agent_id and self.agent_coordinator:
+                await self.agent_coordinator.record_command(agent_id, "recovery", command.cmd_hash)
             stage = "execute"
             duration_ms = await self.terminal.recovery(
                 command, timeout_seconds=_budget(RECOVERY_TIMEOUT_SECONDS)
@@ -234,7 +294,11 @@ class TerminalService:
                 "duration_ms": elapsed,
             }
 
-    async def cancel(self, cmd_hash):
+    async def cancel(self, cmd_hash, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            gate = await self.agent_coordinator.validate(agent_id, "cancel")
+            if gate:
+                return {"ok": False, "cmd_hash": cmd_hash, "error": "agent session expired", **gate}
         if self.runtime:
             await self.runtime.before_tool_call()
         stage = "lookup"
@@ -271,7 +335,31 @@ class TerminalService:
         except Exception as exc:
             return {"ok": False, "cmd_hash": cmd_hash, "error": _error("cancel", stage, exc)}
 
-    async def health(self, auth_mode):
+    async def health(self, auth_mode, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            gate = await self.agent_coordinator.validate(agent_id, "health")
+            if gate:
+                return {
+                    "ok": False,
+                    "application": "terminal-mcp",
+                    "storage": "unknown",
+                    "auth_mode": auth_mode,
+                    "terminal": {
+                        "ok": False,
+                        "user": "",
+                        "uid": 0,
+                        "gid": 0,
+                        "cwd": "",
+                        "privilege": "",
+                        "shell": "",
+                        "terminal_user": "",
+                        "scheduler": "fifo",
+                        "parallelism": 1,
+                        "queue_size": 0,
+                        "running_commands": [],
+                    },
+                    **gate,
+                }
         if self.runtime:
             await self.runtime.before_tool_call()
         timeout = 5 if self.health_command else HEALTH_TIMEOUT_SECONDS
@@ -321,3 +409,23 @@ class TerminalService:
                 "auth_mode": auth_mode,
                 "terminal": terminal,
             }
+
+    async def agent_start(self, task_summary, intent, work_scope):
+        if not self.agent_coordinator:
+            return {"ok": False, "error": "agent coordination unavailable"}
+        return await self.agent_coordinator.start(task_summary, intent, work_scope)
+
+    async def agent_task(self, agent_id, intent, work_scope, detail=None):
+        if not self.agent_coordinator:
+            return {"ok": False, "error": "agent coordination unavailable"}
+        return await self.agent_coordinator.task(agent_id, intent, work_scope, detail)
+
+    async def agents(self, agent_id):
+        if not self.agent_coordinator:
+            return {"ok": False, "error": "agent coordination unavailable"}
+        return await self.agent_coordinator.overview(agent_id)
+
+    async def agent_finish(self, agent_id):
+        if not self.agent_coordinator:
+            return {"ok": False, "error": "agent coordination unavailable"}
+        return await self.agent_coordinator.finish(agent_id)

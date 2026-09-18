@@ -31,39 +31,37 @@
 
 ## MCP
 
-Endpoint: `/mcp`.
+Endpoint: `/mcp`. Каждый рабочий проход начинается с `agent_start`. Активная Agent Session живёт 300 секунд после последнего вызова с её `agent_id`.
 
-- `run(cmd)` сохраняет команду, добавляет её в FIFO и возвращает только `ok`, восьмизначный `cmd_hash` и `error`. Операция ограничена 45 секундами; при неуспешном enqueue созданная запись удаляется.
-- `read(cmd_hash?, lines_count=500, offset?)` возвращает до 1000 строк. Без `offset` возвращаются последние строки; отрицательный offset считается от конца. Только `read` возвращает статус команды.
-- `cancel(cmd_hash)` физически удаляет queued-команду из очереди либо останавливает running-процесс. Через 45 секунд процесс принудительно завершается; окончательный статус проверяется через `read`.
-- `recovery(cmd)` создаёт журналируемую команду с собственным `cmd_hash`, запускает её немедленно вне FIFO и ждёт завершения до 45 секунд. Ответ содержит последние 500 строк, а полный вывод доступен через `read`.
-- `health()` возвращает состояние приложения, авторизации, очереди и terminal adapter. Если настроена `TERMINAL_MCP_HEALTH_COMMAND`, ответ также содержит её структурированный результат в `custom_command`. Health-команда выполняется отдельно от FIFO.
+- `agent_start(task_summary, intent, work_scope)` создаёт NATO call sign вида `Foxtrot-7K2M` и возвращает компактный обзор свежих агентов.
+- `agent_task(agent_id, intent, work_scope, detail?)` обновляет ближайшую задачу, сохраняет transition history и показывает scope overlap.
+- `agents(agent_id)` показывает до 8 свежих коллег и до 3 последних команд каждого.
+- `agent_finish(agent_id)` явно завершает сессию; штатный lifecycle также завершается через TTL.
+- `run(agent_id, cmd)`, `recovery(agent_id, cmd)`, `read(agent_id, ...)`, `cancel(agent_id, cmd_hash)` и `health(agent_id)` требуют активную сессию и обновляют её activity.
 
-`read` возвращает `overall_lines_count` для конкретной команды и `null` для глобального журнала, а также `displayed_lines_count`. При scoped-чтении положительный offset — нулевой индекс строки, отрицательный — позиция от конца. Выход за границы мягко ограничивается существующим диапазоном. В глобальном журнале отрицательный offset также считается от конца, а неотрицательный offset является стабильным SQLite `seq`-курcором: следующий вызов с `next_offset` возвращает только более новые строки. Общее число строк глобального журнала намеренно не вычисляется.
+`task_summary` ограничен 120 символами, `intent` и optional `detail` — 160, `work_scope` — четырьмя элементами по 80 символов. Scope является cooperative metadata. Parent/child пути пересекаются, sibling scopes считаются раздельными. Модель оставляет extension point для coarse-grained leases.
 
-Поле `error` содержит только ошибку самого плагина и этап в формате `<method>.<stage>: <reason>`. Ненулевой exit code shell-команды не считается ошибкой плагина: stderr остаётся в `lines`, `error=null`, а `exit_code` и статус доступны через `read`.
+Command attribution сохраняет `agent_id`, восьмизначный `cmd_hash`, command type, status и нормализованный preview до 100 символов. Полная команда остаётся в основной command model. Global `read` показывает строки как `[time] [agent_id] [cmd_hash] ...`; scoped `read` сохраняет компактный прежний формат.
 
-Каждый MCP tool публикует `outputSchema` и возвращает машинно-читаемый объект в `structuredContent`. Поле `content` содержит краткое текстовое резюме без повторной сериализации JSON.
+Expired session исчезает из active overview. Следующий вызов со старым ID возвращает `session_expired=true` и `registration_required=true`; агент регистрирует новую сессию через `agent_start`. Session, task history, activity audit и command attribution сохраняются в SQLite.
 
-Время появления новых строк сохраняется и отображается в UTC с суффиксом `Z`. Намеренно остановленная команда сохраняет статус `cancelled`, включая завершение процесса по `SIGTERM` или `SIGKILL`.
-
-Статусы команды: `queued`, `running`, `completed`, `failed`, `cancelled`, `not_found`. Статус присутствует только в ответе `read`. Результаты `run` и `recovery` сохраняются в SQLite.
+Рекомендуемый workflow: `agent_start` → inspect active agents → `agent_task` → work → `agent_task` → work.
 
 ## OpenAPI Actions
 
-Schema: `/openapi.json`.
+Schema: `/openapi.json`. Actions используют тот же service layer и те же Agent Session semantics:
 
+- `POST /actions/agent/start`
+- `POST /actions/agent/task`
+- `POST /actions/agents`
+- `POST /actions/agent/finish`
 - `POST /actions/run`
 - `POST /actions/recovery`
 - `POST /actions/read`
 - `POST /actions/cancel`
-- `GET /actions/health`
+- `GET /actions/health?agent_id=...`
 
-`POST /actions/read` принимает JSON-поля `cmd_hash`, `lines_count` и `offset`. Совместимый `GET /actions/read` доступен вне публикуемой OpenAPI-схемы.
-
-Actions возвращают те же типизированные модели результатов напрямую как JSON. OpenAPI-схема описывает их через response schemas, совместимые с Custom GPT Actions.
-
-Все опубликованные Actions содержат `x-openai-isConsequential: false`, поскольку сервис работает в выделенной управляемой среде с возможностью отката. MCP tools публикуют `destructiveHint=false` и `openWorldHint=false`; `health` и `read` дополнительно помечены как read-only.
+Все published Actions содержат `x-openai-isConsequential: false`. MCP tools публикуют `destructiveHint=false` и `openWorldHint=false`; `agents`, `health` и `read` помечены read-only.
 
 ## Авторизация
 

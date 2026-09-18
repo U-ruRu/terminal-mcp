@@ -1,8 +1,12 @@
 # ruff: noqa: E501
+from typing import Annotated
+
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
 from terminal_mcp.api_models import (
+    AgentFinishResponse,
+    AgentOverviewResponse,
     CancelResponse,
     HealthResponse,
     ReadResponse,
@@ -12,106 +16,116 @@ from terminal_mcp.api_models import (
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
 from terminal_mcp.telemetry import observed
 
+ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
+
 
 class StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class RunRequest(StrictRequest):
+class AgentRequest(StrictRequest):
+    agent_id: str = Field(min_length=1, max_length=64)
+
+
+class AgentStartRequest(StrictRequest):
+    task_summary: str = Field(min_length=1, max_length=120)
+    intent: str = Field(min_length=1, max_length=160)
+    work_scope: list[ScopeItem] = Field(min_length=1, max_length=4)
+
+
+class AgentTaskRequest(AgentRequest):
+    intent: str = Field(min_length=1, max_length=160)
+    work_scope: list[ScopeItem] = Field(min_length=1, max_length=4)
+    detail: str | None = Field(default=None, max_length=160)
+
+
+class RunRequest(AgentRequest):
     cmd: str = Field(min_length=1, description="Shell script passed to /bin/bash -s through stdin.")
 
 
-class ReadRequest(StrictRequest):
-    cmd_hash: str | None = Field(
-        default=None,
-        description="Eight-character command identifier. Omit for the global terminal log.",
-    )
-    lines_count: int = Field(
-        default=DEFAULT_READ_LINES,
-        ge=1,
-        le=MAX_READ_LINES,
-        description="Maximum number of lines returned.",
-    )
-    offset: int | None = Field(
-        default=None,
-        description="Zero-based start index. Negative values count from the end. When omitted, the latest lines are returned.",
-    )
+class ReadRequest(AgentRequest):
+    cmd_hash: str | None = None
+    lines_count: int = Field(default=DEFAULT_READ_LINES, ge=1, le=MAX_READ_LINES)
+    offset: int | None = None
 
 
-class RecoveryRequest(StrictRequest):
-    cmd: str = Field(
-        min_length=1,
-        description="Emergency shell script executed immediately outside FIFO, persisted, with a fixed 45-second timeout.",
-    )
+class RecoveryRequest(AgentRequest):
+    cmd: str = Field(min_length=1)
 
 
-class CancelRequest(StrictRequest):
-    cmd_hash: str = Field(
-        min_length=8, max_length=8, description="Eight-character command identifier."
-    )
+class CancelRequest(AgentRequest):
+    cmd_hash: str = Field(min_length=8, max_length=8)
 
 
 def build_actions_router(service, auth_mode="none"):
     router = APIRouter(prefix="/actions", tags=["terminal-actions"])
 
     @router.post(
-        "/run",
-        operation_id="runCommand",
-        summary="Queue a shell command",
-        description="Queues a command and returns after it is persisted and added to FIFO, or after the fixed 45-second operation timeout.",
-        response_model=RunResponse,
+        "/agent/start", operation_id="startAgentSession", response_model=AgentOverviewResponse
     )
-    async def run_command(body: RunRequest):
-        return await observed(service, "rest", "run", service.run(body.cmd))
-
-    @router.post(
-        "/recovery",
-        operation_id="recoveryCommand",
-        summary="Run an emergency command outside FIFO",
-        description="Executes one persisted shell command immediately outside FIFO. The client waits for completion or the fixed 45-second timeout. At most 500 output lines are returned; full output is available through read.",
-        response_model=RecoveryResponse,
-    )
-    async def recovery_command(body: RecoveryRequest):
-        return await observed(service, "rest", "recovery", service.recovery(body.cmd))
-
-    @router.post(
-        "/read",
-        operation_id="readTerminal",
-        summary="Read terminal output",
-        description="Returns at most 1000 lines, 500 by default. Without offset, returns the latest lines. Negative offsets count from the end. Command status is available only here.",
-        response_model=ReadResponse,
-    )
-    async def read_terminal(body: ReadRequest):
+    async def agent_start(body: AgentStartRequest):
         return await observed(
-            service, "rest", "read", service.read(body.cmd_hash, body.lines_count, body.offset)
+            service,
+            "rest",
+            "agent_start",
+            service.agent_start(body.task_summary, body.intent, body.work_scope),
         )
 
-    @router.get("/read", include_in_schema=False)
-    async def read_terminal_compat(
-        cmd_hash: str | None = None,
-        lines_count: int = DEFAULT_READ_LINES,
-        offset: int | None = None,
-    ):
-        return await observed(service, "rest", "read", service.read(cmd_hash, lines_count, offset))
+    @router.post(
+        "/agent/task", operation_id="updateAgentTask", response_model=AgentOverviewResponse
+    )
+    async def agent_task(body: AgentTaskRequest):
+        return await observed(
+            service,
+            "rest",
+            "agent_task",
+            service.agent_task(body.agent_id, body.intent, body.work_scope, body.detail),
+        )
+
+    @router.post("/agents", operation_id="listActiveAgents", response_model=AgentOverviewResponse)
+    async def agents(body: AgentRequest):
+        return await observed(service, "rest", "agents", service.agents(body.agent_id))
 
     @router.post(
-        "/cancel",
-        operation_id="cancelCommand",
-        summary="Cancel a queued or running command",
-        description="Removes a queued command or stops a running process. Read the final command status through read.",
-        response_model=CancelResponse,
+        "/agent/finish", operation_id="finishAgentSession", response_model=AgentFinishResponse
     )
+    async def agent_finish(body: AgentRequest):
+        return await observed(service, "rest", "agent_finish", service.agent_finish(body.agent_id))
+
+    @router.post("/run", operation_id="runCommand", response_model=RunResponse)
+    async def run_command(body: RunRequest):
+        return await observed(service, "rest", "run", service.run(body.cmd, agent_id=body.agent_id))
+
+    @router.post("/recovery", operation_id="recoveryCommand", response_model=RecoveryResponse)
+    async def recovery_command(body: RecoveryRequest):
+        return await observed(
+            service, "rest", "recovery", service.recovery(body.cmd, agent_id=body.agent_id)
+        )
+
+    @router.post("/read", operation_id="readTerminal", response_model=ReadResponse)
+    async def read_terminal(body: ReadRequest):
+        return await observed(
+            service,
+            "rest",
+            "read",
+            service.read(body.cmd_hash, body.lines_count, body.offset, agent_id=body.agent_id),
+        )
+
+    @router.post("/cancel", operation_id="cancelCommand", response_model=CancelResponse)
     async def cancel_command(body: CancelRequest):
-        return await observed(service, "rest", "cancel", service.cancel(body.cmd_hash))
+        return await observed(
+            service, "rest", "cancel", service.cancel(body.cmd_hash, agent_id=body.agent_id)
+        )
 
     @router.get(
         "/health",
         operation_id="getTerminalHealth",
-        summary="Get application and terminal health",
         response_model=HealthResponse,
         response_model_exclude_none=True,
     )
-    async def terminal_health():
-        return await observed(service, "rest", "health", service.health(auth_mode))
+    async def terminal_health(agent_id: str):
+        return await observed(
+            service, "rest", "health", service.health(auth_mode, agent_id=agent_id)
+        )
 
     return router

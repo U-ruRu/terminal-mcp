@@ -9,6 +9,7 @@ from sqlite3 import IntegrityError
 import aiosqlite
 
 from terminal_mcp.core.models import Command, Line
+from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.storage.permissions import secure_database_path
 
 
@@ -80,6 +81,28 @@ class SqliteRepository:
                 );
                 CREATE INDEX IF NOT EXISTS ix_lines_hash_seq ON lines(hash, seq);
                 CREATE INDEX IF NOT EXISTS idx_lines_hash_seq ON lines(hash, seq);
+                CREATE TABLE IF NOT EXISTS agent_sessions(
+                    agent_id TEXT PRIMARY KEY, registered_at TEXT NOT NULL, last_activity_at TEXT NOT NULL,
+                    task_summary TEXT NOT NULL, intent TEXT NOT NULL, work_scope TEXT NOT NULL, state TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS agent_task_events(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, timestamp TEXT NOT NULL,
+                    intent TEXT NOT NULL, work_scope TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS command_agent_attribution(
+                    command_hash TEXT PRIMARY KEY, agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                    command_type TEXT NOT NULL, command_preview TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS agent_activity_events(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, timestamp TEXT NOT NULL,
+                    tool TEXT NOT NULL, command_hash TEXT
+                );
+                CREATE INDEX IF NOT EXISTS ix_agent_sessions_last_activity ON agent_sessions(last_activity_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_agent_task_events_agent ON agent_task_events(agent_id, id DESC);
+                CREATE INDEX IF NOT EXISTS ix_command_agent_agent ON command_agent_attribution(agent_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_command_agent_hash ON command_agent_attribution(command_hash);
+                CREATE INDEX IF NOT EXISTS ix_agent_activity_agent ON agent_activity_events(agent_id, id DESC);
+                PRAGMA user_version=1;
                 """
             )
             await db.execute(
@@ -88,7 +111,16 @@ class SqliteRepository:
             )
             await db.commit()
 
-    async def create(self, cmd, *, status="queued", cmd_hash=None):
+    async def create(
+        self,
+        cmd,
+        *,
+        status="queued",
+        cmd_hash=None,
+        agent_id=None,
+        command_type="run",
+        command_preview="",
+    ):
         attempts = 1 if cmd_hash is not None else 32
         for _ in range(attempts):
             h = cmd_hash or secrets.token_hex(4)
@@ -99,6 +131,11 @@ class SqliteRepository:
                         "INSERT INTO commands VALUES(?,?,?,?,?,?)",
                         (h, cmd, status, None, None, None),
                     )
+                    if agent_id:
+                        await db.execute(
+                            "INSERT INTO command_agent_attribution VALUES(?,?,?,?,?)",
+                            (h, agent_id, utc_text(), command_type, command_preview),
+                        )
                     await db.commit()
                 return command
             except IntegrityError:
@@ -124,6 +161,9 @@ class SqliteRepository:
     async def delete_command(self, cmd_hash):
         async with self._connect() as db:
             await db.execute("DELETE FROM lines WHERE hash=?", (cmd_hash,))
+            await db.execute(
+                "DELETE FROM command_agent_attribution WHERE command_hash=?", (cmd_hash,)
+            )
             await db.execute("DELETE FROM commands WHERE hash=?", (cmd_hash,))
             await db.commit()
 

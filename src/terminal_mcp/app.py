@@ -74,7 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await runtime.stop()
             events.stop()
 
-    app = FastAPI(title="terminal-mcp", version="0.5.0", lifespan=lifespan)
+    app = FastAPI(title="terminal-mcp", version="0.6.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store

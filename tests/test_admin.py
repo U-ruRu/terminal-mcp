@@ -20,6 +20,7 @@ def make_settings(tmp_path):
         admin_session_secret="s" * 32,
         auth_mode="bearer",
         bearer_tokens="api-token",
+        metrics_port=0,
     )
 
 
@@ -83,7 +84,20 @@ def test_admin_credentials_runtime_and_privacy(tmp_path):
             for line in env.read_text().splitlines()
         }
         assert values["TERMINAL_MCP_HEALTH_COMMAND"] == "printf 'admin-health\n'"
-        health = client.get("/actions/health", headers={"Authorization": "Bearer api-token"}).json()
+        headers = {"Authorization": "Bearer api-token"}
+        started = client.post(
+            "/actions/agent/start",
+            json={
+                "task_summary": "Admin test",
+                "intent": "Check health",
+                "work_scope": ["repo:tests"],
+            },
+            headers=headers,
+        ).json()
+        agent_id = started["self"]["agent_id"]
+        health = client.get(
+            "/actions/health", params={"agent_id": agent_id}, headers=headers
+        ).json()
         assert health["custom_command"]["lines"][0].endswith("admin-health")
 
 
