@@ -57,9 +57,15 @@ class TerminalService:
             if self.agent_coordinator
             else []
         )
+        pending_messages = (
+            await self.agent_coordinator.pending_messages(agent_id)
+            if self.agent_coordinator and agent_id
+            else []
+        )
         return {
             "agent_name": public_agent_name(agent_id),
             "active_agents": active_agents,
+            "pending_messages": pending_messages,
         }
 
     async def _create_with_hash(self, cmd, status, agent_id=None, command_type="run"):
@@ -81,21 +87,34 @@ class TerminalService:
 
     async def run(self, cmd, agent_id=None):
         if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.validate_run(agent_id)
-            if gate:
-                error = (
-                    "run.task: task context expired; call agent_task"
-                    if gate.get("task_context_expired")
-                    else "run.agent: agent session expired; call agent_start"
-                )
+            session_gate = await self.agent_coordinator.validate(agent_id, "run")
+            if session_gate:
                 return {
                     "ok": False,
                     "cmd_hash": None,
-                    "error": error,
-                    **gate,
-                    "active_agents": (
-                        await self.agent_coordinator.active_snapshot(exclude_agent_id=agent_id)
+                    "error": "run.agent: agent session expired; call agent_start",
+                    **session_gate,
+                    **await self.awareness(agent_id),
+                }
+            if await self.agent_coordinator.pending_messages(agent_id):
+                return {
+                    "ok": False,
+                    "cmd_hash": None,
+                    "error": (
+                        "run.coordination: unread message; acknowledge it with "
+                        "message(message_hash)"
                     ),
+                    "coordination_message_pending": True,
+                    **await self.awareness(agent_id),
+                }
+            task_gate = await self.agent_coordinator.validate_task_lease(agent_id)
+            if task_gate:
+                return {
+                    "ok": False,
+                    "cmd_hash": None,
+                    "error": "run.task: task context expired; call coordinate with step and intent",
+                    **task_gate,
+                    **await self.awareness(agent_id),
                 }
         if self.runtime:
             await self.runtime.before_tool_call()
@@ -282,6 +301,7 @@ class TerminalService:
                 "exit_code": current.exit_code,
                 "error": plugin_error,
                 "duration_ms": duration_ms,
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
         except asyncio.CancelledError:
             if self.events:
@@ -310,6 +330,7 @@ class TerminalService:
                 "exit_code": None,
                 "error": _error("recovery", stage, exc),
                 "duration_ms": elapsed,
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
 
     async def cancel(self, cmd_hash, agent_id=None):
@@ -326,12 +347,18 @@ class TerminalService:
                         "ok": False,
                         "cmd_hash": cmd_hash,
                         "error": "cancel.lookup: command not found",
+                        **(await self.awareness(agent_id) if agent_id else {}),
                     }
                 stage = "stop"
                 ok, error = await self.terminal.cancel(
                     command, timeout_seconds=_budget(CANCEL_TIMEOUT_SECONDS)
                 )
-                return {"ok": ok, "cmd_hash": cmd_hash, "error": error}
+                return {
+                    "ok": ok,
+                    "cmd_hash": cmd_hash,
+                    "error": error,
+                    **(await self.awareness(agent_id) if agent_id else {}),
+                }
         except asyncio.CancelledError:
             if self.events:
                 self.events.emit(
@@ -347,11 +374,19 @@ class TerminalService:
                 "ok": False,
                 "cmd_hash": cmd_hash,
                 "error": f"cancel.{stage}: timed out after 10000 ms",
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
         except Exception as exc:
-            return {"ok": False, "cmd_hash": cmd_hash, "error": _error("cancel", stage, exc)}
+            return {
+                "ok": False,
+                "cmd_hash": cmd_hash,
+                "error": _error("cancel", stage, exc),
+                **(await self.awareness(agent_id) if agent_id else {}),
+            }
 
     async def health(self, auth_mode, agent_id=None):
+        if agent_id and self.agent_coordinator:
+            await self.agent_coordinator.touch_if_active(agent_id, "health")
         if self.runtime:
             await self.runtime.before_tool_call()
         timeout = 5 if self.health_command else HEALTH_TIMEOUT_SECONDS
@@ -377,6 +412,8 @@ class TerminalService:
                     "auth_mode": auth_mode,
                     "terminal": terminal,
                 }
+                if agent_id:
+                    result.update(await self.awareness(agent_id))
                 if self.health_command:
                     custom = await self.terminal.capture(
                         self.health_command,
@@ -402,24 +439,62 @@ class TerminalService:
                 "storage": "error",
                 "auth_mode": auth_mode,
                 "terminal": terminal,
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
 
-    async def agent_start(self, task_summary, intent, work_scope):
+    async def agent_start(
+        self,
+        task_summary=None,
+        intent=None,
+        details=None,
+        work_scope=None,
+        agent_id=None,
+    ):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.start(task_summary, intent, work_scope)
+        result = await self.agent_coordinator.start(
+            task_summary=task_summary,
+            intent=intent,
+            work_scope=work_scope,
+            details=details,
+            agent_id=agent_id,
+        )
+        effective_id = agent_id
+        if effective_id is None and result.get("self"):
+            effective_id = result["self"].get("agent_id")
+        if effective_id:
+            result["pending_messages"] = await self.agent_coordinator.pending_messages(effective_id)
+        return result
 
-    async def agent_task(self, agent_id, intent):
+    async def coordinate(self, agent_id, step=None, intent=None, show_details=False):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.task(agent_id, intent)
+        result = await self.agent_coordinator.coordinate(
+            agent_id, step=step, intent=intent, show_details=show_details
+        )
+        result["pending_messages"] = await self.agent_coordinator.pending_messages(agent_id)
+        return result
+
+    async def message(self, agent_id, text=None, target=None, message_hash=None):
+        if not self.agent_coordinator:
+            return {"ok": False, "error": "agent coordination unavailable"}
+        result = await self.agent_coordinator.message(
+            agent_id, text=text, target=target, message_hash=message_hash
+        )
+        result["pending_messages"] = await self.agent_coordinator.pending_messages(agent_id)
+        return result
 
     async def agents(self, agent_id):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.overview(agent_id)
+        result = await self.agent_coordinator.overview(agent_id)
+        result["pending_messages"] = await self.agent_coordinator.pending_messages(agent_id)
+        return result
 
     async def agent_finish(self, agent_id):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.finish(agent_id)
+        pending = await self.agent_coordinator.pending_messages(agent_id)
+        result = await self.agent_coordinator.finish(agent_id)
+        result["pending_messages"] = pending
+        return result

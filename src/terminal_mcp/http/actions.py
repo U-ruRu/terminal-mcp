@@ -8,7 +8,9 @@ from terminal_mcp.api_models import (
     AgentFinishResponse,
     AgentOverviewResponse,
     CancelResponse,
+    CoordinateResponse,
     HealthResponse,
+    MessageResponse,
     ReadResponse,
     RecoveryResponse,
     RunResponse,
@@ -18,6 +20,7 @@ from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
 from terminal_mcp.telemetry import observed
 
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
+StepItem = Annotated[str, Field(min_length=1, max_length=160)]
 
 
 class StrictRequest(BaseModel):
@@ -33,13 +36,52 @@ class OptionalAgentRequest(StrictRequest):
 
 
 class AgentStartRequest(StrictRequest):
-    task_summary: str = Field(min_length=1, max_length=120)
-    intent: str = Field(min_length=1, max_length=160)
-    work_scope: list[ScopeItem] = Field(min_length=1, max_length=4)
+    agent_id: str | None = Field(default=None, min_length=1, max_length=64)
+    task_summary: str | None = Field(default=None, min_length=1, max_length=120)
+    intent: str | None = Field(default=None, min_length=1, max_length=160)
+    details: list[StepItem] | None = Field(default=None, min_length=1, max_length=12)
+    work_scope: list[ScopeItem] | None = Field(default=None, max_length=4)
+
+    @model_validator(mode="after")
+    def validate_start(self):
+        if self.agent_id is None:
+            if self.task_summary is None or self.intent is None or self.details is None:
+                raise ValueError(
+                    "new registration requires task_summary, intent and details"
+                )
+        elif all(
+            value is None
+            for value in (self.task_summary, self.intent, self.details, self.work_scope)
+        ):
+            raise ValueError("agent_start update requires at least one field to change")
+        return self
 
 
-class AgentTaskRequest(AgentRequest):
-    intent: str = Field(min_length=1, max_length=160)
+class CoordinateRequest(AgentRequest):
+    step: int | None = Field(default=None, ge=1)
+    intent: str | None = Field(default=None, min_length=1, max_length=160)
+    show_details: bool = False
+
+    @model_validator(mode="after")
+    def validate_coordinate(self):
+        if self.intent is not None and self.step is None:
+            raise ValueError("step is required when intent is provided")
+        return self
+
+
+class MessageRequest(AgentRequest):
+    text: str | None = Field(default=None, min_length=1, max_length=500)
+    target: str | None = Field(default=None, min_length=1, max_length=64)
+    message_hash: str | None = Field(default=None, min_length=8, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_message(self):
+        if self.message_hash is not None:
+            if self.text is not None or self.target is not None:
+                raise ValueError("acknowledgement accepts message_hash only")
+        elif self.text is None:
+            raise ValueError("sending requires text")
+        return self
 
 
 class RunRequest(AgentRequest):
@@ -82,21 +124,51 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "agent_start",
-            service.agent_start(body.task_summary, body.intent, body.work_scope),
+            service.agent_start(
+                task_summary=body.task_summary,
+                intent=body.intent,
+                details=body.details,
+                work_scope=body.work_scope,
+                agent_id=body.agent_id,
+            ),
         )
 
     @router.post(
-        "/agent/task",
-        operation_id="updateAgentTask",
-        response_model=AgentOverviewResponse,
+        "/coordinate",
+        operation_id="coordinateAgent",
+        response_model=CoordinateResponse,
         response_model_exclude_none=True,
     )
-    async def agent_task(body: AgentTaskRequest):
+    async def coordinate(body: CoordinateRequest):
         return await observed(
             service,
             "rest",
-            "agent_task",
-            service.agent_task(body.agent_id, body.intent),
+            "coordinate",
+            service.coordinate(
+                body.agent_id,
+                step=body.step,
+                intent=body.intent,
+                show_details=body.show_details,
+            ),
+        )
+
+    @router.post(
+        "/message",
+        operation_id="messageAgent",
+        response_model=MessageResponse,
+        response_model_exclude_none=True,
+    )
+    async def message(body: MessageRequest):
+        return await observed(
+            service,
+            "rest",
+            "message",
+            service.message(
+                body.agent_id,
+                text=body.text,
+                target=body.target,
+                message_hash=body.message_hash,
+            ),
         )
 
     @router.post(
@@ -157,10 +229,12 @@ def build_actions_router(service, auth_mode="none"):
         response_model=HealthResponse,
         response_model_exclude_none=True,
     )
-    async def terminal_health():
-        result = await observed(service, "rest", "health", service.health(auth_mode))
+    async def terminal_health(agent_id: str | None = None):
+        result = await observed(
+            service, "rest", "health", service.health(auth_mode, agent_id=agent_id)
+        )
         result.pop("agent_id", None)
-        result["agent_name"] = public_agent_name(None)
+        result["agent_name"] = public_agent_name(agent_id)
         return result
 
     return router

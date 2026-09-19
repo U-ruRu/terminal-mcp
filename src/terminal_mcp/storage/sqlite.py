@@ -84,11 +84,12 @@ class SqliteRepository:
                 CREATE INDEX IF NOT EXISTS idx_lines_hash_seq ON lines(hash, seq);
                 CREATE TABLE IF NOT EXISTS agent_sessions(
                     agent_id TEXT PRIMARY KEY, registered_at TEXT NOT NULL, last_activity_at TEXT NOT NULL,
-                    task_summary TEXT NOT NULL, intent TEXT NOT NULL, work_scope TEXT NOT NULL, state TEXT NOT NULL
+                    task_summary TEXT NOT NULL, intent TEXT NOT NULL, work_scope TEXT NOT NULL, state TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT '[]', current_step INTEGER NOT NULL DEFAULT 1
                 );
                 CREATE TABLE IF NOT EXISTS agent_task_events(
                     id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, timestamp TEXT NOT NULL,
-                    intent TEXT NOT NULL, work_scope TEXT NOT NULL
+                    intent TEXT NOT NULL, work_scope TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 1
                 );
                 CREATE TABLE IF NOT EXISTS command_agent_attribution(
                     command_hash TEXT PRIMARY KEY, agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -98,11 +99,21 @@ class SqliteRepository:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, timestamp TEXT NOT NULL,
                     tool TEXT NOT NULL, command_hash TEXT
                 );
+                CREATE TABLE IF NOT EXISTS coordination_messages(
+                    message_hash TEXT PRIMARY KEY, sender_agent_id TEXT NOT NULL,
+                    target_name TEXT, text TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS coordination_message_recipients(
+                    message_hash TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, read_at TEXT,
+                    PRIMARY KEY(message_hash, recipient_agent_id)
+                );
                 CREATE INDEX IF NOT EXISTS ix_agent_sessions_last_activity ON agent_sessions(last_activity_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_agent_task_events_agent ON agent_task_events(agent_id, id DESC);
                 CREATE INDEX IF NOT EXISTS ix_command_agent_agent ON command_agent_attribution(agent_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_command_agent_hash ON command_agent_attribution(command_hash);
                 CREATE INDEX IF NOT EXISTS ix_agent_activity_agent ON agent_activity_events(agent_id, id DESC);
+                CREATE INDEX IF NOT EXISTS ix_coord_message_recipient
+                    ON coordination_message_recipients(recipient_agent_id, read_at);
                 PRAGMA user_version=1;
                 """
             )
@@ -113,13 +124,38 @@ class SqliteRepository:
                 await db.execute("ALTER TABLE commands ADD COLUMN started_at TEXT")
             if "finished_at" not in columns:
                 await db.execute("ALTER TABLE commands ADD COLUMN finished_at TEXT")
+            session_columns = {
+                row[1]
+                for row in await (await db.execute("PRAGMA table_info(agent_sessions)")).fetchall()
+            }
+            legacy_agent_schema = "details" not in session_columns
+            if legacy_agent_schema:
+                await db.execute(
+                    "ALTER TABLE agent_sessions ADD COLUMN details TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "current_step" not in session_columns:
+                await db.execute(
+                    "ALTER TABLE agent_sessions ADD COLUMN current_step INTEGER NOT NULL DEFAULT 1"
+                )
+            task_columns = {
+                row[1]
+                for row in await (await db.execute("PRAGMA table_info(agent_task_events)")).fetchall()
+            }
+            if "step" not in task_columns:
+                await db.execute(
+                    "ALTER TABLE agent_task_events ADD COLUMN step INTEGER NOT NULL DEFAULT 1"
+                )
+            if legacy_agent_schema:
+                await db.execute(
+                    "UPDATE agent_sessions SET state='expired' WHERE state='active'"
+                )
             recovered_at = utc_text()
             await db.execute(
                 "UPDATE commands SET status='failed', error='startup.recover: application restarted', "
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=2")
+            await db.execute("PRAGMA user_version=3")
             await db.commit()
 
     async def create(

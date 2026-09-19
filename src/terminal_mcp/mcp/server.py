@@ -11,7 +11,9 @@ from terminal_mcp.api_models import (
     AgentFinishResponse,
     AgentOverviewResponse,
     CancelResponse,
+    CoordinateResponse,
     HealthResponse,
+    MessageResponse,
     ReadResponse,
     RecoveryResponse,
     RunResponse,
@@ -27,6 +29,7 @@ _SAFE_OPERATION = ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
 )
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
+StepItem = Annotated[str, Field(min_length=1, max_length=160)]
 
 
 def _structured_result(data, summary: str) -> CallToolResult:
@@ -80,16 +83,27 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Start every new work session here. Receive an agent call sign, declare the immediate task and scope, and inspect recent active agents.",
+        description="Register an agent with a concrete step plan. details is required for new registration; work_scope is optional. Pass an existing full agent_id to revise that session plan without allocating a new identity.",
     )
     async def agent_start(
-        task_summary: Annotated[str, Field(min_length=1, max_length=120)],
-        intent: Annotated[str, Field(min_length=1, max_length=160)],
-        work_scope: Annotated[list[ScopeItem], Field(min_length=1, max_length=4)],
+        task_summary: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
+        intent: Annotated[str | None, Field(min_length=1, max_length=160)] = None,
+        details: Annotated[list[StepItem] | None, Field(min_length=1, max_length=12)] = None,
+        work_scope: Annotated[list[ScopeItem] | None, Field(max_length=4)] = None,
+        agent_id: str | None = None,
     ) -> Annotated[CallToolResult, AgentOverviewResponse]:
         data = AgentOverviewResponse.model_validate(
             await observed(
-                service, "mcp", "agent_start", service.agent_start(task_summary, intent, work_scope)
+                service,
+                "mcp",
+                "agent_start",
+                service.agent_start(
+                    task_summary=task_summary,
+                    intent=intent,
+                    details=details,
+                    work_scope=work_scope,
+                    agent_id=agent_id,
+                ),
             )
         )
         return _structured_result(data, _overview_summary(data))
@@ -97,26 +111,57 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Refresh the task lease with one short intent, maximum 160 characters. The work_scope declared at agent_start is preserved.",
+        description="Inspect or update current coordination. agent_id alone returns current step/intent/detail. step selects a plan step. Providing step+intent updates current work and refreshes the 180-second task lease. show_details includes other agents' registered plans. Always inspect pending_messages and acknowledge them with message before new run work.",
     )
-    async def agent_task(
+    async def coordinate(
         agent_id: str,
-        intent: Annotated[str, Field(min_length=1, max_length=160)],
-    ) -> Annotated[CallToolResult, AgentOverviewResponse]:
-        data = AgentOverviewResponse.model_validate(
+        step: Annotated[int | None, Field(ge=1)] = None,
+        intent: Annotated[str | None, Field(min_length=1, max_length=160)] = None,
+        show_details: bool = False,
+    ) -> Annotated[CallToolResult, CoordinateResponse]:
+        data = CoordinateResponse.model_validate(
             await observed(
                 service,
                 "mcp",
-                "agent_task",
-                service.agent_task(agent_id, intent),
+                "coordinate",
+                service.coordinate(agent_id, step=step, intent=intent, show_details=show_details),
             )
         )
-        return _structured_result(data, _overview_summary(data))
+        return _structured_result(
+            data,
+            f"{data.agent_name} step={data.step} — {data.intent}" if data.ok else f"Coordinate failed: {data.error}",
+        )
+
+    @mcp.tool(
+        structured_output=True,
+        annotations=_SAFE_OPERATION,
+        description="Send or acknowledge coordination messages. To send, provide text and optionally target using the public agent name only; omit target for broadcast to all currently active peers. To acknowledge, provide message_hash instead of text/target. Returns recipients/read receipts.",
+    )
+    async def message(
+        agent_id: str,
+        text: Annotated[str | None, Field(min_length=1, max_length=500)] = None,
+        target: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
+        message_hash: Annotated[str | None, Field(min_length=8, max_length=8)] = None,
+    ) -> Annotated[CallToolResult, MessageResponse]:
+        data = MessageResponse.model_validate(
+            await observed(
+                service,
+                "mcp",
+                "message",
+                service.message(agent_id, text=text, target=target, message_hash=message_hash),
+            )
+        )
+        summary = (
+            f"Message {data.message_hash}: read_by={','.join(data.read_by) or '-'}"
+            if message_hash
+            else f"Message {data.message_hash}: delivered_to={','.join(data.delivered_to) or '-'}"
+        )
+        return _structured_result(data, summary if data.ok else f"Message failed: {data.error}")
 
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Show active agent sessions and coordination detail. Runtime run/read responses use compact one-line agent awareness to save context.",
+        description="Show active agent sessions and coordination detail. Also inspect pending_messages and acknowledge unread coordination mail before starting new run work.",
     )
     async def agents(agent_id: str) -> Annotated[CallToolResult, AgentOverviewResponse]:
         data = AgentOverviewResponse.model_validate(
@@ -143,7 +188,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Queue a shell command for FIFO execution. Requires an active agent session and a task context refreshed within 180 seconds. Response includes active_agents with public names and each peer's latest command hash/timestamp.",
+        description="Queue a shell command for FIFO execution. Requires an active session, a task context refreshed within 180 seconds, and no unread coordination messages. If pending_messages is non-empty, acknowledge each with message(agent_id, message_hash=...) and coordinate any changed work before retrying run.",
     )
     async def run(agent_id: str, cmd: str) -> Annotated[CallToolResult, RunResponse]:
         data = RunResponse.model_validate(
@@ -153,7 +198,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             f"Command {data.cmd_hash} queued."
             if data.ok
             else (
-                "Task context expired. Call agent_task before run."
+                "Task context expired. Call coordinate with step and intent before run."
                 if data.task_context_expired
                 else (
                     "Agent session expired. Call agent_start."
@@ -167,7 +212,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Run one persisted emergency command outside FIFO. agent_id is optional and used only for attribution when available.",
+        description="Run one persisted emergency command outside FIFO. agent_id is optional and used for attribution; when supplied, response also surfaces pending_messages without blocking recovery.",
     )
     async def recovery(
         cmd: str,
@@ -185,7 +230,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Read terminal output. Provide agent_id and cmd_hash together for one command, or omit both for the global stream. active_agents is a compact string array with time, public name, command/event and intent.",
+        description="Read terminal output. Provide agent_id and cmd_hash together for one command, or omit both for the global stream. Agent-bound reads include compact active_agents and pending_messages; acknowledge unread coordination messages before new run work.",
     )
     async def read(
         agent_id: str | None = None,
@@ -230,7 +275,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Cancel a queued or running command. agent_id is optional and used only as caller metadata; use read for final status.",
+        description="Cancel a queued or running command. agent_id is optional; when supplied, response also surfaces pending_messages. Use read for final command status.",
     )
     async def cancel(
         cmd_hash: str,
@@ -250,12 +295,12 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Return terminal service health. No agent session is required.",
+        description="Return terminal service health. agent_id is optional; when supplied for a live session it refreshes session TTL and includes pending coordination messages.",
     )
-    async def health() -> Annotated[CallToolResult, HealthResponse]:
-        raw = await observed(service, "mcp", "health", service.health(auth_mode))
+    async def health(agent_id: str | None = None) -> Annotated[CallToolResult, HealthResponse]:
+        raw = await observed(service, "mcp", "health", service.health(auth_mode, agent_id=agent_id))
         raw.pop("agent_id", None)
-        raw["agent_name"] = public_agent_name(None)
+        raw["agent_name"] = public_agent_name(agent_id)
         data = HealthResponse.model_validate(raw)
         return _structured_result(
             data,

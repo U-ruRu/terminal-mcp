@@ -90,6 +90,7 @@ def test_admin_credentials_runtime_and_privacy(tmp_path):
             json={
                 "task_summary": "Admin test",
                 "intent": "Check health",
+                "details": ["Check health"],
                 "work_scope": ["repo:tests"],
             },
             headers=headers,

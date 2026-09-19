@@ -53,15 +53,21 @@ metadata:
 - выполняющиеся команды;
 - доступный эксплуатационный контекст.
 
-### `run` + `read`
+### Coordination + `run` + `read`
 
-Это штатный поток выполнения команд. Сначала вызови `agent_start`. При смене ближайшей задачи или `task_context_expired=true` вызывай `agent_task(agent_id, intent)`, где `intent` — одна короткая фраза до 160 символов. Не передавай туда `work_scope` или `detail`: scope фиксируется при `agent_start`.
+Новая рабочая сессия начинается с `agent_start` с коротким `intent` и обязательным `details`-планом. `work_scope` передавай только как дополнительную metadata, когда она полезна.
 
-1. Вызови `run(agent_id, cmd)`.
-2. Читай конкретную команду через `read(agent_id, cmd_hash, lines_count, offset)`. Global stream — `read()` без `agent_id` и `cmd_hash`.
-3. Всегда просматривай `active_agents`: это компактные строки `HH:MM:SS name hash|started|finished — intent`.
-4. Active-awareness использует тот же 300-секундный Session TTL, который продлевается любым действием с живым `agent_id`. До первой команды активный агент показывается как `started`; после `agent_finish` событие `finished` видно 180 секунд.
+Перед конкретным этапом вызывай `coordinate(agent_id, step, intent)`. `intent` — до 160 символов; `step` — номер элемента `details`.
 
+1. Просматривай `active_agents`: `HH:MM:SS name hash|started|finished — intent`.
+2. Просматривай `pending_messages` в каждом agent-bound ответе.
+3. Pending message прочитай и подтверди через `message(agent_id, message_hash=...)`. Новый `run` до ack блокируется.
+4. Если message меняет распределение работы, обнови `coordinate(step, intent)`.
+5. Direct message: `message(agent_id, text, target="India")`. Без target — broadcast текущим active peers.
+6. `coordinate(agent_id, show_details=true)` используй для просмотра планов peers.
+7. Затем `run(agent_id, cmd)` и `read(agent_id, cmd_hash, ...)`. Global stream — `read()` без ID/hash.
+
+Session TTL — 300 секунд и продлевается любым действием с живым ID. Task lease — 180 секунд и обновляется registration/plan update/`coordinate(step + intent)`.
 
 ### `cancel`
 

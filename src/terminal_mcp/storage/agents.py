@@ -5,30 +5,71 @@ import json
 
 import aiosqlite
 
+_SESSION_COLUMNS = (
+    "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
+    "details,current_step"
+)
+
 
 class AgentStore:
     def __init__(self, path):
         self.path = path
 
-    async def create_session(self, agent_id, task_summary, intent, work_scope, now):
-        scope = json.dumps(work_scope, separators=(",", ":"))
+    async def create_session(
+        self, agent_id, task_summary, intent, work_scope, details, current_step, now
+    ):
+        scope = json.dumps(work_scope or [], separators=(",", ":"))
+        plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             await db.execute(
-                "INSERT INTO agent_sessions VALUES(?,?,?,?,?,?,?)",
-                (agent_id, now, now, task_summary, intent, scope, "active"),
+                "INSERT INTO agent_sessions("
+                "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
+                "details,current_step) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    agent_id,
+                    now,
+                    now,
+                    task_summary,
+                    intent,
+                    scope,
+                    "active",
+                    plan,
+                    current_step,
+                ),
             )
             await db.execute(
-                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope) VALUES(?,?,?,?)",
-                (agent_id, now, intent, scope),
+                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
+                "VALUES(?,?,?,?,?)",
+                (agent_id, now, intent, scope, current_step),
             )
             await db.commit()
+
+    async def update_session(
+        self, agent_id, task_summary, intent, work_scope, details, current_step, now
+    ):
+        scope = json.dumps(work_scope or [], separators=(",", ":"))
+        plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            cur = await db.execute(
+                "UPDATE agent_sessions SET last_activity_at=?,task_summary=?,intent=?,"
+                "work_scope=?,details=?,current_step=?,state='active' "
+                "WHERE agent_id=? AND state='active'",
+                (now, task_summary, intent, scope, plan, current_step, agent_id),
+            )
+            if cur.rowcount:
+                await db.execute(
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
+                    "VALUES(?,?,?,?,?)",
+                    (agent_id, now, intent, scope, current_step),
+                )
+            await db.commit()
+            return cur.rowcount == 1
 
     async def get_session(self, agent_id):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
-                    "SELECT agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state "
-                    "FROM agent_sessions WHERE agent_id=?",
+                    f"SELECT {_SESSION_COLUMNS} FROM agent_sessions WHERE agent_id=?",
                     (agent_id,),
                 )
             ).fetchone()
@@ -57,18 +98,27 @@ class AgentStore:
             )
             await db.commit()
 
-    async def update_task(self, agent_id, intent, work_scope, now):
-        scope = json.dumps(work_scope, separators=(",", ":"))
+    async def update_coordinate(self, agent_id, intent, step, now):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            row = await (
+                await db.execute(
+                    "SELECT work_scope FROM agent_sessions WHERE agent_id=? AND state='active'",
+                    (agent_id,),
+                )
+            ).fetchone()
+            if row is None:
+                return False
             await db.execute(
-                "UPDATE agent_sessions SET intent=?,work_scope=? WHERE agent_id=? AND state='active'",
-                (intent, scope, agent_id),
+                "UPDATE agent_sessions SET intent=?,current_step=? WHERE agent_id=? AND state='active'",
+                (intent, step, agent_id),
             )
             await db.execute(
-                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope) VALUES(?,?,?,?)",
-                (agent_id, now, intent, scope),
+                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
+                "VALUES(?,?,?,?,?)",
+                (agent_id, now, intent, row[0], step),
             )
             await db.commit()
+            return True
 
     async def activity(self, agent_id, tool, now, command_hash=None):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
@@ -93,8 +143,8 @@ class AgentStore:
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
-                    "SELECT agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state "
-                    "FROM agent_sessions WHERE state='active' AND last_activity_at>=? "
+                    f"SELECT {_SESSION_COLUMNS} FROM agent_sessions "
+                    "WHERE state='active' AND last_activity_at>=? "
                     "ORDER BY last_activity_at DESC LIMIT ?",
                     (cutoff, limit),
                 )
@@ -105,8 +155,7 @@ class AgentStore:
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
-                    "SELECT agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state "
-                    "FROM agent_sessions WHERE last_activity_at>=? "
+                    f"SELECT {_SESSION_COLUMNS} FROM agent_sessions WHERE last_activity_at>=? "
                     "ORDER BY last_activity_at DESC",
                     (cutoff,),
                 )
@@ -189,6 +238,84 @@ class AgentStore:
             for row in rows
         ]
 
+    async def create_message(
+        self, message_hash, sender_agent_id, target_name, text, created_at, recipient_ids
+    ):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            await db.execute(
+                "INSERT INTO coordination_messages("
+                "message_hash,sender_agent_id,target_name,text,created_at) VALUES(?,?,?,?,?)",
+                (message_hash, sender_agent_id, target_name, text, created_at),
+            )
+            await db.executemany(
+                "INSERT INTO coordination_message_recipients("
+                "message_hash,recipient_agent_id,read_at) VALUES(?,?,NULL)",
+                [(message_hash, recipient_id) for recipient_id in recipient_ids],
+            )
+            await db.commit()
+
+    async def pending_messages(self, agent_id):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at "
+                    "FROM coordination_message_recipients r "
+                    "JOIN coordination_messages m ON m.message_hash=r.message_hash "
+                    "WHERE r.recipient_agent_id=? AND r.read_at IS NULL "
+                    "ORDER BY m.created_at,m.rowid",
+                    (agent_id,),
+                )
+            ).fetchall()
+        return [
+            {
+                "message_hash": row[0],
+                "sender_agent_id": row[1],
+                "target_name": row[2],
+                "text": row[3],
+                "created_at": row[4],
+            }
+            for row in rows
+        ]
+
+    async def acknowledge_message(self, message_hash, agent_id, read_at):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            message = await (
+                await db.execute(
+                    "SELECT sender_agent_id FROM coordination_messages WHERE message_hash=?",
+                    (message_hash,),
+                )
+            ).fetchone()
+            if message is None:
+                return False
+            recipient = await (
+                await db.execute(
+                    "SELECT read_at FROM coordination_message_recipients "
+                    "WHERE message_hash=? AND recipient_agent_id=?",
+                    (message_hash, agent_id),
+                )
+            ).fetchone()
+            if recipient is not None:
+                await db.execute(
+                    "UPDATE coordination_message_recipients "
+                    "SET read_at=COALESCE(read_at,?) "
+                    "WHERE message_hash=? AND recipient_agent_id=?",
+                    (read_at, message_hash, agent_id),
+                )
+                await db.commit()
+                return True
+            return message[0] == agent_id
+
+    async def message_readers(self, message_hash):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT recipient_agent_id FROM coordination_message_recipients "
+                    "WHERE message_hash=? AND read_at IS NOT NULL ORDER BY read_at,recipient_agent_id",
+                    (message_hash,),
+                )
+            ).fetchall()
+        return [row[0] for row in rows]
+
     async def recent_commands(self, agent_id, limit=3):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             rows = await (
@@ -234,4 +361,6 @@ class AgentStore:
             "intent": row[4],
             "work_scope": json.loads(row[5]),
             "state": row[6],
+            "details": json.loads(row[7]),
+            "current_step": int(row[8]),
         }

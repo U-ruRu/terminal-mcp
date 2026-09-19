@@ -31,19 +31,21 @@
 
 ## MCP
 
-Endpoint: `/mcp`. Каждый рабочий проход начинается с `agent_start`.
+Endpoint: `/mcp`. Каждый новый рабочий агент начинает с `agent_start`.
 
-- `agent_start(task_summary, intent, work_scope)` создаёт внутренний NATO call sign вида `Foxtrot-7K2M`, открывает 180-секундный task lease и единственный раз возвращает полный `agent_id`.
-- Во всех последующих выводах показывается только публичное имя без suffix: `Foxtrot`, `India`, `Juliett`.
-- `agent_task(agent_id, intent)` принимает только короткий `intent` до 160 символов. `work_scope`, объявленный при `agent_start`, сохраняется; `detail` отсутствует.
-- `run(agent_id, cmd)` требует активную Agent Session и свежий task lease. `agent_start` и `agent_task` обновляют task lease.
-- `health()` не требует Agent Session.
-- `recovery(cmd, agent_id?)` и `cancel(cmd_hash, agent_id?)` доступны без Agent Session; отсутствие `agent_id` обозначается как `anonymous`.
-- `read(agent_id?, cmd_hash?, ...)` работает либо с парой `agent_id + cmd_hash`, либо без обоих параметров как global terminal stream.
+- `agent_start(task_summary, intent, details, work_scope?, agent_id?)`: новая регистрация требует summary, короткий intent и непустой `details`-план. `work_scope` — optional metadata.
+- Новая регистрация создаёт внутренний NATO call sign вида `Foxtrot-7K2M`, открывает 180-секундный task lease и единственный раз возвращает полный `agent_id`.
+- Повторный `agent_start(agent_id=...)` обновляет существующий план/описание/optional scope без новой identity и без повторной публикации suffix.
+- Во всех остальных публичных выводах используется только короткое имя.
+- `coordinate(agent_id, step?, intent?, show_details=false)` читает или обновляет текущий шаг. `step + intent` обновляет 180-секундный task lease; `show_details=true` показывает планы peers.
+- `message(agent_id, text?, target?, message_hash?)` отправляет или подтверждает coordination message. Target — только короткое публичное имя; без target используется broadcast по snapshot текущих active peers.
+- Unread coordination message блокирует только новую обычную `run`. `read`, `message`, `coordinate`, `health`, `cancel` и `recovery` остаются доступны.
+- `health(agent_id?)` работает и без Agent Session; с живым ID продлевает Session TTL и показывает pending messages.
+- `read` работает либо с парой `agent_id + cmd_hash`, либо без обоих параметров как global stream.
 
-Agent Session TTL — 300 секунд и продлевается любым действием с живым `agent_id`. Отдельного active-awareness TTL нет: активный агент виден те же 300 секунд. Task lease для `run` — 180 секунд и обновляется только `agent_start`/`agent_task`. `finished` остаётся видимым 180 секунд.
+Agent Session TTL — 300 секунд и продлевается любым действием с живым `agent_id`. Task lease для `run` — 180 секунд и обновляется новой регистрацией, update плана через `agent_start(agent_id=...)` и `coordinate(step + intent)`. `finished` остаётся видимым 180 секунд.
 
-`run` и `read` возвращают `active_agents` как компактный массив строк, а не массив объектов:
+`active_agents` — compact `string[]`:
 
 ```text
 23:32:38 November 10de68b3 — Проверить regression suite
@@ -51,22 +53,28 @@ Agent Session TTL — 300 секунд и продлевается любым д
 23:34:15 Juliett finished — Проверить HTTP contract
 ```
 
-Формат строки: `HH:MM:SS <public-name> <cmd_hash|started|finished> — <intent>`. Для активного агента используется hash последней команды; timestamp берётся из её завершения, запуска или регистрации. Полная команда в awareness не выводится.
+Pending messages тоже compact:
 
-Terminal output также компактный:
+```text
+23:35:10 a1b2c3d4 India → you: Storage правлю я, возьми MCP contract | ack: message(a1b2c3d4)
+23:35:12 e5f6a7b8 Juliett → all: Не трогайте migration до проверки | ack: message(e5f6a7b8)
+```
+
+Terminal output:
 - scoped `read`: `HH:MM:SS <output>`;
 - global `read`: `HH:MM:SS <public-name|anonymous> <cmd_hash> <output>`.
 
-`task_summary` в `agent_start` ограничен 120 символами, `intent` — 160, `work_scope` — четырьмя элементами по 80 символов. Scope остаётся cooperative metadata для обнаружения конфликтов. Agent Session, task history, activity audit и command attribution сохраняются в SQLite.
+Лимиты: `task_summary` — 120 символов, `intent` — 160, `details` — до 12 шагов по 160 символов, optional `work_scope` — до четырёх элементов по 80 символов.
 
-Рекомендуемый workflow: `agent_start` → `run/read` → при смене ближайшей задачи или истечении task lease `agent_task` → `run/read` → `agent_finish`.
+Workflow: `agent_start` → `coordinate(step, intent)` → `run/read`; при pending message сначала `message(message_hash)` для ack и при необходимости новый `coordinate`; затем продолжение работы → `agent_finish`.
 
 ## OpenAPI Actions
 
 Schema: `/openapi.json`. Actions используют тот же service layer и те же Agent Session semantics:
 
 - `POST /actions/agent/start`
-- `POST /actions/agent/task`
+- `POST /actions/coordinate`
+- `POST /actions/message`
 - `POST /actions/agents`
 - `POST /actions/agent/finish`
 - `POST /actions/run`

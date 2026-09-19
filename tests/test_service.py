@@ -75,7 +75,7 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
         assert {"started_at", "finished_at"} <= columns
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
         status, error, started_at, finished_at = db.execute(
             "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
         ).fetchone()
@@ -250,3 +250,78 @@ def test_render_normalizes_legacy_z_timestamp():
     assert TerminalService._render(
         lines, scoped=False, agent_map={"deadbeef": "India-1111"}
     ) == ["12:34:56 India deadbeef legacy"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
+    database = tmp_path / "legacy-coordination.sqlite3"
+    with sqlite3.connect(database) as db:
+        db.executescript(
+            """
+            CREATE TABLE commands(
+                hash TEXT PRIMARY KEY,cmd TEXT,status TEXT,pid INTEGER,exit_code INTEGER,error TEXT,
+                started_at TEXT,finished_at TEXT
+            );
+            CREATE TABLE agent_sessions(
+                agent_id TEXT PRIMARY KEY,registered_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,task_summary TEXT NOT NULL,
+                intent TEXT NOT NULL,work_scope TEXT NOT NULL,state TEXT NOT NULL
+            );
+            CREATE TABLE agent_task_events(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,agent_id TEXT NOT NULL,timestamp TEXT NOT NULL,
+                intent TEXT NOT NULL,work_scope TEXT NOT NULL
+            );
+            PRAGMA user_version=2;
+            """
+        )
+        db.execute(
+            "INSERT INTO agent_sessions VALUES(?,?,?,?,?,?,?)",
+            (
+                "India-1111",
+                "2026-09-19T00:00:00.000Z",
+                "2026-09-19T00:00:00.000Z",
+                "Legacy",
+                "Legacy intent",
+                "[]",
+                "active",
+            ),
+        )
+        db.execute(
+            "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope) VALUES(?,?,?,?)",
+            ("India-1111", "2026-09-19T00:00:00.000Z", "Legacy intent", "[]"),
+        )
+        db.commit()
+
+    repo = SqliteRepository(database)
+    await repo.initialize()
+
+    with sqlite3.connect(database) as db:
+        session_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(agent_sessions)").fetchall()
+        }
+        task_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(agent_task_events)").fetchall()
+        }
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        session = db.execute(
+            "SELECT details,current_step,state FROM agent_sessions WHERE agent_id='India-1111'"
+        ).fetchone()
+        event_step = db.execute(
+            "SELECT step FROM agent_task_events WHERE agent_id='India-1111'"
+        ).fetchone()[0]
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+
+    assert {"details", "current_step"} <= session_columns
+    assert "step" in task_columns
+    assert {
+        "coordination_messages",
+        "coordination_message_recipients",
+    } <= tables
+    assert session == ("[]", 1, "expired")
+    assert event_step == 1
+    assert version == 3

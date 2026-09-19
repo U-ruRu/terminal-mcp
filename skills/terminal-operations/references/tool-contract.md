@@ -2,7 +2,7 @@
 
 ## Интерфейс
 
-Подключённый terminal MCP предоставляет методы `agent_start`, `agent_task`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel` и `recovery`. `agent_start` и `agent_task` создают 180-секундный task lease для `run`; Agent Session TTL составляет 300 секунд. Конкретное пространство имён и способ подключения определяются текущим контекстом сервера и описанием доступных инструментов.
+Подключённый terminal MCP предоставляет методы `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel` и `recovery`. Agent Session TTL составляет 300 секунд. Task lease для `run` составляет 180 секунд и обновляется registration, `agent_start(agent_id=...)` и `coordinate(step + intent)`.
 
 MCP и REST Actions могут использовать общий service layer и одинаковые response-модели.
 
@@ -19,9 +19,9 @@ MCP и REST Actions могут использовать общий service layer
 
 Поле `error` предназначено для ошибок инструмента и таймаутов. Формат: `<method>.<stage>: <reason>`. Ненулевой exit code shell-команды отражается в `exit_code`, а stderr находится в `lines`.
 
-## `health()`
+## `health(agent_id?)`
 
-Аргументов нет. Возвращает состояние приложения, storage, авторизации, terminal adapter и FIFO-планировщика:
+`agent_id` необязателен. Без него health остаётся anonymous диагностикой. С живым ID вызов продлевает Session TTL и включает pending messages. Возвращает состояние приложения, storage, авторизации, terminal adapter и FIFO-планировщика:
 
 - `ok`, `application`, `storage`, `auth_mode`;
 - `terminal.ok`, `user`, `uid`, `gid`, `cwd`, `privilege`, `shell`, `terminal_user`;
@@ -29,6 +29,25 @@ MCP и REST Actions могут использовать общий service layer
 - необязательный `custom_command` с `command`, `lines`, `status`, `exit_code`, `error`, `ok`, `duration_ms`.
 
 Настроенная health-команда выполняется отдельно от пользовательской FIFO-очереди.
+
+## `agent_start(...)`
+
+Новая регистрация требует `task_summary`, `intent` и `details` (1–12 шагов по максимум 160 символов). `work_scope` optional: до четырёх элементов по 80 символов. Новый агент единственный раз получает полный внутренний ID. Существующий `agent_id` превращает вызов в update текущего плана.
+
+## `coordinate(agent_id, step?, intent?, show_details=false)`
+
+Только ID возвращает текущий step/intent/detail. `step` выбирает detail. `step + intent` обновляет current work и task lease. `show_details=true` добавляет compact планы peers. Intent без step недопустим.
+
+## `message(agent_id, text?, target?, message_hash?)`
+
+Send mode использует `text` и optional public-name `target`; без target recipients фиксируются как snapshot всех текущих active peers. Ack mode использует только `message_hash` и возвращает `read_by`.
+
+```text
+HH:MM:SS a1b2c3d4 India → you: text | ack: message(a1b2c3d4)
+HH:MM:SS e5f6a7b8 India → all: text | ack: message(e5f6a7b8)
+```
+
+Unread message блокирует новую `run`, но не `read`, `message`, `coordinate`, `health`, `cancel` или `recovery`.
 
 ## `run(agent_id, cmd)`
 
@@ -105,6 +124,11 @@ MCP и REST Actions могут использовать общий service layer
 
 Типичный HTTP-контракт:
 
+- `POST /actions/agent/start`
+- `POST /actions/coordinate`
+- `POST /actions/message`
+- `POST /actions/agents`
+- `POST /actions/agent/finish`
 - `POST /actions/run`
 - `POST /actions/read`
 - `POST /actions/cancel`
@@ -126,7 +150,7 @@ MCP и REST Actions могут использовать общий service layer
 
 ## Compact agent awareness
 
-`agent_task` принимает только `agent_id` и `intent` (1–160 символов). Scope берётся из `agent_start`.
+`work_scope` является optional metadata. Основная координация хранится в `details`, `current_step`, `intent` и message mailbox.
 
 `RunResponse.active_agents` и `ReadResponse.active_agents` — `string[]`. Каждая строка:
 

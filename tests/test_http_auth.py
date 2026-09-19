@@ -44,6 +44,7 @@ def start_agent(client, headers):
         json={
             "task_summary": "HTTP test",
             "intent": "Exercise actions",
+            "details": ["Exercise actions", "Verify actions"],
             "work_scope": ["repo:tests"],
         },
         headers=headers,
@@ -81,7 +82,8 @@ def test_bearer_actions_and_openapi(tmp_path):
         schema = client.get("/openapi.json").json()
         expected_paths = {
             "/actions/agent/start",
-            "/actions/agent/task",
+            "/actions/coordinate",
+            "/actions/message",
             "/actions/agents",
             "/actions/agent/finish",
             "/actions/run",
@@ -101,29 +103,37 @@ def test_bearer_actions_and_openapi(tmp_path):
         read_request = schema["components"]["schemas"]["ReadRequest"]
         assert "required" not in read_request or read_request["required"] == []
         health_operation = schema["paths"]["/actions/health"]["get"]
-        assert health_operation.get("parameters", []) == []
+        health_params = health_operation.get("parameters", [])
+        assert any(
+            item["name"] == "agent_id" and item["required"] is False
+            for item in health_params
+        )
         start_request = schema["components"]["schemas"]["AgentStartRequest"]
-        assert start_request["properties"]["task_summary"]["maxLength"] == 120
-        assert start_request["properties"]["work_scope"]["maxItems"] == 4
-        task_request = schema["components"]["schemas"]["AgentTaskRequest"]
-        assert set(task_request["required"]) == {"agent_id", "intent"}
-        assert task_request["properties"]["intent"]["maxLength"] == 160
-        assert "work_scope" not in task_request["properties"]
-        assert "detail" not in task_request["properties"]
+        assert start_request["properties"]["task_summary"]["anyOf"][0]["maxLength"] == 120
+        assert start_request["properties"]["details"]["anyOf"][0]["maxItems"] == 12
+        details_schema = start_request["properties"]["details"]["anyOf"][0]
+        assert details_schema["items"]["maxLength"] == 160
+        assert start_request["properties"]["work_scope"]["anyOf"][0]["maxItems"] == 4
+        coordinate_request = schema["components"]["schemas"]["CoordinateRequest"]
+        assert set(coordinate_request["required"]) == {"agent_id"}
+        assert coordinate_request["properties"]["intent"]["anyOf"][0]["maxLength"] == 160
+        message_request = schema["components"]["schemas"]["MessageRequest"]
+        assert set(message_request["required"]) == {"agent_id"}
+        assert message_request["properties"]["message_hash"]["anyOf"][0]["maxLength"] == 8
 
-        accepted_task = client.post(
-            "/actions/agent/task",
-            json={"agent_id": agent_id, "intent": "x" * 160},
+        accepted_coordinate = client.post(
+            "/actions/coordinate",
+            json={"agent_id": agent_id, "step": 1, "intent": "x" * 160},
             headers=headers,
         )
-        assert accepted_task.status_code == 200
-        assert accepted_task.json()["self"]["intent"] == "x" * 160
-        rejected_task = client.post(
-            "/actions/agent/task",
-            json={"agent_id": agent_id, "intent": "x" * 161},
+        assert accepted_coordinate.status_code == 200
+        assert accepted_coordinate.json()["intent"] == "x" * 160
+        rejected_coordinate = client.post(
+            "/actions/coordinate",
+            json={"agent_id": agent_id, "step": 1, "intent": "x" * 161},
             headers=headers,
         )
-        assert rejected_task.status_code == 422
+        assert rejected_coordinate.status_code == 422
 
         recovery = client.post(
             "/actions/recovery",

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 CommandStatus = Literal[
     "queued",
@@ -19,18 +19,26 @@ class SessionStatus(BaseModel):
     task_context_expired: bool | None = None
     task_age_seconds: int | None = None
     max_task_age_seconds: int | None = None
+    coordination_message_pending: bool | None = None
+    pending_messages: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Unread coordination messages for this agent. Read each message and acknowledge it "
+            "with message(agent_id, message_hash=...) before starting a new run."
+        ),
+    )
 
 
 class RunResponse(SessionStatus):
     ok: bool
     cmd_hash: str | None = None
-    active_agents: list[str] = []
+    active_agents: list[str] = Field(default_factory=list)
     error: str | None = None
 
 
 class ReadResponse(SessionStatus):
     ok: bool
-    active_agents: list[str] = []
+    active_agents: list[str] = Field(default_factory=list)
     lines: list[str]
     next_offset: int
     overall_lines_count: int | None = None
@@ -107,7 +115,9 @@ class AgentSelf(BaseModel):
     task_lease_seconds: int
     task_summary: str
     intent: str
-    work_scope: list[str]
+    work_scope: list[str] = Field(default_factory=list)
+    details: list[str] = Field(default_factory=list)
+    current_step: int
 
 
 class ActiveAgent(BaseModel):
@@ -115,7 +125,8 @@ class ActiveAgent(BaseModel):
     idle_seconds: int
     task_summary: str
     intent: str
-    work_scope: list[str]
+    work_scope: list[str] = Field(default_factory=list)
+    current_step: int
     recent_commands: list[RecentCommand]
 
 
@@ -127,12 +138,31 @@ class ScopeOverlap(BaseModel):
 class AgentOverviewResponse(SessionStatus):
     ok: bool
     self: AgentSelf | None = None
-    active: list[ActiveAgent] = []
-    overlaps: list[ScopeOverlap] = []
+    active: list[ActiveAgent] = Field(default_factory=list)
+    overlaps: list[ScopeOverlap] = Field(default_factory=list)
     additional_active_agents: int = 0
     detail: str | None = None
     error: str | None = None
 
+
+
+
+class CoordinateResponse(SessionStatus):
+    ok: bool
+    step: int | None = None
+    intent: str | None = None
+    detail: str | None = None
+    other_details: list[str] = Field(default_factory=list)
+    active_agents: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class MessageResponse(SessionStatus):
+    ok: bool
+    message_hash: str | None = None
+    delivered_to: list[str] = Field(default_factory=list)
+    read_by: list[str] = Field(default_factory=list)
+    error: str | None = None
 
 class AgentFinishResponse(SessionStatus):
     ok: bool
