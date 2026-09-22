@@ -9,8 +9,8 @@
 - Пользователь процесса: `root`.
 - Пользователь терминала: `root`.
 - Рабочая директория: `/`.
-- Планировщик: FIFO.
-- Параллелизм: одна команда.
+- Планировщик: numbered FIFO lanes, SQLite-backed.
+- Параллелизм: configurable workers, по одному процессу на lane.
 - Хранилище: SQLite.
 - ASGI workers: `1`.
 
@@ -31,42 +31,19 @@
 
 ## MCP
 
-Endpoint: `/mcp`. Каждый новый рабочий агент начинает с `agent_start`.
+Endpoint: `/mcp`. Набор tools остаётся компактным: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel`, `recovery`.
 
-- `agent_start(task_summary, intent, details, work_scope?, agent_id?)`: новая регистрация требует summary, короткий intent и непустой `details`-план. `work_scope` — optional metadata.
-- Новая регистрация создаёт внутренний NATO call sign вида `Foxtrot-7K2M`, открывает 180-секундный task lease и единственный раз возвращает полный `agent_id`.
-- Повторный `agent_start(agent_id=...)` обновляет существующий план/описание/optional scope без новой identity и без повторной публикации suffix.
-- Во всех остальных публичных выводах используется только короткое имя.
-- `coordinate(agent_id, step?, intent?, show_details=false)` читает или обновляет текущий шаг. `step + intent` обновляет 180-секундный task lease; `show_details=true` показывает планы peers.
-- `message(agent_id, text?, target?, message_hash?)` отправляет или подтверждает coordination message. Target — только короткое публичное имя; без target используется broadcast по snapshot текущих active peers.
-- Unread coordination message блокирует только новую обычную `run`. `read`, `message`, `coordinate`, `health`, `cancel` и `recovery` остаются доступны.
-- `health(agent_id?)` работает и без Agent Session; с живым ID продлевает Session TTL и показывает pending messages.
-- `read` работает либо с парой `agent_id + cmd_hash`, либо без обоих параметров как global stream.
+Agent Session по умолчанию имеет idle TTL 300 секунд, intent lease 180 секунд и жёсткий lifetime 1500 секунд. Последние 180 секунд каждый agent-bound ответ содержит warning с требованием дойти до безопасной точки, заранее запустить нужный долгий build/test и вернуться в чат с промежуточным отчётом. Terminal commands живут независимо от Agent Session.
 
-Agent Session TTL — 300 секунд и продлевается любым действием с живым `agent_id`. Task lease для `run` — 180 секунд и обновляется новой регистрацией, update плана через `agent_start(agent_id=...)` и `coordinate(step + intent)`. `finished` остаётся видимым 180 секунд.
+`message` хранит состояния `delivered -> seen -> read -> replied`. Показ сообщения отмечает `seen`; `read` требует явного `message(agent_id, message_hash=...)`. Unacknowledged message продолжает показываться полным минимум три минуты и минимум пять ответов. `require_reply=true` удерживает `run` до связанного ответа. `alert=true` дополнительно блокирует normal work surface до reply, сохраняя `message`, `health`, `cancel`, `recovery` и `agent_finish`.
 
-`active_agents` — compact `string[]`:
+`run(agent_id, cmd, queue_id?)` использует numbered FIFO lanes. Первый run без номера выбирает least-loaded queue и запоминает affinity; следующие используют preferred queue. Явный `queue_id` выбирает lane и обновляет affinity. SQLite является источником queue state; workers используют atomic `queued -> running` claim и guarded terminal transitions.
 
-```text
-23:32:38 November 10de68b3 — Проверить regression suite
-23:31:02 India started — Обновить storage
-23:34:15 Juliett finished — Проверить HTTP contract
-```
+`read` принимает `agent_id` и `cmd_hash` независимо. Agent-bound read показывает coordination/session context; scoped read возвращает queue metadata. Global stream имеет вид `HH:MM:SS <name> <hash> qN <output>`.
 
-Pending messages тоже compact:
+`agents()` работает без регистрации как observer. `target` показывает выбранную session вместе с `last_activity_tool`, message receipt journal (`delivered/seen/read/replied`) и coordination counters. `show_details`, `show_intents`, `show_commands`, `command_hash` и `since_minutes` добавляют план, intent journal, command journal и полную исходную команду без новых tools.
 
-```text
-23:35:10 a1b2c3d4 India → you: Storage правлю я, возьми MCP contract | ack: message(a1b2c3d4)
-23:35:12 e5f6a7b8 Juliett → all: Не трогайте migration до проверки | ack: message(e5f6a7b8)
-```
-
-Terminal output:
-- scoped `read`: `HH:MM:SS <output>`;
-- global `read`: `HH:MM:SS <public-name|anonymous> <cmd_hash> <output>`.
-
-Лимиты: `task_summary` — 120 символов, `intent` — 160, `details` — до 12 шагов по 160 символов, optional `work_scope` — до четырёх элементов по 80 символов.
-
-Workflow: `agent_start` → `coordinate(step, intent)` → `run/read`; при pending message сначала `message(message_hash)` для ack и при необходимости новый `coordinate`; затем продолжение работы → `agent_finish`.
+Подробный контракт: [`skills/terminal-operations/references/tool-contract.md`](skills/terminal-operations/references/tool-contract.md).
 
 ## OpenAPI Actions
 

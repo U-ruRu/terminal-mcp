@@ -290,7 +290,7 @@ async def test_run_and_read_expose_public_active_agent_awareness(tmp_path):
     peers = own_run["active_agents"]
     assert any(f"{second_name} {peer_run['cmd_hash']} — Run peer command" in line for line in peers)
     assert not any(f"{second_name} started" in line for line in peers)
-    assert all(re.match(r"^\d{2}:\d{2}:\d{2} ", line) for line in peers)
+    assert all(" ago " in line or line.startswith("yesterday ") for line in peers)
     assert second_id not in str(peers)
     assert "sleep 0.2" not in str(peers)
 

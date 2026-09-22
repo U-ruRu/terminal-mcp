@@ -33,11 +33,6 @@ NATO_WORDS = (
     "Zulu",
 )
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-AGENT_TTL_SECONDS = 300
-AGENT_EVENT_WINDOW_SECONDS = 180
-TASK_LEASE_SECONDS = 180
-MAX_ACTIVE_AGENTS = 8
-MAX_RECENT_COMMANDS = 3
 
 
 def utc_now() -> datetime:
@@ -57,6 +52,25 @@ def short_time(value: str | None) -> str:
         return "--:--:--Z"
     return parse_utc(value).strftime("%H:%M:%S")
 
+
+
+def relative_time(value: str | None, now: datetime | None = None) -> str:
+    if not value:
+        return "unknown"
+    current = now or utc_now()
+    seconds = max(0, int((current - parse_utc(value)).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days == 1:
+        return f"yesterday {parse_utc(value).strftime('%H:%M')}"
+    return f"{days}d ago"
 
 def generate_suffix() -> str:
     return "".join(secrets.choice(CROCKFORD) for _ in range(4))

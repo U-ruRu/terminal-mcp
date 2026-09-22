@@ -16,22 +16,30 @@ class SessionStatus(BaseModel):
     agent_name: str | None = None
     session_expired: bool | None = None
     registration_required: bool | None = None
+    session_status: str | None = None
+    session_started_at: str | None = None
+    session_age_seconds: int | None = None
+    session_remaining_seconds: int | None = None
+    session_warning: str | None = None
+    session_end_reason: str | None = None
     task_context_expired: bool | None = None
     task_age_seconds: int | None = None
     max_task_age_seconds: int | None = None
+    preferred_queue_id: int | None = None
     coordination_message_pending: bool | None = None
-    pending_messages: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Unread coordination messages for this agent. Read each message and acknowledge it "
-            "with message(agent_id, message_hash=...) before starting a new run."
-        ),
-    )
+    unread_message_pending: bool | None = None
+    reply_required_pending: bool | None = None
+    alert_pending: bool | None = None
+    pending_messages: list[str] = Field(default_factory=list)
+    alert_messages: list[str] = Field(default_factory=list)
+    reply_required_messages: list[str] = Field(default_factory=list)
 
 
 class RunResponse(SessionStatus):
     ok: bool
     cmd_hash: str | None = None
+    queue_id: int | None = None
+    queue_position: int | None = None
     active_agents: list[str] = Field(default_factory=list)
     error: str | None = None
 
@@ -46,6 +54,8 @@ class ReadResponse(SessionStatus):
     cmd_hash: str | None = None
     status: CommandStatus | None = None
     exit_code: int | None = None
+    queue_id: int | None = None
+    queue_position: int | None = None
     error: str | None = None
 
 
@@ -76,6 +86,12 @@ class CancelResponse(SessionStatus):
     error: str | None = None
 
 
+class QueueHealth(BaseModel):
+    queue_id: int
+    running: str | None = None
+    queued: int
+
+
 class TerminalHealth(BaseModel):
     ok: bool
     user: str
@@ -89,6 +105,8 @@ class TerminalHealth(BaseModel):
     parallelism: int
     queue_size: int
     running_commands: list[str]
+    queues: list[QueueHealth] = Field(default_factory=list)
+    worker_health: dict[str, bool] = Field(default_factory=dict)
 
 
 class HealthResponse(SessionStatus):
@@ -106,6 +124,10 @@ class RecentCommand(BaseModel):
     preview: str
     status: str
     command_type: str
+    queue_id: int | None = None
+    queue_sequence: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class AgentSelf(BaseModel):
@@ -118,6 +140,7 @@ class AgentSelf(BaseModel):
     work_scope: list[str] = Field(default_factory=list)
     details: list[str] = Field(default_factory=list)
     current_step: int
+    preferred_queue_id: int | None = None
 
 
 class ActiveAgent(BaseModel):
@@ -135,16 +158,79 @@ class ScopeOverlap(BaseModel):
     scope: str
 
 
+class MessageJournalEntry(BaseModel):
+    message_hash: str
+    state: str
+    sender_name: str
+    text: str
+    require_reply: bool = False
+    alert: bool = False
+    created_at: str
+    first_seen_at: str | None = None
+    read_at: str | None = None
+    replied_at: str | None = None
+    seen_count: int = 0
+
+
+class AgentSessionRecord(BaseModel):
+    name: str
+    status: str
+    last_activity: str
+    last_activity_at: str
+    last_activity_tool: str | None = None
+    last_activity_command_hash: str | None = None
+    intent: str
+    current_step: int
+    preferred_queue_id: int | None = None
+    last_command: RecentCommand | None = None
+    end_reason: str | None = None
+    messages_awaiting_read: int = 0
+    messages_awaiting_reply: int = 0
+    alerts_pending: int = 0
+    message_journal: list[MessageJournalEntry] = Field(default_factory=list)
+    task_summary: str | None = None
+    details: list[str] | None = None
+    work_scope: list[str] | None = None
+    registered_at: str | None = None
+    ended_at: str | None = None
+
+
+class IntentJournalEntry(BaseModel):
+    timestamp: str
+    intent: str
+    step: int
+    work_scope: list[str] = Field(default_factory=list)
+
+
+class CommandDetail(BaseModel):
+    command_hash: str
+    cmd: str
+    status: str
+    queue_id: int | None = None
+    queue_sequence: int | None = None
+    enqueued_at: str | None = None
+    claimed_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    agent_name: str | None = None
+    command_type: str | None = None
+    created_at: str | None = None
+
+
 class AgentOverviewResponse(SessionStatus):
     ok: bool
     self: AgentSelf | None = None
     active: list[ActiveAgent] = Field(default_factory=list)
+    sessions: list[AgentSessionRecord] = Field(default_factory=list)
+    intent_journal: list[IntentJournalEntry] = Field(default_factory=list)
+    command_journal: list[RecentCommand] = Field(default_factory=list)
+    command: CommandDetail | None = None
     overlaps: list[ScopeOverlap] = Field(default_factory=list)
     additional_active_agents: int = 0
     detail: str | None = None
     error: str | None = None
-
-
 
 
 class CoordinateResponse(SessionStatus):
@@ -160,9 +246,13 @@ class CoordinateResponse(SessionStatus):
 class MessageResponse(SessionStatus):
     ok: bool
     message_hash: str | None = None
+    reply_message_hash: str | None = None
     delivered_to: list[str] = Field(default_factory=list)
+    seen_by: list[str] = Field(default_factory=list)
     read_by: list[str] = Field(default_factory=list)
+    replied_by: list[str] = Field(default_factory=list)
     error: str | None = None
+
 
 class AgentFinishResponse(SessionStatus):
     ok: bool

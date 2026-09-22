@@ -73,33 +73,37 @@ class MessageRequest(AgentRequest):
     text: str | None = Field(default=None, min_length=1, max_length=500)
     target: str | None = Field(default=None, min_length=1, max_length=64)
     message_hash: str | None = Field(default=None, min_length=8, max_length=8)
+    require_reply: bool = False
+    alert: bool = False
 
     @model_validator(mode="after")
     def validate_message(self):
         if self.message_hash is not None:
-            if self.text is not None or self.target is not None:
-                raise ValueError("acknowledgement accepts message_hash only")
+            if self.target is not None or self.require_reply or self.alert:
+                raise ValueError("acknowledgement/reply inherits target and message policy")
         elif self.text is None:
             raise ValueError("sending requires text")
         return self
 
 
+class AgentsRequest(OptionalAgentRequest):
+    target: str | None = Field(default=None, min_length=1, max_length=64)
+    show_details: bool = False
+    show_intents: bool = False
+    show_commands: bool = False
+    command_hash: str | None = Field(default=None, min_length=8, max_length=8)
+    since_minutes: int | None = Field(default=None, ge=1, le=10080)
+
+
 class RunRequest(AgentRequest):
     cmd: str = Field(min_length=1, description="Shell script passed to /bin/bash -s through stdin.")
+    queue_id: int | None = Field(default=None, ge=1)
 
 
 class ReadRequest(OptionalAgentRequest):
     cmd_hash: str | None = Field(default=None, min_length=8, max_length=8)
     lines_count: int = Field(default=DEFAULT_READ_LINES, ge=1, le=MAX_READ_LINES)
     offset: int | None = None
-
-    @model_validator(mode="after")
-    def validate_scope(self):
-        if bool(self.agent_id) != bool(self.cmd_hash):
-            raise ValueError(
-                "agent_id and cmd_hash must be provided together, or both omitted for global terminal"
-            )
-        return self
 
 
 class RecoveryRequest(OptionalAgentRequest):
@@ -168,6 +172,8 @@ def build_actions_router(service, auth_mode="none"):
                 text=body.text,
                 target=body.target,
                 message_hash=body.message_hash,
+                require_reply=body.require_reply,
+                alert=body.alert,
             ),
         )
 
@@ -177,8 +183,21 @@ def build_actions_router(service, auth_mode="none"):
         response_model=AgentOverviewResponse,
         response_model_exclude_none=True,
     )
-    async def agents(body: AgentRequest):
-        return await observed(service, "rest", "agents", service.agents(body.agent_id))
+    async def agents(body: AgentsRequest):
+        return await observed(
+            service,
+            "rest",
+            "agents",
+            service.agents(
+                body.agent_id,
+                target=body.target,
+                show_details=body.show_details,
+                show_intents=body.show_intents,
+                show_commands=body.show_commands,
+                command_hash=body.command_hash,
+                since_minutes=body.since_minutes,
+            ),
+        )
 
     @router.post(
         "/agent/finish",
@@ -191,7 +210,10 @@ def build_actions_router(service, auth_mode="none"):
 
     @router.post("/run", operation_id="runCommand", response_model=RunResponse)
     async def run_command(body: RunRequest):
-        return await observed(service, "rest", "run", service.run(body.cmd, agent_id=body.agent_id))
+        return await observed(
+            service, "rest", "run",
+            service.run(body.cmd, agent_id=body.agent_id, queue_id=body.queue_id)
+        )
 
     @router.post("/recovery", operation_id="recoveryCommand", response_model=RecoveryResponse)
     async def recovery_command(body: RecoveryRequest):

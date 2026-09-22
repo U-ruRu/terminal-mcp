@@ -46,7 +46,9 @@ class FakeService:
             "pending_messages": [],
         }
 
-    async def message(self, agent_id, text=None, target=None, message_hash=None):
+    async def message(
+        self, agent_id, text=None, target=None, message_hash=None, require_reply=False, alert=False
+    ):
         return {
             "ok": True,
             "agent_name": "Kilo",
@@ -56,7 +58,10 @@ class FakeService:
             "pending_messages": [],
         }
 
-    async def agents(self, agent_id):
+    async def agents(
+        self, agent_id=None, *, target=None, show_details=False, show_intents=False,
+        show_commands=False, command_hash=None, since_minutes=None
+    ):
         return {
             "ok": True,
             "self": {
@@ -90,11 +95,13 @@ class FakeService:
             "pending_messages": [],
         }
 
-    async def run(self, cmd, agent_id=None):
+    async def run(self, cmd, agent_id=None, queue_id=None):
         return {
             "ok": True,
             "cmd_hash": "1234abcd",
             "error": None,
+            "queue_id": queue_id or 1,
+            "queue_position": 1,
             "agent_name": "Kilo",
             "active_agents": ["23:00:01 India deadbeef — Inspect tests"],
             "pending_messages": [],
@@ -156,10 +163,12 @@ class FakeService:
                 "privilege": "root",
                 "shell": "/bin/bash",
                 "terminal_user": "root",
-                "scheduler": "fifo",
-                "parallelism": 1,
+                "scheduler": "numbered-fifo",
+                "parallelism": 4,
                 "queue_size": 0,
                 "running_commands": [],
+                "queues": [],
+                "worker_health": {},
             },
         }
 
@@ -186,6 +195,8 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert tools["health"].annotations.readOnlyHint is True
     assert tools["read"].annotations.readOnlyHint is True
     assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
+    assert tools["run"].parameters["properties"]["queue_id"]["anyOf"][0]["minimum"] == 1
+    assert tools["agents"].parameters.get("required", []) == []
     assert tools["recovery"].parameters["required"] == ["cmd"]
     assert tools["cancel"].parameters["required"] == ["cmd_hash"]
     assert tools["health"].parameters.get("required", []) == []
@@ -203,6 +214,8 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert tools["message"].parameters["required"] == ["agent_id"]
     message = tools["message"].parameters["properties"]
     assert message["message_hash"]["anyOf"][0]["maxLength"] == 8
+    assert message["require_reply"]["default"] is False
+    assert message["alert"]["default"] is False
 
 
 @pytest.mark.asyncio
@@ -260,7 +273,7 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     assert cancelled.structuredContent["agent_name"] == "anonymous"
 
 @pytest.mark.asyncio
-async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
+async def test_mcp_read_supports_independent_agent_and_command_scope():
     mcp = build_mcp(FakeService())
     read = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["read"]
     global_read = await read.run({}, convert_result=True)
@@ -275,6 +288,9 @@ async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
     assert scoped.structuredContent["agent_name"] == "Kilo"
     assert "India deadbeef — Inspect tests" in scoped.structuredContent["active_agents"][0]
     assert "7K2M" not in str(scoped.structuredContent)
-    one_sided = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
-    assert one_sided.structuredContent["ok"] is False
-    assert one_sided.structuredContent["error"].startswith("read.scope:")
+    command_only = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
+    assert command_only.structuredContent["ok"] is True
+    assert command_only.structuredContent["status"] == "completed"
+    agent_global = await read.run({"agent_id": "Kilo-7K2M"}, convert_result=True)
+    assert agent_global.structuredContent["ok"] is True
+    assert agent_global.structuredContent["agent_name"] == "Kilo"

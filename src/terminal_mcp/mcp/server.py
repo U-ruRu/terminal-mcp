@@ -111,7 +111,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Inspect or update current coordination. agent_id alone returns current step/intent/detail. step selects a plan step. Providing step+intent updates current work and refreshes the 180-second task lease. show_details includes other agents' registered plans. Always inspect pending_messages and acknowledge them with message before new run work.",
+        description="Inspect or update current coordination. agent_id alone returns current step/intent/detail. step selects a plan step. Providing step+intent updates current work and refreshes the configured intent lease. show_details includes other agents' registered plans. Always inspect pending_messages and acknowledge them with message before new run work.",
     )
     async def coordinate(
         agent_id: str,
@@ -135,20 +135,25 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Send or acknowledge coordination messages. To send, provide text and optionally target using the public agent name only; omit target for broadcast to all currently active peers. To acknowledge, provide message_hash instead of text/target. Returns recipients/read receipts.",
+        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports require_reply and alert. message_hash alone acknowledges a received message or inspects receipts for the sender; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
     )
     async def message(
         agent_id: str,
         text: Annotated[str | None, Field(min_length=1, max_length=500)] = None,
         target: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
         message_hash: Annotated[str | None, Field(min_length=8, max_length=8)] = None,
+        require_reply: bool = False,
+        alert: bool = False,
     ) -> Annotated[CallToolResult, MessageResponse]:
         data = MessageResponse.model_validate(
             await observed(
                 service,
                 "mcp",
                 "message",
-                service.message(agent_id, text=text, target=target, message_hash=message_hash),
+                service.message(
+                    agent_id, text=text, target=target, message_hash=message_hash,
+                    require_reply=require_reply, alert=alert
+                ),
             )
         )
         summary = (
@@ -161,11 +166,25 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Show active agent sessions and coordination detail. Also inspect pending_messages and acknowledge unread coordination mail before starting new run work.",
+        description="Observe current or historical agent sessions. With no arguments, returns a compact fleet view. target selects a public agent name; show_details, show_intents and show_commands expand its journal; command_hash returns the full original command; since_minutes bounds history.",
     )
-    async def agents(agent_id: str) -> Annotated[CallToolResult, AgentOverviewResponse]:
+    async def agents(
+        agent_id: str | None = None,
+        target: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
+        show_details: bool = False,
+        show_intents: bool = False,
+        show_commands: bool = False,
+        command_hash: Annotated[str | None, Field(min_length=8, max_length=8)] = None,
+        since_minutes: Annotated[int | None, Field(ge=1, le=10080)] = None,
+    ) -> Annotated[CallToolResult, AgentOverviewResponse]:
         data = AgentOverviewResponse.model_validate(
-            await observed(service, "mcp", "agents", service.agents(agent_id))
+            await observed(
+                service, "mcp", "agents",
+                service.agents(
+                    agent_id, target=target, show_details=show_details, show_intents=show_intents,
+                    show_commands=show_commands, command_hash=command_hash, since_minutes=since_minutes
+                )
+            )
         )
         return _structured_result(data, _overview_summary(data))
 
@@ -188,11 +207,15 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Queue a shell command for FIFO execution. Requires an active session, a task context refreshed within 180 seconds, and no unread coordination messages. If pending_messages is non-empty, acknowledge each with message(agent_id, message_hash=...) and coordinate any changed work before retrying run.",
+        description="Queue a shell command on a numbered FIFO worker. queue_id is optional: the first run selects the least-loaded queue and stores affinity; later runs reuse it. Explicit queue_id changes affinity. Requires a live session, fresh intent, acknowledged messages, and required replies.",
     )
-    async def run(agent_id: str, cmd: str) -> Annotated[CallToolResult, RunResponse]:
+    async def run(
+        agent_id: str,
+        cmd: str,
+        queue_id: Annotated[int | None, Field(ge=1)] = None,
+    ) -> Annotated[CallToolResult, RunResponse]:
         data = RunResponse.model_validate(
-            await observed(service, "mcp", "run", service.run(cmd, agent_id=agent_id))
+            await observed(service, "mcp", "run", service.run(cmd, agent_id=agent_id, queue_id=queue_id))
         )
         summary = (
             f"Command {data.cmd_hash} queued."
@@ -230,7 +253,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Read terminal output. Provide agent_id and cmd_hash together for one command, or omit both for the global stream. Agent-bound reads include compact active_agents and pending_messages; acknowledge unread coordination messages before new run work.",
+        description="Read terminal output. cmd_hash selects one command; omitting it reads the global stream. agent_id is independently optional and adds session/message context. ALERT messages block read; ordinary unread messages remain visible without blocking read.",
     )
     async def read(
         agent_id: str | None = None,
@@ -238,30 +261,15 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         lines_count: Annotated[int, Field(ge=1, le=MAX_READ_LINES)] = DEFAULT_READ_LINES,
         offset: int | None = None,
     ) -> Annotated[CallToolResult, ReadResponse]:
-        if bool(agent_id) != bool(cmd_hash):
-            awareness = await service.awareness(agent_id)
-            data = ReadResponse(
-                ok=False,
-                lines=[],
-                next_offset=0,
-                overall_lines_count=None,
-                displayed_lines_count=0,
-                cmd_hash=cmd_hash,
-                status=None,
-                exit_code=None,
-                error="read.scope: provide agent_id and cmd_hash together, or omit both for global terminal",
-                **awareness,
-            )
-        else:
-            raw = await observed(
-                service,
-                "mcp",
-                "read",
-                service.read(cmd_hash, lines_count, offset, agent_id=agent_id),
-            )
-            raw.pop("agent_id", None)
-            raw["agent_name"] = public_agent_name(agent_id)
-            data = ReadResponse.model_validate(raw)
+        raw = await observed(
+            service,
+            "mcp",
+            "read",
+            service.read(cmd_hash, lines_count, offset, agent_id=agent_id),
+        )
+        raw.pop("agent_id", None)
+        raw["agent_name"] = public_agent_name(agent_id)
+        data = ReadResponse.model_validate(raw)
         scope = f"command {cmd_hash}" if cmd_hash else "global log"
         return _structured_result(
             data,
