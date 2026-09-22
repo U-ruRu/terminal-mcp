@@ -65,11 +65,24 @@ WantedBy=multi-user.target
 UNIT
 }
 stage(){
-  release=$ROOT/releases/$(date -u +%Y%m%dT%H%M%SZ)
-  python3 -m venv "$release"
-  "$release/bin/pip" install --upgrade pip >&2
-  "$release/bin/pip" install "$SOURCE" >&2
-  echo "$release"
+  STAGED_RELEASE=$ROOT/releases/$(date -u +%Y%m%dT%H%M%SZ)
+  if ! python3 -m venv "$STAGED_RELEASE"; then
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
+  if ! "$STAGED_RELEASE/bin/pip" install --upgrade pip >&2; then
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
+  if ! "$STAGED_RELEASE/bin/pip" install "$SOURCE" >&2; then
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
+  if [ ! -x "$STAGED_RELEASE/bin/terminal-mcp" ]; then
+    echo "Staged release is missing bin/terminal-mcp" >&2
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
 }
 backup(){
   [ -f "$DATA/terminal-mcp.sqlite3" ] || return 0
@@ -93,8 +106,8 @@ install -d -o root -g root -m 0700 "$DATA" "$BACKUPS"
 find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0600 {} +
 [ ! -e "$DATA/terminal-mcp.sqlite3" ] || chmod 0600 "$DATA/terminal-mcp.sqlite3"
 case "$CMD" in
- install) [ -f "$ENV_FILE" ] || write_env; write_unit; release=$(stage); activate "$release"; $SYSTEMCTL enable terminal-mcp ;;
- update) backup; release=$(stage); activate "$release" ;;
+ install) [ -f "$ENV_FILE" ] || write_env; write_unit; stage; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
+ update) backup; stage; activate "$STAGED_RELEASE" ;;
  doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL" ;;
  *) echo 'Usage: install.sh {install|update|doctor}'; exit 1 ;;
 esac
