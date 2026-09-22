@@ -10,6 +10,7 @@ from terminal_mcp.auth.routes import build_oauth_router
 from terminal_mcp.auth.service import AuthService
 from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
+from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
@@ -40,7 +41,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "runtime_config_reloaded", outcome="success"
     )
     terminal = LinuxTerminalAdapter(
-        repo, settings.shell, settings.cwd, settings.cancel_grace_sec, settings.terminal_user
+        repo,
+        settings.shell,
+        settings.cwd,
+        settings.cancel_grace_sec,
+        settings.terminal_user,
+        settings.queue_workers,
+        settings.queue_reconcile_sec,
+    )
+    agent_policy = AgentPolicy(
+        idle_ttl_seconds=settings.agent_idle_ttl_sec,
+        intent_ttl_seconds=settings.agent_intent_ttl_sec,
+        max_session_seconds=settings.agent_max_session_sec,
+        session_warning_seconds=settings.agent_session_warning_sec,
+        event_window_seconds=settings.agent_event_window_sec,
+        command_preview_chars=settings.agent_command_preview_chars,
+        history_default_minutes=settings.agent_history_default_minutes,
+        message_reminder_seconds=settings.message_reminder_sec,
+        message_reminder_calls=settings.message_reminder_calls,
+        max_active_agents=settings.max_active_agents,
     )
     service = TerminalService(
         repo,
@@ -51,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         runtime,
         events,
         metrics,
+        agent_policy,
     )
     auth = AuthService(settings, oauth_store, credentials)
     mcp = build_mcp(service, settings.public_base_url, settings.mode_for("mcp"))
@@ -74,7 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await runtime.stop()
             events.stop()
 
-    app = FastAPI(title="terminal-mcp", version="0.7.0", lifespan=lifespan)
+    app = FastAPI(title="terminal-mcp", version="0.8.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store

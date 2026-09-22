@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     log_path: Path = Path("/var/log/terminal-mcp/terminal-mcp.log")
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 8081
+    agent_idle_ttl_sec: int = 300
+    agent_intent_ttl_sec: int = 180
+    agent_max_session_sec: int = 1500
+    agent_session_warning_sec: int = 180
+    agent_event_window_sec: int = 180
+    agent_command_preview_chars: int = 160
+    agent_history_default_minutes: int = 60
+    message_reminder_sec: int = 180
+    message_reminder_calls: int = 5
+    max_active_agents: int = 8
+    queue_workers: int = 4
+    queue_reconcile_sec: float = 1.0
 
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode

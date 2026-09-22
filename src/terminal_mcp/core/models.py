@@ -14,6 +14,10 @@ class Command:
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    queue_id: int | None = None
+    queue_sequence: int | None = None
+    enqueued_at: str | None = None
+    claimed_at: str | None = None
 
 
 @dataclass(slots=True)

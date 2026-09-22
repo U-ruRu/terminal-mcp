@@ -156,10 +156,11 @@ def test_bearer_actions_and_openapi(tmp_path):
         global_read = client.post("/actions/read", json={}, headers=headers)
         assert global_read.status_code == 200
         assert global_read.json()["agent_name"] == "anonymous"
-        one_sided_read = client.post(
+        command_only_read = client.post(
             "/actions/read", json={"cmd_hash": cmd_hash}, headers=headers
         )
-        assert one_sided_read.status_code == 422
+        assert command_only_read.status_code == 200
+        assert command_only_read.json()["status"] == "completed"
 
         anonymous_cancel = client.post(
             "/actions/cancel", json={"cmd_hash": "deadbeef"}, headers=headers

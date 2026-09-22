@@ -35,7 +35,7 @@ def scoped_text(line):
 
 
 def global_text(line):
-    return line.split(" ", 3)[3]
+    return line.split(" ", 4)[4]
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
         assert {"started_at", "finished_at"} <= columns
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
         status, error, started_at, finished_at = db.execute(
             "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
         ).fetchone()
@@ -150,6 +150,7 @@ async def test_global_read_defaults_to_latest_500_without_count(tmp_path):
     assert latest["displayed_lines_count"] == 500
     assert latest["next_offset"] > 0
     assert global_text(latest["lines"][0]) == "101"
+    assert " q1 " in latest["lines"][0]
     assert global_text(latest["lines"][-1]) == "600"
 
     negative = await service.read(None, 5, -10)
@@ -322,6 +323,6 @@ async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
         "coordination_messages",
         "coordination_message_recipients",
     } <= tables
-    assert session == ("[]", 1, "expired")
+    assert session == ("[]", 1, "forced")
     assert event_step == 1
-    assert version == 3
+    assert version == 4
