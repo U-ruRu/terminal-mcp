@@ -56,6 +56,10 @@ class ReadResponse(SessionStatus):
     exit_code: int | None = None
     queue_id: int | None = None
     queue_position: int | None = None
+    output_truncated: bool | None = None
+    output_retained: bool | None = None
+    output_pruned_at: str | None = None
+    output_bytes: int | None = None
     error: str | None = None
 
 
@@ -68,6 +72,10 @@ class RecoveryResponse(SessionStatus):
     exit_code: int | None = None
     error: str | None = None
     duration_ms: int
+    output_truncated: bool | None = None
+    output_retained: bool | None = None
+    output_pruned_at: str | None = None
+    output_bytes: int | None = None
 
 
 class HealthCommandResult(BaseModel):
@@ -92,6 +100,19 @@ class QueueHealth(BaseModel):
     queued: int
 
 
+class OutputCacheHealth(BaseModel):
+    used_bytes: int
+    target_bytes: int
+    max_bytes: int
+    lines: int
+    max_lines: int
+    retained_commands: int
+    truncated_commands: int
+    allocated_bytes: int
+    live_page_bytes: int
+    last_prune_at: str | None = None
+
+
 class TerminalHealth(BaseModel):
     ok: bool
     user: str
@@ -107,6 +128,7 @@ class TerminalHealth(BaseModel):
     running_commands: list[str]
     queues: list[QueueHealth] = Field(default_factory=list)
     worker_health: dict[str, bool] = Field(default_factory=dict)
+    output_cache: OutputCacheHealth | None = None
 
 
 class HealthResponse(SessionStatus):

@@ -75,7 +75,7 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
         assert {"started_at", "finished_at"} <= columns
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
         status, error, started_at, finished_at = db.execute(
             "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
         ).fetchone()
@@ -325,4 +325,4 @@ async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
     } <= tables
     assert session == ("[]", 1, "forced")
     assert event_step == 1
-    assert version == 4
+    assert version == 5

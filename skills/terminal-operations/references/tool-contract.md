@@ -2,11 +2,11 @@
 
 ## Интерфейс
 
-Terminal MCP 0.8 предоставляет десять методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Terminal MCP 0.9 предоставляет десять методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
 ## Agent Session
 
-По умолчанию idle TTL равен 300 секундам, intent lease — 180 секундам, абсолютная длительность регистрации — 1500 секундам, warning window — последние 180 секунд. Значения задаются конфигурацией сервера.
+По умолчанию idle TTL равен 300 секундам, intent lease — 180 секундам, абсолютная длительность регистрации — 1500 секундам. Non-blocking warning начинается после 1200 секунд. На 1380-й секунде появляется blocking session ALERT; после reply он снимается и при продолжающейся сессии может появиться снова через 60 секунд. Пороги, repeat interval, флаг включения и текст ALERT задаются конфигурацией сервера.
 
 Каждый agent-bound ответ может содержать `session_status`, `session_started_at`, `session_age_seconds`, `session_remaining_seconds`, `session_warning`, `task_age_seconds`, `max_task_age_seconds`, `preferred_queue_id` и coordination obligations.
 
@@ -38,7 +38,7 @@ Reply:
 
 `message(agent_id, message_hash, text)`
 
-Создаёт связанный ответ исходному отправителю и закрывает reply obligation. `require_reply` блокирует `run` до reply. `ALERT` блокирует normal work surface до reply; `message`, `health`, `cancel`, `recovery` и `agent_finish` сохраняют доступ.
+Создаёт связанный ответ исходному отправителю и закрывает reply obligation. `require_reply` блокирует `run` до reply. `ALERT` блокирует normal work surface до reply; `message`, `health`, `cancel`, `recovery` и `agent_finish` сохраняют доступ. Late-session ALERT создаётся системным sender и после снятия повторяется по configured interval, пока та же сессия продолжает использоваться.
 
 Sender inspection через `message(sender_id, message_hash)` возвращает `delivered_to`, `seen_by`, `read_by`, `replied_by`.
 
@@ -70,7 +70,7 @@ Overview показывает status, относительную последн�
 
 `agent_id` и `cmd_hash` независимы. `cmd_hash` выбирает scoped command output; отсутствие hash читает global stream. `agent_id` добавляет session/message context. Обычное unread message отображается и не блокирует read. `ALERT` блокирует read до reply.
 
-Scoped response содержит `status`, `exit_code`, `queue_id`, `queue_position`, line counters и `error`. Global lines имеют форму:
+Scoped response содержит `status`, `exit_code`, `queue_id`, `queue_position`, line counters, `output_truncated`, `output_retained`, `output_pruned_at`, `output_bytes` и `error`. Persisted output ограничен 4 MiB на логическую строку и 8 MiB на команду. Global lines имеют форму:
 
 `HH:MM:SS <public-name|anonymous> <cmd_hash> qN <output>`
 
@@ -82,11 +82,11 @@ Recovery-команды без numbered lane могут не иметь `qN`.
 
 ## `recovery(cmd, agent_id?)`
 
-Persisted emergency execution вне numbered queues. Выполняется независимо от занятых lanes и остаётся доступным при ALERT. Полный вывод сохраняется и читается через `read`.
+Persisted emergency execution вне numbered queues. Выполняется независимо от занятых lanes и остаётся доступным при ALERT. Вывод сохраняется в общем bounded output-cache и читается через `read`.
 
 ## `health(agent_id?)`
 
-Anonymous health показывает приложение, storage и terminal scheduler. `terminal.scheduler` для 0.8 — `numbered-fifo`; `terminal.queues` содержит состояние каждой lane, `parallelism` — число workers, `worker_health` — их состояние. С `agent_id` ответ также содержит session timing, preferred queue и message obligations.
+Anonymous health показывает приложение, storage и terminal scheduler. `terminal.scheduler` для 0.9 — `numbered-fifo`; `terminal.queues` содержит состояние каждой lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` ответ также содержит session timing, preferred queue и message obligations.
 
 ## Command status
 

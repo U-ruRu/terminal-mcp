@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 
 import aiosqlite
 
@@ -421,9 +422,20 @@ class AgentStore:
                 )
             ).fetchall()
         keys = (
-            "message_hash", "sender_agent_id", "target_name", "text", "created_at",
-            "require_reply", "alert", "delivered_at", "first_seen_at", "last_seen_at",
-            "seen_count", "read_at", "replied_at", "reply_message_hash",
+            "message_hash",
+            "sender_agent_id",
+            "target_name",
+            "text",
+            "created_at",
+            "require_reply",
+            "alert",
+            "delivered_at",
+            "first_seen_at",
+            "last_seen_at",
+            "seen_count",
+            "read_at",
+            "replied_at",
+            "reply_message_hash",
         )
         result = []
         for row in rows:
@@ -433,6 +445,59 @@ class AgentStore:
             item["seen_count"] = int(item["seen_count"] or 0)
             result.append(item)
         return result
+
+    async def ensure_system_alert(
+        self,
+        *,
+        sender_agent_id,
+        recipient_agent_id,
+        target_name,
+        text,
+        now,
+        repeat_cutoff,
+    ):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            latest = await (
+                await db.execute(
+                    "SELECT m.message_hash,m.created_at,r.replied_at FROM coordination_message_recipients r "
+                    "JOIN coordination_messages m ON m.message_hash=r.message_hash "
+                    "WHERE r.recipient_agent_id=? AND m.sender_agent_id=? AND m.alert=1 "
+                    "ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1",
+                    (recipient_agent_id, sender_agent_id),
+                )
+            ).fetchone()
+            if latest is not None:
+                message_hash, created_at, replied_at = latest
+                if replied_at is None or created_at > repeat_cutoff:
+                    await db.commit()
+                    return {"message_hash": message_hash, "created": False}
+
+            for _ in range(32):
+                message_hash = secrets.token_hex(4)
+                exists = await (
+                    await db.execute(
+                        "SELECT 1 FROM coordination_messages WHERE message_hash=?", (message_hash,)
+                    )
+                ).fetchone()
+                if exists is not None:
+                    continue
+                await db.execute(
+                    "INSERT INTO coordination_messages("
+                    "message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert) "
+                    "VALUES(?,?,?,?,?,1,1)",
+                    (message_hash, sender_agent_id, target_name, text, now),
+                )
+                await db.execute(
+                    "INSERT INTO coordination_message_recipients("
+                    "message_hash,recipient_agent_id,delivered_at,first_seen_at,last_seen_at,seen_count,"
+                    "read_at,replied_at,reply_message_hash) VALUES(?,?,?,NULL,NULL,0,NULL,NULL,NULL)",
+                    (message_hash, recipient_agent_id, now),
+                )
+                await db.commit()
+                return {"message_hash": message_hash, "created": True}
+            await db.rollback()
+            raise RuntimeError("unable to allocate unique system alert hash")
 
     async def mark_messages_seen(self, agent_id, message_hashes, seen_at):
         hashes = list(dict.fromkeys(message_hashes))

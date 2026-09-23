@@ -19,6 +19,7 @@ from terminal_mcp.core.orchestration import (
 
 class AgentCoordinator:
     ALERT_BLOCKED_TOOLS = {"run", "read", "coordinate", "agents", "agent_start"}
+    SESSION_ALERT_SENDER = "system-session"
 
     def __init__(self, store, metrics=None, policy: AgentPolicy | None = None):
         self.store = store
@@ -28,7 +29,7 @@ class AgentCoordinator:
         self.ttl_seconds = self.policy.idle_ttl_seconds
         self.task_lease_seconds = self.policy.intent_ttl_seconds
         self.max_session_seconds = self.policy.max_session_seconds
-        self.session_warning_seconds = self.policy.session_warning_seconds
+        self.session_warning_after_seconds = self.policy.session_warning_after_seconds
 
     async def start(
         self,
@@ -148,9 +149,7 @@ class AgentCoordinator:
         latest_task_at = await self.store.latest_task_at(agent_id)
         now = utc_now()
         task_age = (
-            (now - parse_utc(latest_task_at)).total_seconds()
-            if latest_task_at
-            else float("inf")
+            (now - parse_utc(latest_task_at)).total_seconds() if latest_task_at else float("inf")
         )
         if task_age > self.task_lease_seconds:
             self._inc("terminal_mcp_agent_task_lease_expired_total")
@@ -176,12 +175,10 @@ class AgentCoordinator:
         remaining = max(0, self.max_session_seconds - age)
         latest_task = await self.store.latest_task_at(agent_id)
         task_age = (
-            max(0, int((now - parse_utc(latest_task)).total_seconds()))
-            if latest_task
-            else None
+            max(0, int((now - parse_utc(latest_task)).total_seconds())) if latest_task else None
         )
         warning = None
-        if session["state"] == "active" and remaining <= self.session_warning_seconds:
+        if session["state"] == "active" and age >= self.session_warning_after_seconds:
             warning = (
                 f"Session ends in {remaining}s. Reach a safe checkpoint and return to chat "
                 "with an interim report. If a long build or test run is needed, start it now "
@@ -220,6 +217,30 @@ class AgentCoordinator:
             return "idle"
         return "active"
 
+    async def _ensure_session_alert(self, agent_id):
+        if not agent_id or not self.policy.session_alert_enabled:
+            return None
+        now = utc_now()
+        session = await self.store.get_session(agent_id)
+        session = await self._enforce_session(session, now)
+        if not session or session["state"] != "active":
+            return None
+        age = (now - parse_utc(session["registered_at"])).total_seconds()
+        if age < self.policy.session_alert_after_seconds:
+            return None
+        repeat_cutoff = utc_text(now - timedelta(seconds=self.policy.session_alert_repeat_seconds))
+        result = await self.store.ensure_system_alert(
+            sender_agent_id=self.SESSION_ALERT_SENDER,
+            recipient_agent_id=agent_id,
+            target_name=public_agent_name(agent_id),
+            text=self.policy.session_alert_message,
+            now=utc_text(now),
+            repeat_cutoff=repeat_cutoff,
+        )
+        if result.get("created"):
+            self._inc("terminal_mcp_agent_session_alerts_total")
+        return result
+
     async def message_state(self, agent_id, *, surface=False):
         if not agent_id:
             return {
@@ -230,6 +251,7 @@ class AgentCoordinator:
                 "reply_required_pending": False,
                 "alert_pending": False,
             }
+        await self._ensure_session_alert(agent_id)
         messages = await self.store.message_obligations(agent_id)
         now = utc_now()
         if surface and messages:
@@ -722,9 +744,7 @@ class AgentCoordinator:
         for session in sessions:
             latest_task = await self.store.latest_task_at(session["agent_id"])
             task_age = (
-                max(0, int((now - parse_utc(latest_task)).total_seconds()))
-                if latest_task
-                else None
+                max(0, int((now - parse_utc(latest_task)).total_seconds())) if latest_task else None
             )
             recent = await self.store.recent_commands(session["agent_id"], 1)
             last_command = recent[0] if recent else None

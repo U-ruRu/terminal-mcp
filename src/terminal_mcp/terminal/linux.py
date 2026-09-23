@@ -129,22 +129,79 @@ class LinuxTerminalAdapter:
 
     async def _pipe_output(self, command, reader):
         pending = b""
+        batch = []
+        batch_bytes = 0
+        discarding_long_line = False
+        accepting = True
+        overflow_marked = False
+        line_limit = max(1, int(getattr(self.repo, "output_line_max_bytes", 4 * 1024 * 1024)))
+
+        async def flush():
+            nonlocal batch, batch_bytes, accepting
+            if not batch or not accepting:
+                batch = []
+                batch_bytes = 0
+                return
+            result = await self.repo.append_lines(command.cmd_hash, batch)
+            accepting = bool(result.get("accepting", True))
+            batch = []
+            batch_bytes = 0
+
+        async def add_raw(raw):
+            nonlocal batch_bytes
+            if not accepting:
+                return
+            text = raw.rstrip(b"\r").decode(errors="replace")
+            batch.append(text)
+            batch_bytes += len(raw)
+            if len(batch) >= 64 or batch_bytes >= 256 * 1024:
+                await flush()
+
         while True:
             chunk = await reader.read(65536)
             if not chunk:
                 break
-            pending += chunk
-            while b"\n" in pending:
-                raw, pending = pending.split(b"\n", 1)
-                await self.repo.append_line(
-                    command.cmd_hash,
-                    raw.rstrip(b"\r").decode(errors="replace"),
-                )
-        if pending:
-            await self.repo.append_line(
-                command.cmd_hash,
-                pending.rstrip(b"\r").decode(errors="replace"),
-            )
+            if not accepting:
+                if not overflow_marked:
+                    await self.repo.mark_output_truncated(command.cmd_hash)
+                    overflow_marked = True
+                continue
+            data = chunk
+            while data:
+                if discarding_long_line:
+                    newline = data.find(b"\n")
+                    if newline < 0:
+                        data = b""
+                        continue
+                    data = data[newline + 1 :]
+                    discarding_long_line = False
+                    continue
+
+                newline = data.find(b"\n")
+                if newline >= 0:
+                    raw = pending + data[:newline]
+                    pending = b""
+                    data = data[newline + 1 :]
+                    await add_raw(raw)
+                    continue
+
+                if len(pending) + len(data) > line_limit:
+                    # Keep one byte beyond the configured limit so OutputStore records
+                    # the line as truncated, then discard the rest until the newline.
+                    take = max(0, line_limit + 1 - len(pending))
+                    raw = pending + data[:take]
+                    pending = b""
+                    data = data[take:]
+                    await add_raw(raw)
+                    discarding_long_line = True
+                    continue
+
+                pending += data
+                data = b""
+
+        if accepting and pending and not discarding_long_line:
+            await add_raw(pending)
+        await flush()
 
     async def _terminate(self, process, grace_seconds=1.0):
         if process.returncode is not None:
@@ -232,6 +289,7 @@ class LinuxTerminalAdapter:
                 await self.repo.finish_running(
                     command.cmd_hash, final_status, command.exit_code, error
                 )
+                await self.repo.prune_output_cache()
             self.cancel_requested.discard(command.cmd_hash)
             if command.queue_id in self.queue_events:
                 self.queue_events[command.queue_id].set()
@@ -325,9 +383,7 @@ class LinuxTerminalAdapter:
             changed = await self.repo.finish_running(command.cmd_hash, "cancelled")
             self.cancel_requested.discard(command.cmd_hash)
             return (
-                (True, None)
-                if changed
-                else (False, "cancel.wait_process: command changed state")
+                (True, None) if changed else (False, "cancel.wait_process: command changed state")
             )
 
         if process.returncode is None:
@@ -359,6 +415,7 @@ class LinuxTerminalAdapter:
         uid = os.geteuid()
         queues = await self.repo.queue_snapshot(self.queue_workers)
         running = [item["running"] for item in queues if item["running"]]
+        output_cache = await self.repo.output_cache_stats()
         return {
             "ok": bool(self.workers) and all(not worker.done() for worker in self.workers.values()),
             "user": pwd.getpwuid(uid).pw_name,
@@ -376,4 +433,5 @@ class LinuxTerminalAdapter:
             "worker_health": {
                 str(queue_id): not worker.done() for queue_id, worker in self.workers.items()
             },
+            "output_cache": output_cache,
         }

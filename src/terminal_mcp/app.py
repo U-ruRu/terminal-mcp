@@ -27,7 +27,15 @@ from terminal_mcp.trace import TraceMiddleware
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    repo = SqliteRepository(settings.database_path)
+    repo = SqliteRepository(
+        settings.database_path,
+        settings.output_cache_path,
+        output_line_max_bytes=settings.output_line_max_bytes,
+        output_command_max_bytes=settings.output_command_max_bytes,
+        output_target_bytes=settings.output_retention_target_bytes,
+        output_max_bytes=settings.output_retention_max_bytes,
+        output_max_rows=settings.output_retention_max_rows,
+    )
     oauth_store = OAuthStore(settings.database_path)
     credentials = CredentialManager(settings)
     runtime = RuntimeConfigProvider(settings.runtime_config_path)
@@ -53,7 +61,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         idle_ttl_seconds=settings.agent_idle_ttl_sec,
         intent_ttl_seconds=settings.agent_intent_ttl_sec,
         max_session_seconds=settings.agent_max_session_sec,
-        session_warning_seconds=settings.agent_session_warning_sec,
+        session_warning_after_seconds=settings.agent_session_warning_after_sec,
+        session_alert_enabled=settings.agent_session_alert_enabled,
+        session_alert_after_seconds=settings.agent_session_alert_after_sec,
+        session_alert_repeat_seconds=settings.agent_session_alert_repeat_sec,
+        session_alert_message=settings.agent_session_alert_message,
         event_window_seconds=settings.agent_event_window_sec,
         command_preview_chars=settings.agent_command_preview_chars,
         history_default_minutes=settings.agent_history_default_minutes,
@@ -94,7 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await runtime.stop()
             events.stop()
 
-    app = FastAPI(title="terminal-mcp", version="0.8.0", lifespan=lifespan)
+    app = FastAPI(title="terminal-mcp", version="0.9.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store

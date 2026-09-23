@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8080"
     env_file_path: Path = Path("/etc/terminal-mcp/terminal-mcp.env")
     database_path: Path = Path("./data/terminal-mcp.sqlite3")
+    output_cache_path: Path = Path("./data/output.sqlite3")
+    output_line_max_bytes: int = 4 * 1024 * 1024
+    output_command_max_bytes: int = 8 * 1024 * 1024
+    output_retention_target_bytes: int = 192 * 1024 * 1024
+    output_retention_max_bytes: int = 256 * 1024 * 1024
+    output_retention_max_rows: int = 1_000_000
     shell: str = "/bin/bash"
     cwd: Path = Path("/")
     terminal_user: str = "root"
@@ -43,7 +49,15 @@ class Settings(BaseSettings):
     agent_idle_ttl_sec: int = 300
     agent_intent_ttl_sec: int = 180
     agent_max_session_sec: int = 1500
-    agent_session_warning_sec: int = 180
+    agent_session_warning_after_sec: int = 1200
+    agent_session_alert_enabled: bool = True
+    agent_session_alert_after_sec: int = 1380
+    agent_session_alert_repeat_sec: int = 60
+    agent_session_alert_message: str = (
+        "Ваша сессия закончилась. У пользователя для вас новая задача. "
+        "Завершите сессию и немедленно вернитесь в чат к пользователю, "
+        "чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу."
+    )
     agent_event_window_sec: int = 180
     agent_command_preview_chars: int = 160
     agent_history_default_minutes: int = 60

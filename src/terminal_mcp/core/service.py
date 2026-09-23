@@ -256,6 +256,10 @@ class TerminalService:
                     "exit_code": None,
                     "queue_id": None,
                     "queue_position": None,
+                    "output_truncated": None,
+                    "output_retained": None,
+                    "output_pruned_at": None,
+                    "output_bytes": None,
                     **gate["response"],
                 }
             gate_context = gate["context"]
@@ -280,6 +284,10 @@ class TerminalService:
             "exit_code": None,
             "queue_id": None,
             "queue_position": None,
+            "output_truncated": None,
+            "output_retained": None,
+            "output_pruned_at": None,
+            "output_bytes": None,
             "error": None,
         }
         stage = "load_command" if cmd_hash else "load_lines"
@@ -297,6 +305,7 @@ class TerminalService:
                     result["ok"] = command.error is None
                     result["queue_id"] = command.queue_id
                     result["queue_position"] = await self.repo.queue_position(cmd_hash)
+                    result.update(await self.repo.output_status(cmd_hash))
                     stage = "count_lines"
                     total = await self.repo.count_lines(cmd_hash)
                     result["overall_lines_count"] = total
@@ -381,6 +390,7 @@ class TerminalService:
                 command.cmd_hash, RECOVERY_OUTPUT_LINES, start
             )
             plugin_error = current.error
+            output_status = await self.repo.output_status(command.cmd_hash)
             return {
                 "ok": plugin_error is None and current.status in {"completed", "failed"},
                 "agent_name": public_agent_name(caller_agent_id),
@@ -391,6 +401,7 @@ class TerminalService:
                 "exit_code": current.exit_code,
                 "error": plugin_error,
                 "duration_ms": duration_ms,
+                **output_status,
                 **context,
             }
         except asyncio.CancelledError:
@@ -419,6 +430,10 @@ class TerminalService:
                 "exit_code": None,
                 "error": _error("recovery", stage, exc),
                 "duration_ms": elapsed,
+                "output_truncated": None,
+                "output_retained": None,
+                "output_pruned_at": None,
+                "output_bytes": None,
                 **context,
             }
 

@@ -4,7 +4,7 @@ description: Управляет и диагностирует Linux-сервер
 compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, health, run, read, cancel и recovery.
 metadata:
   author: U-ruRu
-  version: "1.3.0"
+  version: "1.4.0"
   language: ru
 ---
 
@@ -50,6 +50,7 @@ metadata:
 - доступность приложения и хранилища;
 - пользователя, рабочую директорию и привилегии;
 - состояние numbered queues и их workers;
+- состояние output-cache, retention ceilings и признаки truncation/pruning;
 - выполняющиеся команды;
 - доступный эксплуатационный контекст.
 
@@ -58,15 +59,16 @@ metadata:
 Новая рабочая сессия начинается с `agent_start` с коротким `intent` и обязательным `details`-планом. Полный `agent_id` является credential текущей регистрации; public name используется для наблюдения и адресации сообщений.
 
 1. Перед этапом вызывай `coordinate(agent_id, step, intent)`. Intent lease по умолчанию 180 секунд.
-2. Просматривай session timing и `session_warning` в каждом agent-bound ответе. Абсолютный lifetime по умолчанию 25 минут и активностью не продлевается.
-3. В последние три минуты дойди до безопасной точки. Если нужен долгий build/test, запусти его перед возвратом в чат, затем выдай промежуточный отчёт пользователю.
-4. Просматривай `pending_messages`, `reply_required_messages` и `alert_messages`. Показ сообщения означает `seen`; осознанное прочтение подтверждай `message(agent_id, message_hash=...)`.
-5. Сообщение с required reply закрывай через `message(agent_id, message_hash=..., text=...)`. `ALERT` требует ответа и блокирует normal work surface.
-6. Для отправки используй `message(agent_id, text, target=...)`; `require_reply=true` требует ответа, `alert=true` создаёт срочное обязательство. Без target выполняется broadcast active peers snapshot.
-7. `run(agent_id, cmd, queue_id?)` запускает работу в numbered FIFO lane. Первый вызов без queue выбирает least-loaded lane, последующие используют `preferred_queue_id`. Явный номер меняет affinity.
-8. `read(agent_id?, cmd_hash?, ...)` позволяет независимо выбрать command scope и agent context. Обычное unread message не мешает read; ALERT блокирует его до reply.
-9. `agents()` используй как anonymous observer. `target` показывает last activity и message receipt journal (`delivered/seen/read/replied`); `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` дают полный handoff/journal без новой регистрации.
-10. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. Уже запущенные terminal commands продолжают жить в своих queues.
+2. Просматривай session timing и `session_warning` в каждом agent-bound ответе. Абсолютный lifetime по умолчанию 25 минут и активностью не продлевается; warning начинается на 20-й минуте.
+3. На warning дойди до безопасной точки и подготовь промежуточный отчёт. По умолчанию на 23-й минуте появляется blocking session `ALERT`, который после reply может повториться через 60 секунд, если сессия продолжается.
+4. Если `ALERT` явно требует остановиться и вернуться к пользователю, прекрати дальнейшую работу на ближайшей безопасной точке, ответь на ALERT, заверши Agent Session через `agent_finish` и вернись в пользовательский чат. Не продолжай реализацию и не веди дополнительную coordination-переписку вместо возврата.
+5. Просматривай `pending_messages`, `reply_required_messages` и `alert_messages`. Показ сообщения означает `seen`; осознанное прочтение подтверждай `message(agent_id, message_hash=...)`.
+6. Сообщение с required reply закрывай через `message(agent_id, message_hash=..., text=...)`. `ALERT` требует ответа и блокирует normal work surface.
+7. Для отправки используй `message(agent_id, text, target=...)`; `require_reply=true` требует ответа, `alert=true` создаёт срочное обязательство. Без target выполняется broadcast active peers snapshot.
+8. `run(agent_id, cmd, queue_id?)` запускает работу в numbered FIFO lane. Первый вызов без queue выбирает least-loaded lane, последующие используют `preferred_queue_id`. Явный номер меняет affinity.
+9. `read(agent_id?, cmd_hash?, ...)` позволяет независимо выбрать command scope и agent context. Обычное unread message не мешает read; ALERT блокирует его до reply.
+10. `agents()` используй как anonymous observer. `target` показывает last activity и message receipt journal (`delivered/seen/read/replied`); `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` дают полный handoff/journal без новой регистрации.
+11. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. Уже запущенные terminal commands продолжают жить в своих queues.
 
 Agent statuses: `started`, `active`, `idle`, `finished`, `forced`. Источник истины для command queue — SQLite; queue state сохраняется отдельно от Agent Session.
 
@@ -76,7 +78,7 @@ Agent statuses: `started`, `active`, `idle`, `finished`, `forced`. Источн�
 
 ### `recovery`
 
-`recovery(cmd)` — независимый аварийный запуск вне numbered queues с сохранением команды и вывода в SQLite. Метод создаёт `cmd_hash`, выполняет команду параллельно numbered workers и ждёт завершения или фиксированного таймаута.
+`recovery(cmd)` — независимый аварийный запуск вне numbered queues с сохранением команды и bounded output в отдельном output-cache. Метод создаёт `cmd_hash`, выполняет команду параллельно numbered workers и ждёт завершения или фиксированного таймаута.
 
 Допустимые задачи:
 
