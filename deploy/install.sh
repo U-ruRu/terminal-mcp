@@ -10,7 +10,7 @@ BACKUPS=${TERMINAL_MCP_BACKUP_DIR:-/var/backups/terminal-mcp}
 UNIT_FILE=${TERMINAL_MCP_UNIT_FILE:-/etc/systemd/system/terminal-mcp.service}
 SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
 HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
-HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-180}
+HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
 SOURCE=$(cd "$(dirname "$0")/.." && pwd)
 [ "$(id -u)" -eq 0 ] || { echo 'Run as root'; exit 1; }
 write_env(){
