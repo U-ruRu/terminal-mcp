@@ -24,12 +24,14 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     env_dir = tmp_path / "etc"
     data_dir = tmp_path / "data"
     backup_dir = tmp_path / "backups"
+    cache_dir = tmp_path / "cache"
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "TERMINAL_MCP_INSTALL_ROOT": str(root),
         "TERMINAL_MCP_ENV_DIR": str(env_dir),
         "TERMINAL_MCP_DATA_DIR": str(data_dir),
+        "TERMINAL_MCP_CACHE_DIR": str(cache_dir),
         "TERMINAL_MCP_BACKUP_DIR": str(backup_dir),
         "TERMINAL_MCP_UNIT_FILE": str(tmp_path / "terminal-mcp.service"),
         "TERMINAL_MCP_SYSTEMCTL": "/bin/true",

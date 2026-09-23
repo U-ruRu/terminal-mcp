@@ -3,13 +3,21 @@ import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from pathlib import Path
 from sqlite3 import IntegrityError
 
 import aiosqlite
 
-from terminal_mcp.core.models import Command, Line
+from terminal_mcp.core.models import Command
 from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.storage.output import (
+    DEFAULT_COMMAND_MAX_BYTES,
+    DEFAULT_LINE_MAX_BYTES,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_ROWS,
+    DEFAULT_TARGET_BYTES,
+    OutputStore,
+)
 from terminal_mcp.storage.permissions import secure_database_path
 
 _COMMAND_COLUMNS = (
@@ -19,8 +27,28 @@ _COMMAND_COLUMNS = (
 
 
 class SqliteRepository:
-    def __init__(self, path):
+    def __init__(
+        self,
+        path,
+        output_path=None,
+        *,
+        output_line_max_bytes=DEFAULT_LINE_MAX_BYTES,
+        output_command_max_bytes=DEFAULT_COMMAND_MAX_BYTES,
+        output_target_bytes=DEFAULT_TARGET_BYTES,
+        output_max_bytes=DEFAULT_MAX_BYTES,
+        output_max_rows=DEFAULT_MAX_ROWS,
+    ):
         self.path = path
+        output_path = output_path or Path(path).with_name("output.sqlite3")
+        self.output = OutputStore(
+            output_path,
+            line_max_bytes=output_line_max_bytes,
+            command_max_bytes=output_command_max_bytes,
+            target_bytes=output_target_bytes,
+            max_bytes=output_max_bytes,
+            max_rows=output_max_rows,
+        )
+        self.output_line_max_bytes = self.output.line_max_bytes
         self.events = None
         self.metrics = None
 
@@ -73,6 +101,7 @@ class SqliteRepository:
 
     async def initialize(self):
         secure_database_path(self.path)
+        await self.output.initialize()
         async with self._connect("initialize") as db:
             await db.executescript(
                 """
@@ -83,12 +112,11 @@ class SqliteRepository:
                     queue_id INTEGER, queue_sequence INTEGER,
                     enqueued_at TEXT, claimed_at TEXT
                 );
-                CREATE TABLE IF NOT EXISTS lines(
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    hash TEXT, appeared_at TEXT, text TEXT
+                CREATE TABLE IF NOT EXISTS command_output_state(
+                    command_hash TEXT PRIMARY KEY,
+                    truncated INTEGER NOT NULL DEFAULT 0,
+                    pruned_at TEXT
                 );
-                CREATE INDEX IF NOT EXISTS ix_lines_hash_seq ON lines(hash, seq);
-                CREATE INDEX IF NOT EXISTS idx_lines_hash_seq ON lines(hash, seq);
                 CREATE TABLE IF NOT EXISTS agent_sessions(
                     agent_id TEXT PRIMARY KEY, registered_at TEXT NOT NULL, last_activity_at TEXT NOT NULL,
                     task_summary TEXT NOT NULL, intent TEXT NOT NULL, work_scope TEXT NOT NULL, state TEXT NOT NULL,
@@ -129,20 +157,22 @@ class SqliteRepository:
                 """
             )
             await self._migrate(db)
+            legacy_output_migrated = await self._migrate_legacy_output(db)
             recovered_at = utc_text()
             await db.execute(
                 "UPDATE commands SET status='failed', error='startup.recover: application restarted', "
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=4")
+            await db.execute("PRAGMA user_version=5")
             await db.commit()
+            if legacy_output_migrated:
+                await db.execute("VACUUM")
 
     async def _migrate(self, db):
         async def add_columns(table, definitions):
             columns = {
-                row[1]
-                for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+                row[1] for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
             }
             for name, definition in definitions:
                 if name not in columns:
@@ -170,9 +200,7 @@ class SqliteRepository:
                 ("preferred_queue_id", "INTEGER"),
             ],
         )
-        await add_columns(
-            "agent_task_events", [("step", "INTEGER NOT NULL DEFAULT 1")]
-        )
+        await add_columns("agent_task_events", [("step", "INTEGER NOT NULL DEFAULT 1")])
         await add_columns(
             "coordination_messages",
             [
@@ -218,6 +246,87 @@ class SqliteRepository:
             "CREATE INDEX IF NOT EXISTS ix_coord_message_recipient "
             "ON coordination_message_recipients(recipient_agent_id, read_at, replied_at)"
         )
+
+    async def _migrate_legacy_output(self, db):
+        table = await (
+            await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lines'")
+        ).fetchone()
+        if table is None:
+            return False
+        count = int((await (await db.execute("SELECT COUNT(*) FROM lines")).fetchone())[0])
+        if count == 0:
+            await db.execute("DROP INDEX IF EXISTS ix_lines_hash_seq")
+            await db.execute("DROP INDEX IF EXISTS idx_lines_hash_seq")
+            await db.execute("DROP TABLE lines")
+            return True
+
+        # A failed migration can be retried safely because the legacy table remains authoritative
+        # until the import succeeds and the final DROP TABLE commits.
+        await self.output.reset()
+        aggregate = await (
+            await db.execute(
+                "SELECT hash,MAX(seq),SUM(CASE WHEN length(CAST(text AS BLOB))>? THEN ? "
+                "ELSE length(CAST(text AS BLOB)) END) FROM lines GROUP BY hash ORDER BY MAX(seq) DESC",
+                (self.output.line_max_bytes, self.output.line_max_bytes),
+            )
+        ).fetchall()
+        selected = []
+        budget = 0
+        for cmd_hash, _last_seq, clipped_bytes in aggregate:
+            effective = min(int(clipped_bytes or 0), self.output.command_max_bytes)
+            if selected and budget + effective > self.output.target_bytes:
+                break
+            selected.append(cmd_hash)
+            budget += effective
+            if budget >= self.output.target_bytes:
+                break
+
+        truncated_hashes = set()
+        for start in range(0, len(selected), 250):
+            chunk = selected[start : start + 250]
+            marks = ",".join("?" for _ in chunk)
+            cursor = await db.execute(
+                f"SELECT seq,hash,appeared_at,text FROM lines WHERE hash IN ({marks}) ORDER BY seq",
+                chunk,
+            )
+            pending = {}
+            while True:
+                rows = await cursor.fetchmany(256)
+                if not rows:
+                    break
+                for seq, cmd_hash, appeared_at, text in rows:
+                    values = pending.setdefault(cmd_hash, [])
+                    values.append((int(seq), appeared_at or "00:00:00", text or ""))
+                    if len(values) >= 64:
+                        result = await self.output.append_records(cmd_hash, values)
+                        if result["truncated"]:
+                            truncated_hashes.add(cmd_hash)
+                        pending[cmd_hash] = []
+            for cmd_hash, records in pending.items():
+                if records:
+                    result = await self.output.append_records(cmd_hash, records)
+                    if result["truncated"]:
+                        truncated_hashes.add(cmd_hash)
+
+        migrated_at = utc_text()
+        selected_set = set(selected)
+        pruned_hashes = [row[0] for row in aggregate if row[0] not in selected_set]
+        if truncated_hashes:
+            await db.executemany(
+                "INSERT INTO command_output_state(command_hash,truncated,pruned_at) VALUES(?,1,NULL) "
+                "ON CONFLICT(command_hash) DO UPDATE SET truncated=1",
+                [(value,) for value in sorted(truncated_hashes)],
+            )
+        if pruned_hashes:
+            await db.executemany(
+                "INSERT INTO command_output_state(command_hash,truncated,pruned_at) VALUES(?,0,?) "
+                "ON CONFLICT(command_hash) DO UPDATE SET pruned_at=excluded.pruned_at",
+                [(value, migrated_at) for value in pruned_hashes],
+            )
+        await db.execute("DROP INDEX IF EXISTS ix_lines_hash_seq")
+        await db.execute("DROP INDEX IF EXISTS idx_lines_hash_seq")
+        await db.execute("DROP TABLE lines")
+        return True
 
     async def create(
         self,
@@ -346,7 +455,9 @@ class SqliteRepository:
                 await db.rollback()
                 return None
             row = await (
-                await db.execute(f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,))
+                await db.execute(
+                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,)
+                )
             ).fetchone()
             await db.commit()
         return Command(*row)
@@ -459,71 +570,91 @@ class SqliteRepository:
         return result
 
     async def delete_command(self, cmd_hash):
+        await self.output.delete_command(cmd_hash)
         async with self._connect("delete_command") as db:
-            await db.execute("DELETE FROM lines WHERE hash=?", (cmd_hash,))
             await db.execute(
                 "DELETE FROM command_agent_attribution WHERE command_hash=?", (cmd_hash,)
             )
+            await db.execute("DELETE FROM command_output_state WHERE command_hash=?", (cmd_hash,))
             await db.execute("DELETE FROM commands WHERE hash=?", (cmd_hash,))
             await db.commit()
 
     async def get(self, cmd_hash):
         async with self._connect("get_command") as db:
             row = await (
-                await db.execute(f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,))
+                await db.execute(
+                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,)
+                )
             ).fetchone()
         return Command(*row) if row else None
 
-    async def append_line(self, cmd_hash, text):
-        appeared_at = datetime.now(UTC).strftime("%H:%M:%S")
-        async with self._connect("append_line") as db:
+    async def mark_output_truncated(self, cmd_hash):
+        async with self._connect("mark_output_truncated") as db:
             await db.execute(
-                "INSERT INTO lines(hash,appeared_at,text) VALUES(?,?,?)",
-                (cmd_hash, appeared_at, text),
+                "INSERT INTO command_output_state(command_hash,truncated,pruned_at) VALUES(?,1,NULL) "
+                "ON CONFLICT(command_hash) DO UPDATE SET truncated=1",
+                (cmd_hash,),
             )
             await db.commit()
 
-    async def count_lines(self, cmd_hash):
-        async with self._connect("count_lines") as db:
-            row = await (
-                await db.execute("SELECT COUNT(*) FROM lines WHERE hash=?", (cmd_hash,))
+    async def append_lines(self, cmd_hash, texts):
+        result = await self.output.append_lines(cmd_hash, list(texts))
+        if result["truncated"]:
+            await self.mark_output_truncated(cmd_hash)
+        return result
+
+    async def append_line(self, cmd_hash, text):
+        return await self.append_lines(cmd_hash, [text])
+
+    async def output_status(self, cmd_hash):
+        meta = await self.output.command_meta(cmd_hash)
+        async with self._connect("output_status") as db:
+            state = await (
+                await db.execute(
+                    "SELECT truncated,pruned_at FROM command_output_state WHERE command_hash=?",
+                    (cmd_hash,),
+                )
             ).fetchone()
-        return int(row[0])
+        durable_truncated = bool(state[0]) if state else False
+        pruned_at = state[1] if state else None
+        return {
+            "output_truncated": durable_truncated or bool(meta and meta["truncated"]),
+            "output_retained": pruned_at is None,
+            "output_pruned_at": pruned_at,
+            "output_bytes": int(meta["stored_bytes"]) if meta else 0,
+        }
+
+    async def prune_output_cache(self):
+        async with self._connect("output_active_hashes") as db:
+            rows = await (
+                await db.execute("SELECT hash FROM commands WHERE status IN ('queued','running')")
+            ).fetchall()
+        pruned = await self.output.prune({row[0] for row in rows})
+        if pruned:
+            stamp = utc_text()
+            async with self._connect("mark_output_pruned") as db:
+                await db.executemany(
+                    "INSERT INTO command_output_state(command_hash,truncated,pruned_at) VALUES(?,0,?) "
+                    "ON CONFLICT(command_hash) DO UPDATE SET pruned_at=excluded.pruned_at",
+                    [(cmd_hash, stamp) for cmd_hash in pruned],
+                )
+                await db.commit()
+        return pruned
+
+    async def output_cache_stats(self):
+        return await self.output.stats()
+
+    async def count_lines(self, cmd_hash):
+        return await self.output.count_lines(cmd_hash)
 
     async def read_command_lines(self, cmd_hash, limit, offset):
-        query = "SELECT seq,hash,appeared_at,text FROM lines WHERE hash=? ORDER BY seq LIMIT ? OFFSET ?"
-        async with self._connect("read_command_lines") as db:
-            rows = await (await db.execute(query, (cmd_hash, limit, offset))).fetchall()
-        return [Line(*row) for row in rows]
+        return await self.output.read_command_lines(cmd_hash, limit, offset)
 
     async def read_global_after_cursor(self, limit, cursor):
-        query = "SELECT seq,hash,appeared_at,text FROM lines WHERE seq>? ORDER BY seq LIMIT ?"
-        async with self._connect("read_global_after") as db:
-            rows = await (await db.execute(query, (cursor, limit))).fetchall()
-        return [Line(*row) for row in rows]
+        return await self.output.read_global_after_cursor(limit, cursor)
 
     async def read_global_tail(self, limit, distance_from_end=None):
-        if distance_from_end is None:
-            take = limit
-            skip = 0
-        else:
-            distance = max(0, distance_from_end)
-            take = min(limit, distance)
-            skip = max(distance - take, 0)
-        if take == 0:
-            return []
-        query = "SELECT seq,hash,appeared_at,text FROM lines ORDER BY seq DESC LIMIT ? OFFSET ?"
-        async with self._connect("read_global_tail") as db:
-            rows = await (await db.execute(query, (take, skip))).fetchall()
-            if distance_from_end is not None and skip > 0 and len(rows) < take:
-                rows = await (
-                    await db.execute(
-                        "SELECT seq,hash,appeared_at,text FROM lines ORDER BY seq LIMIT ?", (limit,)
-                    )
-                ).fetchall()
-                return [Line(*row) for row in rows]
-        rows.reverse()
-        return [Line(*row) for row in rows]
+        return await self.output.read_global_tail(limit, distance_from_end)
 
     async def read_lines(self, cmd_hash, limit, offset):
         if cmd_hash:

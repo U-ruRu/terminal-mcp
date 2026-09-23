@@ -160,7 +160,7 @@ async def test_alert_blocks_work_surface_and_keeps_emergency_operations_availabl
 
 @pytest.mark.asyncio
 async def test_absolute_session_warning_and_forced_expiry(tmp_path):
-    policy = AgentPolicy(max_session_seconds=1500, session_warning_seconds=180)
+    policy = AgentPolicy(max_session_seconds=1500, session_warning_after_seconds=1320)
     repo, terminal, service = await runtime(tmp_path, policy=policy)
     try:
         agent_id = (await register(service))["self"]["agent_id"]
@@ -332,7 +332,7 @@ def test_v07_database_migrates_to_v08_without_reset(tmp_path):
             "SELECT cmd FROM commands WHERE hash='deadbeef'"
         ).fetchone()[0]
         assert old_command == "printf old"
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 @pytest.mark.asyncio
