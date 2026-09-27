@@ -26,7 +26,7 @@ Send mode:
 
 `message(agent_id, text, target?, namespace?, task_id?, require_reply=false, alert=false)`
 
-`target` адресует active agent, отсутствие target создаёт broadcast active peers snapshot, а `namespace + task_id` адресуют managed task: сообщение snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history. Agent target и task target взаимоисключающие. `alert=true` автоматически требует reply.
+`target` адресует active agent, отсутствие target или `target="broadcast"` создаёт broadcast active peers snapshot, а `namespace + task_id` адресуют managed task: сообщение snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history. Agent target и task target взаимоисключающие. `alert=true` автоматически требует reply.
 
 Read acknowledgement:
 
@@ -39,6 +39,8 @@ Reply:
 `message(agent_id, message_hash, text)`
 
 Создаёт связанный ответ исходному отправителю и закрывает reply obligation. `require_reply` блокирует `run` до reply. `ALERT` блокирует normal work surface до reply; `message`, `health`, `cancel`, `recovery` и `agent_finish` сохраняют доступ. Late-session ALERT создаётся системным sender и после снятия повторяется по configured interval, пока та же сессия продолжает использоваться.
+
+После normal `agent_finish` exact old `agent_id` в течение 300 секунд может только ACK/reply уже delivered ему message hash; grace не разрешает новые sends или другие agent tools.
 
 Sender inspection через `message(sender_id, message_hash)` возвращает `delivered_to`, `seen_by`, `read_by`, `replied_by`.
 
@@ -59,19 +61,27 @@ Sender inspection через `message(sender_id, message_hash)` возвраща
 По умолчанию overview компактный: status, activity age, intent/step и managed-task refs. `show_details` раскрывает plan/scope, `show_commands` — command data, `target` — выбранную session и message journal с persisted receipt state `delivered|seen|read|replied`.
 
 
-## `tasks(namespace?, task_id?, lane?, state?, show_details=false, show_done=false, show_archived=false, limit=50, cursor?)`
+## `tasks(namespace?, task_id?, lane?, state?, tags?, show_details=false, show_done=false, show_archived=false, limit=50, cursor?)`
 
-Read-only локальный backlog observer. Без selector возвращает compact unfinished tasks, counts/pressure и `recommended`; namespace фильтрует пространство, `namespace + task_id` выбирают одну карточку. `show_details=true` раскрывает description, resource context, dependencies, reviews и recent events. `show_done=true` включает завершённые задачи, `show_archived=true` — архив. `state=archived` выбирает архив напрямую. Cursor используется для истории/больших выборок.
+Read-only backlog observer. `tags` uses AND semantics; `tag_counts` exposes vocabulary. Default response returns active backlog, `claimable_count`, weighted pressure and recommended task; priority sorts first, equal priority uses oldest `ready_since`. Summary includes `oldest_claimable_ready_since` / age and `missing_dependency_count`. Detailed lookup exposes dependencies, relations, claims, comments/history, archive lifecycle metadata and legacy reviews. `show_archived=true` selects archived lifecycle records; archive is not a workflow state.
 
 ## `task(agent_id, action, namespace, ...)`
 
-Явно изменяет managed task. Базовые actions: `create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`, `archive`. `archive` требует свободный текст `note`, переводит task в `archived`, освобождает live claims и сохраняет note/release evidence в durable history. Архив скрывается из обычного backlog; прямой `update/state` в `archived` отклоняется, чтобы audit note был обязательным. Namespace обязателен. Fixed lanes: `implementation`, `review`, `release`, `integration`, `general`; durable states: `ready`, `blocked`, `deferred`, `done`, `archived`; review dimensions: `A`, `C`, `R`. Tool schemas публикуют фиксированные enum для action, lane, state, priority, review dimensions и verdict. Переход в `done` атомарно освобождает все текущие claims и сохраняет release events; последующий явный claim завершённой задачи остаётся разрешённым с warning. Scheduler только рекомендует. Multiple claims разрешены. Dependency, self-review, concurrent claim, stale candidate и unusual transition возвращаются structured warnings и сохраняют наблюдаемость вместо workflow lock. Ad-hoc terminal work не требует managed task.
+Workflow states are `ready|blocked|deferred|done`. `done` means goal reached and requires meaningful `result`. Claimed blocked requires `blocker_reason`; release live claim requires `release_reason`. `action=comment` with `comment_text` appends durable history distinct from mutable description.
 
-## `run(agent_id, cmd, queue_id?)`
+Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
+
+Dependencies are a validated directed graph: self edge and cycle reject before persistence. Missing target is allowed, represented as `missing` and remains blocking. Completion satisfies prerequisite independently of archive visibility: archived done satisfied; archived unfinished blocking. `force=true` + `force_reason` is durable conscious override only for dependency claim gate.
+
+Generic relation mutations are `action=relate` / `unrelate` with `relation_kind`, `related_namespace`, `related_task_id`. Relation view entries expose direction/kind/namespace/task_id/created_at. Review uses relation kind `review_of`; success is ordinary done(result), blocking findings are comment + blocked. Reviewed task receives linked `review_feedback` event with review reference, `outcome=done|blocked`, candidate_ref and result or findings/blocker_reason.
+
+`archive` requires `archive_note`, preserves workflow state, stores `archived_at` / archive evidence, releases live claims and removes task from active backlog/pressure/recommendation. Legacy v8 archived-state rows migrate deterministically into v9 lifecycle representation. Ad-hoc terminal work still requires no managed task.
+
+## `run(agent_id, cmd, queue_id?, task_scope?)`
 
 Сохраняет команду в SQLite и помещает её в numbered FIFO lane. Первый вызов без `queue_id` выбирает least-loaded lane и сохраняет affinity. Следующие вызовы используют preferred queue. Явный `queue_id` меняет affinity.
 
-Успешный ответ содержит `cmd_hash`, `queue_id` и `queue_position` (position может стать `null`, если worker уже atomically claimed команду).
+При наличии active task claims `task_scope` обязателен до enqueue: `none`, `all` или одна собственная claimed `namespace/task_id`. Scope управляет только task command events; без claims scope можно опустить или использовать `none`. Успешный ответ содержит `cmd_hash`, `queue_id` и `queue_position` (position может стать `null`, если worker уже atomically claimed команду).
 
 `run` требует live session, fresh intent, read acknowledgement всех unread messages и replies для обязательных сообщений.
 
@@ -95,7 +105,7 @@ Persisted emergency execution вне numbered queues. Выполняется н�
 
 ## `health(agent_id?)`
 
-Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` для 0.9.x — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
+Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
 
 ## Command status
 

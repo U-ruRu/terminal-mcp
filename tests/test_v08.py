@@ -329,7 +329,7 @@ def test_v07_database_migrates_to_v08_without_reset(tmp_path):
         assert {"delivered_at", "first_seen_at", "seen_count", "replied_at"} <= recipient_columns
         old_command = db.execute("SELECT cmd FROM commands WHERE hash='deadbeef'").fetchone()[0]
         assert old_command == "printf old"
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
 @pytest.mark.asyncio

@@ -18,11 +18,12 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     with sqlite3.connect(repo.path) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == 8
+    assert version == 9
     assert {
         "work_items",
         "work_claims",
         "work_dependencies",
+        "work_relations",
         "work_reviews",
         "work_events",
     } <= tables
@@ -51,7 +52,13 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     assert created["candidate_ref"] == "abc123"
 
     await tasks.create_task("project", "DONE-1", "Old", state="done")
-    await tasks.create_task("project", "ARCH-1", "Archived", state="archived")
+    await tasks.create_task("project", "ARCH-1", "Archived")
+    await tasks.update_task(
+        "project",
+        "ARCH-1",
+        archived_at="2026-01-02T00:00:00.000Z",
+        archive_note="archived for storage visibility test",
+    )
     assert [item["task_id"] for item in await tasks.list_tasks(namespace="project")] == ["REV-1"]
     assert {
         item["task_id"] for item in await tasks.list_tasks(namespace="project", show_done=True)
@@ -69,9 +76,10 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
         item["task_id"]
         for item in await tasks.list_tasks(namespace="project", show_done=True, show_archived=True)
     } == {"REV-1", "DONE-1", "ARCH-1"}
-    assert [
-        item["task_id"] for item in await tasks.list_tasks(namespace="project", state="archived")
-    ] == ["ARCH-1"]
+    archived = await tasks.get_task("project", "ARCH-1")
+    assert archived["state"] == "ready"
+    assert archived["archived_at"] == "2026-01-02T00:00:00.000Z"
+    assert archived["archive_note"] == "archived for storage visibility test"
 
     with pytest.raises(ValueError):
         await tasks.create_task("project", "BAD-LANE", "Bad", lane="other")
@@ -105,11 +113,18 @@ async def test_task_optimistic_revision_update(tmp_path):
 async def test_multi_claim_and_release(tmp_path):
     _, tasks = await store(tmp_path)
     await tasks.create_task("ns", "T-1", "One", cooperative=True)
-    first = await tasks.claim("ns", "T-1", "Alpha-1111")
-    duplicate = await tasks.claim("ns", "T-1", "Alpha-1111")
-    second = await tasks.claim("ns", "T-1", "Bravo-2222")
+    first = await tasks.claim(
+        "ns", "T-1", "Alpha-1111", claim_intent="implementing storage test"
+    )
+    duplicate = await tasks.claim(
+        "ns", "T-1", "Alpha-1111", claim_intent="updating storage test intent"
+    )
+    second = await tasks.claim(
+        "ns", "T-1", "Bravo-2222", claim_intent="cooperative storage test"
+    )
     assert first["created"] is True
     assert duplicate["created"] is False
+    assert duplicate["claim_intent"] == "updating storage test intent"
     assert second["created"] is True
     assert [item["agent_id"] for item in await tasks.active_claims("ns", "T-1")] == [
         "Alpha-1111",
@@ -213,12 +228,24 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
     await repo.initialize()
     tasks = TaskStore(repo.path)
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         claim = db.execute(
             "SELECT agent_id FROM work_claims WHERE namespace='project' AND task_id='LEGACY-1'"
         ).fetchone()
         assert claim == ("Alpha-1111",)
 
-    migrated = await tasks.update_task("project", "LEGACY-1", state="archived")
-    assert migrated["state"] == "archived"
+    migrated = await tasks.update_task(
+        "project",
+        "LEGACY-1",
+        archived_at="2026-01-02T00:00:00.000Z",
+        archive_note="legacy archive lifecycle test",
+    )
+    assert migrated["state"] == "ready"
+    assert migrated["archived_at"] == "2026-01-02T00:00:00.000Z"
+    assert migrated["archive_note"] == "legacy archive lifecycle test"
+    with sqlite3.connect(database) as db:
+        intent = db.execute(
+            "SELECT claim_intent FROM work_claims WHERE namespace='project' AND task_id='LEGACY-1'"
+        ).fetchone()
+    assert intent == ("legacy claim",)

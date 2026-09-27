@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
@@ -16,8 +16,6 @@ from terminal_mcp.api_models import (
     MessageResponse,
     ReadResponse,
     RecoveryResponse,
-    ReviewDimension,
-    ReviewVerdict,
     RunResponse,
     TaskAction,
     TaskLane,
@@ -141,12 +139,14 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports direct target, broadcast, or managed-task target via namespace+task_id, plus require_reply and alert. message_hash alone acknowledges a received message or inspects receipts for the sender; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
+        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports direct target, broadcast by omitting target or target=broadcast, or managed-task target via namespace+task_id, plus require_reply and alert. message_hash alone acknowledges a received message or inspects receipts for the sender; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
     )
     async def message(
         agent_id: str,
         text: Annotated[str | None, Field(min_length=1, max_length=500)] = None,
-        target: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
+        target: Literal["broadcast"]
+        | Annotated[str, Field(min_length=1, max_length=64)]
+        | None = None,
         message_hash: Annotated[str | None, Field(min_length=8, max_length=8)] = None,
         require_reply: bool = False,
         alert: bool = False,
@@ -212,13 +212,20 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Inspect local managed tasks. No selector returns a compact unfinished backlog with lane/state counts, pressure and a recommended next task. namespace+task_id selects one compact card. show_details expands description, resources, dependencies, reviews and recent history. show_done includes completed work; show_archived includes soft-archived work.",
+        description=(
+            "Inspect managed tasks with optional namespace/lane/state/tags filters. Responses "
+            "include claimable pressure, oldest-ready recommendation, missing-dependency "
+            "observability, and tag_counts so agents can discover the active custom tag "
+            "vocabulary. show_details expands durable history; show_done/show_archived include "
+            "completed history."
+        ),
     )
     async def tasks(
         namespace: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
         task_id: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
         lane: TaskLane | None = None,
         state: TaskState | None = None,
+        tags: Annotated[list[str] | None, Field(max_length=50)] = None,
         show_details: bool = False,
         show_done: bool = False,
         show_archived: bool = False,
@@ -235,6 +242,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
                     task_id=task_id,
                     lane=lane,
                     state=state,
+                    tags=tags,
                     show_details=show_details,
                     show_done=show_done,
                     show_archived=show_archived,
@@ -256,7 +264,15 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Mutate one managed task explicitly. action supports create, claim, release, update, checkpoint, review, state, done and archive. archive requires a free-form note, releases live claims and hides the task from the normal backlog. Workflow guardrails return structured warnings instead of blocking task actions; existing Agent Session safety rules still apply. Concurrent claims remain observable and allowed.",
+        description=(
+            "Mutate one unified managed task. claim requires claim_intent. The first live "
+            "claimant is owner; cooperative participants may comment and edit safe metadata, while "
+            "workflow changes require owner. blocked requires blocker_reason for a claimed task; "
+            "release requires release_reason; done requires result. comment is append-only history. "
+            "relate/unrelate manage generic task relations; review work uses lane=review plus "
+            "relation_kind=review_of. archive requires archive_note and preserves workflow state. "
+            "force=true with force_reason overrides open dependencies only, never ownership."
+        ),
     )
     async def task(
         agent_id: str,
@@ -270,14 +286,22 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         description: Annotated[str | None, Field(max_length=8000)] = None,
         next_action: Annotated[str | None, Field(max_length=2000)] = None,
         resource_context: dict[str, object] | None = None,
-        review_requirements: Annotated[list[ReviewDimension] | None, Field(max_length=3)] = None,
         cooperative: bool | None = None,
-        checkpoint: str | dict[str, object] | None = None,
+        checkpoint: str | dict[str, object] | list[object] | None = None,
         candidate_ref: Annotated[str | None, Field(max_length=200)] = None,
+        result: str | dict[str, object] | list[object] | None = None,
+        tags: Annotated[list[str] | None, Field(max_length=50)] = None,
         dependencies: Annotated[list[dict[str, str]] | None, Field(max_length=100)] = None,
-        dimensions: Annotated[list[ReviewDimension] | None, Field(max_length=3)] = None,
-        verdict: ReviewVerdict | None = None,
-        evidence: str | dict[str, object] | None = None,
+        force: bool = False,
+        force_reason: Annotated[str | None, Field(max_length=2000)] = None,
+        claim_intent: Annotated[str | None, Field(max_length=160)] = None,
+        blocker_reason: Annotated[str | None, Field(max_length=4000)] = None,
+        release_reason: Annotated[str | None, Field(max_length=4000)] = None,
+        archive_note: Annotated[str | None, Field(max_length=4000)] = None,
+        comment_text: Annotated[str | None, Field(max_length=4000)] = None,
+        relation_kind: Annotated[str | None, Field(max_length=64)] = None,
+        related_namespace: Annotated[str | None, Field(max_length=120)] = None,
+        related_task_id: Annotated[str | None, Field(max_length=120)] = None,
         note: Annotated[str | None, Field(max_length=2000)] = None,
         expected_revision: Annotated[int | None, Field(ge=1)] = None,
     ) -> Annotated[CallToolResult, TaskMutationResponse]:
@@ -290,14 +314,22 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             "description": description,
             "next_action": next_action,
             "resource_context": resource_context,
-            "review_requirements": review_requirements,
             "cooperative": cooperative,
             "checkpoint": checkpoint,
             "candidate_ref": candidate_ref,
+            "result": result,
+            "tags": tags,
             "dependencies": dependencies,
-            "dimensions": dimensions,
-            "verdict": verdict,
-            "evidence": evidence,
+            "force": force,
+            "force_reason": force_reason,
+            "claim_intent": claim_intent,
+            "blocker_reason": blocker_reason,
+            "release_reason": release_reason,
+            "archive_note": archive_note,
+            "comment_text": comment_text,
+            "relation_kind": relation_kind,
+            "related_namespace": related_namespace,
+            "related_task_id": related_task_id,
             "note": note,
             "expected_revision": expected_revision,
         }
@@ -342,16 +374,20 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Queue a shell command on a numbered FIFO worker. queue_id is optional: the first run selects the least-loaded queue and stores affinity; later runs reuse it. Explicit queue_id changes affinity. Requires a live session, fresh intent, acknowledged messages, and required replies.",
+        description="Queue a shell command on a numbered FIFO worker. If active managed-task claims exist, task_scope is required: all, none, or a claimed <namespace>/<task_id>. Without claims it may be omitted. queue_id controls FIFO affinity.",
     )
     async def run(
         agent_id: str,
         cmd: str,
         queue_id: Annotated[int | None, Field(ge=1)] = None,
+        task_scope: Annotated[str | None, Field(min_length=1, max_length=260)] = None,
     ) -> Annotated[CallToolResult, RunResponse]:
         data = RunResponse.model_validate(
             await observed(
-                service, "mcp", "run", service.run(cmd, agent_id=agent_id, queue_id=queue_id)
+                service,
+                "mcp",
+                "run",
+                service.run(cmd, agent_id=agent_id, queue_id=queue_id, task_scope=task_scope),
             )
         )
         summary = (

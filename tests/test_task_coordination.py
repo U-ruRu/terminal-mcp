@@ -24,7 +24,7 @@ async def register(service, summary):
 
 
 @pytest.mark.asyncio
-async def test_task_create_claim_warning_and_compact_listing(tmp_path):
+async def test_task_create_cooperative_claims_and_compact_listing(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
         one = (await register(service, "one"))["self"]["agent_id"]
@@ -37,32 +37,56 @@ async def test_task_create_claim_warning_and_compact_listing(tmp_path):
             title="Review slice",
             lane="review",
             priority="P1",
-            review_requirements=["A", "C"],
+            cooperative=True,
             resource_context={"repo": "/srv/repo"},
         )
         assert created["ok"] is True
         assert created["task"]["priority"] == "P1"
         assert "description" not in created["task"]
 
-        first = await service.task(one, action="claim", namespace="project", task_id="REV-1")
+        first = await service.task(
+            one,
+            action="claim",
+            namespace="project",
+            task_id="REV-1",
+            claim_intent="reviewing shared slice",
+        )
+        second = await service.task(
+            two,
+            action="claim",
+            namespace="project",
+            task_id="REV-1",
+            claim_intent="cooperating on review slice",
+        )
+        assert first["ok"] is True
+        assert second["ok"] is True
         assert first["warnings"] == []
-        second = await service.task(two, action="claim", namespace="project", task_id="REV-1")
-        assert [item["code"] for item in second["warnings"]] == ["already_claimed"]
+        assert all(item["severity"] == "info" for item in second["warnings"])
         assert {item["agent_name"] for item in second["task"]["claims"]} == {
-            first["task"]["claims"][0]["agent_name"],
-            second["task"]["claims"][1]["agent_name"],
+            public_agent_name(one),
+            public_agent_name(two),
         }
 
         fleet = await service.agents(one)
-        assert fleet["self"]["managed_tasks"] == [
-            {
-                "namespace": "project",
-                "task_id": "REV-1",
-                "lane": "review",
-                "priority": "P1",
-                "state": "ready",
-            }
-        ]
+        assert len(fleet["self"]["managed_tasks"]) == 1
+        managed = fleet["self"]["managed_tasks"][0]
+        assert {
+            "namespace": managed["namespace"],
+            "task_id": managed["task_id"],
+            "lane": managed["lane"],
+            "priority": managed["priority"],
+            "state": managed["state"],
+        } == {
+            "namespace": "project",
+            "task_id": "REV-1",
+            "lane": "review",
+            "priority": "P1",
+            "state": "ready",
+        }
+        assert managed["claim_intent"] == "reviewing shared slice"
+        assert managed["role"] == "owner"
+        assert managed["claimed_at"]
+        assert managed["claim_age_seconds"] >= 0
         health = await service.health("none")
         assert health["workflow"]["by_lane"] == {"review": 1}
         assert health["workflow"]["active_claims"] == 2
@@ -70,7 +94,6 @@ async def test_task_create_claim_warning_and_compact_listing(tmp_path):
 
         recovery = await service.recovery("printf task-event", agent_id=one)
         assert recovery["ok"] is True
-
         listing = await service.tasks(namespace="project")
         assert listing["ok"] is True
         assert listing["summary"]["by_lane"] == {"review": 1}
@@ -78,14 +101,13 @@ async def test_task_create_claim_warning_and_compact_listing(tmp_path):
         assert "resource_context" not in listing["tasks"][0]
         detailed = await service.tasks(namespace="project", task_id="REV-1", show_details=True)
         assert detailed["task"]["resource_context"] == {"repo": "/srv/repo"}
-        command_event = next(
-            item for item in detailed["task"]["events"] if item["event_type"] == "command"
+        assert not any(
+            item["event_type"] == "command"
+            and item["payload"].get("command_hash") == recovery["cmd_hash"]
+            for item in detailed["task"]["events"]
         )
-        assert command_event["payload"]["command_hash"] == recovery["cmd_hash"]
-        assert command_event["payload"]["command_type"] == "recovery"
     finally:
         await terminal.stop()
-
 
 @pytest.mark.asyncio
 async def test_task_addressed_message_routes_to_live_claimants_and_persists(tmp_path):
@@ -100,7 +122,13 @@ async def test_task_addressed_message_routes_to_live_claimants_and_persists(tmp_
             task_id="REV-2",
             title="Task mailbox",
         )
-        claimed = await service.task(worker, action="claim", namespace="project", task_id="REV-2")
+        claimed = await service.task(
+            worker,
+            action="claim",
+            namespace="project",
+            task_id="REV-2",
+            claim_intent="handling task-addressed messages",
+        )
         worker_name = claimed["task"]["claims"][0]["agent_name"]
 
         sent = await service.message(
@@ -184,7 +212,13 @@ async def test_agent_finish_releases_claim_with_durable_event(tmp_path):
             task_id="FINISH-1",
             title="Finish releases claim",
         )
-        await service.task(agent_id, action="claim", namespace="project", task_id="FINISH-1")
+        await service.task(
+            agent_id,
+            action="claim",
+            namespace="project",
+            task_id="FINISH-1",
+            claim_intent="testing session finish release",
+        )
 
         finished = await service.agent_finish(agent_id)
         assert finished["ok"] is True
@@ -201,38 +235,48 @@ async def test_agent_finish_releases_claim_with_durable_event(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unbound_candidate_review_does_not_satisfy_required_dimension(tmp_path):
+async def test_review_lane_is_ordinary_task_and_requires_result_to_finish(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
-        owner = (await register(service, "owner-candidate"))["self"]["agent_id"]
-        reviewer = (await register(service, "reviewer-candidate"))["self"]["agent_id"]
-        await service.task(
+        owner = (await register(service, "review-owner"))["self"]["agent_id"]
+        created = await service.task(
             owner,
             action="create",
             namespace="project",
             task_id="CANDIDATE-1",
-            title="Candidate binding",
-            review_requirements=["A"],
+            title="Candidate review",
+            lane="review",
+            candidate_ref="opaque-candidate-ref",
         )
-        reviewed = await service.task(
-            reviewer,
-            action="review",
+        assert created["ok"] is True
+        assert created["task"]["lane"] == "review"
+        assert created["task"]["candidate_ref"] == "opaque-candidate-ref"
+
+        missing = await service.task(
+            owner, action="done", namespace="project", task_id="CANDIDATE-1"
+        )
+        assert missing["ok"] is False
+        assert "result" in missing["error"]
+
+        result = {
+            "verdict": "accepted",
+            "evidence": {"tests": "green", "candidate_ref": "opaque-candidate-ref"},
+        }
+        done = await service.task(
+            owner,
+            action="done",
             namespace="project",
             task_id="CANDIDATE-1",
-            candidate_ref="unrelated-sha",
-            dimensions=["A"],
-            verdict="NON_BLOCKING",
+            result=result,
         )
-        assert reviewed["ok"] is True
-
-        done = await service.task(owner, action="done", namespace="project", task_id="CANDIDATE-1")
         assert done["ok"] is True
         assert done["task"]["state"] == "done"
-        assert [warning["code"] for warning in done["warnings"]] == ["review_incomplete"]
-        assert done["warnings"][0]["context"]["dimensions"] == ["A"]
+        detail = await service.tasks(
+            namespace="project", task_id="CANDIDATE-1", show_details=True
+        )
+        assert detail["task"]["result"] == result
     finally:
         await terminal.stop()
-
 
 @pytest.mark.asyncio
 async def test_invalid_dependencies_do_not_partially_create_or_update_task(tmp_path):
@@ -331,19 +375,18 @@ async def test_release_without_claim_does_not_create_false_release_event(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_task_events_preserve_checkpoint_and_review_evidence_history(tmp_path):
+async def test_task_events_preserve_checkpoint_and_result_history(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
         owner = (await register(service, "history-owner"))["self"]["agent_id"]
-        reviewer = (await register(service, "history-reviewer"))["self"]["agent_id"]
         await service.task(
             owner,
             action="create",
             namespace="project",
             task_id="HISTORY-1",
-            title="Preserve history",
+            title="Preserve review task history",
+            lane="review",
             candidate_ref="sha1",
-            review_requirements=["A"],
         )
         await service.task(
             owner,
@@ -359,50 +402,39 @@ async def test_task_events_preserve_checkpoint_and_review_evidence_history(tmp_p
             task_id="HISTORY-1",
             checkpoint={"step": "two"},
         )
-        await service.task(
-            reviewer,
-            action="review",
+        result = {"verdict": "approved", "evidence": {"tests": 2}}
+        finished = await service.task(
+            owner,
+            action="done",
             namespace="project",
             task_id="HISTORY-1",
-            candidate_ref="sha1",
-            dimensions=["A"],
-            verdict="NON_BLOCKING",
-            evidence={"tests": 1},
+            result=result,
         )
-        await service.task(
-            reviewer,
-            action="review",
-            namespace="project",
-            task_id="HISTORY-1",
-            candidate_ref="sha1",
-            dimensions=["A"],
-            verdict="BLOCKING",
-            evidence={"tests": 2},
-        )
+        assert finished["ok"] is True
 
         detail = await service.tasks(namespace="project", task_id="HISTORY-1", show_details=True)
         assert all("agent_id" not in event for event in detail["task"]["events"])
         visible_names = {
-            event.get("agent_name") for event in detail["task"]["events"] if event.get("agent_name")
+            event.get("agent_name")
+            for event in detail["task"]["events"]
+            if event.get("agent_name")
         }
-        assert visible_names <= {public_agent_name(owner), public_agent_name(reviewer)}
+        assert visible_names <= {public_agent_name(owner)}
         checkpoints = [
             event["payload"]["checkpoint"]
             for event in reversed(detail["task"]["events"])
             if event["event_type"] == "checkpoint"
         ]
         assert checkpoints == [{"step": "one"}, {"step": "two"}]
-        reviews = [
-            event["payload"]
-            for event in reversed(detail["task"]["events"])
-            if event["event_type"] == "review"
+        result_events = [
+            event
+            for event in detail["task"]["events"]
+            if event["payload"].get("result") == result
         ]
-        assert [event["evidence"] for event in reviews] == [{"tests": 1}, {"tests": 2}]
-        assert [event["verdict"] for event in reviews] == ["NON_BLOCKING", "BLOCKING"]
-        assert detail["task"]["reviews"][0]["evidence"] == {"tests": 2}
+        assert len(result_events) == 1
+        assert detail["task"]["result"] == result
     finally:
         await terminal.stop()
-
 
 @pytest.mark.asyncio
 async def test_done_atomically_releases_all_current_claims(tmp_path):
@@ -418,10 +450,28 @@ async def test_done_atomically_releases_all_current_claims(tmp_path):
             title="Done releases current ownership",
             cooperative=True,
         )
-        await service.task(owner, action="claim", namespace="project", task_id="DONE-CLAIMS")
-        await service.task(peer, action="claim", namespace="project", task_id="DONE-CLAIMS")
+        await service.task(
+            owner,
+            action="claim",
+            namespace="project",
+            task_id="DONE-CLAIMS",
+            claim_intent="finishing completed task",
+        )
+        await service.task(
+            peer,
+            action="claim",
+            namespace="project",
+            task_id="DONE-CLAIMS",
+            claim_intent="supporting completion validation",
+        )
 
-        done = await service.task(owner, action="done", namespace="project", task_id="DONE-CLAIMS")
+        done = await service.task(
+            owner,
+            action="done",
+            namespace="project",
+            task_id="DONE-CLAIMS",
+            result={"summary": "completed and claims released"},
+        )
         assert done["ok"] is True
         assert done["task"]["state"] == "done"
         assert done["task"]["active"] is False
@@ -447,7 +497,7 @@ async def test_done_atomically_releases_all_current_claims(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_archive_hides_task_records_note_releases_claims_and_closes_dependency(tmp_path):
+async def test_archive_hides_task_releases_claims_and_keeps_dependency_blocked(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
         owner = (await register(service, "archive-owner"))["self"]["agent_id"]
@@ -458,7 +508,13 @@ async def test_archive_hides_task_records_note_releases_claims_and_closes_depend
             task_id="ARCHIVE-1",
             title="Mistaken task",
         )
-        await service.task(owner, action="claim", namespace="project", task_id="ARCHIVE-1")
+        await service.task(
+            owner,
+            action="claim",
+            namespace="project",
+            task_id="ARCHIVE-1",
+            claim_intent="checking whether task should be archived",
+        )
 
         create_archived = await service.task(
             owner,
@@ -469,13 +525,13 @@ async def test_archive_hides_task_records_note_releases_claims_and_closes_depend
             state="archived",
         )
         assert create_archived["ok"] is False
-        assert create_archived["error"] == "task.create: use action=archive with note"
+        assert "state" in create_archived["error"]
 
         missing_note = await service.task(
             owner, action="archive", namespace="project", task_id="ARCHIVE-1"
         )
         assert missing_note["ok"] is False
-        assert missing_note["error"] == "task.archive: note required"
+        assert "archive_note" in missing_note["error"]
 
         direct_state = await service.task(
             owner,
@@ -485,17 +541,19 @@ async def test_archive_hides_task_records_note_releases_claims_and_closes_depend
             state="archived",
         )
         assert direct_state["ok"] is False
-        assert direct_state["error"] == "task.update: use action=archive with note"
+        assert "state" in direct_state["error"]
 
         archived = await service.task(
             owner,
             action="archive",
             namespace="project",
             task_id="ARCHIVE-1",
-            note="Created by mistake; superseded by ARCHIVE-2.",
+            archive_note="Created by mistake; superseded by ARCHIVE-2.",
         )
         assert archived["ok"] is True
-        assert archived["task"]["state"] == "archived"
+        assert archived["task"]["state"] == "ready"
+        assert archived["task"]["archived_at"]
+        assert archived["task"]["archive_note"] == "Created by mistake; superseded by ARCHIVE-2."
         assert archived["task"]["active"] is False
         assert archived["task"]["claims"] == []
 
@@ -503,8 +561,9 @@ async def test_archive_hides_task_records_note_releases_claims_and_closes_depend
         assert all(item["task_id"] != "ARCHIVE-1" for item in default["tasks"])
         visible = await service.tasks(namespace="project", show_archived=True)
         assert [item["task_id"] for item in visible["tasks"]] == ["ARCHIVE-1"]
-        filtered = await service.tasks(namespace="project", state="archived")
-        assert [item["task_id"] for item in filtered["tasks"]] == ["ARCHIVE-1"]
+        direct = await service.tasks(namespace="project", task_id="ARCHIVE-1", show_details=True)
+        assert direct["task"]["state"] == "ready"
+        assert direct["task"]["archived_at"]
 
         detail = await service.tasks(namespace="project", task_id="ARCHIVE-1", show_details=True)
         archive_events = [
@@ -512,7 +571,8 @@ async def test_archive_hides_task_records_note_releases_claims_and_closes_depend
         ]
         assert len(archive_events) == 1
         assert (
-            archive_events[0]["payload"]["note"] == "Created by mistake; superseded by ARCHIVE-2."
+            archive_events[0]["payload"]["archive_note"]
+            == "Created by mistake; superseded by ARCHIVE-2."
         )
         releases = [
             event
@@ -531,11 +591,28 @@ async def test_archive_hides_task_records_note_releases_claims_and_closes_depend
             title="Replacement task",
             dependencies=[{"namespace": "project", "task_id": "ARCHIVE-1"}],
         )
-        claim = await service.task(owner, action="claim", namespace="project", task_id="ARCHIVE-2")
-        assert "dependency_open" not in {item["code"] for item in claim["warnings"]}
+        claim = await service.task(
+            owner,
+            action="claim",
+            namespace="project",
+            task_id="ARCHIVE-2",
+            claim_intent="waiting on archived prerequisite",
+        )
+        assert claim["ok"] is False
+        assert claim["code"] == "dependency_open"
+        assert claim["blocking_dependencies"] == [
+            {
+                "namespace": "project",
+                "task_id": "ARCHIVE-1",
+                "state": "ready",
+                "archived": True,
+                "satisfied": False,
+            }
+        ]
 
         stats = await service.task_coordinator.health()
-        assert stats["by_state"]["archived"] == 1
+        assert "archived" not in stats["by_state"]
+        assert stats["by_state"]["ready"] == 2
         assert stats["by_lane"].get("general") == 1
     finally:
         await terminal.stop()

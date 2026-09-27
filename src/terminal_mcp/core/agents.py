@@ -543,6 +543,17 @@ class AgentCoordinator:
             **context,
         }
 
+    async def _message_grace_remaining(self, agent_id, message_hash):
+        session = await self.store.get_session(agent_id)
+        if not session or session["state"] != "finished" or not session.get("ended_at"):
+            return None
+        elapsed = (utc_now() - parse_utc(session["ended_at"])).total_seconds()
+        if elapsed < 0 or elapsed > self.policy.post_finish_message_grace_seconds:
+            return None
+        if await self.store.recipient_record(message_hash, agent_id) is None:
+            return None
+        return max(0, int(self.policy.post_finish_message_grace_seconds - elapsed))
+
     async def message(
         self,
         agent_id,
@@ -555,8 +566,13 @@ class AgentCoordinator:
         task_id=None,
     ):
         lifecycle = await self.validate(agent_id, "message")
+        grace_remaining = None
         if lifecycle:
-            return lifecycle
+            if message_hash is None:
+                return lifecycle
+            grace_remaining = await self._message_grace_remaining(agent_id, message_hash)
+            if grace_remaining is None:
+                return lifecycle
         if message_hash is not None:
             original = await self.store.message_record(message_hash)
             if original is None:
@@ -594,6 +610,8 @@ class AgentCoordinator:
                 response = self._message_response(agent_id, message_hash, receipts)
                 response["namespace"] = original.get("task_namespace")
                 response["task_id"] = original.get("task_id")
+                if grace_remaining is not None:
+                    response["message_grace_remaining_seconds"] = grace_remaining
                 return response
 
             if (
@@ -655,7 +673,18 @@ class AgentCoordinator:
             response["delivered_to"] = [public_agent_name(original["sender_agent_id"])]
             response["namespace"] = original.get("task_namespace")
             response["task_id"] = original.get("task_id")
+            if grace_remaining is not None:
+                response["message_grace_remaining_seconds"] = grace_remaining
             return response
+
+        if target and target.casefold() == "broadcast":
+            if namespace is not None:
+                return {
+                    "ok": False,
+                    "agent_name": public_agent_name(agent_id),
+                    "error": "message.target: broadcast cannot be combined with a task target",
+                }
+            target = None
 
         if not text:
             return {
@@ -825,16 +854,27 @@ class AgentCoordinator:
             return []
         priorities = {3: "P0", 2: "P1", 1: "P2", 0: "P3"}
         rows = await self.task_store.claims_for_agent(agent_id, active_only=True)
-        return [
-            {
-                "namespace": item["namespace"],
-                "task_id": item["task_id"],
-                "lane": item["lane"],
-                "priority": priorities.get(int(item["priority"]), "P3"),
-                "state": item["state"],
-            }
-            for item in rows
-        ]
+        result = []
+        for item in rows:
+            claims = await self.task_store.active_claims(item["namespace"], item["task_id"])
+            role = "owner" if claims and claims[0]["agent_id"] == agent_id else "participant"
+            claim_age_seconds = max(
+                0, int((utc_now() - parse_utc(item["claimed_at"])).total_seconds())
+            )
+            result.append(
+                {
+                    "namespace": item["namespace"],
+                    "task_id": item["task_id"],
+                    "lane": item["lane"],
+                    "priority": priorities.get(int(item["priority"]), "P3"),
+                    "state": item["state"],
+                    "claimed_at": item["claimed_at"],
+                    "claim_age_seconds": claim_age_seconds,
+                    "claim_intent": item.get("claim_intent") or "",
+                    "role": role,
+                }
+            )
+        return result
 
     async def overview(
         self,

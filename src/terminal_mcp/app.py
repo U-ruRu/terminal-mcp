@@ -36,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output_target_bytes=settings.output_retention_target_bytes,
         output_max_bytes=settings.output_retention_max_bytes,
         output_max_rows=settings.output_retention_max_rows,
+        output_prune_rows=settings.output_retention_prune_rows,
     )
     oauth_store = OAuthStore(settings.database_path)
     credentials = CredentialManager(settings)
@@ -72,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         history_default_minutes=settings.agent_history_default_minutes,
         message_reminder_seconds=settings.message_reminder_sec,
         message_reminder_calls=settings.message_reminder_calls,
+        post_finish_message_grace_seconds=settings.agent_post_finish_message_grace_sec,
         max_active_agents=settings.max_active_agents,
     )
     service = TerminalService(

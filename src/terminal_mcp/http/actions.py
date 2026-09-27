@@ -13,8 +13,6 @@ from terminal_mcp.api_models import (
     MessageResponse,
     ReadResponse,
     RecoveryResponse,
-    ReviewDimension,
-    ReviewVerdict,
     RunResponse,
     TaskAction,
     TaskLane,
@@ -77,7 +75,12 @@ class CoordinateRequest(AgentRequest):
 
 class MessageRequest(AgentRequest):
     text: str | None = Field(default=None, min_length=1, max_length=500)
-    target: str | None = Field(default=None, min_length=1, max_length=64)
+    target: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="Public agent name, or 'broadcast' to send to all other active agents.",
+    )
     message_hash: str | None = Field(default=None, min_length=8, max_length=8)
     require_reply: bool = False
     alert: bool = False
@@ -118,6 +121,7 @@ class TasksRequest(StrictRequest):
     task_id: str | None = Field(default=None, min_length=1, max_length=120)
     lane: TaskLane | None = None
     state: TaskState | None = None
+    tags: list[str] | None = Field(default=None, max_length=50)
     show_details: bool = False
     show_done: bool = False
     show_archived: bool = False
@@ -136,14 +140,29 @@ class TaskRequest(AgentRequest):
     description: str | None = Field(default=None, max_length=8000)
     next_action: str | None = Field(default=None, max_length=2000)
     resource_context: dict[str, object] | None = None
-    review_requirements: list[ReviewDimension] | None = Field(default=None, max_length=3)
     cooperative: bool | None = None
-    checkpoint: str | dict[str, object] | None = None
+    checkpoint: str | dict[str, object] | list[object] | None = None
     candidate_ref: str | None = Field(default=None, max_length=200)
+    result: str | dict[str, object] | list[object] | None = None
+    tags: list[str] | None = Field(default=None, max_length=50)
     dependencies: list[dict[str, str]] | None = Field(default=None, max_length=100)
-    dimensions: list[ReviewDimension] | None = Field(default=None, max_length=3)
-    verdict: ReviewVerdict | None = None
-    evidence: str | dict[str, object] | None = None
+    force: bool = Field(
+        default=False,
+        description="Conscious dependency override only when the claim is genuinely necessary.",
+    )
+    force_reason: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Required justification when force=true; force never overrides ownership.",
+    )
+    claim_intent: str | None = Field(default=None, max_length=160)
+    blocker_reason: str | None = Field(default=None, max_length=4000)
+    release_reason: str | None = Field(default=None, max_length=4000)
+    archive_note: str | None = Field(default=None, max_length=4000)
+    comment_text: str | None = Field(default=None, max_length=4000)
+    relation_kind: str | None = Field(default=None, max_length=64)
+    related_namespace: str | None = Field(default=None, max_length=120)
+    related_task_id: str | None = Field(default=None, max_length=120)
     note: str | None = Field(default=None, max_length=2000)
     expected_revision: int | None = Field(default=None, ge=1)
 
@@ -151,6 +170,12 @@ class TaskRequest(AgentRequest):
 class RunRequest(AgentRequest):
     cmd: str = Field(min_length=1, description="Shell script passed to /bin/bash -s through stdin.")
     queue_id: int | None = Field(default=None, ge=1)
+    task_scope: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=260,
+        description="With active claims: 'all', 'none', or '<namespace>/<task_id>'.",
+    )
 
 
 class ReadRequest(OptionalAgentRequest):
@@ -279,6 +304,7 @@ def build_actions_router(service, auth_mode="none"):
                 task_id=body.task_id,
                 lane=body.lane,
                 state=body.state,
+                tags=body.tags,
                 show_details=body.show_details,
                 show_done=body.show_done,
                 show_archived=body.show_archived,
@@ -308,7 +334,12 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "run",
-            service.run(body.cmd, agent_id=body.agent_id, queue_id=body.queue_id),
+            service.run(
+                body.cmd,
+                agent_id=body.agent_id,
+                queue_id=body.queue_id,
+                task_scope=body.task_scope,
+            ),
         )
 
     @router.post("/recovery", operation_id="recoveryCommand", response_model=RecoveryResponse)

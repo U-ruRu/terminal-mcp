@@ -10,8 +10,16 @@ import aiosqlite
 from terminal_mcp.core.orchestration import utc_text
 
 LANES = frozenset({"implementation", "review", "release", "integration", "general"})
-STATES = frozenset({"ready", "blocked", "deferred", "done", "archived"})
+STATES = frozenset({"ready", "blocked", "deferred", "done"})
 REVIEW_DIMENSIONS = frozenset({"A", "C", "R"})
+
+
+class TaskClaimConflict(RuntimeError):
+    def __init__(self, namespace: str, task_id: str, agent_ids: list[str]):
+        self.namespace = namespace
+        self.task_id = task_id
+        self.agent_ids = agent_ids
+        super().__init__(f"task already claimed: {namespace}/{task_id}")
 
 
 class TaskRevisionConflict(RuntimeError):
@@ -93,9 +101,15 @@ class TaskStore:
             "cooperative": bool(row[10]),
             "checkpoint": TaskStore._loads(row[11], {}),
             "candidate_ref": row[12],
-            "revision": row[13],
-            "created_at": row[14],
-            "updated_at": row[15],
+            "result": TaskStore._loads(row[13], None),
+            "tags": TaskStore._loads(row[14], []),
+            "state_changed_at": row[15],
+            "ready_since": row[16],
+            "archived_at": row[17],
+            "archive_note": row[18],
+            "revision": row[19],
+            "created_at": row[20],
+            "updated_at": row[21],
         }
 
     async def create_task(
@@ -114,6 +128,8 @@ class TaskStore:
         cooperative: bool = False,
         checkpoint: Any = None,
         candidate_ref: str | None = None,
+        result: Any = None,
+        tags: Any = None,
         now: str | None = None,
     ):
         if not namespace or not task_id or not title:
@@ -124,8 +140,8 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute(
                 "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,"
-                "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,revision,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,revision,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                 (
                     namespace,
                     task_id,
@@ -140,6 +156,10 @@ class TaskStore:
                     int(bool(cooperative)),
                     self._json(checkpoint or {}),
                     candidate_ref,
+                    self._json(result) if result is not None else None,
+                    self._json(tags or []),
+                    now,
+                    now if state == "ready" else None,
                     now,
                     now,
                 ),
@@ -163,6 +183,8 @@ class TaskStore:
         cooperative: bool = False,
         checkpoint: Any = None,
         candidate_ref: str | None = None,
+        result: Any = None,
+        tags: Any = None,
         dependencies=None,
         event_agent_id: str | None = None,
         event_payload: Any = None,
@@ -177,10 +199,11 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._validate_dependency_graph_tx(db, namespace, task_id, normalized)
                 await db.execute(
                     "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,"
-                    "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,revision,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                    "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,revision,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                     (
                         namespace,
                         task_id,
@@ -195,6 +218,10 @@ class TaskStore:
                         int(bool(cooperative)),
                         self._json(checkpoint or {}),
                         candidate_ref,
+                        self._json(result) if result is not None else None,
+                        self._json(tags or []),
+                        now,
+                        now if state == "ready" else None,
                         now,
                         now,
                     ),
@@ -231,7 +258,7 @@ class TaskStore:
             row = await (
                 await db.execute(
                     "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
-                    "reviews_json,cooperative,checkpoint_json,candidate_ref,revision,created_at,updated_at "
+                    "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at "
                     "FROM work_items WHERE namespace=? AND task_id=?",
                     (namespace, task_id),
                 )
@@ -244,9 +271,10 @@ class TaskStore:
         namespace: str | None = None,
         lane: str | None = None,
         state: str | None = None,
+        tags=None,
         show_done: bool = False,
         show_archived: bool = False,
-        limit: int = 100,
+        limit: int | None = 100,
         offset: int = 0,
     ):
         where = []
@@ -262,25 +290,33 @@ class TaskStore:
             self._validate_state(state)
             where.append("state=?")
             params.append(state)
-        else:
-            hidden_states = []
-            if not show_done:
-                hidden_states.append("done")
-            if not show_archived:
-                hidden_states.append("archived")
-            if hidden_states:
-                where.append(f"state NOT IN ({','.join('?' for _ in hidden_states)})")
-                params.extend(hidden_states)
+        if not show_archived:
+            where.append("archived_at IS NULL")
+        if not show_done:
+            if show_archived:
+                where.append("(state<>'done' OR archived_at IS NOT NULL)")
+            else:
+                where.append("state<>'done'")
         clause = f" WHERE {' AND '.join(where)}" if where else ""
-        params.extend([max(1, min(int(limit), 1000)), max(0, int(offset))])
         query = (
             "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
-            "reviews_json,cooperative,checkpoint_json,candidate_ref,revision,created_at,updated_at "
-            f"FROM work_items{clause} ORDER BY priority DESC,updated_at DESC,namespace,task_id LIMIT ? OFFSET ?"
+            "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,"
+            "state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at "
+            f"FROM work_items{clause} "
+            "ORDER BY priority DESC,"
+            "CASE WHEN state='ready' THEN 0 ELSE 1 END,"
+            "COALESCE(ready_since,created_at) ASC,updated_at DESC,namespace,task_id"
         )
         async with self._connect() as db:
             rows = await (await db.execute(query, params)).fetchall()
-        return [self._task(row) for row in rows]
+        tasks = [self._task(row) for row in rows]
+        required_tags = set(tags or [])
+        if required_tags:
+            tasks = [task for task in tasks if required_tags.issubset(set(task["tags"]))]
+        offset = max(0, int(offset))
+        if limit is None:
+            return tasks[offset:]
+        return tasks[offset : offset + max(1, min(int(limit), 1000))]
 
     async def update_task(
         self,
@@ -303,6 +339,10 @@ class TaskStore:
             "cooperative",
             "checkpoint",
             "candidate_ref",
+            "result",
+            "tags",
+            "archived_at",
+            "archive_note",
         }
         unknown = set(changes) - allowed
         if unknown:
@@ -317,13 +357,22 @@ class TaskStore:
             "resource": "resource_json",
             "reviews": "reviews_json",
             "checkpoint": "checkpoint_json",
+            "result": "result_json",
+            "tags": "tags_json",
         }
         assignments = []
         params: list[Any] = []
         for key, value in changes.items():
             column = columns.get(key, key)
-            if key in {"resource", "reviews", "checkpoint"}:
-                value = self._json(value if value is not None else ({} if key != "reviews" else []))
+            if key in {"resource", "reviews", "checkpoint", "result", "tags"}:
+                if key == "result":
+                    value = self._json(value) if value is not None else None
+                elif key == "tags":
+                    value = self._json(value or [])
+                else:
+                    value = self._json(
+                        value if value is not None else ({} if key != "reviews" else [])
+                    )
             elif key == "cooperative":
                 value = int(bool(value))
             elif key == "priority":
@@ -331,6 +380,13 @@ class TaskStore:
             assignments.append(f"{column}=?")
             params.append(value)
         now = now or utc_text()
+        if "state" in changes:
+            current = await self.get_task(namespace, task_id)
+            if current is None:
+                raise KeyError(f"unknown task: {namespace}/{task_id}")
+            if changes["state"] != current["state"]:
+                assignments.extend(["state_changed_at=?", "ready_since=?"])
+                params.extend([now, now if changes["state"] == "ready" else None])
         assignments.extend(["revision=revision+1", "updated_at=?"])
         params.append(now)
         where = "namespace=? AND task_id=?"
@@ -346,7 +402,7 @@ class TaskStore:
             if cur.rowcount != 1:
                 row = await (
                     await db.execute(
-                        "SELECT revision FROM work_items WHERE namespace=? AND task_id=?",
+                        "SELECT revision,state FROM work_items WHERE namespace=? AND task_id=?",
                         (namespace, task_id),
                     )
                 ).fetchone()
@@ -372,6 +428,7 @@ class TaskStore:
         event_agent_id: str | None = None,
         event_payload: Any = None,
         release_claims_reason: str | None = None,
+        additional_events=None,
         now: str | None = None,
         **changes,
     ):
@@ -387,6 +444,10 @@ class TaskStore:
             "cooperative",
             "checkpoint",
             "candidate_ref",
+            "result",
+            "tags",
+            "archived_at",
+            "archive_note",
         }
         unknown = set(changes) - allowed
         if unknown:
@@ -400,13 +461,22 @@ class TaskStore:
             "resource": "resource_json",
             "reviews": "reviews_json",
             "checkpoint": "checkpoint_json",
+            "result": "result_json",
+            "tags": "tags_json",
         }
         assignments = []
         params: list[Any] = []
         for key, value in changes.items():
             column = columns.get(key, key)
-            if key in {"resource", "reviews", "checkpoint"}:
-                value = self._json(value if value is not None else ({} if key != "reviews" else []))
+            if key in {"resource", "reviews", "checkpoint", "result", "tags"}:
+                if key == "result":
+                    value = self._json(value) if value is not None else None
+                elif key == "tags":
+                    value = self._json(value or [])
+                else:
+                    value = self._json(
+                        value if value is not None else ({} if key != "reviews" else [])
+                    )
             elif key == "cooperative":
                 value = int(bool(value))
             elif key == "priority":
@@ -419,13 +489,16 @@ class TaskStore:
             try:
                 exists = await (
                     await db.execute(
-                        "SELECT revision FROM work_items WHERE namespace=? AND task_id=?",
+                        "SELECT revision,state FROM work_items WHERE namespace=? AND task_id=?",
                         (namespace, task_id),
                     )
                 ).fetchone()
                 if exists is None:
                     raise KeyError(f"unknown task: {namespace}/{task_id}")
                 if assignments:
+                    if "state" in changes and changes["state"] != exists[1]:
+                        assignments.extend(["state_changed_at=?", "ready_since=?"])
+                        params.extend([now, now if changes["state"] == "ready" else None])
                     assignments.extend(["revision=revision+1", "updated_at=?"])
                     update_params = [*params, now, namespace, task_id]
                     where = "namespace=? AND task_id=?"
@@ -449,6 +522,7 @@ class TaskStore:
                             )
                         raise RuntimeError("task update failed")
                 if dependencies is not None:
+                    await self._validate_dependency_graph_tx(db, namespace, task_id, normalized)
                     await db.execute(
                         "DELETE FROM work_dependencies WHERE namespace=? AND task_id=?",
                         (namespace, task_id),
@@ -484,6 +558,19 @@ class TaskStore:
                             event_agent_id,
                             self._json({"dependencies": dependencies}),
                             now,
+                        ),
+                    )
+                for extra_event in additional_events or []:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            extra_event["namespace"],
+                            extra_event["task_id"],
+                            extra_event["event_type"],
+                            extra_event.get("agent_id"),
+                            self._json(extra_event.get("payload") or {}),
+                            extra_event.get("created_at") or now,
                         ),
                     )
                 if release_claims_reason:
@@ -526,13 +613,20 @@ class TaskStore:
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT id,agent_id,claimed_at,released_at FROM work_claims "
+                    "SELECT id,agent_id,claimed_at,released_at,claim_intent FROM work_claims "
                     "WHERE namespace=? AND task_id=?" + clause + " ORDER BY claimed_at,id",
                     (namespace, task_id),
                 )
             ).fetchall()
         return [
-            {"id": r[0], "agent_id": r[1], "claimed_at": r[2], "released_at": r[3]} for r in rows
+            {
+                "id": r[0],
+                "agent_id": r[1],
+                "claimed_at": r[2],
+                "released_at": r[3],
+                "claim_intent": r[4],
+            }
+            for r in rows
         ]
 
     async def claims_for_agent(self, agent_id: str, *, active_only: bool = True):
@@ -540,7 +634,8 @@ class TaskStore:
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT c.namespace,c.task_id,c.claimed_at,c.released_at,w.lane,w.priority,w.state "
+                    "SELECT c.namespace,c.task_id,c.claimed_at,c.released_at,c.claim_intent,"
+                    "w.lane,w.priority,w.state,w.cooperative "
                     "FROM work_claims c JOIN work_items w ON w.namespace=c.namespace AND w.task_id=c.task_id "
                     "WHERE c.agent_id=?" + clause + " ORDER BY c.claimed_at,c.id",
                     (agent_id,),
@@ -552,9 +647,11 @@ class TaskStore:
                 "task_id": r[1],
                 "claimed_at": r[2],
                 "released_at": r[3],
-                "lane": r[4],
-                "priority": r[5],
-                "state": r[6],
+                "claim_intent": r[4],
+                "lane": r[5],
+                "priority": r[6],
+                "state": r[7],
+                "cooperative": bool(r[8]),
             }
             for r in rows
         ]
@@ -563,7 +660,7 @@ class TaskStore:
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT namespace,task_id,agent_id,claimed_at FROM work_claims "
+                    "SELECT namespace,task_id,agent_id,claimed_at,claim_intent FROM work_claims "
                     "WHERE released_at IS NULL ORDER BY claimed_at,id"
                 )
             ).fetchall()
@@ -573,6 +670,7 @@ class TaskStore:
                 "task_id": row[1],
                 "agent_id": row[2],
                 "claimed_at": row[3],
+                "claim_intent": row[4],
             }
             for row in rows
         ]
@@ -584,7 +682,8 @@ class TaskStore:
             ).fetchall()
             lanes = await (
                 await db.execute(
-                    "SELECT lane,COUNT(*) FROM work_items WHERE state NOT IN ('done','archived') GROUP BY lane"
+                    "SELECT lane,COUNT(*) FROM work_items "
+                    "WHERE state<>'done' AND archived_at IS NULL GROUP BY lane"
                 )
             ).fetchall()
             active_claims = int(
@@ -610,46 +709,114 @@ class TaskStore:
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT id,agent_id,claimed_at FROM work_claims "
+                    "SELECT id,agent_id,claimed_at,claim_intent FROM work_claims "
                     "WHERE namespace=? AND task_id=? AND released_at IS NULL ORDER BY claimed_at,id",
                     (namespace, task_id),
                 )
             ).fetchall()
-        return [{"id": row[0], "agent_id": row[1], "claimed_at": row[2]} for row in rows]
+        return [
+            {"id": row[0], "agent_id": row[1], "claimed_at": row[2], "claim_intent": row[3]}
+            for row in rows
+        ]
 
-    async def claim(self, namespace: str, task_id: str, agent_id: str, *, now: str | None = None):
+    async def claim(
+        self,
+        namespace: str,
+        task_id: str,
+        agent_id: str,
+        *,
+        claim_intent: str = "",
+        exclusive: bool = False,
+        event_payload: Any = None,
+        dependency_override: Any = None,
+        now: str | None = None,
+    ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
-            existing = await (
-                await db.execute(
-                    "SELECT id,claimed_at FROM work_claims WHERE namespace=? AND task_id=? "
-                    "AND agent_id=? AND released_at IS NULL",
-                    (namespace, task_id, agent_id),
+            try:
+                existing = await (
+                    await db.execute(
+                        "SELECT id,claimed_at FROM work_claims WHERE namespace=? AND task_id=? AND agent_id=? AND released_at IS NULL",
+                        (namespace, task_id, agent_id),
+                    )
+                ).fetchone()
+                if existing:
+                    await db.execute(
+                        "UPDATE work_claims SET claim_intent=? WHERE id=?",
+                        (claim_intent, existing[0]),
+                    )
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "claim_intent_updated",
+                            agent_id,
+                            self._json({"claim_intent": claim_intent}),
+                            now,
+                        ),
+                    )
+                    await db.commit()
+                    return {
+                        "id": existing[0],
+                        "agent_id": agent_id,
+                        "claimed_at": existing[1],
+                        "claim_intent": claim_intent,
+                        "created": False,
+                    }
+                task = await (
+                    await db.execute(
+                        "SELECT cooperative,archived_at FROM work_items WHERE namespace=? AND task_id=?",
+                        (namespace, task_id),
+                    )
+                ).fetchone()
+                if task is None:
+                    raise KeyError(f"unknown task: {namespace}/{task_id}")
+                if task[1] is not None:
+                    raise ValueError("archived task cannot be claimed")
+                if exclusive or not bool(task[0]):
+                    conflicts = await (
+                        await db.execute(
+                            "SELECT agent_id FROM work_claims WHERE namespace=? AND task_id=? AND released_at IS NULL AND agent_id<>? ORDER BY claimed_at,id",
+                            (namespace, task_id, agent_id),
+                        )
+                    ).fetchall()
+                    if conflicts:
+                        raise TaskClaimConflict(namespace, task_id, [row[0] for row in conflicts])
+                cur = await db.execute(
+                    "INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at,released_at,claim_intent) VALUES(?,?,?,?,NULL,?)",
+                    (namespace, task_id, agent_id, now, claim_intent),
                 )
-            ).fetchone()
-            if existing:
-                await db.rollback()
+                if dependency_override:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "dependency_override",
+                            agent_id,
+                            self._json(dependency_override),
+                            now,
+                        ),
+                    )
+                payload = dict(event_payload or {})
+                payload["claim_intent"] = claim_intent
+                await db.execute(
+                    "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (namespace, task_id, "claim", agent_id, self._json(payload), now),
+                )
+                await db.commit()
                 return {
-                    "id": existing[0],
+                    "id": cur.lastrowid,
                     "agent_id": agent_id,
-                    "claimed_at": existing[1],
-                    "created": False,
+                    "claimed_at": now,
+                    "claim_intent": claim_intent,
+                    "created": True,
                 }
-            task = await (
-                await db.execute(
-                    "SELECT 1 FROM work_items WHERE namespace=? AND task_id=?", (namespace, task_id)
-                )
-            ).fetchone()
-            if task is None:
+            except Exception:
                 await db.rollback()
-                raise KeyError(f"unknown task: {namespace}/{task_id}")
-            cur = await db.execute(
-                "INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at,released_at) VALUES(?,?,?,?,NULL)",
-                (namespace, task_id, agent_id, now),
-            )
-            await db.commit()
-            return {"id": cur.lastrowid, "agent_id": agent_id, "claimed_at": now, "created": True}
+                raise
 
     async def release_claim(
         self, namespace: str, task_id: str, agent_id: str, *, now: str | None = None
@@ -663,6 +830,52 @@ class TaskStore:
             )
             await db.commit()
         return cur.rowcount > 0
+
+    async def release_claim_mutation(
+        self,
+        namespace: str,
+        task_id: str,
+        agent_id: str,
+        *,
+        reason: str,
+        now: str | None = None,
+    ) -> bool:
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cur = await db.execute(
+                    "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND agent_id=? AND released_at IS NULL",
+                    (now, namespace, task_id, agent_id),
+                )
+                if cur.rowcount:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "comment",
+                            agent_id,
+                            self._json({"text": reason, "kind": "handoff"}),
+                            now,
+                        ),
+                    )
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "claim_released",
+                            agent_id,
+                            self._json({"reason": reason, "release_reason": reason}),
+                            now,
+                        ),
+                    )
+                await db.commit()
+                return cur.rowcount > 0
+            except Exception:
+                await db.rollback()
+                raise
 
     async def release_claims(
         self,
@@ -691,6 +904,42 @@ class TaskStore:
             await db.commit()
         return cur.rowcount
 
+    async def was_completed(self, namespace: str, task_id: str) -> bool:
+        task = await self.get_task(namespace, task_id)
+        if task is not None and task["state"] == "done":
+            return True
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT payload_json FROM work_events "
+                    "WHERE namespace=? AND task_id=? ORDER BY id",
+                    (namespace, task_id),
+                )
+            ).fetchall()
+        return any(self._loads(row[0], {}).get("state") == "done" for row in rows)
+
+    async def _validate_dependency_graph_tx(self, db, namespace, task_id, normalized):
+        source = (namespace, task_id)
+        for dependency in normalized:
+            if dependency == source:
+                raise ValueError(f"self dependency is not allowed: {namespace}/{task_id}")
+            queue = [dependency]
+            seen = set()
+            while queue:
+                current = queue.pop(0)
+                if current == source:
+                    raise ValueError(f"dependency cycle detected for {namespace}/{task_id}")
+                if current in seen:
+                    continue
+                seen.add(current)
+                rows = await (
+                    await db.execute(
+                        "SELECT dependency_namespace,dependency_task_id FROM work_dependencies WHERE namespace=? AND task_id=?",
+                        current,
+                    )
+                ).fetchall()
+                queue.extend((row[0], row[1]) for row in rows)
+
     async def dependencies(self, namespace: str, task_id: str):
         async with self._connect() as db:
             rows = await (
@@ -717,6 +966,7 @@ class TaskStore:
             if exists is None:
                 await db.rollback()
                 raise KeyError(f"unknown task: {namespace}/{task_id}")
+            await self._validate_dependency_graph_tx(db, namespace, task_id, normalized)
             await db.execute(
                 "DELETE FROM work_dependencies WHERE namespace=? AND task_id=?",
                 (namespace, task_id),
@@ -728,6 +978,147 @@ class TaskStore:
             )
             await db.commit()
         return await self.dependencies(namespace, task_id)
+
+    async def relations(self, namespace: str, task_id: str):
+        async with self._connect() as db:
+            outgoing = await (
+                await db.execute(
+                    "SELECT relation_kind,related_namespace,related_task_id,created_at,created_by FROM work_relations WHERE namespace=? AND task_id=? ORDER BY relation_kind,related_namespace,related_task_id",
+                    (namespace, task_id),
+                )
+            ).fetchall()
+            incoming = await (
+                await db.execute(
+                    "SELECT relation_kind,namespace,task_id,created_at,created_by FROM work_relations WHERE related_namespace=? AND related_task_id=? ORDER BY relation_kind,namespace,task_id",
+                    (namespace, task_id),
+                )
+            ).fetchall()
+        return [
+            {
+                "direction": "outgoing",
+                "kind": r[0],
+                "namespace": r[1],
+                "task_id": r[2],
+                "created_at": r[3],
+                "created_by": r[4],
+            }
+            for r in outgoing
+        ] + [
+            {
+                "direction": "incoming",
+                "kind": r[0],
+                "namespace": r[1],
+                "task_id": r[2],
+                "created_at": r[3],
+                "created_by": r[4],
+            }
+            for r in incoming
+        ]
+
+    async def add_relation(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        related_namespace: str,
+        related_task_id: str,
+        relation_kind: str,
+        agent_id: str,
+        now: str | None = None,
+    ):
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                for ns, tid in ((namespace, task_id), (related_namespace, related_task_id)):
+                    if (
+                        await (
+                            await db.execute(
+                                "SELECT 1 FROM work_items WHERE namespace=? AND task_id=?",
+                                (ns, tid),
+                            )
+                        ).fetchone()
+                        is None
+                    ):
+                        raise KeyError(f"unknown task: {ns}/{tid}")
+                cur = await db.execute(
+                    "INSERT OR IGNORE INTO work_relations(namespace,task_id,related_namespace,related_task_id,relation_kind,created_at,created_by) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        related_namespace,
+                        related_task_id,
+                        relation_kind,
+                        now,
+                        agent_id,
+                    ),
+                )
+                if cur.rowcount:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "relation_added",
+                            agent_id,
+                            self._json(
+                                {
+                                    "kind": relation_kind,
+                                    "namespace": related_namespace,
+                                    "task_id": related_task_id,
+                                }
+                            ),
+                            now,
+                        ),
+                    )
+                await db.commit()
+                return cur.rowcount > 0
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def remove_relation(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        related_namespace: str,
+        related_task_id: str,
+        relation_kind: str,
+        agent_id: str,
+        now: str | None = None,
+    ):
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cur = await db.execute(
+                    "DELETE FROM work_relations WHERE namespace=? AND task_id=? AND related_namespace=? AND related_task_id=? AND relation_kind=?",
+                    (namespace, task_id, related_namespace, related_task_id, relation_kind),
+                )
+                if cur.rowcount:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "relation_removed",
+                            agent_id,
+                            self._json(
+                                {
+                                    "kind": relation_kind,
+                                    "namespace": related_namespace,
+                                    "task_id": related_task_id,
+                                }
+                            ),
+                            now,
+                        ),
+                    )
+                await db.commit()
+                return cur.rowcount > 0
+            except Exception:
+                await db.rollback()
+                raise
 
     async def reviews(self, namespace: str, task_id: str, *, candidate_ref: str | None = None):
         params: list[Any] = [namespace, task_id]

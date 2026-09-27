@@ -22,6 +22,7 @@ class AgentPolicy:
     history_default_minutes: int = 60
     message_reminder_seconds: int = 180
     message_reminder_calls: int = 5
+    post_finish_message_grace_seconds: int = 300
     max_active_agents: int = 8
 
     def __post_init__(self):
@@ -34,6 +35,7 @@ class AgentPolicy:
             "history_default_minutes": self.history_default_minutes,
             "message_reminder_seconds": self.message_reminder_seconds,
             "message_reminder_calls": self.message_reminder_calls,
+            "post_finish_message_grace_seconds": self.post_finish_message_grace_seconds,
             "max_active_agents": self.max_active_agents,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
@@ -68,5 +70,6 @@ class AgentPolicy:
             "history_default_minutes": self.history_default_minutes,
             "message_reminder_seconds": self.message_reminder_seconds,
             "message_reminder_calls": self.message_reminder_calls,
+            "post_finish_message_grace_seconds": self.post_finish_message_grace_seconds,
             "max_active_agents": self.max_active_agents,
         }
