@@ -449,7 +449,9 @@ class TaskStore:
                 dep_namespace, dep_task_id = namespace, item
             elif isinstance(item, dict):
                 dep_namespace = item.get("namespace") or namespace
-                dep_task_id = item["task_id"]
+                dep_task_id = item.get("task_id")
+                if not isinstance(dep_task_id, str) or not dep_task_id.strip():
+                    raise ValueError("dependency task_id is required")
             else:
                 dep_namespace, dep_task_id = item
             normalized.append((dep_namespace, dep_task_id))

@@ -130,8 +130,11 @@ class AgentCoordinator:
                 claims = await self.task_store.claims_for_agent(
                     session["agent_id"], active_only=True
                 )
-                await self.task_store.release_claims(agent_id=session["agent_id"], now=stamp)
                 for claim in claims:
+                    if not await self.task_store.release_claim(
+                        claim["namespace"], claim["task_id"], session["agent_id"], now=stamp
+                    ):
+                        continue
                     await self.task_store.add_event(
                         claim["namespace"],
                         claim["task_id"],
