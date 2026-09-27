@@ -192,6 +192,9 @@ class TaskCoordinator:
         return await handler(agent_id, namespace, task_id, **kwargs)
 
     async def _action_create(self, agent_id, namespace, task_id, **kwargs):
+        dependency_error = self._validate_dependencies(kwargs.get("dependencies"))
+        if dependency_error:
+            return {"ok": False, "error": dependency_error, "warnings": []}
         task_id = task_id or f"TASK-{secrets.token_hex(3).upper()}"
         lane = kwargs.get("lane", "general")
         priority = kwargs.get("priority", "P2")
@@ -292,8 +295,11 @@ class TaskCoordinator:
         if not await self._required(namespace, task_id):
             return self._missing()
         now = utc_text()
-        await self.store.release_claim(namespace, task_id, agent_id, now=now)
-        await self.store.add_event(namespace, task_id, "claim_released", agent_id=agent_id, now=now)
+        released = await self.store.release_claim(namespace, task_id, agent_id, now=now)
+        if released:
+            await self.store.add_event(
+                namespace, task_id, "claim_released", agent_id=agent_id, now=now
+            )
         return await self._result(namespace, task_id, [])
 
     async def _action_checkpoint(self, agent_id, namespace, task_id, **kwargs):
@@ -325,6 +331,9 @@ class TaskCoordinator:
         return await self._action_update(agent_id, namespace, task_id, **kwargs)
 
     async def _update_from_kwargs(self, agent_id, namespace, task_id, kwargs):
+        dependency_error = self._validate_dependencies(kwargs.get("dependencies"))
+        if dependency_error:
+            return {"ok": False, "error": dependency_error, "warnings": []}
         current = await self.store.get_task(namespace, task_id)
         fields = {}
         mapping = {
@@ -356,8 +365,11 @@ class TaskCoordinator:
         target_state = kwargs.get("state")
         if target_state == "done":
             required = set(current.get("reviews") or [])
-            approvals = await self.store.reviews(
-                namespace, task_id, candidate_ref=current.get("candidate_ref")
+            candidate = current.get("candidate_ref")
+            approvals = (
+                await self.store.reviews(namespace, task_id, candidate_ref=candidate)
+                if candidate
+                else []
             )
             approved = {
                 item["dimension"] for item in approvals if item["verdict"] == "NON_BLOCKING"
@@ -433,12 +445,19 @@ class TaskCoordinator:
             )
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.update: {exc}", "warnings": warnings}
+        event_payload = {
+            "fields": sorted(fields),
+            "warnings": [item["code"] for item in warnings],
+        }
+        for key in ("checkpoint", "candidate_ref", "state", "lane", "priority", "next_action"):
+            if key in fields:
+                event_payload[key] = fields[key]
         await self.store.add_event(
             namespace,
             task_id,
             event_type,
             agent_id=agent_id,
-            payload={"fields": sorted(fields), "warnings": [item["code"] for item in warnings]},
+            payload=event_payload,
             now=now,
         )
         return await self._result(namespace, task_id, warnings)
@@ -510,6 +529,7 @@ class TaskCoordinator:
                 "candidate_ref": candidate,
                 "dimensions": dimensions,
                 "verdict": verdict,
+                "evidence": kwargs.get("evidence") or {},
                 "warnings": [item["code"] for item in warnings],
             },
             now=now,
@@ -523,6 +543,21 @@ class TaskCoordinator:
     @staticmethod
     def _missing():
         return {"ok": False, "error": "task not found", "warnings": []}
+
+    @staticmethod
+    def _validate_dependencies(dependencies):
+        if dependencies is None:
+            return None
+        for index, item in enumerate(dependencies):
+            if not isinstance(item, dict):
+                return f"task.dependencies[{index}]: expected object"
+            task_id = item.get("task_id")
+            namespace = item.get("namespace")
+            if not isinstance(task_id, str) or not task_id.strip():
+                return f"task.dependencies[{index}].task_id: required"
+            if namespace is not None and (not isinstance(namespace, str) or not namespace.strip()):
+                return f"task.dependencies[{index}].namespace: expected non-empty string"
+        return None
 
     def _validate(self, *, lane=None, priority=None, state=None, dimensions=None):
         if lane is not None and lane not in LANES:
@@ -562,6 +597,28 @@ class TaskCoordinator:
             self.metrics.set("terminal_mcp_task_active_claims", stats["active_claims"])
             self.metrics.set("terminal_mcp_task_stale_claims", stale_claims)
         return stats
+
+    async def release_agent_claims(self, agent_id, *, reason="agent_finish", now=None):
+        now = now or utc_text()
+        claims = await self.store.claims_for_agent(agent_id, active_only=True)
+        if not claims:
+            return 0
+        released = 0
+        for claim in claims:
+            if not await self.store.release_claim(
+                claim["namespace"], claim["task_id"], agent_id, now=now
+            ):
+                continue
+            released += 1
+            await self.store.add_event(
+                claim["namespace"],
+                claim["task_id"],
+                "claim_released",
+                agent_id=agent_id,
+                payload={"reason": reason},
+                now=now,
+            )
+        return released
 
     async def task_refs_for_agent(self, agent_id):
         rows = await self.store.claims_for_agent(agent_id, active_only=True)

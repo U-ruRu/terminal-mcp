@@ -4,7 +4,7 @@ from sqlite3 import IntegrityError
 
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.agents import AgentCoordinator
-from terminal_mcp.core.orchestration import normalize_preview, public_agent_name, utc_text
+from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.tasks import TaskStore
@@ -689,8 +689,8 @@ class TerminalService:
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
         pending = await self.agent_coordinator.message_state(agent_id, surface=True)
-        if self.task_coordinator:
-            await self.task_coordinator.store.release_claims(agent_id=agent_id, now=utc_text())
         result = await self.agent_coordinator.finish(agent_id)
+        if self.task_coordinator and result.get("finished"):
+            await self.task_coordinator.release_agent_claims(agent_id, reason="agent_finish")
         result.update(_compact_context(pending))
         return result

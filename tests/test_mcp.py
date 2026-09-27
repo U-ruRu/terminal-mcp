@@ -27,7 +27,7 @@ class FakeService:
                 "current_step": 1,
             },
             "active": [],
-            "overlaps": [],
+            "overlaps": None,
             "additional_active_agents": 0,
             "pending_messages": [],
         }
@@ -78,7 +78,7 @@ class FakeService:
                 "current_step": 1,
             },
             "active": [],
-            "overlaps": [],
+            "overlaps": None,
             "additional_active_agents": 0,
             "pending_messages": [],
         }

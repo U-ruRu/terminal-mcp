@@ -46,7 +46,7 @@ def _overview_summary(data: AgentOverviewResponse) -> str:
     if data.registration_required:
         return "Agent session expired. Call agent_start."
     identity = (data.self.agent_id or data.self.name) if data.self else data.agent_name or "unknown"
-    return f"{identity} | active={len(data.active)} | overlaps={len(data.overlaps)}"
+    return f"{identity} | active={len(data.active)} | overlaps={len(data.overlaps or [])}"
 
 
 def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode: str = "none"):
