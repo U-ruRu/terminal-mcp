@@ -230,6 +230,7 @@ async def test_stdout_and_stderr_preserve_shell_order_and_exit_error_stays_null(
 async def test_health_runs_optional_configured_command(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
     plain = await service.health("oauth")
+    assert plain["version"] == "0.9.1"
     assert "custom_command" not in plain
 
     service.health_command = "printf 'health-output\\n'"

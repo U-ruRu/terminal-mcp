@@ -13,9 +13,15 @@ from terminal_mcp.api_models import (
     MessageResponse,
     ReadResponse,
     RecoveryResponse,
+    ReviewDimension,
+    ReviewVerdict,
     RunResponse,
+    TaskAction,
+    TaskLane,
     TaskMutationResponse,
+    TaskPriority,
     TasksResponse,
+    TaskState,
 )
 from terminal_mcp.core.orchestration import public_agent_name
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
@@ -110,8 +116,8 @@ class AgentsRequest(OptionalAgentRequest):
 class TasksRequest(StrictRequest):
     namespace: str | None = Field(default=None, min_length=1, max_length=120)
     task_id: str | None = Field(default=None, min_length=1, max_length=120)
-    lane: str | None = Field(default=None, max_length=32)
-    state: str | None = Field(default=None, max_length=32)
+    lane: TaskLane | None = None
+    state: TaskState | None = None
     show_details: bool = False
     show_done: bool = False
     limit: int = Field(default=50, ge=1, le=200)
@@ -119,23 +125,23 @@ class TasksRequest(StrictRequest):
 
 
 class TaskRequest(AgentRequest):
-    action: str = Field(min_length=1, max_length=24)
+    action: TaskAction
     namespace: str = Field(min_length=1, max_length=120)
     task_id: str | None = Field(default=None, max_length=120)
     title: str | None = Field(default=None, max_length=200)
-    lane: str | None = Field(default=None, max_length=32)
-    priority: str | None = Field(default=None, max_length=2)
-    state: str | None = Field(default=None, max_length=32)
+    lane: TaskLane | None = None
+    priority: TaskPriority | None = None
+    state: TaskState | None = None
     description: str | None = Field(default=None, max_length=8000)
     next_action: str | None = Field(default=None, max_length=2000)
     resource_context: dict[str, object] | None = None
-    review_requirements: list[str] | None = Field(default=None, max_length=3)
+    review_requirements: list[ReviewDimension] | None = Field(default=None, max_length=3)
     cooperative: bool | None = None
     checkpoint: str | dict[str, object] | None = None
     candidate_ref: str | None = Field(default=None, max_length=200)
     dependencies: list[dict[str, str]] | None = Field(default=None, max_length=100)
-    dimensions: list[str] | None = Field(default=None, max_length=3)
-    verdict: str | None = Field(default=None, max_length=32)
+    dimensions: list[ReviewDimension] | None = Field(default=None, max_length=3)
+    verdict: ReviewVerdict | None = None
     evidence: str | dict[str, object] | None = None
     expected_revision: int | None = Field(default=None, ge=1)
 

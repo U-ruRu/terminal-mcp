@@ -399,6 +399,7 @@ class TaskCoordinator:
             "updated",
             warnings=warnings,
             dependencies=kwargs.get("dependencies"),
+            release_claims_reason="task_done" if target_state == "done" else None,
         )
 
     async def _update(
@@ -411,6 +412,7 @@ class TaskCoordinator:
         event_type,
         warnings=None,
         dependencies=None,
+        release_claims_reason=None,
     ):
         warnings = list(warnings or [])
         now = utc_text()
@@ -430,6 +432,7 @@ class TaskCoordinator:
                 event_type=event_type,
                 event_agent_id=agent_id,
                 event_payload=event_payload,
+                release_claims_reason=release_claims_reason,
                 now=now,
                 **fields,
             )

@@ -1,5 +1,7 @@
 # terminal-mcp
 
+Application release: **0.9.1**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
+
 `terminal-mcp` предоставляет MCP и OpenAPI-интерфейсы для управления Linux-терминалом.
 
 Готовый skill для установки: [`dist/terminal-operations.skill`](dist/terminal-operations.skill).
@@ -51,7 +53,7 @@ Managed task workflow является опциональным слоем по�
 
 `tasks()` — read-only observation surface. Без selector он показывает компактный незавершённый backlog, counts/pressure по lane/state и recommended next task; `namespace`/`task_id` сужают выборку, `show_details=true` раскрывает description, resources, dependencies, claims, reviews и history, `show_done=true` включает завершённые задачи.
 
-`task()` выполняет явные mutations (`create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`). Scheduler рекомендует работу и не назначает её автоматически. Несколько claims разрешены и остаются наблюдаемыми. Workflow anomalies — concurrent claim, self-review, open dependency, stale candidate, unusual transition — возвращаются structured warnings вместо запрета операции; существующие Agent Session safety gates остаются отдельным механизмом.
+`task()` выполняет явные mutations (`create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`). Tool/OpenAPI schemas публикуют фиксированные значения action, lane, state, priority, review dimensions и verdict. Переход задачи в `done` атомарно освобождает все текущие claims и сохраняет `claim_released(reason=task_done)` в durable history; последующий явный claim завершённой задачи остаётся допустимым soft-guardrail действием с warning. Scheduler рекомендует работу и не назначает её автоматически. Несколько claims разрешены и остаются наблюдаемыми. Workflow anomalies — concurrent claim, self-review, open dependency, stale candidate, unusual transition — возвращаются structured warnings вместо запрета операции; существующие Agent Session safety gates остаются отдельным механизмом.
 
 Review requirements представлены dimensions `A` (architecture), `C` (correctness/contracts) и `R` (runtime quality). Один независимый агент может закрыть несколько dimensions для одной immutable candidate.
 

@@ -2,7 +2,7 @@
 
 ## Интерфейс
 
-Terminal MCP 0.9 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Terminal MCP 0.9.1 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
 ## Agent Session
 
@@ -65,7 +65,7 @@ Read-only локальный backlog observer. Без selector возвраща�
 
 ## `task(agent_id, action, namespace, ...)`
 
-Явно изменяет managed task. Базовые actions: `create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`. Namespace обязателен. Fixed lanes: `implementation`, `review`, `release`, `integration`, `general`; durable states: `ready`, `blocked`, `deferred`, `done`; review dimensions: `A`, `C`, `R`. Scheduler только рекомендует. Multiple claims разрешены. Dependency, self-review, concurrent claim, stale candidate и unusual transition возвращаются structured warnings и сохраняют наблюдаемость вместо workflow lock. Ad-hoc terminal work не требует managed task.
+Явно изменяет managed task. Базовые actions: `create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`. Namespace обязателен. Fixed lanes: `implementation`, `review`, `release`, `integration`, `general`; durable states: `ready`, `blocked`, `deferred`, `done`; review dimensions: `A`, `C`, `R`. Tool schemas публикуют фиксированные enum для action, lane, state, priority, review dimensions и verdict. Переход в `done` атомарно освобождает все текущие claims и сохраняет release events; последующий явный claim завершённой задачи остаётся разрешённым с warning. Scheduler только рекомендует. Multiple claims разрешены. Dependency, self-review, concurrent claim, stale candidate и unusual transition возвращаются structured warnings и сохраняют наблюдаемость вместо workflow lock. Ad-hoc terminal work не требует managed task.
 
 ## `run(agent_id, cmd, queue_id?)`
 
@@ -95,7 +95,7 @@ Persisted emergency execution вне numbered queues. Выполняется н�
 
 ## `health(agent_id?)`
 
-Anonymous health показывает приложение, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` для 0.9 — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
+Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` для 0.9.x — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
 
 ## Command status
 

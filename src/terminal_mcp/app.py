@@ -23,6 +23,7 @@ from terminal_mcp.runtime import RuntimeConfigProvider
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 from terminal_mcp.trace import TraceMiddleware
+from terminal_mcp.version import __version__
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -106,7 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await runtime.stop()
             events.stop()
 
-    app = FastAPI(title="terminal-mcp", version="0.9.0", lifespan=lifespan)
+    app = FastAPI(title="terminal-mcp", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store
@@ -122,7 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/live", include_in_schema=False)
     async def live():
-        return {"ok": True}
+        return {"ok": True, "version": __version__}
 
     def custom_openapi():
         if app.openapi_schema:

@@ -58,12 +58,16 @@ def start_agent(client, headers):
 def test_bearer_actions_and_openapi(tmp_path):
     app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha,beta"))
     with TestClient(app) as client:
+        live = client.get("/health/live")
+        assert live.status_code == 200
+        assert live.json()["version"] == "0.9.1"
         assert client.get("/actions/health").status_code == 401
         headers = {"Authorization": "Bearer alpha"}
         agent_id = start_agent(client, headers)
         health = client.get("/actions/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["agent_name"] == "anonymous"
+        assert health.json()["version"] == "0.9.1"
 
         run = client.post(
             "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
@@ -97,6 +101,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/health",
         }
         assert set(schema["paths"]) == expected_paths
+        assert schema["info"]["version"] == "0.9.1"
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
         assert set(run_request["required"]) == {"agent_id", "cmd"}
@@ -126,6 +131,46 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert message_request["properties"]["message_hash"]["anyOf"][0]["maxLength"] == 8
         assert message_request["properties"]["namespace"]["anyOf"][0]["maxLength"] == 120
         assert message_request["properties"]["task_id"]["anyOf"][0]["maxLength"] == 120
+        tasks_request = schema["components"]["schemas"]["TasksRequest"]
+        assert tasks_request["properties"]["lane"]["anyOf"][0]["enum"] == [
+            "implementation",
+            "review",
+            "release",
+            "integration",
+            "general",
+        ]
+        assert tasks_request["properties"]["state"]["anyOf"][0]["enum"] == [
+            "ready",
+            "blocked",
+            "deferred",
+            "done",
+        ]
+        task_request = schema["components"]["schemas"]["TaskRequest"]
+        assert task_request["properties"]["action"]["enum"] == [
+            "create",
+            "claim",
+            "release",
+            "update",
+            "checkpoint",
+            "review",
+            "state",
+            "done",
+        ]
+        assert task_request["properties"]["priority"]["anyOf"][0]["enum"] == [
+            "P0",
+            "P1",
+            "P2",
+            "P3",
+        ]
+        assert task_request["properties"]["review_requirements"]["anyOf"][0]["items"]["enum"] == [
+            "A",
+            "C",
+            "R",
+        ]
+        assert task_request["properties"]["verdict"]["anyOf"][0]["enum"] == [
+            "NON_BLOCKING",
+            "BLOCKING",
+        ]
 
         created_task = client.post(
             "/actions/task",

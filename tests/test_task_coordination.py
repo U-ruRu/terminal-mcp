@@ -402,3 +402,49 @@ async def test_task_events_preserve_checkpoint_and_review_evidence_history(tmp_p
         assert detail["task"]["reviews"][0]["evidence"] == {"tests": 2}
     finally:
         await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_done_atomically_releases_all_current_claims(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        owner = (await register(service, "done-owner"))["self"]["agent_id"]
+        peer = (await register(service, "done-peer"))["self"]["agent_id"]
+        await service.task(
+            owner,
+            action="create",
+            namespace="project",
+            task_id="DONE-CLAIMS",
+            title="Done releases current ownership",
+            cooperative=True,
+        )
+        await service.task(owner, action="claim", namespace="project", task_id="DONE-CLAIMS")
+        await service.task(peer, action="claim", namespace="project", task_id="DONE-CLAIMS")
+
+        done = await service.task(
+            owner, action="done", namespace="project", task_id="DONE-CLAIMS"
+        )
+        assert done["ok"] is True
+        assert done["task"]["state"] == "done"
+        assert done["task"]["active"] is False
+        assert done["task"]["claims"] == []
+
+        detail = await service.tasks(
+            namespace="project", task_id="DONE-CLAIMS", show_details=True
+        )
+        assert detail["task"]["claims"] == []
+        releases = [
+            event
+            for event in detail["task"]["events"]
+            if event["event_type"] == "claim_released"
+            and event["payload"].get("reason") == "task_done"
+        ]
+        assert len(releases) == 2
+        assert {event["agent_name"] for event in releases} == {
+            public_agent_name(owner),
+            public_agent_name(peer),
+        }
+        assert await service.task_store.claims_for_agent(owner, active_only=True) == []
+        assert await service.task_store.claims_for_agent(peer, active_only=True) == []
+    finally:
+        await terminal.stop()
