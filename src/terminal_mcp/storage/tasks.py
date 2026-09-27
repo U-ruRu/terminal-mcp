@@ -10,7 +10,7 @@ import aiosqlite
 from terminal_mcp.core.orchestration import utc_text
 
 LANES = frozenset({"implementation", "review", "release", "integration", "general"})
-STATES = frozenset({"ready", "blocked", "deferred", "done"})
+STATES = frozenset({"ready", "blocked", "deferred", "done", "archived"})
 REVIEW_DIMENSIONS = frozenset({"A", "C", "R"})
 
 
@@ -245,6 +245,7 @@ class TaskStore:
         lane: str | None = None,
         state: str | None = None,
         show_done: bool = False,
+        show_archived: bool = False,
         limit: int = 100,
         offset: int = 0,
     ):
@@ -261,8 +262,15 @@ class TaskStore:
             self._validate_state(state)
             where.append("state=?")
             params.append(state)
-        elif not show_done:
-            where.append("state<>'done'")
+        else:
+            hidden_states = []
+            if not show_done:
+                hidden_states.append("done")
+            if not show_archived:
+                hidden_states.append("archived")
+            if hidden_states:
+                where.append(f"state NOT IN ({','.join('?' for _ in hidden_states)})")
+                params.extend(hidden_states)
         clause = f" WHERE {' AND '.join(where)}" if where else ""
         params.extend([max(1, min(int(limit), 1000)), max(0, int(offset))])
         query = (
@@ -576,7 +584,7 @@ class TaskStore:
             ).fetchall()
             lanes = await (
                 await db.execute(
-                    "SELECT lane,COUNT(*) FROM work_items WHERE state<>'done' GROUP BY lane"
+                    "SELECT lane,COUNT(*) FROM work_items WHERE state NOT IN ('done','archived') GROUP BY lane"
                 )
             ).fetchall()
             active_claims = int(

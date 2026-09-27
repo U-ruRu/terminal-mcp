@@ -659,6 +659,7 @@ class TerminalService:
         state=None,
         show_details=False,
         show_done=False,
+        show_archived=False,
         limit=50,
         cursor=None,
     ):
@@ -671,6 +672,7 @@ class TerminalService:
             state=state,
             show_details=show_details,
             show_done=show_done,
+            show_archived=show_archived,
             limit=limit,
             cursor=cursor,
         )

@@ -18,7 +18,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     with sqlite3.connect(repo.path) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == 7
+    assert version == 8
     assert {
         "work_items",
         "work_claims",
@@ -51,6 +51,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     assert created["candidate_ref"] == "abc123"
 
     await tasks.create_task("project", "DONE-1", "Old", state="done")
+    await tasks.create_task("project", "ARCH-1", "Archived", state="archived")
     assert [item["task_id"] for item in await tasks.list_tasks(namespace="project")] == ["REV-1"]
     assert {
         item["task_id"] for item in await tasks.list_tasks(namespace="project", show_done=True)
@@ -58,6 +59,19 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
         "REV-1",
         "DONE-1",
     }
+    assert {
+        item["task_id"] for item in await tasks.list_tasks(namespace="project", show_archived=True)
+    } == {
+        "REV-1",
+        "ARCH-1",
+    }
+    assert {
+        item["task_id"]
+        for item in await tasks.list_tasks(namespace="project", show_done=True, show_archived=True)
+    } == {"REV-1", "DONE-1", "ARCH-1"}
+    assert [
+        item["task_id"] for item in await tasks.list_tasks(namespace="project", state="archived")
+    ] == ["ARCH-1"]
 
     with pytest.raises(ValueError):
         await tasks.create_task("project", "BAD-LANE", "Bad", lane="other")
@@ -153,3 +167,58 @@ async def test_dependencies_reviews_and_event_cursor(tmp_path):
     assert recent[0]["id"] == second["id"]
     older = await tasks.list_events("ns", "T-1", before_id=second["id"])
     assert [item["id"] for item in older] == [first["id"]]
+
+
+@pytest.mark.asyncio
+async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_claims(tmp_path):
+    database = tmp_path / "legacy-v7.sqlite3"
+    with sqlite3.connect(database) as db:
+        db.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+            CREATE TABLE work_items(
+                namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
+                lane TEXT NOT NULL CHECK(lane IN (
+                    'implementation','review','release','integration','general'
+                )),
+                priority INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
+                description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+                resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
+                cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
+                checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT,
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY(namespace, task_id)
+            );
+            CREATE TABLE work_claims(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace TEXT NOT NULL, task_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL, claimed_at TEXT NOT NULL, released_at TEXT,
+                FOREIGN KEY(namespace,task_id)
+                    REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+            );
+            INSERT INTO work_items(
+                namespace,task_id,title,lane,priority,state,created_at,updated_at
+            ) VALUES(
+                'project','LEGACY-1','Legacy task','general',1,'ready','2026-01-01','2026-01-01'
+            );
+            INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at)
+            VALUES('project','LEGACY-1','Alpha-1111','2026-01-01');
+            PRAGMA user_version=7;
+            """
+        )
+
+    repo = SqliteRepository(database, tmp_path / "output.sqlite3")
+    await repo.initialize()
+    tasks = TaskStore(repo.path)
+    with sqlite3.connect(database) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        claim = db.execute(
+            "SELECT agent_id FROM work_claims WHERE namespace='project' AND task_id='LEGACY-1'"
+        ).fetchone()
+        assert claim == ("Alpha-1111",)
+
+    migrated = await tasks.update_task("project", "LEGACY-1", state="archived")
+    assert migrated["state"] == "archived"

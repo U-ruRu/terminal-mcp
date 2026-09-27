@@ -6,5 +6,5 @@ from terminal_mcp.version import __version__
 
 def test_package_version_matches_pyproject():
     project = tomllib.loads(Path("pyproject.toml").read_text())
-    assert __version__ == "0.9.1"
+    assert __version__ == "0.9.2"
     assert project["project"]["version"] == __version__

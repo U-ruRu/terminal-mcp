@@ -421,17 +421,13 @@ async def test_done_atomically_releases_all_current_claims(tmp_path):
         await service.task(owner, action="claim", namespace="project", task_id="DONE-CLAIMS")
         await service.task(peer, action="claim", namespace="project", task_id="DONE-CLAIMS")
 
-        done = await service.task(
-            owner, action="done", namespace="project", task_id="DONE-CLAIMS"
-        )
+        done = await service.task(owner, action="done", namespace="project", task_id="DONE-CLAIMS")
         assert done["ok"] is True
         assert done["task"]["state"] == "done"
         assert done["task"]["active"] is False
         assert done["task"]["claims"] == []
 
-        detail = await service.tasks(
-            namespace="project", task_id="DONE-CLAIMS", show_details=True
-        )
+        detail = await service.tasks(namespace="project", task_id="DONE-CLAIMS", show_details=True)
         assert detail["task"]["claims"] == []
         releases = [
             event
@@ -446,5 +442,100 @@ async def test_done_atomically_releases_all_current_claims(tmp_path):
         }
         assert await service.task_store.claims_for_agent(owner, active_only=True) == []
         assert await service.task_store.claims_for_agent(peer, active_only=True) == []
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_archive_hides_task_records_note_releases_claims_and_closes_dependency(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        owner = (await register(service, "archive-owner"))["self"]["agent_id"]
+        await service.task(
+            owner,
+            action="create",
+            namespace="project",
+            task_id="ARCHIVE-1",
+            title="Mistaken task",
+        )
+        await service.task(owner, action="claim", namespace="project", task_id="ARCHIVE-1")
+
+        create_archived = await service.task(
+            owner,
+            action="create",
+            namespace="project",
+            task_id="ARCHIVE-BYPASS",
+            title="Cannot bypass archive note",
+            state="archived",
+        )
+        assert create_archived["ok"] is False
+        assert create_archived["error"] == "task.create: use action=archive with note"
+
+        missing_note = await service.task(
+            owner, action="archive", namespace="project", task_id="ARCHIVE-1"
+        )
+        assert missing_note["ok"] is False
+        assert missing_note["error"] == "task.archive: note required"
+
+        direct_state = await service.task(
+            owner,
+            action="state",
+            namespace="project",
+            task_id="ARCHIVE-1",
+            state="archived",
+        )
+        assert direct_state["ok"] is False
+        assert direct_state["error"] == "task.update: use action=archive with note"
+
+        archived = await service.task(
+            owner,
+            action="archive",
+            namespace="project",
+            task_id="ARCHIVE-1",
+            note="Created by mistake; superseded by ARCHIVE-2.",
+        )
+        assert archived["ok"] is True
+        assert archived["task"]["state"] == "archived"
+        assert archived["task"]["active"] is False
+        assert archived["task"]["claims"] == []
+
+        default = await service.tasks(namespace="project")
+        assert all(item["task_id"] != "ARCHIVE-1" for item in default["tasks"])
+        visible = await service.tasks(namespace="project", show_archived=True)
+        assert [item["task_id"] for item in visible["tasks"]] == ["ARCHIVE-1"]
+        filtered = await service.tasks(namespace="project", state="archived")
+        assert [item["task_id"] for item in filtered["tasks"]] == ["ARCHIVE-1"]
+
+        detail = await service.tasks(namespace="project", task_id="ARCHIVE-1", show_details=True)
+        archive_events = [
+            event for event in detail["task"]["events"] if event["event_type"] == "archived"
+        ]
+        assert len(archive_events) == 1
+        assert (
+            archive_events[0]["payload"]["note"] == "Created by mistake; superseded by ARCHIVE-2."
+        )
+        releases = [
+            event
+            for event in detail["task"]["events"]
+            if event["event_type"] == "claim_released"
+            and event["payload"].get("reason") == "task_archived"
+        ]
+        assert len(releases) == 1
+        assert releases[0]["agent_name"] == public_agent_name(owner)
+
+        await service.task(
+            owner,
+            action="create",
+            namespace="project",
+            task_id="ARCHIVE-2",
+            title="Replacement task",
+            dependencies=[{"namespace": "project", "task_id": "ARCHIVE-1"}],
+        )
+        claim = await service.task(owner, action="claim", namespace="project", task_id="ARCHIVE-2")
+        assert "dependency_open" not in {item["code"] for item in claim["warnings"]}
+
+        stats = await service.task_coordinator.health()
+        assert stats["by_state"]["archived"] == 1
+        assert stats["by_lane"].get("general") == 1
     finally:
         await terminal.stop()

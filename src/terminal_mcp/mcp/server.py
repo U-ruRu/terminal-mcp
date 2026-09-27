@@ -212,7 +212,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
-        description="Inspect local managed tasks. No selector returns a compact unfinished backlog with lane/state counts, pressure and a recommended next task. namespace+task_id selects one compact card. show_details expands description, resources, dependencies, reviews and recent history. show_done includes completed work.",
+        description="Inspect local managed tasks. No selector returns a compact unfinished backlog with lane/state counts, pressure and a recommended next task. namespace+task_id selects one compact card. show_details expands description, resources, dependencies, reviews and recent history. show_done includes completed work; show_archived includes soft-archived work.",
     )
     async def tasks(
         namespace: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
@@ -221,6 +221,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         state: TaskState | None = None,
         show_details: bool = False,
         show_done: bool = False,
+        show_archived: bool = False,
         limit: Annotated[int, Field(ge=1, le=200)] = 50,
         cursor: Annotated[int | None, Field(ge=0)] = None,
     ) -> Annotated[CallToolResult, TasksResponse]:
@@ -236,6 +237,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
                     state=state,
                     show_details=show_details,
                     show_done=show_done,
+                    show_archived=show_archived,
                     limit=limit,
                     cursor=cursor,
                 ),
@@ -254,7 +256,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Mutate one managed task explicitly. action supports create, claim, release, update, checkpoint, review, state and done. Workflow guardrails return structured warnings instead of blocking task actions; existing Agent Session safety rules still apply. Concurrent claims remain observable and allowed.",
+        description="Mutate one managed task explicitly. action supports create, claim, release, update, checkpoint, review, state, done and archive. archive requires a free-form note, releases live claims and hides the task from the normal backlog. Workflow guardrails return structured warnings instead of blocking task actions; existing Agent Session safety rules still apply. Concurrent claims remain observable and allowed.",
     )
     async def task(
         agent_id: str,
@@ -276,6 +278,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         dimensions: Annotated[list[ReviewDimension] | None, Field(max_length=3)] = None,
         verdict: ReviewVerdict | None = None,
         evidence: str | dict[str, object] | None = None,
+        note: Annotated[str | None, Field(max_length=2000)] = None,
         expected_revision: Annotated[int | None, Field(ge=1)] = None,
     ) -> Annotated[CallToolResult, TaskMutationResponse]:
         kwargs = {
@@ -295,6 +298,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             "dimensions": dimensions,
             "verdict": verdict,
             "evidence": evidence,
+            "note": note,
             "expected_revision": expected_revision,
         }
         data = TaskMutationResponse.model_validate(

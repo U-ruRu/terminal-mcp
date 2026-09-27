@@ -68,7 +68,7 @@ metadata:
 8. `run(agent_id, cmd, queue_id?)` запускает работу в numbered FIFO lane. Первый вызов без queue выбирает least-loaded lane, последующие используют `preferred_queue_id`. Явный номер меняет affinity.
 9. `read(agent_id?, cmd_hash?, ...)` позволяет независимо выбрать command scope и agent context. Обычное unread message не мешает read; ALERT блокирует его до reply.
 10. `agents()` используй как anonymous observer. По умолчанию он возвращает compact fleet state; `target`, `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` раскрывают нужный контекст по запросу.
-11. Managed work веди через `tasks()` и `task(...)`: backlog локален серверу, namespace обязателен, scheduler рекомендует работу, claims явные, workflow anomalies приходят как warnings. Для ad-hoc server work managed task не требуется.
+11. Managed work веди через `tasks()` и `task(...)`: backlog локален серверу, namespace обязателен, scheduler рекомендует работу, claims явные, workflow anomalies приходят как warnings. Ошибочно созданную/устаревшую карточку архивируй через `task(action="archive", note="...")`; обычный backlog архив не показывает. Для ad-hoc server work managed task не требуется.
 12. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. Уже запущенные terminal commands продолжают жить в своих queues.
 
 Agent statuses: `started`, `active`, `idle`, `finished`, `forced`. Источник истины для command queue — SQLite; queue state сохраняется отдельно от Agent Session.
