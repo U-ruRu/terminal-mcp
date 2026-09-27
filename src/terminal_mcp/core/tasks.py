@@ -98,7 +98,11 @@ class TaskCoordinator:
             for review in reviews:
                 review["agent_name"] = public_agent_name(review.pop("agent_id"))
             result["reviews"] = reviews
-            result["events"] = await self.store.list_events(namespace, task_id, limit=50)
+            events = await self.store.list_events(namespace, task_id, limit=50)
+            for event in events:
+                if event.get("agent_id"):
+                    event["agent_name"] = public_agent_name(event.pop("agent_id"))
+            result["events"] = events
         else:
             result.pop("description", None)
             result.pop("resource_context", None)
@@ -205,7 +209,7 @@ class TaskCoordinator:
             return {"ok": False, "error": error, "warnings": []}
         now = utc_text()
         try:
-            await self.store.create_task(
+            await self.store.create_task_mutation(
                 namespace,
                 task_id,
                 kwargs.get("title") or task_id,
@@ -219,21 +223,13 @@ class TaskCoordinator:
                 cooperative=bool(kwargs.get("cooperative")),
                 checkpoint=kwargs.get("checkpoint") or {},
                 candidate_ref=kwargs.get("candidate_ref"),
+                dependencies=kwargs.get("dependencies"),
+                event_agent_id=agent_id,
+                event_payload={"lane": lane, "priority": priority, "state": state},
                 now=now,
             )
         except Exception as exc:
             return {"ok": False, "error": f"task.create: {exc}", "warnings": []}
-        dependencies = kwargs.get("dependencies")
-        if dependencies is not None:
-            await self.store.set_dependencies(namespace, task_id, dependencies, now=now)
-        await self.store.add_event(
-            namespace,
-            task_id,
-            "created",
-            agent_id=agent_id,
-            payload={"lane": lane, "priority": priority, "state": state},
-            now=now,
-        )
         self._inc("terminal_mcp_tasks_created_total")
         return await self._result(namespace, task_id, [])
 
@@ -394,7 +390,7 @@ class TaskCoordinator:
                     to_state=target_state,
                 )
             )
-        result = await self._update(
+        return await self._update(
             agent_id,
             namespace,
             task_id,
@@ -402,31 +398,38 @@ class TaskCoordinator:
             kwargs.get("expected_revision"),
             "updated",
             warnings=warnings,
+            dependencies=kwargs.get("dependencies"),
         )
-        if result["ok"] and kwargs.get("dependencies") is not None:
-            now = utc_text()
-            await self.store.set_dependencies(namespace, task_id, kwargs["dependencies"], now=now)
-            await self.store.add_event(
-                namespace,
-                task_id,
-                "dependencies_updated",
-                agent_id=agent_id,
-                payload={"dependencies": kwargs["dependencies"]},
-                now=now,
-            )
-            result = await self._result(namespace, task_id, warnings)
-        return result
 
     async def _update(
-        self, agent_id, namespace, task_id, fields, expected_revision, event_type, warnings=None
+        self,
+        agent_id,
+        namespace,
+        task_id,
+        fields,
+        expected_revision,
+        event_type,
+        warnings=None,
+        dependencies=None,
     ):
         warnings = list(warnings or [])
         now = utc_text()
+        event_payload = {
+            "fields": sorted(fields),
+            "warnings": [item["code"] for item in warnings],
+        }
+        for key in ("checkpoint", "candidate_ref", "state", "lane", "priority", "next_action"):
+            if key in fields:
+                event_payload[key] = fields[key]
         try:
-            await self.store.update_task(
+            await self.store.update_task_mutation(
                 namespace,
                 task_id,
                 expected_revision=expected_revision,
+                dependencies=dependencies,
+                event_type=event_type,
+                event_agent_id=agent_id,
+                event_payload=event_payload,
                 now=now,
                 **fields,
             )
@@ -445,21 +448,8 @@ class TaskCoordinator:
             )
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.update: {exc}", "warnings": warnings}
-        event_payload = {
-            "fields": sorted(fields),
-            "warnings": [item["code"] for item in warnings],
-        }
-        for key in ("checkpoint", "candidate_ref", "state", "lane", "priority", "next_action"):
-            if key in fields:
-                event_payload[key] = fields[key]
-        await self.store.add_event(
-            namespace,
-            task_id,
-            event_type,
-            agent_id=agent_id,
-            payload=event_payload,
-            now=now,
-        )
+        except Exception as exc:
+            return {"ok": False, "error": f"task.update: {exc}", "warnings": warnings}
         return await self._result(namespace, task_id, warnings)
 
     async def _action_review(self, agent_id, namespace, task_id, **kwargs):

@@ -369,7 +369,7 @@ async def test_agent_actions_refresh_session_not_task_lease(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_public_name_is_reserved_for_full_session_ttl_after_finish(tmp_path, monkeypatch):
+async def test_public_name_is_reusable_after_finished_session(tmp_path, monkeypatch):
     repo, terminal, service = await runtime(tmp_path)
     ids = iter(["India-1111", "India-2222", "Juliett-3333"])
     monkeypatch.setattr(agents_module, "generate_agent_id", lambda: next(ids))
@@ -379,8 +379,8 @@ async def test_public_name_is_reserved_for_full_session_ttl_after_finish(tmp_pat
     assert (await service.agent_finish("India-1111"))["finished"] is True
 
     second = await register(service, "Second", "Work", ["repo:second"])
-    assert second["self"]["agent_id"] == "Juliett-3333"
-    assert second["self"]["name"] == "Juliett"
+    assert second["self"]["agent_id"] == "India-2222"
+    assert second["self"]["name"] == "India"
     await terminal.stop()
 
 

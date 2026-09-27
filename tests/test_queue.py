@@ -224,3 +224,19 @@ async def test_run_restarts_failed_fifo_worker_before_enqueue(tmp_path):
     completed = await wait_status(service, submitted["cmd_hash"], "completed")
     assert completed["lines"][0].endswith("worker-restarted")
     await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_kills_process_that_ignores_sigterm(tmp_path):
+    repo = SqliteRepository(tmp_path / "shutdown.sqlite3")
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.05)
+    process = await terminal._spawn()
+    terminal.processes["stubborn"] = process
+    process.stdin.write(b"trap '' TERM\nsleep 60\n")
+    await process.stdin.drain()
+    process.stdin.close()
+    await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(terminal.stop(), 1.0)
+    assert process.returncode is not None

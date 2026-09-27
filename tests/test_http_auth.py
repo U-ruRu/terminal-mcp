@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
+from terminal_mcp.auth.middleware import AuthMiddleware
+from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
 
 
@@ -238,7 +240,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
             "client_id": client_id,
             "redirect_uri": "https://chat.example/callback",
             "response_type": "code",
-            "scope": "terminal:read terminal:execute",
+            "scope": "terminal:read",
             "state": "abc",
             "code_challenge": pkce(verifier),
             "code_challenge_method": "S256",
@@ -338,7 +340,7 @@ def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
                 data={
                     "client_id": registration["client_id"],
                     "redirect_uri": redirect_uri,
-                    "scope": "terminal:read terminal:execute",
+                    "scope": "terminal:read",
                     "state": f"state-{index}",
                     "code_challenge": pkce(verifier),
                     "code_challenge_method": "S256",
@@ -371,3 +373,31 @@ def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
                 ).status_code
                 == 200
             )
+
+
+def test_agent_facing_oauth_uses_one_read_scope():
+    for path in (
+        "/actions/run",
+        "/actions/recovery",
+        "/actions/cancel",
+        "/actions/task",
+        "/actions/agent/start",
+        "/actions/read",
+        "/mcp",
+    ):
+        assert AuthMiddleware._scopes(path, "POST") == ["terminal:read"]
+
+
+def test_refresh_rotation_is_single_use_under_concurrency(tmp_path):
+    async def scenario():
+        store = OAuthStore(tmp_path / "refresh-race.sqlite3")
+        await store.initialize()
+        client_id, _ = await store.register_client(
+            ["https://client.example/callback"], "Concurrent client", "none"
+        )
+        token = await store.create_refresh(client_id, "terminal:read", 3600)
+        results = await asyncio.gather(*(store.rotate_refresh(token) for _ in range(20)))
+        return results
+
+    results = asyncio.run(scenario())
+    assert sum(result is not None for result in results) == 1

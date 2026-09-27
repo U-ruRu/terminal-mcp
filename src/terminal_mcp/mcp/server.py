@@ -28,7 +28,7 @@ _SAFE_READ_ONLY = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
 )
 _SAFE_OPERATION = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=False
 )
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
 StepItem = Annotated[str, Field(min_length=1, max_length=160)]

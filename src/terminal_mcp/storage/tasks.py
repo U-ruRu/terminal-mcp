@@ -60,6 +60,22 @@ class TaskStore:
             raise ValueError(f"unsupported state: {state}")
 
     @staticmethod
+    def _normalize_dependencies(namespace: str, dependencies):
+        normalized = []
+        for item in dependencies or []:
+            if isinstance(item, str):
+                dep_namespace, dep_task_id = namespace, item
+            elif isinstance(item, dict):
+                dep_namespace = item.get("namespace") or namespace
+                dep_task_id = item.get("task_id")
+                if not isinstance(dep_task_id, str) or not dep_task_id.strip():
+                    raise ValueError("dependency task_id is required")
+            else:
+                dep_namespace, dep_task_id = item
+            normalized.append((dep_namespace, dep_task_id))
+        return normalized
+
+    @staticmethod
     def _task(row):
         if row is None:
             return None
@@ -129,6 +145,85 @@ class TaskStore:
                 ),
             )
             await db.commit()
+        return await self.get_task(namespace, task_id)
+
+    async def create_task_mutation(
+        self,
+        namespace: str,
+        task_id: str,
+        title: str,
+        *,
+        lane: str = "general",
+        priority: int = 0,
+        state: str = "ready",
+        description: str = "",
+        next_action: str = "",
+        resource: Any = None,
+        reviews: Any = None,
+        cooperative: bool = False,
+        checkpoint: Any = None,
+        candidate_ref: str | None = None,
+        dependencies=None,
+        event_agent_id: str | None = None,
+        event_payload: Any = None,
+        now: str | None = None,
+    ):
+        if not namespace or not task_id or not title:
+            raise ValueError("namespace, task_id and title are required")
+        self._validate_lane(lane)
+        self._validate_state(state)
+        normalized = self._normalize_dependencies(namespace, dependencies)
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,"
+                    "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,revision,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        title,
+                        lane,
+                        int(priority),
+                        state,
+                        description,
+                        next_action,
+                        self._json(resource or {}),
+                        self._json(reviews or []),
+                        int(bool(cooperative)),
+                        self._json(checkpoint or {}),
+                        candidate_ref,
+                        now,
+                        now,
+                    ),
+                )
+                if dependencies is not None:
+                    await db.executemany(
+                        "INSERT INTO work_dependencies(namespace,task_id,dependency_namespace,dependency_task_id,created_at) "
+                        "VALUES(?,?,?,?,?)",
+                        [
+                            (namespace, task_id, dep_ns, dep_id, now)
+                            for dep_ns, dep_id in normalized
+                        ],
+                    )
+                await db.execute(
+                    "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        "created",
+                        event_agent_id,
+                        self._json(event_payload or {}),
+                        now,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
         return await self.get_task(namespace, task_id)
 
     async def get_task(self, namespace: str, task_id: str):
@@ -256,6 +351,136 @@ class TaskStore:
                     )
                 raise RuntimeError("task update failed")
             await db.commit()
+        return await self.get_task(namespace, task_id)
+
+    async def update_task_mutation(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        expected_revision: int | None = None,
+        dependencies=None,
+        event_type: str = "updated",
+        event_agent_id: str | None = None,
+        event_payload: Any = None,
+        now: str | None = None,
+        **changes,
+    ):
+        allowed = {
+            "title",
+            "lane",
+            "priority",
+            "state",
+            "description",
+            "next_action",
+            "resource",
+            "reviews",
+            "cooperative",
+            "checkpoint",
+            "candidate_ref",
+        }
+        unknown = set(changes) - allowed
+        if unknown:
+            raise ValueError(f"unsupported task fields: {sorted(unknown)}")
+        if "lane" in changes:
+            self._validate_lane(changes["lane"])
+        if "state" in changes:
+            self._validate_state(changes["state"])
+        normalized = self._normalize_dependencies(namespace, dependencies)
+        columns = {
+            "resource": "resource_json",
+            "reviews": "reviews_json",
+            "checkpoint": "checkpoint_json",
+        }
+        assignments = []
+        params: list[Any] = []
+        for key, value in changes.items():
+            column = columns.get(key, key)
+            if key in {"resource", "reviews", "checkpoint"}:
+                value = self._json(value if value is not None else ({} if key != "reviews" else []))
+            elif key == "cooperative":
+                value = int(bool(value))
+            elif key == "priority":
+                value = int(value)
+            assignments.append(f"{column}=?")
+            params.append(value)
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                exists = await (
+                    await db.execute(
+                        "SELECT revision FROM work_items WHERE namespace=? AND task_id=?",
+                        (namespace, task_id),
+                    )
+                ).fetchone()
+                if exists is None:
+                    raise KeyError(f"unknown task: {namespace}/{task_id}")
+                if assignments:
+                    assignments.extend(["revision=revision+1", "updated_at=?"])
+                    update_params = [*params, now, namespace, task_id]
+                    where = "namespace=? AND task_id=?"
+                    if expected_revision is not None:
+                        where += " AND revision=?"
+                        update_params.append(int(expected_revision))
+                    cur = await db.execute(
+                        f"UPDATE work_items SET {','.join(assignments)} WHERE {where}",
+                        update_params,
+                    )
+                    if cur.rowcount != 1:
+                        current = await (
+                            await db.execute(
+                                "SELECT revision FROM work_items WHERE namespace=? AND task_id=?",
+                                (namespace, task_id),
+                            )
+                        ).fetchone()
+                        if expected_revision is not None and current is not None:
+                            raise TaskRevisionConflict(
+                                namespace, task_id, int(expected_revision), int(current[0])
+                            )
+                        raise RuntimeError("task update failed")
+                if dependencies is not None:
+                    await db.execute(
+                        "DELETE FROM work_dependencies WHERE namespace=? AND task_id=?",
+                        (namespace, task_id),
+                    )
+                    await db.executemany(
+                        "INSERT INTO work_dependencies(namespace,task_id,dependency_namespace,dependency_task_id,created_at) "
+                        "VALUES(?,?,?,?,?)",
+                        [
+                            (namespace, task_id, dep_ns, dep_id, now)
+                            for dep_ns, dep_id in normalized
+                        ],
+                    )
+                await db.execute(
+                    "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        event_type,
+                        event_agent_id,
+                        self._json(event_payload or {}),
+                        now,
+                    ),
+                )
+                if dependencies is not None:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "dependencies_updated",
+                            event_agent_id,
+                            self._json({"dependencies": dependencies}),
+                            now,
+                        ),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
         return await self.get_task(namespace, task_id)
 
     async def claims(self, namespace: str, task_id: str, *, active_only: bool = True):
@@ -443,18 +668,7 @@ class TaskStore:
         self, namespace: str, task_id: str, dependencies, *, now: str | None = None
     ):
         now = now or utc_text()
-        normalized = []
-        for item in dependencies or []:
-            if isinstance(item, str):
-                dep_namespace, dep_task_id = namespace, item
-            elif isinstance(item, dict):
-                dep_namespace = item.get("namespace") or namespace
-                dep_task_id = item.get("task_id")
-                if not isinstance(dep_task_id, str) or not dep_task_id.strip():
-                    raise ValueError("dependency task_id is required")
-            else:
-                dep_namespace, dep_task_id = item
-            normalized.append((dep_namespace, dep_task_id))
+        normalized = self._normalize_dependencies(namespace, dependencies)
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             exists = await (
