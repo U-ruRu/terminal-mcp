@@ -1,5 +1,6 @@
 import pytest
 
+from terminal_mcp.core.orchestration import public_agent_name
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
@@ -189,14 +190,10 @@ async def test_agent_finish_releases_claim_with_durable_event(tmp_path):
         assert finished["ok"] is True
         assert finished["finished"] is True
 
-        detail = await service.tasks(
-            namespace="project", task_id="FINISH-1", show_details=True
-        )
+        detail = await service.tasks(namespace="project", task_id="FINISH-1", show_details=True)
         assert detail["task"]["claims"] == []
         release = next(
-            event
-            for event in detail["task"]["events"]
-            if event["event_type"] == "claim_released"
+            event for event in detail["task"]["events"] if event["event_type"] == "claim_released"
         )
         assert release["payload"]["reason"] == "agent_finish"
     finally:
@@ -228,9 +225,7 @@ async def test_unbound_candidate_review_does_not_satisfy_required_dimension(tmp_
         )
         assert reviewed["ok"] is True
 
-        done = await service.task(
-            owner, action="done", namespace="project", task_id="CANDIDATE-1"
-        )
+        done = await service.task(owner, action="done", namespace="project", task_id="CANDIDATE-1")
         assert done["ok"] is True
         assert done["task"]["state"] == "done"
         assert [warning["code"] for warning in done["warnings"]] == ["review_incomplete"]
@@ -276,6 +271,39 @@ async def test_invalid_dependencies_do_not_partially_create_or_update_task(tmp_p
         assert updated["ok"] is False
         current = await service.tasks(namespace="project", task_id="GOOD", show_details=True)
         assert current["task"]["title"] == "Original title"
+
+        duplicate = [
+            {"namespace": "project", "task_id": "DEP"},
+            {"namespace": "project", "task_id": "DEP"},
+        ]
+        partial_create = await service.task(
+            agent_id,
+            action="create",
+            namespace="project",
+            task_id="ATOMIC-CREATE",
+            title="Must roll back",
+            dependencies=duplicate,
+        )
+        assert partial_create["ok"] is False
+        missing_atomic = await service.tasks(
+            namespace="project", task_id="ATOMIC-CREATE", show_details=True
+        )
+        assert missing_atomic["task"] is None
+
+        before = await service.tasks(namespace="project", task_id="GOOD", show_details=True)
+        before_revision = before["task"]["revision"]
+        partial_update = await service.task(
+            agent_id,
+            action="update",
+            namespace="project",
+            task_id="GOOD",
+            title="Must also roll back",
+            dependencies=duplicate,
+        )
+        assert partial_update["ok"] is False
+        after = await service.tasks(namespace="project", task_id="GOOD", show_details=True)
+        assert after["task"]["title"] == "Original title"
+        assert after["task"]["revision"] == before_revision
     finally:
         await terminal.stop()
 
@@ -296,9 +324,7 @@ async def test_release_without_claim_does_not_create_false_release_event(tmp_pat
             agent_id, action="release", namespace="project", task_id="RELEASE-1"
         )
         assert released["ok"] is True
-        detail = await service.tasks(
-            namespace="project", task_id="RELEASE-1", show_details=True
-        )
+        detail = await service.tasks(namespace="project", task_id="RELEASE-1", show_details=True)
         assert all(event["event_type"] != "claim_released" for event in detail["task"]["events"])
     finally:
         await terminal.stop()
@@ -354,9 +380,12 @@ async def test_task_events_preserve_checkpoint_and_review_evidence_history(tmp_p
             evidence={"tests": 2},
         )
 
-        detail = await service.tasks(
-            namespace="project", task_id="HISTORY-1", show_details=True
-        )
+        detail = await service.tasks(namespace="project", task_id="HISTORY-1", show_details=True)
+        assert all("agent_id" not in event for event in detail["task"]["events"])
+        visible_names = {
+            event.get("agent_name") for event in detail["task"]["events"] if event.get("agent_name")
+        }
+        assert visible_names <= {public_agent_name(owner), public_agent_name(reviewer)}
         checkpoints = [
             event["payload"]["checkpoint"]
             for event in reversed(detail["task"]["events"])

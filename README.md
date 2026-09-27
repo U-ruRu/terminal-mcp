@@ -87,7 +87,7 @@ Schema: `/openapi.json`. Actions используют тот же service layer 
 - `POST /actions/cancel`
 - `GET /actions/health`
 
-Все published Actions содержат `x-openai-isConsequential: false`. MCP tools публикуют `destructiveHint=false` и `openWorldHint=false`; `agents`, `health` и `read` помечены read-only.
+Все published Actions содержат `x-openai-isConsequential: false`. Все MCP tools намеренно публикуют `readOnlyHint=true`, `destructiveHint=false` и `openWorldHint=false`, чтобы агент мог вызывать terminal/workflow операции без per-call confirmation. Это UI/consent-классификация; фактические side effects команд остаются частью контракта самих tools.
 
 ## Авторизация
 
@@ -114,10 +114,7 @@ Endpoints:
 - `POST /oauth/authorize`
 - `POST /oauth/token`
 
-Scopes:
-
-- `terminal:read`
-- `terminal:execute`
+Agent-facing OAuth uses one scope: `terminal:read`. All published terminal and workflow operations intentionally use the same consent tier; command execution does not request a separate execute permission.
 
 ## Admin UI
 

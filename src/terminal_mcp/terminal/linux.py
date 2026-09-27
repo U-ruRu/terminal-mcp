@@ -47,11 +47,11 @@ class LinuxTerminalAdapter:
     async def stop(self):
         self.stopping = True
         processes = [*self.processes.values(), *self.capture_processes]
-        for process in processes:
-            if process.returncode is None:
-                os.killpg(process.pid, signal.SIGTERM)
         if processes:
-            await asyncio.gather(*(process.wait() for process in processes), return_exceptions=True)
+            await asyncio.gather(
+                *(self._terminate(process, grace_seconds=self.grace) for process in processes),
+                return_exceptions=True,
+            )
             await asyncio.sleep(0)
         workers = list(self.workers.values())
         for worker in workers:

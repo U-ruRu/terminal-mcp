@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 from datetime import timedelta
 from sqlite3 import IntegrityError
 
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.orchestration import (
+    NATO_WORDS,
     find_scope_overlaps,
     generate_agent_id,
     parse_utc,
@@ -31,6 +33,7 @@ class AgentCoordinator:
         self.task_lease_seconds = self.policy.intent_ttl_seconds
         self.max_session_seconds = self.policy.max_session_seconds
         self.session_warning_after_seconds = self.policy.session_warning_after_seconds
+        self._start_lock = asyncio.Lock()
 
     async def start(
         self,
@@ -83,32 +86,32 @@ class AgentCoordinator:
         if not details:
             return {"ok": False, "error": "agent_start.details: required for registration"}
 
-        now_dt = utc_now()
-        now = utc_text(now_dt)
-        reserve_window = max(self.ttl_seconds, self.max_session_seconds)
-        cutoff = utc_text(now_dt - timedelta(seconds=reserve_window))
-        recent = await self.store.recent_sessions(cutoff)
-        reserved_names = {public_agent_name(item["agent_id"]) for item in recent}
-        for _ in range(64):
-            allocated = generate_agent_id()
-            if public_agent_name(allocated) in reserved_names:
-                continue
-            try:
-                await self.store.create_session(
-                    allocated,
-                    task_summary,
-                    intent,
-                    work_scope or [],
-                    details,
-                    1,
-                    now,
-                )
-                agent_id = allocated
-                break
-            except IntegrityError:
-                continue
-        else:
-            raise RuntimeError("unable to allocate unique agent id")
+        async with self._start_lock:
+            now_dt = utc_now()
+            now = utc_text(now_dt)
+            cutoff = utc_text(now_dt - timedelta(seconds=self.ttl_seconds))
+            active = await self.store.active(cutoff, len(NATO_WORDS))
+            reserved_names = {public_agent_name(item["agent_id"]) for item in active}
+            for _ in range(64):
+                allocated = generate_agent_id()
+                if public_agent_name(allocated) in reserved_names:
+                    continue
+                try:
+                    await self.store.create_session(
+                        allocated,
+                        task_summary,
+                        intent,
+                        work_scope or [],
+                        details,
+                        1,
+                        now,
+                    )
+                    agent_id = allocated
+                    break
+                except IntegrityError:
+                    continue
+            else:
+                raise RuntimeError("unable to allocate unique agent id")
         self._inc("terminal_mcp_agent_sessions_total")
         return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=True)
 

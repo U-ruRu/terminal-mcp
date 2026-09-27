@@ -47,8 +47,15 @@ class FakeService:
         }
 
     async def message(
-        self, agent_id, text=None, target=None, message_hash=None, require_reply=False, alert=False,
-        namespace=None, task_id=None,
+        self,
+        agent_id,
+        text=None,
+        target=None,
+        message_hash=None,
+        require_reply=False,
+        alert=False,
+        namespace=None,
+        task_id=None,
     ):
         return {
             "ok": True,
@@ -62,8 +69,15 @@ class FakeService:
         }
 
     async def agents(
-        self, agent_id=None, *, target=None, show_details=False, show_intents=False,
-        show_commands=False, command_hash=None, since_minutes=None
+        self,
+        agent_id=None,
+        *,
+        target=None,
+        show_details=False,
+        show_intents=False,
+        show_commands=False,
+        command_hash=None,
+        since_minutes=None,
     ):
         return {
             "ok": True,
@@ -175,6 +189,7 @@ class FakeService:
             },
         }
 
+
 def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
@@ -196,10 +211,7 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         assert tool.output_schema is not None and tool.output_schema["type"] == "object"
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.openWorldHint is False
-    assert tools["agents"].annotations.readOnlyHint is True
-    assert tools["tasks"].annotations.readOnlyHint is True
-    assert tools["health"].annotations.readOnlyHint is True
-    assert tools["read"].annotations.readOnlyHint is True
+    assert all(tool.annotations.readOnlyHint is True for tool in tools.values())
     assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
     assert tools["run"].parameters["properties"]["queue_id"]["anyOf"][0]["minimum"] == 1
     assert tools["agents"].parameters.get("required", []) == []
@@ -280,6 +292,7 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert recovery.structuredContent["cmd_hash"] == "abcd1234"
     assert recovery.structuredContent["displayed_lines_count"] == 1
 
+
 @pytest.mark.asyncio
 async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     mcp = build_mcp(FakeService())
@@ -291,6 +304,7 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     assert recovery.structuredContent["agent_name"] == "anonymous"
     cancelled = await tools["cancel"].run({"cmd_hash": "1234abcd"}, convert_result=True)
     assert cancelled.structuredContent["agent_name"] == "anonymous"
+
 
 @pytest.mark.asyncio
 async def test_mcp_read_supports_independent_agent_and_command_scope():
