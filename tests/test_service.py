@@ -94,7 +94,7 @@ async def test_run_timeout_rolls_back_persisted_command(tmp_path, monkeypatch):
         await asyncio.sleep(1)
 
     monkeypatch.setattr(terminal, "submit", stalled_submit)
-    result = await service.run("printf never-runs")
+    result = await service.run("printf never-runs", task_scope="none")
     assert result["ok"] is False
     assert result["cmd_hash"] is None
     assert result["error"].startswith("run.enqueue:")
@@ -106,7 +106,7 @@ async def test_run_timeout_rolls_back_persisted_command(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_scoped_read_defaults_to_last_500_and_supports_offsets(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    submitted = await service.run("seq 1 520")
+    submitted = await service.run("seq 1 520", task_scope="none")
     completed = await wait_finished(service, submitted["cmd_hash"])
     assert completed["status"] == "completed"
 
@@ -142,7 +142,7 @@ async def test_scoped_read_defaults_to_last_500_and_supports_offsets(tmp_path):
 @pytest.mark.asyncio
 async def test_global_read_defaults_to_latest_500_without_count(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    submitted = await service.run("seq 1 600")
+    submitted = await service.run("seq 1 600", task_scope="none")
     await wait_finished(service, submitted["cmd_hash"])
 
     latest = await service.read()
@@ -171,7 +171,7 @@ async def test_global_read_defaults_to_latest_500_without_count(tmp_path):
     assert positive["next_offset"] == 5
 
     cursor = latest["next_offset"]
-    appended = await service.run("printf 'new-global-line\n'")
+    appended = await service.run("printf 'new-global-line\n'", task_scope="none")
     await wait_finished(service, appended["cmd_hash"])
     incremental = await service.read(None, 10, cursor)
     assert [global_text(line) for line in incremental["lines"]] == ["new-global-line"]
@@ -211,7 +211,7 @@ async def test_stdout_and_stderr_preserve_shell_order_and_exit_error_stays_null(
         "printf 'stdout-one\\nstdout-two\\n'; "
         "printf 'stderr-one\\n' >&2; printf 'stdout-three\\n'; exit 4"
     )
-    submitted = await service.run(command)
+    submitted = await service.run(command, task_scope="none")
     result = await wait_finished(service, submitted["cmd_hash"])
     assert result["status"] == "failed"
     assert result["exit_code"] == 4
@@ -234,7 +234,7 @@ async def test_health_runs_optional_configured_command(tmp_path):
     assert "custom_command" not in plain
 
     service.health_command = "printf 'health-output\\n'"
-    long_run = await service.run("sleep 30")
+    long_run = await service.run("sleep 30", task_scope="none")
     await asyncio.sleep(0.05)
     configured = await asyncio.wait_for(service.health("oauth"), 1)
     await service.cancel(long_run["cmd_hash"])

@@ -74,13 +74,15 @@ async def test_seen_message_repeats_until_explicit_read_ack(tmp_path):
         sixth = await service.read(agent_id=receiver)
         assert any("message reminder" in line for line in sixth["pending_messages"])
 
-        blocked = await service.run("printf blocked", agent_id=receiver)
+        blocked = await service.run("printf blocked", agent_id=receiver, task_scope="none")
         assert blocked["ok"] is False
         assert blocked["coordination_message_pending"] is True
 
         ack = await service.message(receiver, message_hash=message_hash)
         assert public_agent_name(receiver) in ack["read_by"]
-        allowed = await service.run("printf acknowledged", agent_id=receiver, queue_id=1)
+        allowed = await service.run(
+            "printf acknowledged", agent_id=receiver, queue_id=1, task_scope="none"
+        )
         assert allowed["ok"] is True
         completed = await wait_status(service, allowed["cmd_hash"], "completed")
         assert completed["status"] == "completed"
@@ -104,7 +106,7 @@ async def test_require_reply_blocks_run_after_ack_until_linked_reply(tmp_path):
         await service.read(agent_id=receiver)
         await service.message(receiver, message_hash=message_hash)
 
-        blocked = await service.run("printf still-blocked", agent_id=receiver)
+        blocked = await service.run("printf still-blocked", agent_id=receiver, task_scope="none")
         assert blocked["ok"] is False
         assert blocked["reply_required_pending"] is True
 
@@ -113,7 +115,9 @@ async def test_require_reply_blocks_run_after_ack_until_linked_reply(tmp_path):
         status = await service.message(sender, message_hash=message_hash)
         assert public_agent_name(receiver) in status["replied_by"]
 
-        allowed = await service.run("printf replied", agent_id=receiver, queue_id=1)
+        allowed = await service.run(
+            "printf replied", agent_id=receiver, queue_id=1, task_scope="none"
+        )
         assert allowed["ok"] is True
     finally:
         await terminal.stop()
@@ -180,7 +184,7 @@ async def test_absolute_session_warning_and_forced_expiry(tmp_path):
                 (utc_text(utc_now() - timedelta(seconds=1501)), agent_id),
             )
             db.commit()
-        expired = await service.run("printf too-late", agent_id=agent_id)
+        expired = await service.run("printf too-late", agent_id=agent_id, task_scope="none")
         assert expired["ok"] is False
         assert expired["registration_required"] is True
         assert expired["session_status"] == "forced"
@@ -199,7 +203,7 @@ async def test_agents_observer_exposes_intents_commands_and_full_command(tmp_pat
         agent_id = (await register(service, "Journal", "Inspect"))["self"]["agent_id"]
         await service.coordinate(agent_id, step=2, intent="Implement scheduler")
         command_text = "printf 'journal-command\\n'"
-        run = await service.run(command_text, agent_id=agent_id, queue_id=2)
+        run = await service.run(command_text, agent_id=agent_id, queue_id=2, task_scope="none")
         await wait_status(service, run["cmd_hash"], "completed")
 
         fleet = await service.agents()
@@ -235,15 +239,18 @@ async def test_queue_affinity_parallelism_and_command_survival_after_finish(tmp_
             "while [ ! -f release-slow ]; do sleep 0.02; done; printf slow",
             agent_id=first_agent,
             queue_id=2,
+            task_scope="none",
         )
         for _ in range(100):
             if (await service.read(slow["cmd_hash"]))["status"] == "running":
                 break
             await asyncio.sleep(0.005)
-        inherited = await service.run("printf inherited", agent_id=first_agent)
+        inherited = await service.run("printf inherited", agent_id=first_agent, task_scope="none")
         assert inherited["queue_id"] == 2
 
-        fast = await service.run("printf fast", agent_id=second_agent, queue_id=1)
+        fast = await service.run(
+            "printf fast", agent_id=second_agent, queue_id=1, task_scope="none"
+        )
         fast_done = await wait_status(service, fast["cmd_hash"], "completed")
         assert fast_done["status"] == "completed"
         assert (await service.read(slow["cmd_hash"]))["status"] == "running"
@@ -400,7 +407,9 @@ async def test_global_read_uses_batch_queue_lookup(tmp_path, monkeypatch):
     repo, terminal, service = await runtime(tmp_path, workers=1)
     try:
         agent_id = (await register(service, "Reader", "Generate output"))["self"]["agent_id"]
-        submitted = await service.run("printf 'batch-queue-map\\n'", agent_id=agent_id, queue_id=1)
+        submitted = await service.run(
+            "printf 'batch-queue-map\\n'", agent_id=agent_id, queue_id=1, task_scope="none"
+        )
         completed = await wait_status(service, submitted["cmd_hash"], "completed")
         assert completed["status"] == "completed"
 

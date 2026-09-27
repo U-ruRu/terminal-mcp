@@ -9,10 +9,10 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     (fake_bin / "id").write_text("#!/bin/sh\necho 0\n")
     (fake_bin / "python3").write_text(
         "#!/bin/sh\n"
-        "if [ \"$1 $2\" = \"-m venv\" ]; then\n"
-        "  mkdir -p \"$3/bin\"\n"
+        'if [ "$1 $2" = "-m venv" ]; then\n'
+        '  mkdir -p "$3/bin"\n'
         "  printf '#!/bin/sh\nexit 17\n' > \"$3/bin/pip\"\n"
-        "  chmod +x \"$3/bin/pip\"\n"
+        '  chmod +x "$3/bin/pip"\n'
         "  exit 0\n"
         "fi\n"
         "exit 99\n"

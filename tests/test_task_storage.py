@@ -113,15 +113,11 @@ async def test_task_optimistic_revision_update(tmp_path):
 async def test_multi_claim_and_release(tmp_path):
     _, tasks = await store(tmp_path)
     await tasks.create_task("ns", "T-1", "One", cooperative=True)
-    first = await tasks.claim(
-        "ns", "T-1", "Alpha-1111", claim_intent="implementing storage test"
-    )
+    first = await tasks.claim("ns", "T-1", "Alpha-1111", claim_intent="implementing storage test")
     duplicate = await tasks.claim(
         "ns", "T-1", "Alpha-1111", claim_intent="updating storage test intent"
     )
-    second = await tasks.claim(
-        "ns", "T-1", "Bravo-2222", claim_intent="cooperative storage test"
-    )
+    second = await tasks.claim("ns", "T-1", "Bravo-2222", claim_intent="cooperative storage test")
     assert first["created"] is True
     assert duplicate["created"] is False
     assert duplicate["claim_intent"] == "updating storage test intent"

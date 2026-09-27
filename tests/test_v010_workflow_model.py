@@ -62,9 +62,7 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
         )
         assert created["ok"] is True
 
-        missing_intent = await service.task(
-            owner, action="claim", namespace="wf", task_id="COOP"
-        )
+        missing_intent = await service.task(owner, action="claim", namespace="wf", task_id="COOP")
         assert missing_intent["ok"] is False
         assert "claim_intent" in missing_intent["error"]
 
@@ -367,9 +365,7 @@ async def test_comments_and_relations_are_append_only_durable_history(tmp_path):
         target = await detail(service, "wf", "TARGET")
         incoming = [item for item in target["relations"] if item["direction"] == "incoming"]
         assert any(
-            item["kind"] == "supports"
-            and item["namespace"] == "wf"
-            and item["task_id"] == "SOURCE"
+            item["kind"] == "supports" and item["namespace"] == "wf" and item["task_id"] == "SOURCE"
             for item in incoming
         )
         released = await service.task(

@@ -213,7 +213,7 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.openWorldHint is False
     assert all(tool.annotations.readOnlyHint is True for tool in tools.values())
-    assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
+    assert tools["run"].parameters["required"] == ["agent_id", "cmd", "task_scope"]
     assert tools["run"].parameters["properties"]["queue_id"]["anyOf"][0]["minimum"] == 1
     assert tools["agents"].parameters.get("required", []) == []
     assert tools["recovery"].parameters["required"] == ["cmd"]
@@ -287,6 +287,11 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert task["claim_intent"]["anyOf"][0]["maxLength"] == 160
     assert "tags" in tasks
     assert "task_scope" in tools["run"].parameters["properties"]
+    assert "task_scope" in tools["run"].parameters["required"]
+    assert "required on every command" in tools["run"].description
+    assert "concurrent participation" in tools["task"].description
+    assert "durable handoff history" in tools["task"].description
+    assert "ACK REQUIRED" in tools["message"].description
 
     task_card = tools["tasks"].output_schema["$defs"]["TaskCard"]["properties"]
     assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
@@ -374,7 +379,9 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert task_sent.structuredContent["task_id"] == "REV-1"
     assert task_sent.structuredContent["delivered_to"] == []
 
-    run = await tools["run"].run({"agent_id": "Kilo-7K2M", "cmd": "printf ok"}, convert_result=True)
+    run = await tools["run"].run(
+        {"agent_id": "Kilo-7K2M", "cmd": "printf ok", "task_scope": "none"}, convert_result=True
+    )
     assert run.content[0].text == "Command 1234abcd queued."
     assert run.structuredContent["agent_name"] == "Kilo"
     assert "7K2M" not in str(run.structuredContent)

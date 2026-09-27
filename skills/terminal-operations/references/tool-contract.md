@@ -2,11 +2,11 @@
 
 ## Интерфейс
 
-Terminal MCP 0.9.2 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Terminal MCP 0.10.0 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
 ## Agent Session
 
-По умолчанию idle TTL равен 300 секундам, intent lease — 180 секундам, абсолютная длительность регистрации — 1500 секундам. Non-blocking warning начинается после 1200 секунд. На 1380-й секунде появляется blocking session ALERT; после reply он снимается и при продолжающейся сессии может появиться снова через 60 секунд. Пороги, repeat interval, флаг включения и текст ALERT задаются конфигурацией сервера.
+По умолчанию idle TTL равен 300 секундам, task-context TTL — 180 секундам, абсолютная длительность регистрации — 1500 секундам. Канонические поля — `task_context_ttl_seconds` и `task_context_age_seconds`; `task_lease_seconds`, `task_age_seconds` и `max_task_age_seconds` остаются compatibility aliases. Non-blocking warning начинается после 1200 секунд. На 1380-й секунде появляется blocking session ALERT; после reply он снимается и при продолжающейся сессии может появиться снова через 60 секунд. Пороги, repeat interval, флаг включения и текст ALERT задаются конфигурацией сервера.
 
 Agent-bound operational success по умолчанию возвращает только результат операции. Session/message context добавляется, когда он меняет следующее действие: warning, unread/reply-required message, ALERT, expiry или registration requirement. Полный session/fleet context читается через observation tools.
 
@@ -18,7 +18,7 @@ Agent-bound operational success по умолчанию возвращает т�
 
 ## `coordinate(agent_id, step?, intent?, show_details=false)`
 
-Читает текущий step/intent/detail. `step + intent` фиксирует новый intent event и обновляет intent lease. `show_details=true` сохраняется для compact peer coordination; историческое наблюдение выполняется через `agents`.
+Читает текущий step/intent/detail. `step + intent` фиксирует новый intent event и обновляет task-context freshness. `show_details=true` сохраняется для compact peer coordination; историческое наблюдение выполняется через `agents`.
 
 ## `message(...)`
 
@@ -32,7 +32,7 @@ Read acknowledgement:
 
 `message(agent_id, message_hash)`
 
-Получатель явно подтверждает, что сообщение прочитано. Сам показ сообщения выставляет только `seen`. До acknowledgement обычное сообщение блокирует новую `run` и повторно показывается. Полный текст гарантирован минимум 180 секунд и минимум пять surfaced responses, затем остаётся compact reminder.
+Получатель явно подтверждает, что сообщение прочитано. Сам показ сообщения выставляет только `seen` и не является acknowledgement. До явного `message(agent_id, message_hash=...)` состояние помечается `ACK REQUIRED`; обычное сообщение блокирует новую `run` и повторно показывается. Полный текст гарантирован минимум 180 секунд и минимум пять surfaced responses, затем остаётся compact reminder.
 
 Reply:
 
@@ -42,7 +42,7 @@ Reply:
 
 После normal `agent_finish` exact old `agent_id` в течение 300 секунд может только ACK/reply уже delivered ему message hash; grace не разрешает новые sends или другие agent tools.
 
-Sender inspection через `message(sender_id, message_hash)` возвращает `delivered_to`, `seen_by`, `read_by`, `replied_by`.
+Sender inspection через `message(sender_id, message_hash)` возвращает `delivered_to`, `seen_by`, `read_by`, `replied_by` и отдельно `inactive_recipients`. Receipt state не меняется от завершения recipient session. `agent_finish` разрешён при pending communication и может вернуть `pending_communication {unacknowledged, reply_required, alerts}`; post-finish grace действует только для exact old `agent_id` и только для ACK/reply ранее доставленного hash.
 
 ## `agents(...)`
 
@@ -67,9 +67,9 @@ Read-only backlog observer. `tags` uses AND semantics; `tag_counts` exposes voca
 
 ## `task(agent_id, action, namespace, ...)`
 
-Workflow states are `ready|blocked|deferred|done`. `done` means goal reached and requires meaningful `result`. Claimed blocked requires `blocker_reason`; release live claim requires `release_reason`. `action=comment` with `comment_text` appends durable history distinct from mutable description.
+Workflow states are `ready|blocked|deferred|done`. `done` means goal reached and requires meaningful `result`. Claimed blocked requires `blocker_reason`; release live claim requires `release_reason`, который сохраняется как durable handoff history entry. `action=comment` with `comment_text` appends durable history distinct from mutable description.
 
-Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
+Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. `cooperative` управляет concurrent participation, а не visibility. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
 
 Dependencies are a validated directed graph: self edge and cycle reject before persistence. Missing target is allowed, represented as `missing` and remains blocking. Completion satisfies prerequisite independently of archive visibility: archived done satisfied; archived unfinished blocking. `force=true` + `force_reason` is durable conscious override only for dependency claim gate.
 
@@ -77,11 +77,11 @@ Generic relation mutations are `action=relate` / `unrelate` with `relation_kind`
 
 `archive` requires `archive_note`, preserves workflow state, stores `archived_at` / archive evidence, releases live claims and removes task from active backlog/pressure/recommendation. Legacy v8 archived-state rows migrate deterministically into v9 lifecycle representation. Ad-hoc terminal work still requires no managed task.
 
-## `run(agent_id, cmd, queue_id?, task_scope?)`
+## `run(agent_id, cmd, task_scope, queue_id?)`
 
 Сохраняет команду в SQLite и помещает её в numbered FIFO lane. Первый вызов без `queue_id` выбирает least-loaded lane и сохраняет affinity. Следующие вызовы используют preferred queue. Явный `queue_id` меняет affinity.
 
-При наличии active task claims `task_scope` обязателен до enqueue: `none`, `all` или одна собственная claimed `namespace/task_id`. Scope управляет только task command events; без claims scope можно опустить или использовать `none`. Успешный ответ содержит `cmd_hash`, `queue_id` и `queue_position` (position может стать `null`, если worker уже atomically claimed команду).
+`task_scope` обязателен для каждой normal run до enqueue. Без live claims допустим только `none`; при live claims — `none`, `all` или одна собственная live claimed `namespace/task_id`. Текущие legal values возвращаются в `task_scope_options`. Scope управляет только task command events. Успешный ответ содержит `cmd_hash`, `queue_id` и `queue_position` (position может стать `null`, если worker уже atomically claimed команду).
 
 `run` требует live session, fresh intent, read acknowledgement всех unread messages и replies для обязательных сообщений.
 
@@ -105,7 +105,7 @@ Persisted emergency execution вне numbered queues. Выполняется н�
 
 ## `health(agent_id?)`
 
-Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
+Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, canonical `live_claims` / `unreleased_claims` / `stale_claims` и reviews; legacy `active_claims` — compatibility alias для unreleased rows без backlog payload. `terminal.scheduler` — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
 
 ## Command status
 

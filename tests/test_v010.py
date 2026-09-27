@@ -51,12 +51,18 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
             one, action="create", namespace="ns", task_id="EXCLUSIVE", title="exclusive"
         )
         first = await service.task(
-            one, action="claim", namespace="ns", task_id="EXCLUSIVE",
+            one,
+            action="claim",
+            namespace="ns",
+            task_id="EXCLUSIVE",
             claim_intent="owning exclusive task",
         )
         assert first["ok"] is True
         second = await service.task(
-            two, action="claim", namespace="ns", task_id="EXCLUSIVE",
+            two,
+            action="claim",
+            namespace="ns",
+            task_id="EXCLUSIVE",
             claim_intent="attempting conflicting ownership",
         )
         assert second["ok"] is False
@@ -86,13 +92,19 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
         )
         assert (
             await service.task(
-                one, action="claim", namespace="ns", task_id="COOP",
+                one,
+                action="claim",
+                namespace="ns",
+                task_id="COOP",
                 claim_intent="cooperative owner",
             )
         )["ok"]
         assert (
             await service.task(
-                two, action="claim", namespace="ns", task_id="COOP",
+                two,
+                action="claim",
+                namespace="ns",
+                task_id="COOP",
                 claim_intent="cooperative participant",
             )
         )["ok"]
@@ -147,9 +159,7 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
             force_reason="Emergency integration validation requires parallel access",
         )
         assert forced["ok"] is True
-        detail = await service.tasks(
-            namespace="ns", task_id="BLOCKED-BY-DEP", show_details=True
-        )
+        detail = await service.tasks(namespace="ns", task_id="BLOCKED-BY-DEP", show_details=True)
         forced_events = [
             event for event in detail["task"]["events"] if event["payload"].get("force_reason")
         ]
@@ -296,7 +306,10 @@ async def test_tags_filter_discovery_pressure_and_oldest_ready(tmp_path):
             tags=["architecture", "correctness"],
         )
         await service.task(
-            one, action="claim", namespace="ns", task_id="EXCLUSIVE",
+            one,
+            action="claim",
+            namespace="ns",
+            task_id="EXCLUSIVE",
             claim_intent="occupying exclusive routing work",
         )
         await create(
@@ -307,11 +320,17 @@ async def test_tags_filter_discovery_pressure_and_oldest_ready(tmp_path):
             cooperative=True,
         )
         await service.task(
-            one, action="claim", namespace="ns", task_id="COOP",
+            one,
+            action="claim",
+            namespace="ns",
+            task_id="COOP",
             claim_intent="cooperative routing owner",
         )
         await service.task(
-            two, action="claim", namespace="ns", task_id="COOP",
+            two,
+            action="claim",
+            namespace="ns",
+            task_id="COOP",
             claim_intent="cooperative routing participant",
         )
         await create("OLD", lane="general", priority="P1", tags=["architecture", "runtime"])
@@ -337,9 +356,7 @@ async def test_tags_filter_discovery_pressure_and_oldest_ready(tmp_path):
         }
         assert filtered["tag_counts"]["runtime"] >= 2
         assert filtered["tag_counts"]["correctness"] == 1
-        intersection = await service.tasks(
-            namespace="ns", tags=["architecture", "runtime"]
-        )
+        intersection = await service.tasks(namespace="ns", tags=["architecture", "runtime"])
         assert {item["task_id"] for item in intersection["tasks"]} == {"OLD"}
 
         listing = await service.tasks(namespace="ns")
@@ -379,8 +396,20 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
     try:
         agent = await register(service, "runner")
         other = await register(service, "other")
-        ad_hoc = await service.run("printf adhoc", agent_id=agent)
+        with sqlite3.connect(repo.path) as db:
+            before_ad_hoc = db.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
+        missing_ad_hoc = await service.run("printf should-not-queue", agent_id=agent)
+        assert missing_ad_hoc["ok"] is False
+        assert missing_ad_hoc["task_scope_options"] == ["none"]
+        with sqlite3.connect(repo.path) as db:
+            assert db.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == before_ad_hoc
+
+        overview = await service.agents(agent_id=agent)
+        assert overview["task_scope_options"] == ["none"]
+
+        ad_hoc = await service.run("printf adhoc", agent_id=agent, task_scope="none")
         assert ad_hoc["ok"] is True
+        assert ad_hoc["task_scope_options"] == ["none"]
         await wait_done(service, ad_hoc["cmd_hash"], agent)
 
         for task_id in ("T1", "T2"):
@@ -400,11 +429,15 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
                 claim_intent=f"running scoped command for {task_id}",
             )
 
+        overview = await service.agents(agent_id=agent)
+        assert set(overview["task_scope_options"]) == {"none", "all", "ns/T1", "ns/T2"}
+
         with sqlite3.connect(repo.path) as db:
             before = db.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
         missing = await service.run("printf should-not-queue", agent_id=agent)
         assert missing["ok"] is False
-        assert set(missing["task_targets"]) == {"ns/T1", "ns/T2"}
+        assert missing["task_targets"] == []
+        assert set(missing["task_scope_options"]) == {"none", "all", "ns/T1", "ns/T2"}
         with sqlite3.connect(repo.path) as db:
             assert db.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == before
 
@@ -428,7 +461,10 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
             title="foreign",
         )
         await service.task(
-            other, action="claim", namespace="ns", task_id="FOREIGN",
+            other,
+            action="claim",
+            namespace="ns",
+            task_id="FOREIGN",
             claim_intent="owning foreign scoped task",
         )
         denied = await service.run("printf denied", agent_id=agent, task_scope="ns/FOREIGN")
@@ -474,13 +510,30 @@ async def test_broadcast_alias_and_post_finish_message_grace(tmp_path):
 
         ack_message = await service.message(sender, text="ack me", target=recipient_name)
         reply_message = await service.message(sender, text="reply me", target=recipient_name)
-        assert ack_message["ok"] and reply_message["ok"]
+        alert_message = await service.message(
+            sender, text="urgent reply", target=recipient_name, alert=True
+        )
+        assert ack_message["ok"] and reply_message["ok"] and alert_message["ok"]
+        alert_record = await service.agent_coordinator.store.message_record(
+            alert_message["message_hash"]
+        )
+        assert alert_record["alert"] is True
+        assert alert_record["require_reply"] is True
 
         foreign = await service.message(outsider, message_hash=ack_message["message_hash"])
         assert foreign["ok"] is False
 
         finished = await service.agent_finish(recipient)
         assert finished["ok"] is True
+        pending = finished["pending_communication"]
+        assert alert_message["message_hash"] in pending["unacknowledged"]
+        assert alert_message["message_hash"] in pending["reply_required"]
+        assert alert_message["message_hash"] in pending["alerts"]
+
+        sender_status = await service.message(sender, message_hash=alert_message["message_hash"])
+        assert recipient_name in sender_status["inactive_recipients"]
+        assert "message_grace_remaining_seconds" not in sender_status
+
         foreign_after_finish = await service.message(
             outsider, message_hash=ack_message["message_hash"]
         )
@@ -662,6 +715,7 @@ def test_mcp_schema_has_unified_task_contract():
     assert "force_reason" in task
     assert "tags" in tasks
     assert "task_scope" in run
+    assert "task_scope" in tools["run"].parameters["required"]
     assert "broadcast" in tools["message"].description
     assert "broadcast" in str(message["target"])
     assert "force" in tools["task"].description.lower()
@@ -684,20 +738,24 @@ async def test_non_cooperative_concurrent_claim_has_single_winner(tmp_path):
         assert created["ok"] is True
         left, right = await asyncio.gather(
             service.task(
-                one, action="claim", namespace="race", task_id="ONE-OWNER",
+                one,
+                action="claim",
+                namespace="race",
+                task_id="ONE-OWNER",
                 claim_intent="racing for exclusive ownership one",
             ),
             service.task(
-                two, action="claim", namespace="race", task_id="ONE-OWNER",
+                two,
+                action="claim",
+                namespace="race",
+                task_id="ONE-OWNER",
                 claim_intent="racing for exclusive ownership two",
             ),
         )
         assert sum(result["ok"] is True for result in (left, right)) == 1
         loser = left if not left["ok"] else right
         assert loser["code"] == "already_claimed"
-        detail = await service.tasks(
-            namespace="race", task_id="ONE-OWNER", show_details=True
-        )
+        detail = await service.tasks(namespace="race", task_id="ONE-OWNER", show_details=True)
         assert len(detail["task"]["claims"]) == 1
     finally:
         await terminal.stop()

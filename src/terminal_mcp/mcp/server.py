@@ -20,6 +20,7 @@ from terminal_mcp.api_models import (
     TaskAction,
     TaskLane,
     TaskMutationResponse,
+    TaskOperationalStatus,
     TaskPriority,
     TasksResponse,
     TaskState,
@@ -113,7 +114,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Inspect or update current coordination. agent_id alone returns current step/intent/detail. step selects a plan step. Providing step+intent updates current work and refreshes the configured intent lease. show_details includes other agents' registered plans. Always inspect pending_messages and acknowledge them with message before new run work.",
+        description="Inspect or update current coordination. agent_id alone returns current step/intent/detail. step selects a plan step. Providing step+intent updates current work and refreshes task-context freshness. show_details includes other agents' registered plans. Always inspect pending_messages and acknowledge them with message before new run work.",
     )
     async def coordinate(
         agent_id: str,
@@ -139,7 +140,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports direct target, broadcast by omitting target or target=broadcast, or managed-task target via namespace+task_id, plus require_reply and alert. message_hash alone acknowledges a received message or inspects receipts for the sender; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
+        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports direct target, broadcast by omitting target or target=broadcast, or managed-task target via namespace+task_id, plus require_reply and alert. alert=true canonically implies require_reply=true. SEEN only means surfaced; ACK REQUIRED clears only after explicit message(agent_id,message_hash). message_hash alone acknowledges a received message or inspects receipts for the sender, including inactive recipients; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
     )
     async def message(
         agent_id: str,
@@ -171,7 +172,8 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             )
         )
         summary = (
-            f"Message {data.message_hash}: read_by={','.join(data.read_by) or '-'}"
+            f"Message {data.message_hash}: read_by={','.join(data.read_by) or '-'}; "
+            f"inactive={','.join(data.inactive_recipients) or '-'}"
             if message_hash
             else f"Message {data.message_hash}: delivered_to={','.join(data.delivered_to) or '-'}"
         )
@@ -213,7 +215,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
         description=(
-            "Inspect managed tasks with optional namespace/lane/state/tags filters. Responses "
+            "Inspect managed tasks with optional namespace/lane/state/operational_status/tags filters. Responses "
             "include claimable pressure, oldest-ready recommendation, missing-dependency "
             "observability, and tag_counts so agents can discover the active custom tag "
             "vocabulary. show_details expands durable history; show_done/show_archived include "
@@ -225,6 +227,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         task_id: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
         lane: TaskLane | None = None,
         state: TaskState | None = None,
+        operational_status: TaskOperationalStatus | None = None,
         tags: Annotated[list[str] | None, Field(max_length=50)] = None,
         show_details: bool = False,
         show_done: bool = False,
@@ -242,6 +245,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
                     task_id=task_id,
                     lane=lane,
                     state=state,
+                    operational_status=operational_status,
                     tags=tags,
                     show_details=show_details,
                     show_done=show_done,
@@ -253,7 +257,8 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         )
         if data.task:
             summary = (
-                f"{data.task.namespace}/{data.task.task_id} {data.task.state} {data.task.lane}"
+                f"{data.task.namespace}/{data.task.task_id} "
+                f"{data.task.operational_status} state={data.task.state} {data.task.lane}"
             )
         else:
             summary = f"tasks={len(data.tasks)}"
@@ -265,10 +270,12 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
-            "Mutate one unified managed task. claim requires claim_intent. The first live "
-            "claimant is owner; cooperative participants may comment and edit safe metadata, while "
+            "Mutate one unified managed task. claim requires claim_intent. cooperative controls "
+            "concurrent participation, not task visibility. The first live claimant is owner; later "
+            "cooperative claimants are participants that may comment and edit safe metadata, while "
             "workflow changes require owner. blocked requires blocker_reason for a claimed task; "
-            "release requires release_reason; done requires result. comment is append-only history. "
+            "release requires release_reason as durable handoff history; done requires result. "
+            "comment is append-only history. "
             "relate/unrelate manage generic task relations; review work uses lane=review plus "
             "relation_kind=review_of. archive requires archive_note and preserves workflow state. "
             "force=true with force_reason overrides open dependencies only, never ownership."
@@ -364,23 +371,30 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         data = AgentFinishResponse.model_validate(
             await observed(service, "mcp", "agent_finish", service.agent_finish(agent_id))
         )
-        return _structured_result(
-            data,
+        summary = (
             f"{data.agent_name} finished."
             if data.ok
-            else "Agent session expired. Call agent_start.",
+            else "Agent session expired. Call agent_start."
         )
+        if data.ok and data.pending_communication:
+            pending = data.pending_communication
+            summary += (
+                " Pending communication: "
+                f"unacknowledged={len(pending.unacknowledged)}, "
+                f"reply_required={len(pending.reply_required)}, alerts={len(pending.alerts)}."
+            )
+        return _structured_result(data, summary)
 
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Queue a shell command on a numbered FIFO worker. If active managed-task claims exist, task_scope is required: all, none, or a claimed <namespace>/<task_id>. Without claims it may be omitted. queue_id controls FIFO affinity.",
+        description="Queue a shell command on a numbered FIFO worker. task_scope is required on every command: use none with no live claims; with live claims use none, all, or a claimed <namespace>/<task_id>. queue_id controls FIFO affinity.",
     )
     async def run(
         agent_id: str,
         cmd: str,
+        task_scope: Annotated[str, Field(min_length=1, max_length=260)],
         queue_id: Annotated[int | None, Field(ge=1)] = None,
-        task_scope: Annotated[str | None, Field(min_length=1, max_length=260)] = None,
     ) -> Annotated[CallToolResult, RunResponse]:
         data = RunResponse.model_validate(
             await observed(

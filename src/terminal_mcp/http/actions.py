@@ -17,6 +17,7 @@ from terminal_mcp.api_models import (
     TaskAction,
     TaskLane,
     TaskMutationResponse,
+    TaskOperationalStatus,
     TaskPriority,
     TasksResponse,
     TaskState,
@@ -121,6 +122,7 @@ class TasksRequest(StrictRequest):
     task_id: str | None = Field(default=None, min_length=1, max_length=120)
     lane: TaskLane | None = None
     state: TaskState | None = None
+    operational_status: TaskOperationalStatus | None = None
     tags: list[str] | None = Field(default=None, max_length=50)
     show_details: bool = False
     show_done: bool = False
@@ -140,7 +142,13 @@ class TaskRequest(AgentRequest):
     description: str | None = Field(default=None, max_length=8000)
     next_action: str | None = Field(default=None, max_length=2000)
     resource_context: dict[str, object] | None = None
-    cooperative: bool | None = None
+    cooperative: bool | None = Field(
+        default=None,
+        description=(
+            "Controls concurrent participation, not task visibility. The first live claimant "
+            "is owner; later live claimants are participants when cooperative=true."
+        ),
+    )
     checkpoint: str | dict[str, object] | list[object] | None = None
     candidate_ref: str | None = Field(default=None, max_length=200)
     result: str | dict[str, object] | list[object] | None = None
@@ -157,7 +165,11 @@ class TaskRequest(AgentRequest):
     )
     claim_intent: str | None = Field(default=None, max_length=160)
     blocker_reason: str | None = Field(default=None, max_length=4000)
-    release_reason: str | None = Field(default=None, max_length=4000)
+    release_reason: str | None = Field(
+        default=None,
+        max_length=4000,
+        description="Required for release and retained as durable handoff history.",
+    )
     archive_note: str | None = Field(default=None, max_length=4000)
     comment_text: str | None = Field(default=None, max_length=4000)
     relation_kind: str | None = Field(default=None, max_length=64)
@@ -170,11 +182,13 @@ class TaskRequest(AgentRequest):
 class RunRequest(AgentRequest):
     cmd: str = Field(min_length=1, description="Shell script passed to /bin/bash -s through stdin.")
     queue_id: int | None = Field(default=None, ge=1)
-    task_scope: str | None = Field(
-        default=None,
+    task_scope: str = Field(
         min_length=1,
         max_length=260,
-        description="With active claims: 'all', 'none', or '<namespace>/<task_id>'.",
+        description=(
+            "Required on every run. Use 'none' with no live claims; with live claims use "
+            "'none', 'all', or one claimed '<namespace>/<task_id>'."
+        ),
     )
 
 
@@ -304,6 +318,7 @@ def build_actions_router(service, auth_mode="none"):
                 task_id=body.task_id,
                 lane=body.lane,
                 state=body.state,
+                operational_status=body.operational_status,
                 tags=body.tags,
                 show_details=body.show_details,
                 show_done=body.show_done,

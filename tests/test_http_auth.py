@@ -70,7 +70,9 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert health.json()["version"] == "0.10.0"
 
         run = client.post(
-            "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
+            "/actions/run",
+            json={"agent_id": agent_id, "cmd": "printf ok", "task_scope": "none"},
+            headers=headers,
         )
         assert run.status_code == 200 and run.json()["ok"] is True
         cmd_hash = run.json()["cmd_hash"]
@@ -104,7 +106,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert schema["info"]["version"] == "0.10.0"
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
-        assert set(run_request["required"]) == {"agent_id", "cmd"}
+        assert set(run_request["required"]) == {"agent_id", "cmd", "task_scope"}
         recovery_request = schema["components"]["schemas"]["RecoveryRequest"]
         assert set(recovery_request["required"]) == {"cmd"}
         cancel_request = schema["components"]["schemas"]["CancelRequest"]
@@ -184,6 +186,9 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert claim_intent["maxLength"] == 160
         assert "tags" in schema["components"]["schemas"]["TasksRequest"]["properties"]
         assert "task_scope" in schema["components"]["schemas"]["RunRequest"]["properties"]
+        task_request_props = schema["components"]["schemas"]["TaskRequest"]["properties"]
+        assert "concurrent participation" in task_request_props["cooperative"]["description"]
+        assert "durable handoff history" in task_request_props["release_reason"]["description"]
 
         task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
         assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]

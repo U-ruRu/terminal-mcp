@@ -109,6 +109,7 @@ async def test_task_create_cooperative_claims_and_compact_listing(tmp_path):
     finally:
         await terminal.stop()
 
+
 @pytest.mark.asyncio
 async def test_task_addressed_message_routes_to_live_claimants_and_persists(tmp_path):
     _, terminal, service = await runtime(tmp_path)
@@ -271,12 +272,11 @@ async def test_review_lane_is_ordinary_task_and_requires_result_to_finish(tmp_pa
         )
         assert done["ok"] is True
         assert done["task"]["state"] == "done"
-        detail = await service.tasks(
-            namespace="project", task_id="CANDIDATE-1", show_details=True
-        )
+        detail = await service.tasks(namespace="project", task_id="CANDIDATE-1", show_details=True)
         assert detail["task"]["result"] == result
     finally:
         await terminal.stop()
+
 
 @pytest.mark.asyncio
 async def test_invalid_dependencies_do_not_partially_create_or_update_task(tmp_path):
@@ -415,9 +415,7 @@ async def test_task_events_preserve_checkpoint_and_result_history(tmp_path):
         detail = await service.tasks(namespace="project", task_id="HISTORY-1", show_details=True)
         assert all("agent_id" not in event for event in detail["task"]["events"])
         visible_names = {
-            event.get("agent_name")
-            for event in detail["task"]["events"]
-            if event.get("agent_name")
+            event.get("agent_name") for event in detail["task"]["events"] if event.get("agent_name")
         }
         assert visible_names <= {public_agent_name(owner)}
         checkpoints = [
@@ -427,14 +425,13 @@ async def test_task_events_preserve_checkpoint_and_result_history(tmp_path):
         ]
         assert checkpoints == [{"step": "one"}, {"step": "two"}]
         result_events = [
-            event
-            for event in detail["task"]["events"]
-            if event["payload"].get("result") == result
+            event for event in detail["task"]["events"] if event["payload"].get("result") == result
         ]
         assert len(result_events) == 1
         assert detail["task"]["result"] == result
     finally:
         await terminal.stop()
+
 
 @pytest.mark.asyncio
 async def test_done_atomically_releases_all_current_claims(tmp_path):

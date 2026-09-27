@@ -49,7 +49,7 @@ async def test_output_line_command_caps_and_batched_writes(tmp_path, monkeypatch
 
     monkeypatch.setattr(repo, "append_lines", counted)
     try:
-        first = await service.run("python3 -c \"print('x'*300); print('tail')\"")
+        first = await service.run("python3 -c \"print('x'*300); print('tail')\"", task_scope="none")
         first_read = await wait_done(service, first["cmd_hash"])
         assert first_read["output_truncated"] is True
         assert first_read["output_bytes"] <= 256
@@ -58,12 +58,14 @@ async def test_output_line_command_caps_and_batched_writes(tmp_path, monkeypatch
         assert "truncated" in first_read["lines"][0]
 
         calls = 0
-        second = await service.run("seq 1 200")
+        second = await service.run("seq 1 200", task_scope="none")
         second_read = await wait_done(service, second["cmd_hash"])
         assert second_read["status"] == "completed"
         assert calls < 20
 
-        third = await service.run("for i in $(seq 1 30); do printf '01234567890123456789\\n'; done")
+        third = await service.run(
+            "for i in $(seq 1 30); do printf '01234567890123456789\\n'; done", task_scope="none"
+        )
         third_read = await wait_done(service, third["cmd_hash"])
         assert third_read["output_truncated"] is True
         assert third_read["output_bytes"] <= 256
@@ -84,7 +86,7 @@ async def test_retention_prunes_whole_old_commands_to_target(tmp_path):
     try:
         hashes = []
         for marker in ("a", "b", "c"):
-            run = await service.run(f"python3 -c \"print('{marker}'*180)\"")
+            run = await service.run(f"python3 -c \"print('{marker}'*180)\"", task_scope="none")
             done = await wait_done(service, run["cmd_hash"])
             assert done["status"] == "completed"
             hashes.append(run["cmd_hash"])
@@ -185,7 +187,7 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
                 (utc_text(utc_now() - timedelta(seconds=81)), agent_id),
             )
             db.commit()
-        blocked = await service.run("printf blocked", agent_id=agent_id)
+        blocked = await service.run("printf blocked", agent_id=agent_id, task_scope="none")
         assert blocked["ok"] is False
         assert blocked["alert_pending"] is True
         assert DEFAULT_SESSION_ALERT_MESSAGE in blocked["alert_messages"][0]
@@ -195,7 +197,9 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
         await service.message(
             agent_id, message_hash=first_hash, text="Завершаю сессию и возвращаюсь"
         )
-        allowed = await service.run("printf allowed", agent_id=agent_id, queue_id=1)
+        allowed = await service.run(
+            "printf allowed", agent_id=agent_id, queue_id=1, task_scope="none"
+        )
         assert allowed["ok"] is True
         assert (await wait_done(service, allowed["cmd_hash"]))["status"] == "completed"
 

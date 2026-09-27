@@ -49,6 +49,8 @@ def _compact_context(context):
     for key in ("pending_messages", "alert_messages", "reply_required_messages"):
         if context.get(key):
             keep[key] = context[key]
+    if context.get("task_scope_options"):
+        keep["task_scope_options"] = context["task_scope_options"]
     if context.get("session_warning"):
         keep["session_warning"] = context["session_warning"]
         keep["session_remaining_seconds"] = context.get("session_remaining_seconds")
@@ -106,12 +108,23 @@ class TerminalService:
             return _compact_context(lifecycle)
         return _compact_context(await self.awareness(agent_id, surface_messages=True))
 
+    async def _task_scope_state(self, agent_id):
+        refs = []
+        if agent_id and self.task_coordinator:
+            refs = await self.task_coordinator.task_refs_for_agent(agent_id)
+        concrete = [f"{item['namespace']}/{item['task_id']}" for item in refs]
+        options = ["none"]
+        if concrete:
+            options.extend(["all", *concrete])
+        return refs, options
+
     async def awareness(self, agent_id=None, *, surface_messages=False):
         active_agents = (
             await self.agent_coordinator.active_snapshot(exclude_agent_id=agent_id)
             if self.agent_coordinator
             else []
         )
+        _, task_scope_options = await self._task_scope_state(agent_id)
         if not self.agent_coordinator or not agent_id:
             return {
                 "agent_name": public_agent_name(agent_id),
@@ -119,9 +132,11 @@ class TerminalService:
                 "pending_messages": [],
                 "alert_messages": [],
                 "reply_required_messages": [],
+                "task_scope_options": task_scope_options,
             }
         return {
             "active_agents": active_agents,
+            "task_scope_options": task_scope_options,
             **await self.agent_coordinator.session_context(agent_id),
             **await self.agent_coordinator.message_state(agent_id, surface=surface_messages),
         }
@@ -171,73 +186,57 @@ class TerminalService:
                 response.setdefault("cmd_hash", None)
                 response.setdefault("queue_id", None)
                 response.setdefault("queue_position", None)
+                _, task_scope_options = await self._task_scope_state(agent_id)
                 response.update(
                     {
                         "active_agents": await self.agent_coordinator.active_snapshot(
                             exclude_agent_id=agent_id
-                        )
+                        ),
+                        "task_scope_options": task_scope_options,
                     }
                 )
                 return response
             gate_context = _compact_context(gate["context"])
+        available_task_refs, task_scope_options = await self._task_scope_state(agent_id)
         selected_task_refs = []
-        available_task_refs = []
-        normalized_task_scope = task_scope
-        if agent_id and self.task_coordinator:
-            available_task_refs = await self.task_coordinator.task_refs_for_agent(agent_id)
-            choices = [
-                f"{item['namespace']}/{item['task_id']}" for item in available_task_refs
-            ]
-            if available_task_refs:
-                if task_scope is None:
-                    return {
-                        "ok": False,
-                        "cmd_hash": None,
-                        "queue_id": None,
-                        "queue_position": None,
-                        "task_scope": None,
-                        "task_targets": choices,
-                        "error": (
-                            "run.task_scope: active task claims exist; choose 'all', 'none', "
-                            f"or one claimed task: {', '.join(choices)}"
-                        ),
-                        **gate_context,
-                    }
-                if task_scope == "all":
-                    selected_task_refs = available_task_refs
-                elif task_scope == "none":
-                    selected_task_refs = []
+        if task_scope not in task_scope_options:
+            concrete = task_scope_options[2:] if len(task_scope_options) > 2 else []
+            if task_scope is None:
+                if concrete:
+                    error = (
+                        "run.task_scope: required; choose 'none', 'all', "
+                        f"or one claimed task: {', '.join(concrete)}"
+                    )
                 else:
-                    selected_task_refs = [
-                        item
-                        for item in available_task_refs
-                        if f"{item['namespace']}/{item['task_id']}" == task_scope
-                    ]
-                    if not selected_task_refs:
-                        return {
-                            "ok": False,
-                            "cmd_hash": None,
-                            "queue_id": None,
-                            "queue_position": None,
-                            "task_scope": task_scope,
-                            "task_targets": choices,
-                            "error": (
-                                f"run.task_scope: {task_scope!r} is not an active claimed task; "
-                                f"choose 'all', 'none', or one of: {', '.join(choices)}"
-                            ),
-                            **gate_context,
-                        }
-            elif task_scope not in (None, "none"):
-                return {
-                    "ok": False,
-                    "cmd_hash": None,
-                    "queue_id": None,
-                    "queue_position": None,
-                    "task_scope": task_scope,
-                    "task_targets": [],
-                    "error": "run.task_scope: no active task claims; omit task_scope or use 'none'",
-                    **gate_context,
-                }
+                    error = "run.task_scope: required; no active task claims, use 'none'"
+            elif concrete:
+                error = (
+                    f"run.task_scope: {task_scope!r} is invalid; choose 'none', 'all', "
+                    f"or one claimed task: {', '.join(concrete)}"
+                )
+            else:
+                error = (
+                    f"run.task_scope: {task_scope!r} is invalid; no active task claims, use 'none'"
+                )
+            return {
+                "ok": False,
+                "cmd_hash": None,
+                "queue_id": None,
+                "queue_position": None,
+                "task_scope": task_scope,
+                "task_targets": [],
+                "task_scope_options": task_scope_options,
+                "error": error,
+                **gate_context,
+            }
+        if task_scope == "all":
+            selected_task_refs = available_task_refs
+        elif task_scope != "none":
+            selected_task_refs = [
+                item
+                for item in available_task_refs
+                if f"{item['namespace']}/{item['task_id']}" == task_scope
+            ]
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -265,10 +264,11 @@ class TerminalService:
                 "cmd_hash": command.cmd_hash,
                 "queue_id": command.queue_id,
                 "queue_position": position,
-                "task_scope": normalized_task_scope,
+                "task_scope": task_scope,
                 "task_targets": [
                     f"{item['namespace']}/{item['task_id']}" for item in selected_task_refs
                 ],
+                "task_scope_options": task_scope_options,
                 "error": None,
                 **gate_context,
             }
@@ -639,20 +639,27 @@ class TerminalService:
     ):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.start(
+        result = await self.agent_coordinator.start(
             task_summary=task_summary,
             intent=intent,
             work_scope=work_scope,
             details=details,
             agent_id=agent_id,
         )
+        self_payload = result.get("self") or {}
+        scope_agent_id = self_payload.get("agent_id") or agent_id
+        if scope_agent_id:
+            _, result["task_scope_options"] = await self._task_scope_state(scope_agent_id)
+        return result
 
     async def coordinate(self, agent_id, step=None, intent=None, show_details=False):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.coordinate(
+        result = await self.agent_coordinator.coordinate(
             agent_id, step=step, intent=intent, show_details=show_details
         )
+        _, result["task_scope_options"] = await self._task_scope_state(agent_id)
+        return result
 
     async def message(
         self,
@@ -700,7 +707,7 @@ class TerminalService:
     ):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
-        return await self.agent_coordinator.overview(
+        result = await self.agent_coordinator.overview(
             agent_id=agent_id,
             target=target,
             show_details=show_details,
@@ -709,6 +716,9 @@ class TerminalService:
             command_hash=command_hash,
             since_minutes=since_minutes,
         )
+        if agent_id:
+            _, result["task_scope_options"] = await self._task_scope_state(agent_id)
+        return result
 
     async def tasks(
         self,
@@ -717,6 +727,7 @@ class TerminalService:
         task_id=None,
         lane=None,
         state=None,
+        operational_status=None,
         tags=None,
         show_details=False,
         show_done=False,
@@ -731,6 +742,7 @@ class TerminalService:
             task_id=task_id,
             lane=lane,
             state=state,
+            operational_status=operational_status,
             tags=tags,
             show_details=show_details,
             show_done=show_done,
@@ -756,8 +768,11 @@ class TerminalService:
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
         pending = await self.agent_coordinator.message_state(agent_id, surface=True)
+        pending_communication = await self.agent_coordinator.message_obligation_summary(agent_id)
         result = await self.agent_coordinator.finish(agent_id)
         if self.task_coordinator and result.get("finished"):
             await self.task_coordinator.release_agent_claims(agent_id, reason="agent_finish")
         result.update(_compact_context(pending))
+        if any(pending_communication.values()):
+            result["pending_communication"] = pending_communication
         return result

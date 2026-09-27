@@ -26,6 +26,7 @@ TaskAction = Literal[
 ]
 TaskLane = Literal["implementation", "review", "release", "integration", "general"]
 TaskState = Literal["ready", "blocked", "deferred", "done"]
+TaskOperationalStatus = Literal["ready", "in_progress", "blocked", "deferred", "done"]
 TaskPriority = Literal["P0", "P1", "P2", "P3"]
 ReviewDimension = Literal["A", "C", "R"]
 ReviewVerdict = Literal["NON_BLOCKING", "BLOCKING"]
@@ -42,8 +43,18 @@ class SessionStatus(BaseModel):
     session_warning: str | None = None
     session_end_reason: str | None = None
     task_context_expired: bool | None = None
-    task_age_seconds: int | None = None
-    max_task_age_seconds: int | None = None
+    task_age_seconds: int | None = Field(
+        default=None, description="Compatibility alias for task_context_age_seconds."
+    )
+    max_task_age_seconds: int | None = Field(
+        default=None, description="Compatibility alias for task_context_ttl_seconds."
+    )
+    task_context_age_seconds: int | None = Field(
+        default=None, description="Canonical age of the current task context in seconds."
+    )
+    task_context_ttl_seconds: int | None = Field(
+        default=None, description="Canonical freshness TTL for the current task context."
+    )
     preferred_queue_id: int | None = None
     coordination_message_pending: bool | None = None
     unread_message_pending: bool | None = None
@@ -53,6 +64,9 @@ class SessionStatus(BaseModel):
     alert_messages: list[str] | None = None
     reply_required_messages: list[str] | None = None
     message_grace_remaining_seconds: int | None = None
+    task_scope_options: list[str] | None = Field(
+        default=None, description="Current legal values for run.task_scope for this agent session."
+    )
 
 
 class RunResponse(SessionStatus):
@@ -60,8 +74,12 @@ class RunResponse(SessionStatus):
     cmd_hash: str | None = None
     queue_id: int | None = None
     queue_position: int | None = None
-    task_scope: str | None = None
-    task_targets: list[str] | None = None
+    task_scope: str | None = Field(
+        default=None, description="Explicit task provenance scope selected for this run."
+    )
+    task_targets: list[str] | None = Field(
+        default=None, description="Managed tasks that received command provenance events."
+    )
     active_agents: list[str] | None = None
     error: str | None = None
 
@@ -190,6 +208,7 @@ class ManagedTaskRef(BaseModel):
     lane: TaskLane
     priority: TaskPriority
     state: TaskState
+    operational_status: TaskOperationalStatus
     claimed_at: str
     claim_age_seconds: int
     claim_intent: str
@@ -211,6 +230,7 @@ class TaskCard(BaseModel):
     lane: TaskLane
     priority: TaskPriority
     state: TaskState
+    operational_status: TaskOperationalStatus
     next_action: str = ""
     checkpoint: str | dict[str, object] = Field(default_factory=dict)
     candidate_ref: str | None = None
@@ -262,7 +282,10 @@ class AgentSelf(BaseModel):
     name: str
     agent_id: str | None = None
     ttl_seconds: int
-    task_lease_seconds: int
+    task_context_ttl_seconds: int | None = Field(
+        default=None, description="Canonical task-context freshness TTL in seconds."
+    )
+    task_lease_seconds: int = Field(description="Compatibility alias for task_context_ttl_seconds.")
     task_summary: str
     intent: str
     work_scope: list[str] = Field(default_factory=list)
@@ -388,10 +411,26 @@ class MessageResponse(SessionStatus):
     seen_by: list[str] = Field(default_factory=list)
     read_by: list[str] = Field(default_factory=list)
     replied_by: list[str] = Field(default_factory=list)
+    inactive_recipients: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Recipients whose exact Agent Session is inactive, separate from receipt state."
+        ),
+    )
     error: str | None = None
+
+
+class PendingCommunicationSummary(BaseModel):
+    unacknowledged: list[str] = Field(default_factory=list)
+    reply_required: list[str] = Field(default_factory=list)
+    alerts: list[str] = Field(default_factory=list)
 
 
 class AgentFinishResponse(SessionStatus):
     ok: bool
     finished: bool | None = None
+    pending_communication: PendingCommunicationSummary | None = Field(
+        default=None,
+        description="Outstanding communication summary retained when agent_finish is allowed.",
+    )
     error: str | None = None

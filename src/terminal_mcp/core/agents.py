@@ -10,9 +10,11 @@ from terminal_mcp.core.orchestration import (
     NATO_WORDS,
     find_scope_overlaps,
     generate_agent_id,
+    live_task_claims,
     parse_utc,
     public_agent_name,
     relative_time,
+    session_expiry_reason,
     short_time,
     utc_now,
     utc_text,
@@ -30,10 +32,19 @@ class AgentCoordinator:
         self.task_store = task_store
         # Mutable aliases preserve the existing testing/diagnostic surface.
         self.ttl_seconds = self.policy.idle_ttl_seconds
-        self.task_lease_seconds = self.policy.intent_ttl_seconds
+        self.task_context_ttl_seconds = self.policy.intent_ttl_seconds
         self.max_session_seconds = self.policy.max_session_seconds
         self.session_warning_after_seconds = self.policy.session_warning_after_seconds
         self._start_lock = asyncio.Lock()
+
+    @property
+    def task_lease_seconds(self):
+        """Compatibility alias; this timer governs task-context freshness, not claim ownership."""
+        return self.task_context_ttl_seconds
+
+    @task_lease_seconds.setter
+    def task_lease_seconds(self, value):
+        self.task_context_ttl_seconds = value
 
     async def start(
         self,
@@ -119,13 +130,12 @@ class AgentCoordinator:
         if session is None or session["state"] != "active":
             return session
         current = now or utc_now()
-        age = (current - parse_utc(session["registered_at"])).total_seconds()
-        idle = (current - parse_utc(session["last_activity_at"])).total_seconds()
-        reason = None
-        if age >= self.max_session_seconds:
-            reason = "max_session_duration"
-        elif idle >= self.ttl_seconds:
-            reason = "idle_timeout"
+        reason = session_expiry_reason(
+            session,
+            now=current,
+            idle_ttl_seconds=self.ttl_seconds,
+            max_session_seconds=self.max_session_seconds,
+        )
         if reason:
             stamp = utc_text(current)
             await self.store.expire(session["agent_id"], reason=reason, now=stamp)
@@ -173,14 +183,18 @@ class AgentCoordinator:
         task_age = (
             (now - parse_utc(latest_task_at)).total_seconds() if latest_task_at else float("inf")
         )
-        if task_age > self.task_lease_seconds:
+        if task_age > self.task_context_ttl_seconds:
             self._inc("terminal_mcp_agent_task_lease_expired_total")
             return {
                 "ok": False,
                 "agent_name": public_agent_name(agent_id),
                 "task_context_expired": True,
                 "task_age_seconds": None if latest_task_at is None else max(0, int(task_age)),
-                "max_task_age_seconds": self.task_lease_seconds,
+                "max_task_age_seconds": self.task_context_ttl_seconds,
+                "task_context_age_seconds": (
+                    None if latest_task_at is None else max(0, int(task_age))
+                ),
+                "task_context_ttl_seconds": self.task_context_ttl_seconds,
             }
         return None
 
@@ -216,7 +230,9 @@ class AgentCoordinator:
             "session_warning": warning,
             "session_end_reason": session["end_reason"],
             "task_age_seconds": task_age,
-            "max_task_age_seconds": self.task_lease_seconds,
+            "max_task_age_seconds": self.task_context_ttl_seconds,
+            "task_context_age_seconds": task_age,
+            "task_context_ttl_seconds": self.task_context_ttl_seconds,
             "preferred_queue_id": session["preferred_queue_id"],
         }
 
@@ -235,7 +251,7 @@ class AgentCoordinator:
         activity_count = await self.store.activity_count(session["agent_id"])
         if activity_count == 0:
             return "started"
-        if task_age is None or task_age > self.task_lease_seconds:
+        if task_age is None or task_age > self.task_context_ttl_seconds:
             return "idle"
         return "active"
 
@@ -566,6 +582,7 @@ class AgentCoordinator:
         task_id=None,
     ):
         lifecycle = await self.validate(agent_id, "message")
+        require_reply = bool(require_reply or alert)
         grace_remaining = None
         if lifecycle:
             if message_hash is None:
@@ -607,7 +624,7 @@ class AgentCoordinator:
                         "error": "message.ack: caller is neither sender nor recipient",
                     }
                 receipts = await self.store.message_receipts(message_hash)
-                response = self._message_response(agent_id, message_hash, receipts)
+                response = await self._message_response(agent_id, message_hash, receipts)
                 response["namespace"] = original.get("task_namespace")
                 response["task_id"] = original.get("task_id")
                 if grace_remaining is not None:
@@ -668,7 +685,7 @@ class AgentCoordinator:
                     now=replied_at,
                 )
             receipts = await self.store.message_receipts(message_hash)
-            response = self._message_response(agent_id, message_hash, receipts)
+            response = await self._message_response(agent_id, message_hash, receipts)
             response["reply_message_hash"] = reply_hash
             response["delivered_to"] = [public_agent_name(original["sender_agent_id"])]
             response["namespace"] = original.get("task_namespace")
@@ -757,7 +774,7 @@ class AgentCoordinator:
             text,
             target,
             [item["agent_id"] for item in recipients],
-            require_reply or alert,
+            require_reply,
             alert,
             task_namespace=namespace,
             task_id=task_id,
@@ -772,7 +789,7 @@ class AgentCoordinator:
                 payload={
                     "message_hash": allocated_hash,
                     "text": text,
-                    "require_reply": bool(require_reply or alert),
+                    "require_reply": require_reply,
                     "alert": bool(alert),
                     "delivered_to": [public_agent_name(item["agent_id"]) for item in recipients],
                 },
@@ -787,6 +804,7 @@ class AgentCoordinator:
             "seen_by": [],
             "read_by": [],
             "replied_by": [],
+            "inactive_recipients": [],
             **await self.session_context(agent_id),
             **await self.message_state(agent_id),
         }
@@ -824,7 +842,15 @@ class AgentCoordinator:
                 continue
         raise RuntimeError("unable to allocate unique message hash")
 
-    def _message_response(self, agent_id, message_hash, receipts):
+    async def _message_response(self, agent_id, message_hash, receipts):
+        now = utc_now()
+        inactive_recipients = []
+        for item in receipts:
+            session = await self._enforce_session(
+                await self.store.get_session(item["agent_id"]), now
+            )
+            if session is None or session["state"] != "active":
+                inactive_recipients.append(public_agent_name(item["agent_id"]))
         return {
             "ok": True,
             "agent_name": public_agent_name(agent_id),
@@ -834,6 +860,25 @@ class AgentCoordinator:
             "read_by": [public_agent_name(item["agent_id"]) for item in receipts if item["read"]],
             "replied_by": [
                 public_agent_name(item["agent_id"]) for item in receipts if item["replied"]
+            ],
+            "inactive_recipients": inactive_recipients,
+        }
+
+    async def message_obligation_summary(self, agent_id):
+        obligations = await self.store.message_obligations(agent_id)
+        return {
+            "unacknowledged": [
+                item["message_hash"] for item in obligations if item["read_at"] is None
+            ],
+            "reply_required": [
+                item["message_hash"]
+                for item in obligations
+                if item["require_reply"] and item["replied_at"] is None
+            ],
+            "alerts": [
+                item["message_hash"]
+                for item in obligations
+                if item["alert"] and item["replied_at"] is None
             ],
         }
 
@@ -856,8 +901,18 @@ class AgentCoordinator:
         rows = await self.task_store.claims_for_agent(agent_id, active_only=True)
         result = []
         for item in rows:
-            claims = await self.task_store.active_claims(item["namespace"], item["task_id"])
-            role = "owner" if claims and claims[0]["agent_id"] == agent_id else "participant"
+            claims = await live_task_claims(
+                self.task_store,
+                self.store,
+                item["namespace"],
+                item["task_id"],
+                idle_ttl_seconds=self.ttl_seconds,
+                max_session_seconds=self.max_session_seconds,
+            )
+            own = next((claim for claim in claims if claim["agent_id"] == agent_id), None)
+            if own is None:
+                continue
+            role = "owner" if claims[0]["agent_id"] == agent_id else "participant"
             claim_age_seconds = max(
                 0, int((utc_now() - parse_utc(item["claimed_at"])).total_seconds())
             )
@@ -868,6 +923,9 @@ class AgentCoordinator:
                     "lane": item["lane"],
                     "priority": priorities.get(int(item["priority"]), "P3"),
                     "state": item["state"],
+                    "operational_status": item["state"]
+                    if item["state"] != "ready"
+                    else "in_progress",
                     "claimed_at": item["claimed_at"],
                     "claim_age_seconds": claim_age_seconds,
                     "claim_intent": item.get("claim_intent") or "",
@@ -1030,7 +1088,8 @@ class AgentCoordinator:
             self_payload = {
                 "name": public_agent_name(agent_id),
                 "ttl_seconds": self.ttl_seconds,
-                "task_lease_seconds": self.task_lease_seconds,
+                "task_context_ttl_seconds": self.task_context_ttl_seconds,
+                "task_lease_seconds": self.task_context_ttl_seconds,
                 "task_summary": own["task_summary"],
                 "intent": own["intent"],
                 "work_scope": own["work_scope"],

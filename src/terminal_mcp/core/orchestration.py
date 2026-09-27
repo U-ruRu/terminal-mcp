@@ -47,6 +47,75 @@ def parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def session_expiry_reason(
+    session: dict | None,
+    *,
+    now: datetime | None = None,
+    idle_ttl_seconds: float,
+    max_session_seconds: float,
+) -> str | None:
+    """Return the lifecycle expiry reason for an otherwise-active Agent Session."""
+    if not session or session.get("state") != "active":
+        return None
+    current = now or utc_now()
+    age = (current - parse_utc(session["registered_at"])).total_seconds()
+    idle = (current - parse_utc(session["last_activity_at"])).total_seconds()
+    if age >= max_session_seconds:
+        return "max_session_duration"
+    if idle >= idle_ttl_seconds:
+        return "idle_timeout"
+    return None
+
+
+def session_is_live(
+    session: dict | None,
+    *,
+    now: datetime | None = None,
+    idle_ttl_seconds: float,
+    max_session_seconds: float,
+) -> bool:
+    """Canonical predicate for whether an Agent Session may project live ownership."""
+    return bool(
+        session
+        and session.get("state") == "active"
+        and session_expiry_reason(
+            session,
+            now=now,
+            idle_ttl_seconds=idle_ttl_seconds,
+            max_session_seconds=max_session_seconds,
+        )
+        is None
+    )
+
+
+async def live_task_claims(
+    task_store,
+    agent_store,
+    namespace: str,
+    task_id: str,
+    *,
+    idle_ttl_seconds: float,
+    max_session_seconds: float,
+    now: datetime | None = None,
+) -> list[dict]:
+    """Project persisted claims through current Agent Session liveness, preserving claim order."""
+    claims = await task_store.active_claims(namespace, task_id)
+    if agent_store is None:
+        return claims
+    current = now or utc_now()
+    live = []
+    for claim in claims:
+        session = await agent_store.get_session(claim["agent_id"])
+        if session_is_live(
+            session,
+            now=current,
+            idle_ttl_seconds=idle_ttl_seconds,
+            max_session_seconds=max_session_seconds,
+        ):
+            live.append(claim)
+    return live
+
+
 def short_time(value: str | None) -> str:
     if not value:
         return "--:--:--Z"

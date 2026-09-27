@@ -31,8 +31,8 @@ async def wait_status(service, cmd_hash, statuses, attempts=300):
 @pytest.mark.asyncio
 async def test_short_hash_and_fifo_queue(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    first = await service.run("sleep 0.2; printf 'first\\n'", queue_id=1)
-    second = await service.run("printf 'second\\n'", queue_id=1)
+    first = await service.run("sleep 0.2; printf 'first\\n'", queue_id=1, task_scope="none")
+    second = await service.run("printf 'second\\n'", queue_id=1, task_scope="none")
     assert {"ok", "cmd_hash", "error", "queue_id", "queue_position"} <= set(first)
     assert first["queue_id"] == second["queue_id"] == 1
     assert first["ok"] is True and first["error"] is None
@@ -56,8 +56,8 @@ async def test_short_hash_and_fifo_queue(tmp_path):
 @pytest.mark.asyncio
 async def test_cancel_removes_queued_command_before_marking_cancelled(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    busy = await service.run("sleep 0.5")
-    queued = await service.run("printf 'must-not-run\\n'")
+    busy = await service.run("sleep 0.5", task_scope="none")
+    queued = await service.run("printf 'must-not-run\\n'", task_scope="none")
     result = await service.cancel(queued["cmd_hash"])
     assert result == {"ok": True, "cmd_hash": queued["cmd_hash"], "error": None}
     assert all(item.cmd_hash != queued["cmd_hash"] for item in terminal.queue)
@@ -74,7 +74,7 @@ async def test_cancel_removes_queued_command_before_marking_cancelled(tmp_path):
 async def test_cancel_running_process_waits_for_real_stop_and_forces_kill(tmp_path, monkeypatch):
     _, terminal, service = await create_runtime(tmp_path)
     monkeypatch.setattr(service_module, "OPERATION_TIMEOUT_SECONDS", 1.5)
-    running = await service.run("trap '' TERM; sleep 30")
+    running = await service.run("trap '' TERM; sleep 30", task_scope="none")
     await wait_status(service, running["cmd_hash"], "running")
 
     started = time.monotonic()
@@ -95,7 +95,7 @@ async def test_cancel_running_process_waits_for_real_stop_and_forces_kill(tmp_pa
 @pytest.mark.asyncio
 async def test_recovery_bypasses_fifo_is_persisted_and_visible_globally(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    busy = await service.run("sleep 1; printf 'fifo-finished\\n'")
+    busy = await service.run("sleep 1; printf 'fifo-finished\\n'", task_scope="none")
     await wait_status(service, busy["cmd_hash"], "running")
 
     result = await asyncio.wait_for(service.recovery("printf 'recovery-ready\\n'"), 0.5)
@@ -149,7 +149,7 @@ async def test_recovery_timeout_stops_process_and_does_not_block_fifo(tmp_path, 
     assert stored["ok"] is False
     assert stored["error"] == result["error"]
 
-    queued = await service.run("printf 'fifo-still-works\\n'")
+    queued = await service.run("printf 'fifo-still-works\\n'", task_scope="none")
     read = await wait_status(service, queued["cmd_hash"], "completed")
     assert read["lines"][0].endswith("fifo-still-works")
     await terminal.stop()
@@ -189,8 +189,8 @@ async def test_recovery_calls_do_not_block_each_other(tmp_path):
 @pytest.mark.asyncio
 async def test_recovery_can_stop_stuck_fifo_process_and_release_queue(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    running = await service.run("printf '%s' $$ > stuck.pgid; sleep 30")
-    queued = await service.run("printf 'queue-released\\n'")
+    running = await service.run("printf '%s' $$ > stuck.pgid; sleep 30", task_scope="none")
+    queued = await service.run("printf 'queue-released\\n'", task_scope="none")
     for _ in range(200):
         if (tmp_path / "stuck.pgid").exists():
             break
@@ -219,7 +219,7 @@ async def test_run_restarts_failed_fifo_worker_before_enqueue(tmp_path):
         pass
     assert worker.done()
 
-    submitted = await service.run("printf 'worker-restarted\\n'", queue_id=1)
+    submitted = await service.run("printf 'worker-restarted\\n'", queue_id=1, task_scope="none")
     assert submitted["ok"] is True
     completed = await wait_status(service, submitted["cmd_hash"], "completed")
     assert completed["lines"][0].endswith("worker-restarted")

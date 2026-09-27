@@ -3,11 +3,19 @@ from __future__ import annotations
 import secrets
 from collections import Counter
 
-from terminal_mcp.core.orchestration import parse_utc, public_agent_name, utc_now, utc_text
+from terminal_mcp.core.orchestration import (
+    live_task_claims,
+    parse_utc,
+    public_agent_name,
+    session_is_live,
+    utc_now,
+    utc_text,
+)
 from terminal_mcp.storage.tasks import TaskClaimConflict, TaskRevisionConflict
 
 LANES = ("implementation", "review", "release", "integration", "general")
 STATES = ("ready", "blocked", "deferred", "done")
+OPERATIONAL_STATUSES = ("ready", "in_progress", "blocked", "deferred", "done")
 PRIORITIES = ("P0", "P1", "P2", "P3")
 ACTIONS = (
     "create",
@@ -63,21 +71,14 @@ class TaskCoordinator:
             self.metrics.inc(name, labels)
 
     async def _live_claims(self, namespace, task_id):
-        claims = await self.store.active_claims(namespace, task_id)
-        if not self.agent_store:
-            return claims
-        now = utc_now()
-        live = []
-        for item in claims:
-            session = await self.agent_store.get_session(item["agent_id"])
-            if not session or session["state"] != "active":
-                continue
-            idle = (now - parse_utc(session["last_activity_at"])).total_seconds()
-            age = (now - parse_utc(session["registered_at"])).total_seconds()
-            if idle >= self.session_ttl_seconds or age >= self.max_session_seconds:
-                continue
-            live.append(item)
-        return live
+        return await live_task_claims(
+            self.store,
+            self.agent_store,
+            namespace,
+            task_id,
+            idle_ttl_seconds=self.session_ttl_seconds,
+            max_session_seconds=self.max_session_seconds,
+        )
 
     async def _dependencies(self, namespace, task_id):
         result = []
@@ -170,6 +171,12 @@ class TaskCoordinator:
         result["review_requirements"] = result.pop("reviews", [])
         return result
 
+    @staticmethod
+    def _operational_status(task, claims):
+        if task["state"] != "ready":
+            return task["state"]
+        return "in_progress" if claims else "ready"
+
     def _claim_view(self, item, role):
         age = max(0, int((utc_now() - parse_utc(item["claimed_at"])).total_seconds()))
         return {
@@ -192,6 +199,7 @@ class TaskCoordinator:
         result["owner"] = views[0] if views else None
         result["participants"] = views[1:]
         result["active"] = bool(claims)
+        result["operational_status"] = self._operational_status(result, claims)
         if details:
             result["dependencies"] = await self._dependencies(namespace, task_id)
             result["relations"] = await self.store.relations(namespace, task_id)
@@ -279,6 +287,7 @@ class TaskCoordinator:
         task_id=None,
         lane=None,
         state=None,
+        operational_status=None,
         tags=None,
         show_details=False,
         show_done=False,
@@ -290,6 +299,13 @@ class TaskCoordinator:
             return {"ok": False, "error": f"tasks.lane: expected one of {', '.join(LANES)}"}
         if state is not None and state not in STATES:
             return {"ok": False, "error": f"tasks.state: expected one of {', '.join(STATES)}"}
+        if operational_status is not None and operational_status not in OPERATIONAL_STATUSES:
+            return {
+                "ok": False,
+                "error": (
+                    f"tasks.operational_status: expected one of {', '.join(OPERATIONAL_STATUSES)}"
+                ),
+            }
         try:
             normalized_tags = self._normalize_tags(tags)
         except ValueError as exc:
@@ -327,12 +343,15 @@ class TaskCoordinator:
         )
         tag_counts = Counter(tag for item in vocabulary_rows for tag in item.get("tags", []))
         compact = [await self._decorate(item, details=False) for item in all_rows]
+        if operational_status is not None:
+            compact = [item for item in compact if item["operational_status"] == operational_status]
         lane_counts = Counter(
             item["lane"]
             for item in compact
             if item["state"] != "done" and item.get("archived_at") is None
         )
         state_counts = Counter(item["state"] for item in compact)
+        operational_status_counts = Counter(item["operational_status"] for item in compact)
         pressure = Counter()
         recommended = None
         claimable_count = 0
@@ -361,6 +380,7 @@ class TaskCoordinator:
                     "lane": item["lane"],
                     "priority": item["priority"],
                     "title": item["title"],
+                    "operational_status": item["operational_status"],
                     "tags": item.get("tags", []),
                     "ready_since": ready_since,
                 }
@@ -371,17 +391,21 @@ class TaskCoordinator:
                 0,
                 int((utc_now() - parse_utc(oldest_claimable_ready_since)).total_seconds()),
             )
-        page_rows = all_rows[offset : offset + max(1, min(int(limit), 200))]
+        page = compact[offset : offset + max(1, min(int(limit), 200))]
         if show_details:
-            tasks = [await self._decorate(item, details=True) for item in page_rows]
+            tasks = []
+            for item in page:
+                stored = await self.store.get_task(item["namespace"], item["task_id"])
+                tasks.append(await self._decorate(stored, details=True))
         else:
-            tasks = compact[offset : offset + len(page_rows)]
-        next_cursor = offset + len(page_rows) if offset + len(page_rows) < len(all_rows) else None
+            tasks = page
+        next_cursor = offset + len(page) if offset + len(page) < len(compact) else None
         summary = {
             "visible": len(compact),
             "returned": len(tasks),
             "by_lane": dict(lane_counts),
             "by_state": dict(state_counts),
+            "by_operational_status": dict(operational_status_counts),
             "pressure": dict(pressure),
             "tag_counts": dict(sorted(tag_counts.items())),
             "claimable_count": claimable_count,
@@ -1075,13 +1099,17 @@ class TaskCoordinator:
             session = (
                 await self.agent_store.get_session(claim["agent_id"]) if self.agent_store else None
             )
-            if not session or session["state"] != "active":
+            if not session_is_live(
+                session,
+                now=now,
+                idle_ttl_seconds=self.session_ttl_seconds,
+                max_session_seconds=self.max_session_seconds,
+            ):
                 stale_claims += 1
-                continue
-            idle = (now - parse_utc(session["last_activity_at"])).total_seconds()
-            age = (now - parse_utc(session["registered_at"])).total_seconds()
-            if idle >= self.session_ttl_seconds or age >= self.max_session_seconds:
-                stale_claims += 1
+        unreleased_claims = stats["active_claims"]
+        live_claims = max(0, unreleased_claims - stale_claims)
+        stats["unreleased_claims"] = unreleased_claims
+        stats["live_claims"] = live_claims
         stats["stale_claims"] = stale_claims
         stats["ok"] = True
         if self.metrics:
@@ -1089,7 +1117,10 @@ class TaskCoordinator:
                 self.metrics.set("terminal_mcp_tasks", count, (("state", state),))
             for lane, count in stats["by_lane"].items():
                 self.metrics.set("terminal_mcp_tasks_by_lane", count, (("lane", lane),))
-            self.metrics.set("terminal_mcp_task_active_claims", stats["active_claims"])
+            # Compatibility metric: active_claims historically meant unreleased persisted rows.
+            self.metrics.set("terminal_mcp_task_active_claims", unreleased_claims)
+            self.metrics.set("terminal_mcp_task_unreleased_claims", unreleased_claims)
+            self.metrics.set("terminal_mcp_task_live_claims", live_claims)
             self.metrics.set("terminal_mcp_task_stale_claims", stale_claims)
         return stats
 
@@ -1117,16 +1148,24 @@ class TaskCoordinator:
 
     async def task_refs_for_agent(self, agent_id):
         rows = await self.store.claims_for_agent(agent_id, active_only=True)
-        return [
-            {
-                "namespace": item["namespace"],
-                "task_id": item["task_id"],
-                "lane": item["lane"],
-                "priority": VALUE_PRIORITY.get(int(item["priority"]), "P3"),
-                "state": item["state"],
-            }
-            for item in rows
-        ]
+        result = []
+        for item in rows:
+            claims = await self._live_claims(item["namespace"], item["task_id"])
+            if not any(claim["agent_id"] == agent_id for claim in claims):
+                continue
+            result.append(
+                {
+                    "namespace": item["namespace"],
+                    "task_id": item["task_id"],
+                    "lane": item["lane"],
+                    "priority": VALUE_PRIORITY.get(int(item["priority"]), "P3"),
+                    "state": item["state"],
+                    "operational_status": item["state"]
+                    if item["state"] != "ready"
+                    else "in_progress",
+                }
+            )
+        return result
 
     async def record_command(self, agent_id, command_hash, command_type, task_refs):
         now = utc_text()
