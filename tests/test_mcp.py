@@ -112,7 +112,7 @@ class FakeService:
             "pending_messages": [],
         }
 
-    async def run(self, cmd, agent_id=None, queue_id=None):
+    async def run(self, cmd, agent_id=None, queue_id=None, task_scope=None):
         return {
             "ok": True,
             "cmd_hash": "1234abcd",
@@ -169,7 +169,7 @@ class FakeService:
             "agent_name": "Kilo" if agent_id else "anonymous",
             "pending_messages": [],
             "application": "terminal-mcp",
-            "version": "0.9.2",
+            "version": "0.10.0",
             "storage": "ok",
             "auth_mode": auth_mode,
             "terminal": {
@@ -250,24 +250,85 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         "blocked",
         "deferred",
         "done",
-        "archived",
     ]
     task = tools["task"].parameters["properties"]
-    assert task["action"]["enum"] == [
+    assert set(task["action"]["enum"]) == {
         "create",
         "claim",
         "release",
         "update",
         "checkpoint",
-        "review",
+        "comment",
+        "relate",
+        "unrelate",
         "state",
         "done",
         "archive",
-    ]
+    }
     assert task["priority"]["anyOf"][0]["enum"] == ["P0", "P1", "P2", "P3"]
-    assert task["review_requirements"]["anyOf"][0]["items"]["enum"] == ["A", "C", "R"]
-    assert task["dimensions"]["anyOf"][0]["items"]["enum"] == ["A", "C", "R"]
-    assert task["verdict"]["anyOf"][0]["enum"] == ["NON_BLOCKING", "BLOCKING"]
+    assert "review_requirements" not in task
+    assert "dimensions" not in task
+    assert "verdict" not in task
+    assert "evidence" not in task
+    assert "tags" in task
+    assert "force" in task
+    assert "force_reason" in task
+    for field in (
+        "claim_intent",
+        "blocker_reason",
+        "release_reason",
+        "archive_note",
+        "comment_text",
+        "relation_kind",
+        "related_namespace",
+        "related_task_id",
+    ):
+        assert field in task
+    assert task["claim_intent"]["anyOf"][0]["maxLength"] == 160
+    assert "tags" in tasks
+    assert "task_scope" in tools["run"].parameters["properties"]
+
+    task_card = tools["tasks"].output_schema["$defs"]["TaskCard"]["properties"]
+    assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+    for field in (
+        "archived_at",
+        "archive_note",
+        "owner",
+        "participants",
+        "claims",
+        "relations",
+        "comments",
+    ):
+        assert field in task_card
+    claim = tools["tasks"].output_schema["$defs"]["TaskClaimView"]["properties"]
+    assert {
+        "agent_name",
+        "claimed_at",
+        "claim_age_seconds",
+        "claim_intent",
+        "role",
+    } <= set(claim)
+    managed_ref = tools["agents"].output_schema["$defs"]["ManagedTaskRef"]["properties"]
+    assert {
+        "claimed_at",
+        "claim_age_seconds",
+        "claim_intent",
+        "role",
+    } <= set(managed_ref)
+    task_description = tools["task"].description.lower()
+    for term in (
+        "claim_intent",
+        "owner",
+        "blocker_reason",
+        "release_reason",
+        "comment",
+        "relation",
+        "archive",
+    ):
+        assert term in task_description
+    tasks_description = tools["tasks"].description.lower()
+    assert "claimable" in tasks_description
+    assert "missing" in tasks_description
 
 
 @pytest.mark.asyncio
@@ -330,7 +391,7 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     health = await tools["health"].run({}, convert_result=True)
-    assert health.structuredContent["version"] == "0.9.2"
+    assert health.structuredContent["version"] == "0.10.0"
     assert health.structuredContent["ok"] is True
     assert health.structuredContent["agent_name"] == "anonymous"
     recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)

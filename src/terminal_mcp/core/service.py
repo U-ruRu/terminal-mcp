@@ -160,7 +160,7 @@ class TerminalService:
             return requested_queue_id
         return await self.terminal.least_loaded_queue()
 
-    async def run(self, cmd, agent_id=None, queue_id=None):
+    async def run(self, cmd, agent_id=None, queue_id=None, task_scope=None):
         gate_context = {}
         if agent_id and self.agent_coordinator:
             gate = await self.agent_coordinator.gate(
@@ -180,6 +180,64 @@ class TerminalService:
                 )
                 return response
             gate_context = _compact_context(gate["context"])
+        selected_task_refs = []
+        available_task_refs = []
+        normalized_task_scope = task_scope
+        if agent_id and self.task_coordinator:
+            available_task_refs = await self.task_coordinator.task_refs_for_agent(agent_id)
+            choices = [
+                f"{item['namespace']}/{item['task_id']}" for item in available_task_refs
+            ]
+            if available_task_refs:
+                if task_scope is None:
+                    return {
+                        "ok": False,
+                        "cmd_hash": None,
+                        "queue_id": None,
+                        "queue_position": None,
+                        "task_scope": None,
+                        "task_targets": choices,
+                        "error": (
+                            "run.task_scope: active task claims exist; choose 'all', 'none', "
+                            f"or one claimed task: {', '.join(choices)}"
+                        ),
+                        **gate_context,
+                    }
+                if task_scope == "all":
+                    selected_task_refs = available_task_refs
+                elif task_scope == "none":
+                    selected_task_refs = []
+                else:
+                    selected_task_refs = [
+                        item
+                        for item in available_task_refs
+                        if f"{item['namespace']}/{item['task_id']}" == task_scope
+                    ]
+                    if not selected_task_refs:
+                        return {
+                            "ok": False,
+                            "cmd_hash": None,
+                            "queue_id": None,
+                            "queue_position": None,
+                            "task_scope": task_scope,
+                            "task_targets": choices,
+                            "error": (
+                                f"run.task_scope: {task_scope!r} is not an active claimed task; "
+                                f"choose 'all', 'none', or one of: {', '.join(choices)}"
+                            ),
+                            **gate_context,
+                        }
+            elif task_scope not in (None, "none"):
+                return {
+                    "ok": False,
+                    "cmd_hash": None,
+                    "queue_id": None,
+                    "queue_position": None,
+                    "task_scope": task_scope,
+                    "task_targets": [],
+                    "error": "run.task_scope: no active task claims; omit task_scope or use 'none'",
+                    **gate_context,
+                }
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -197,14 +255,20 @@ class TerminalService:
                 submitted = True
             if agent_id and self.agent_coordinator:
                 await self.agent_coordinator.record_command(agent_id, "run", command.cmd_hash)
-                if self.task_coordinator:
-                    await self.task_coordinator.record_command(agent_id, command.cmd_hash, "run")
+                if self.task_coordinator and selected_task_refs:
+                    await self.task_coordinator.record_command(
+                        agent_id, command.cmd_hash, "run", selected_task_refs
+                    )
             position = await self.repo.queue_position(command.cmd_hash)
             return {
                 "ok": True,
                 "cmd_hash": command.cmd_hash,
                 "queue_id": command.queue_id,
                 "queue_position": position,
+                "task_scope": normalized_task_scope,
+                "task_targets": [
+                    f"{item['namespace']}/{item['task_id']}" for item in selected_task_refs
+                ],
                 "error": None,
                 **gate_context,
             }
@@ -389,10 +453,6 @@ class TerminalService:
             )
             if agent_id and self.agent_coordinator:
                 await self.agent_coordinator.record_command(agent_id, "recovery", command.cmd_hash)
-                if self.task_coordinator:
-                    await self.task_coordinator.record_command(
-                        agent_id, command.cmd_hash, "recovery"
-                    )
             stage = "execute"
             duration_ms = await self.terminal.recovery(
                 command, timeout_seconds=_budget(RECOVERY_TIMEOUT_SECONDS)
@@ -657,6 +717,7 @@ class TerminalService:
         task_id=None,
         lane=None,
         state=None,
+        tags=None,
         show_details=False,
         show_done=False,
         show_archived=False,
@@ -670,6 +731,7 @@ class TerminalService:
             task_id=task_id,
             lane=lane,
             state=state,
+            tags=tags,
             show_details=show_details,
             show_done=show_done,
             show_archived=show_archived,

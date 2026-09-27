@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     output_retention_target_bytes: int = 192 * 1024 * 1024
     output_retention_max_bytes: int = 256 * 1024 * 1024
     output_retention_max_rows: int = 1_000_000
+    output_retention_prune_rows: int = 100_000
     shell: str = "/bin/bash"
     cwd: Path = Path("/")
     terminal_user: str = "root"
@@ -63,6 +64,7 @@ class Settings(BaseSettings):
     agent_history_default_minutes: int = 60
     message_reminder_sec: int = 180
     message_reminder_calls: int = 5
+    agent_post_finish_message_grace_sec: int = 300
     max_active_agents: int = 8
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0

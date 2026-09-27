@@ -1,4 +1,5 @@
 # ruff: noqa: E501
+import json
 import secrets
 import sqlite3
 import time
@@ -37,6 +38,7 @@ class SqliteRepository:
         output_target_bytes=DEFAULT_TARGET_BYTES,
         output_max_bytes=DEFAULT_MAX_BYTES,
         output_max_rows=DEFAULT_MAX_ROWS,
+        output_prune_rows=100_000,
     ):
         self.path = path
         output_path = output_path or Path(path).with_name("output.sqlite3")
@@ -47,6 +49,7 @@ class SqliteRepository:
             target_bytes=output_target_bytes,
             max_bytes=output_max_bytes,
             max_rows=output_max_rows,
+            prune_rows=output_prune_rows,
         )
         self.output_line_max_bytes = self.output.line_max_bytes
         self.events = None
@@ -152,23 +155,33 @@ class SqliteRepository:
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
                     lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
                     priority INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done','archived')),
+                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
                     description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
                     resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
                     cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
-                    checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT,
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT, result_json TEXT,
+                    tags_json TEXT NOT NULL DEFAULT '[]', state_changed_at TEXT NOT NULL, ready_since TEXT,
+                    archived_at TEXT, archive_note TEXT,
                     revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     PRIMARY KEY(namespace, task_id)
                 );
                 CREATE TABLE IF NOT EXISTS work_claims(
                     id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, task_id TEXT NOT NULL,
                     agent_id TEXT NOT NULL, claimed_at TEXT NOT NULL, released_at TEXT,
+                    claim_intent TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
                 );
                 CREATE TABLE IF NOT EXISTS work_dependencies(
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL,
                     dependency_namespace TEXT NOT NULL, dependency_task_id TEXT NOT NULL, created_at TEXT NOT NULL,
                     PRIMARY KEY(namespace,task_id,dependency_namespace,dependency_task_id),
+                    FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS work_relations(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL,
+                    related_namespace TEXT NOT NULL, related_task_id TEXT NOT NULL,
+                    relation_kind TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT,
+                    PRIMARY KEY(namespace,task_id,related_namespace,related_task_id,relation_kind),
                     FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
                 );
                 CREATE TABLE IF NOT EXISTS work_reviews(
@@ -201,6 +214,10 @@ class SqliteRepository:
                     ON work_claims(namespace,task_id,agent_id) WHERE released_at IS NULL;
                 CREATE INDEX IF NOT EXISTS ix_work_dependencies_target
                     ON work_dependencies(dependency_namespace,dependency_task_id);
+                CREATE INDEX IF NOT EXISTS ix_work_relations_source
+                    ON work_relations(namespace,task_id,relation_kind);
+                CREATE INDEX IF NOT EXISTS ix_work_relations_target
+                    ON work_relations(related_namespace,related_task_id,relation_kind);
                 CREATE INDEX IF NOT EXISTS ix_work_reviews_task
                     ON work_reviews(namespace,task_id,candidate_ref,dimension);
                 CREATE INDEX IF NOT EXISTS ix_work_events_task
@@ -215,14 +232,12 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=8")
+            await db.execute("PRAGMA user_version=9")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
 
     async def _migrate(self, db):
-        await self._migrate_work_items_archive_state(db)
-
         async def add_columns(table, definitions):
             columns = {
                 row[1] for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
@@ -274,6 +289,33 @@ class SqliteRepository:
                 ("reply_message_hash", "TEXT"),
             ],
         )
+        await add_columns(
+            "work_items",
+            [
+                ("result_json", "TEXT"),
+                ("tags_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("state_changed_at", "TEXT"),
+                ("ready_since", "TEXT"),
+                ("archived_at", "TEXT"),
+                ("archive_note", "TEXT"),
+            ],
+        )
+        await add_columns(
+            "work_claims",
+            [("claim_intent", "TEXT NOT NULL DEFAULT ''")],
+        )
+        await db.execute(
+            "UPDATE work_claims SET claim_intent='legacy claim' "
+            "WHERE claim_intent IS NULL OR claim_intent=''"
+        )
+        await self._migrate_work_items_archive_lifecycle(db)
+        await db.execute(
+            "UPDATE work_items SET state_changed_at=COALESCE(state_changed_at,updated_at)"
+        )
+        await db.execute(
+            "UPDATE work_items SET ready_since=CASE "
+            "WHEN state='ready' THEN COALESCE(ready_since,updated_at) ELSE NULL END"
+        )
         if "details" not in session_columns:
             await db.execute(
                 "UPDATE agent_sessions SET state='forced',ended_at=COALESCE(ended_at,last_activity_at),"
@@ -305,56 +347,187 @@ class SqliteRepository:
             "CREATE INDEX IF NOT EXISTS ix_coord_messages_task "
             "ON coordination_messages(task_namespace,task_id,created_at)"
         )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS work_relations("
+            "namespace TEXT NOT NULL,task_id TEXT NOT NULL,"
+            "related_namespace TEXT NOT NULL,related_task_id TEXT NOT NULL,"
+            "relation_kind TEXT NOT NULL,created_at TEXT NOT NULL,created_by TEXT,"
+            "PRIMARY KEY(namespace,task_id,related_namespace,related_task_id,relation_kind),"
+            "FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_relations_source "
+            "ON work_relations(namespace,task_id,relation_kind)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_relations_target "
+            "ON work_relations(related_namespace,related_task_id,relation_kind)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_items_archived ON work_items(namespace,archived_at)"
+        )
+        await db.execute("DROP INDEX IF EXISTS ix_work_items_state")
+        await db.execute("DROP INDEX IF EXISTS ix_work_items_lane")
+        await db.execute(
+            "CREATE INDEX ix_work_items_state "
+            "ON work_items(namespace,state,priority DESC,ready_since,updated_at)"
+        )
+        await db.execute(
+            "CREATE INDEX ix_work_items_lane "
+            "ON work_items(namespace,lane,state,priority DESC,ready_since,updated_at)"
+        )
 
-    async def _migrate_work_items_archive_state(self, db):
+    async def _migrate_work_items_archive_lifecycle(self, db):
         row = await (
-            await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'")
+            await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'"
+            )
         ).fetchone()
-        if row is None or "'archived'" in (row[0] or ""):
+        if row is None:
+            return False
+        table_sql = row[0] or ""
+        if "'archived'" not in table_sql:
             return False
 
-        # SQLite cannot widen a CHECK constraint in place. Rebuild only the task parent
-        # table with FK enforcement temporarily disabled; child tables keep referencing
-        # the stable work_items name and are verified before normal operation resumes.
+        # SQLite ignores PRAGMA foreign_keys changes while a transaction is active.
+        # Commit the additive v9 columns first, disable FK enforcement outside a
+        # transaction, then rebuild work_items atomically so ON DELETE CASCADE does
+        # not erase durable child history (claims, dependencies, reviews, events).
+        await db.commit()
         await db.execute("PRAGMA foreign_keys=OFF")
+        foreign_keys = int((await (await db.execute("PRAGMA foreign_keys")).fetchone())[0])
+        if foreign_keys != 0:
+            raise RuntimeError("schema v9 migration could not disable foreign keys")
+
         try:
-            await db.executescript(
+            await db.execute("BEGIN IMMEDIATE")
+            archived = await (
+                await db.execute(
+                    "SELECT namespace,task_id,result_json,updated_at,archived_at,archive_note "
+                    "FROM work_items WHERE state='archived' ORDER BY namespace,task_id"
+                )
+            ).fetchall()
+            valid_states = {"ready", "blocked", "deferred", "done"}
+            for namespace, task_id, result_json, updated_at, archived_at, archive_note in archived:
+                events = await (
+                    await db.execute(
+                        "SELECT event_type,payload_json,created_at FROM work_events "
+                        "WHERE namespace=? AND task_id=? ORDER BY id DESC",
+                        (namespace, task_id),
+                    )
+                ).fetchall()
+                resolved_state = None
+                archive_time = archived_at
+                note = archive_note
+                for event_type, payload_json, created_at in events:
+                    try:
+                        payload = json.loads(payload_json or "{}")
+                    except json.JSONDecodeError:
+                        payload = {}
+                    if event_type == "archived" and archive_time is None:
+                        archive_time = created_at
+                        note = note or payload.get("archive_note") or payload.get("note")
+                    candidate = payload.get("state")
+                    if resolved_state is None and candidate in valid_states:
+                        resolved_state = candidate
+                if resolved_state is None:
+                    try:
+                        result_value = json.loads(result_json) if result_json is not None else None
+                    except json.JSONDecodeError:
+                        result_value = result_json
+                    resolved_state = "done" if result_value not in (None, "", {}, []) else "blocked"
+                archive_time = archive_time or updated_at
+                note = note or "legacy archived task migrated to lifecycle archive"
+                await db.execute(
+                    "UPDATE work_items SET state=?,archived_at=?,archive_note=? "
+                    "WHERE namespace=? AND task_id=?",
+                    (resolved_state, archive_time, note, namespace, task_id),
+                )
+                await db.execute(
+                    "INSERT INTO work_events("
+                    "namespace,task_id,event_type,agent_id,payload_json,created_at"
+                    ") VALUES(?,?,?,?,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        "archive_migrated",
+                        None,
+                        json.dumps(
+                            {
+                                "legacy_state": "archived",
+                                "resolved_state": resolved_state,
+                                "archive_note": note,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        archive_time,
+                    ),
+                )
+
+            await db.execute(
                 """
-                CREATE TABLE work_items_v8(
+                CREATE TABLE work_items_v9(
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
-                    lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
+                    lane TEXT NOT NULL CHECK(
+                        lane IN ('implementation','review','release','integration','general')
+                    ),
                     priority INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done','archived')),
-                    description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
-                    resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
+                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
+                    description TEXT NOT NULL DEFAULT '',
+                    next_action TEXT NOT NULL DEFAULT '',
+                    resource_json TEXT NOT NULL DEFAULT '{}',
+                    reviews_json TEXT NOT NULL DEFAULT '[]',
                     cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
-                    checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT,
-                    revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                    candidate_ref TEXT,
+                    result_json TEXT,
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    state_changed_at TEXT,
+                    ready_since TEXT,
+                    archived_at TEXT,
+                    archive_note TEXT,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
                     PRIMARY KEY(namespace, task_id)
-                );
-                INSERT INTO work_items_v8(
+                )
+                """
+            )
+            await db.execute(
+                """
+                INSERT INTO work_items_v9(
                     namespace,task_id,title,lane,priority,state,description,next_action,
                     resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,
+                    result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,
                     revision,created_at,updated_at
                 )
                 SELECT
                     namespace,task_id,title,lane,priority,state,description,next_action,
                     resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,
+                    result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,
                     revision,created_at,updated_at
-                FROM work_items;
-                DROP TABLE work_items;
-                ALTER TABLE work_items_v8 RENAME TO work_items;
-                CREATE INDEX IF NOT EXISTS ix_work_items_state
-                    ON work_items(namespace,state,priority DESC,updated_at DESC);
-                CREATE INDEX IF NOT EXISTS ix_work_items_lane
-                    ON work_items(namespace,lane,state,priority DESC,updated_at DESC);
+                FROM work_items
                 """
             )
+            await db.execute("DROP TABLE work_items")
+            await db.execute("ALTER TABLE work_items_v9 RENAME TO work_items")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         finally:
             await db.execute("PRAGMA foreign_keys=ON")
+
+        foreign_keys = int((await (await db.execute("PRAGMA foreign_keys")).fetchone())[0])
+        if foreign_keys != 1:
+            raise RuntimeError("schema v9 migration could not re-enable foreign keys")
         violations = await (await db.execute("PRAGMA foreign_key_check")).fetchall()
         if violations:
-            raise RuntimeError(f"schema v8 work_items migration broke foreign keys: {violations}")
+            raise RuntimeError(
+                f"schema v9 archive lifecycle migration broke foreign keys: {violations}"
+            )
         return True
 
     async def _migrate_legacy_output(self, db):

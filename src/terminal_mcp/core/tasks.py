@@ -4,15 +4,31 @@ import secrets
 from collections import Counter
 
 from terminal_mcp.core.orchestration import parse_utc, public_agent_name, utc_now, utc_text
-from terminal_mcp.storage.tasks import TaskRevisionConflict
+from terminal_mcp.storage.tasks import TaskClaimConflict, TaskRevisionConflict
 
 LANES = ("implementation", "review", "release", "integration", "general")
-STATES = ("ready", "blocked", "deferred", "done", "archived")
+STATES = ("ready", "blocked", "deferred", "done")
 PRIORITIES = ("P0", "P1", "P2", "P3")
-REVIEW_DIMENSIONS = ("A", "C", "R")
+ACTIONS = (
+    "create",
+    "claim",
+    "release",
+    "update",
+    "checkpoint",
+    "state",
+    "done",
+    "archive",
+    "comment",
+    "relate",
+    "unrelate",
+)
+REVIEW_DIMENSIONS = ("A", "C", "R")  # legacy read-only review history
 PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 VALUE_PRIORITY = {value: key for key, value in PRIORITY_VALUE.items()}
 PRESSURE_WEIGHT = {"P0": 8, "P1": 4, "P2": 2, "P3": 1}
+SAFE_PARTICIPANT_FIELDS = frozenset(
+    {"title", "lane", "priority", "description", "next_action", "resource", "candidate_ref", "tags"}
+)
 
 
 def _warning(code: str, message: str, *, task_id=None, severity="warning", **context):
@@ -25,7 +41,7 @@ def _warning(code: str, message: str, *, task_id=None, severity="warning", **con
 
 
 class TaskCoordinator:
-    """Optional task workflow with soft guardrails and durable evidence."""
+    """Durable task workflow with hard ownership/dependency gates and explicit evidence."""
 
     def __init__(
         self,
@@ -72,9 +88,80 @@ class TaskCoordinator:
                     "namespace": item["namespace"],
                     "task_id": item["task_id"],
                     "state": dep["state"] if dep else "missing",
+                    "archived": bool(dep and dep.get("archived_at")),
+                    "satisfied": bool(dep and dep["state"] == "done"),
                 }
             )
         return result
+
+    @staticmethod
+    def _valid_result(result):
+        if isinstance(result, str):
+            return bool(result.strip())
+        if isinstance(result, (dict, list)):
+            return bool(result)
+        return False
+
+    async def _open_dependencies(self, namespace, task_id):
+        return [dep for dep in await self._dependencies(namespace, task_id) if not dep["satisfied"]]
+
+    @staticmethod
+    def _normalize_tags(tags):
+        if tags is None:
+            return None
+        if not isinstance(tags, (list, tuple)):
+            raise ValueError("task.tags: expected a list of strings")
+        normalized = []
+        for index, item in enumerate(tags):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"task.tags[{index}]: expected non-empty string")
+            tag = item.strip()
+            if len(tag) > 64:
+                raise ValueError(f"task.tags[{index}]: maximum length is 64")
+            if tag not in normalized:
+                normalized.append(tag)
+        if len(normalized) > 50:
+            raise ValueError("task.tags: maximum 50 tags")
+        return normalized
+
+    async def _claimability(self, task, *, claims=None, dependencies=None):
+        claims = (
+            claims
+            if claims is not None
+            else await self._live_claims(task["namespace"], task["task_id"])
+        )
+        if dependencies is None:
+            blocking = await self._open_dependencies(task["namespace"], task["task_id"])
+        else:
+            blocking = dependencies
+        if task.get("archived_at") is not None:
+            return False, claims, blocking
+        if task["state"] != "ready":
+            return False, claims, blocking
+        if blocking:
+            return False, claims, blocking
+        if claims and not task.get("cooperative"):
+            return False, claims, blocking
+        return True, claims, blocking
+
+    async def _cleanup_stale_claims(self, namespace, task_id):
+        active = await self.store.active_claims(namespace, task_id)
+        live = await self._live_claims(namespace, task_id)
+        live_ids = {item["id"] for item in live}
+        now = utc_text()
+        for item in active:
+            if item["id"] in live_ids:
+                continue
+            if await self.store.release_claim(namespace, task_id, item["agent_id"], now=now):
+                await self.store.add_event(
+                    namespace,
+                    task_id,
+                    "claim_released",
+                    agent_id=item["agent_id"],
+                    payload={"reason": "stale_session"},
+                    now=now,
+                )
+        return live
 
     def _external_task(self, task):
         result = dict(task)
@@ -83,30 +170,107 @@ class TaskCoordinator:
         result["review_requirements"] = result.pop("reviews", [])
         return result
 
+    def _claim_view(self, item, role):
+        age = max(0, int((utc_now() - parse_utc(item["claimed_at"])).total_seconds()))
+        return {
+            "agent_name": public_agent_name(item["agent_id"]),
+            "claimed_at": item["claimed_at"],
+            "claim_age_seconds": age,
+            "claim_intent": item.get("claim_intent") or "",
+            "role": role,
+        }
+
     async def _decorate(self, task, *, details=False):
         result = self._external_task(task)
         namespace, task_id = result["namespace"], result["task_id"]
         claims = await self._live_claims(namespace, task_id)
-        result["claims"] = [
-            {"agent_name": public_agent_name(item["agent_id"]), "claimed_at": item["claimed_at"]}
-            for item in claims
+        views = [
+            self._claim_view(item, "owner" if index == 0 else "participant")
+            for index, item in enumerate(claims)
         ]
+        result["claims"] = views
+        result["owner"] = views[0] if views else None
+        result["participants"] = views[1:]
         result["active"] = bool(claims)
         if details:
             result["dependencies"] = await self._dependencies(namespace, task_id)
+            result["relations"] = await self.store.relations(namespace, task_id)
             reviews = await self.store.reviews(namespace, task_id)
             for review in reviews:
                 review["agent_name"] = public_agent_name(review.pop("agent_id"))
             result["reviews"] = reviews
-            events = await self.store.list_events(namespace, task_id, limit=50)
+            events = await self.store.list_events(namespace, task_id, limit=100)
+            comments = []
             for event in events:
                 if event.get("agent_id"):
                     event["agent_name"] = public_agent_name(event.pop("agent_id"))
+                if event["event_type"] in {"comment", "review_feedback"}:
+                    comments.append(dict(event))
             result["events"] = events
+            result["comments"] = comments
         else:
             result.pop("description", None)
             result.pop("resource_context", None)
         return result
+
+    async def _owner_error(self, agent_id, namespace, task_id, operation):
+        claims = await self._live_claims(namespace, task_id)
+        if claims and claims[0]["agent_id"] != agent_id:
+            return {
+                "ok": False,
+                "code": "owner_required",
+                "error": f"task.{operation}: live owner required",
+                "warnings": [],
+            }
+        return None
+
+    @staticmethod
+    def _clean_reason(value, field, *, max_length=4000):
+        text = (value or "").strip()
+        if not text:
+            return None, f"task.{field}: non-empty value required"
+        if len(text) > max_length:
+            return None, f"task.{field}: maximum length is {max_length}"
+        return text, None
+
+    async def _review_feedback_events(
+        self,
+        current,
+        *,
+        agent_id,
+        outcome,
+        result=None,
+        blocker_reason=None,
+        now,
+    ):
+        if current.get("lane") != "review" or outcome not in {"done", "blocked"}:
+            return []
+        events = []
+        for relation in await self.store.relations(current["namespace"], current["task_id"]):
+            if relation["direction"] != "outgoing" or relation["kind"] != "review_of":
+                continue
+            payload = {
+                "review_namespace": current["namespace"],
+                "review_task_id": current["task_id"],
+                "outcome": outcome,
+                "candidate_ref": current.get("candidate_ref"),
+            }
+            if outcome == "done":
+                payload["result"] = result
+            else:
+                payload["findings"] = blocker_reason
+                payload["blocker_reason"] = blocker_reason
+            events.append(
+                {
+                    "namespace": relation["namespace"],
+                    "task_id": relation["task_id"],
+                    "event_type": "review_feedback",
+                    "agent_id": agent_id,
+                    "payload": payload,
+                    "created_at": now,
+                }
+            )
+        return events
 
     async def list(
         self,
@@ -115,6 +279,7 @@ class TaskCoordinator:
         task_id=None,
         lane=None,
         state=None,
+        tags=None,
         show_details=False,
         show_done=False,
         show_archived=False,
@@ -125,6 +290,10 @@ class TaskCoordinator:
             return {"ok": False, "error": f"tasks.lane: expected one of {', '.join(LANES)}"}
         if state is not None and state not in STATES:
             return {"ok": False, "error": f"tasks.state: expected one of {', '.join(STATES)}"}
+        try:
+            normalized_tags = self._normalize_tags(tags)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         if task_id:
             if not namespace:
                 return {"ok": False, "error": "tasks.namespace: required with task_id"}
@@ -136,47 +305,97 @@ class TaskCoordinator:
             }
 
         offset = max(0, int(cursor or 0))
-        rows = await self.store.list_tasks(
+        all_rows = await self.store.list_tasks(
             namespace=namespace,
             lane=lane,
             state=state,
+            tags=normalized_tags,
             show_done=show_done,
             show_archived=show_archived,
-            limit=limit,
-            offset=offset,
+            limit=None,
+            offset=0,
         )
-        tasks = [await self._decorate(item, details=show_details) for item in rows]
+        vocabulary_rows = await self.store.list_tasks(
+            namespace=namespace,
+            lane=lane,
+            state=state,
+            tags=None,
+            show_done=show_done,
+            show_archived=show_archived,
+            limit=None,
+            offset=0,
+        )
+        tag_counts = Counter(tag for item in vocabulary_rows for tag in item.get("tags", []))
+        compact = [await self._decorate(item, details=False) for item in all_rows]
         lane_counts = Counter(
-            item["lane"] for item in tasks if item["state"] not in {"done", "archived"}
+            item["lane"]
+            for item in compact
+            if item["state"] != "done" and item.get("archived_at") is None
         )
-        state_counts = Counter(item["state"] for item in tasks)
+        state_counts = Counter(item["state"] for item in compact)
         pressure = Counter()
         recommended = None
-        for item in tasks:
-            if item["state"] != "ready":
+        claimable_count = 0
+        oldest_claimable_ready_since = None
+        missing_dependency_count = 0
+        for item in compact:
+            deps = await self._dependencies(item["namespace"], item["task_id"])
+            missing_dependency_count += sum(dep["state"] == "missing" for dep in deps)
+            blocking = [dep for dep in deps if not dep["satisfied"]]
+            eligible, _, _ = await self._claimability(
+                item, claims=item["claims"], dependencies=blocking
+            )
+            if not eligible:
                 continue
+            claimable_count += 1
             pressure[item["lane"]] += PRESSURE_WEIGHT[item["priority"]]
-            if recommended is None and not item["claims"]:
-                deps = await self._dependencies(item["namespace"], item["task_id"])
-                if not any(dep["state"] not in {"done", "archived"} for dep in deps):
-                    recommended = {
-                        "namespace": item["namespace"],
-                        "task_id": item["task_id"],
-                        "lane": item["lane"],
-                        "priority": item["priority"],
-                        "title": item["title"],
-                    }
+            ready_since = item.get("ready_since")
+            if ready_since and (
+                oldest_claimable_ready_since is None or ready_since < oldest_claimable_ready_since
+            ):
+                oldest_claimable_ready_since = ready_since
+            if recommended is None:
+                recommended = {
+                    "namespace": item["namespace"],
+                    "task_id": item["task_id"],
+                    "lane": item["lane"],
+                    "priority": item["priority"],
+                    "title": item["title"],
+                    "tags": item.get("tags", []),
+                    "ready_since": ready_since,
+                }
+
+        oldest_age = None
+        if oldest_claimable_ready_since:
+            oldest_age = max(
+                0,
+                int((utc_now() - parse_utc(oldest_claimable_ready_since)).total_seconds()),
+            )
+        page_rows = all_rows[offset : offset + max(1, min(int(limit), 200))]
+        if show_details:
+            tasks = [await self._decorate(item, details=True) for item in page_rows]
+        else:
+            tasks = compact[offset : offset + len(page_rows)]
+        next_cursor = offset + len(page_rows) if offset + len(page_rows) < len(all_rows) else None
+        summary = {
+            "visible": len(compact),
+            "returned": len(tasks),
+            "by_lane": dict(lane_counts),
+            "by_state": dict(state_counts),
+            "pressure": dict(pressure),
+            "tag_counts": dict(sorted(tag_counts.items())),
+            "claimable_count": claimable_count,
+            "oldest_claimable_ready_since": oldest_claimable_ready_since,
+            "oldest_claimable_ready_age_seconds": oldest_age,
+            "missing_dependency_count": missing_dependency_count,
+        }
         return {
             "ok": True,
-            "summary": {
-                "visible": len(tasks),
-                "by_lane": dict(lane_counts),
-                "by_state": dict(state_counts),
-                "pressure": dict(pressure),
-            },
+            "summary": summary,
+            "tag_counts": dict(sorted(tag_counts.items())),
             "recommended": recommended,
             "tasks": tasks,
-            "next_cursor": offset + len(rows) if len(rows) == limit else None,
+            "next_cursor": next_cursor,
         }
 
     async def mutate(self, agent_id, *, action, namespace, task_id=None, **kwargs):
@@ -190,7 +409,7 @@ class TaskCoordinator:
                     "error": "task.agent_id: active session required",
                     "warnings": [],
                 }
-        handler = getattr(self, f"_action_{action}", None)
+        handler = getattr(self, f"_action_{action}", None) if action in ACTIONS else None
         if handler is None:
             return {
                 "ok": False,
@@ -207,16 +426,19 @@ class TaskCoordinator:
         lane = kwargs.get("lane", "general")
         priority = kwargs.get("priority", "P2")
         state = kwargs.get("state", "ready")
-        if state == "archived":
+        if state == "done" and not self._valid_result(kwargs.get("result")):
             return {
                 "ok": False,
-                "error": "task.create: use action=archive with note",
+                "error": "task.create: result required when creating a done task",
                 "warnings": [],
             }
-        dimensions = kwargs.get("review_requirements") or []
-        error = self._validate(lane=lane, priority=priority, state=state, dimensions=dimensions)
+        error = self._validate(lane=lane, priority=priority, state=state)
         if error:
             return {"ok": False, "error": error, "warnings": []}
+        try:
+            tags = self._normalize_tags(kwargs.get("tags")) or []
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "warnings": []}
         now = utc_text()
         try:
             await self.store.create_task_mutation(
@@ -229,10 +451,12 @@ class TaskCoordinator:
                 description=kwargs.get("description") or "",
                 next_action=kwargs.get("next_action") or "",
                 resource=kwargs.get("resource_context") or {},
-                reviews=dimensions,
+                reviews=[],
                 cooperative=bool(kwargs.get("cooperative")),
                 checkpoint=kwargs.get("checkpoint") or {},
                 candidate_ref=kwargs.get("candidate_ref"),
+                result=kwargs.get("result"),
+                tags=tags,
                 dependencies=kwargs.get("dependencies"),
                 event_agent_id=agent_id,
                 event_payload={"lane": lane, "priority": priority, "state": state},
@@ -247,24 +471,46 @@ class TaskCoordinator:
         current = await self._required(namespace, task_id)
         if not current:
             return self._missing()
+        if current.get("archived_at") is not None:
+            return {
+                "ok": False,
+                "code": "archived_task",
+                "error": "task.claim: task is archived",
+                "warnings": [],
+            }
+        claim_intent, error = self._clean_reason(
+            kwargs.get("claim_intent"), "claim_intent", max_length=160
+        )
+        if error:
+            return {"ok": False, "error": error, "warnings": []}
         warnings = []
-        others = [
-            item
-            for item in await self._live_claims(namespace, task_id)
-            if item["agent_id"] != agent_id
-        ]
+        live_claims = await self._cleanup_stale_claims(namespace, task_id)
+        others = [item for item in live_claims if item["agent_id"] != agent_id]
+        if others and not current.get("cooperative"):
+            warning = _warning(
+                "already_claimed",
+                "Non-cooperative task already has a live owner.",
+                task_id=task_id,
+                claims=[public_agent_name(item["agent_id"]) for item in others],
+                cooperative=False,
+            )
+            result = await self._result(
+                namespace, task_id, [warning], ok=False, error="task.claim: already_claimed"
+            )
+            result["code"] = "already_claimed"
+            return result
         if others:
             warnings.append(
                 _warning(
                     "already_claimed",
-                    "Task already has active claims; concurrent work is visible and allowed.",
+                    "Cooperative task already has active claims; additional claim is allowed.",
                     task_id=task_id,
-                    severity="info" if current.get("cooperative") else "warning",
+                    severity="info",
                     claims=[public_agent_name(item["agent_id"]) for item in others],
-                    cooperative=bool(current.get("cooperative")),
+                    cooperative=True,
                 )
             )
-        if current["state"] in {"blocked", "deferred", "done", "archived"}:
+        if current["state"] in {"blocked", "deferred", "done"}:
             warnings.append(
                 _warning(
                     f"{current['state']}_task",
@@ -272,47 +518,120 @@ class TaskCoordinator:
                     task_id=task_id,
                 )
             )
-        open_deps = [
-            dep
-            for dep in await self._dependencies(namespace, task_id)
-            if dep["state"] not in {"done", "archived"}
-        ]
+        open_deps = await self._open_dependencies(namespace, task_id)
+        dependency_override = None
         if open_deps:
-            warnings.append(
-                _warning(
-                    "dependency_open",
-                    "Task has unfinished dependencies.",
-                    task_id=task_id,
-                    dependencies=open_deps,
-                )
+            dependency_warning = _warning(
+                "dependency_open",
+                "Task has unfinished dependencies.",
+                task_id=task_id,
+                dependencies=open_deps,
             )
+            force = bool(kwargs.get("force"))
+            force_reason = (kwargs.get("force_reason") or "").strip()
+            if not force:
+                result = await self._result(
+                    namespace,
+                    task_id,
+                    [*warnings, dependency_warning],
+                    ok=False,
+                    error=(
+                        "task.claim: dependency_open; use force=true with force_reason "
+                        "if genuinely necessary"
+                    ),
+                )
+                result["code"] = "dependency_open"
+                result["blocking_dependencies"] = open_deps
+                return result
+            if not force_reason:
+                result = await self._result(
+                    namespace,
+                    task_id,
+                    [*warnings, dependency_warning],
+                    ok=False,
+                    error="task.claim.force_reason: required when forcing open dependencies",
+                )
+                result["code"] = "dependency_open"
+                result["blocking_dependencies"] = open_deps
+                return result
+            warnings.extend(
+                [
+                    dependency_warning,
+                    _warning(
+                        "dependency_forced",
+                        "Open dependencies were explicitly overridden for this claim.",
+                        task_id=task_id,
+                        dependencies=open_deps,
+                        force_reason=force_reason,
+                    ),
+                ]
+            )
+            dependency_override = {
+                "blocking_dependencies": open_deps,
+                "force_reason": force_reason,
+            }
         now = utc_text()
-        claim = await self.store.claim(namespace, task_id, agent_id, now=now)
-        await self.store.add_event(
-            namespace,
-            task_id,
-            "claim" if claim.get("created") else "claim_refresh",
-            agent_id=agent_id,
-            payload={"warnings": [item["code"] for item in warnings]},
-            now=now,
-        )
+        try:
+            await self.store.claim(
+                namespace,
+                task_id,
+                agent_id,
+                claim_intent=claim_intent,
+                exclusive=not bool(current.get("cooperative")),
+                event_payload={"warnings": [item["code"] for item in warnings]},
+                dependency_override=dependency_override,
+                now=now,
+            )
+        except TaskClaimConflict as exc:
+            warning = _warning(
+                "already_claimed",
+                "Non-cooperative task already has a live owner.",
+                task_id=task_id,
+                claims=[public_agent_name(item) for item in exc.agent_ids],
+                cooperative=False,
+            )
+            result = await self._result(
+                namespace, task_id, [warning], ok=False, error="task.claim: already_claimed"
+            )
+            result["code"] = "already_claimed"
+            return result
+        except (KeyError, ValueError) as exc:
+            return {"ok": False, "error": f"task.claim: {exc}", "warnings": warnings}
         self._inc("terminal_mcp_task_claims_total")
         return await self._result(namespace, task_id, warnings)
 
     async def _action_release(self, agent_id, namespace, task_id, **kwargs):
         if not await self._required(namespace, task_id):
             return self._missing()
-        now = utc_text()
-        released = await self.store.release_claim(namespace, task_id, agent_id, now=now)
-        if released:
-            await self.store.add_event(
-                namespace, task_id, "claim_released", agent_id=agent_id, now=now
+        claims = await self._live_claims(namespace, task_id)
+        own = next((item for item in claims if item["agent_id"] == agent_id), None)
+        if not own:
+            return await self._result(
+                namespace,
+                task_id,
+                [
+                    _warning(
+                        "not_claimed",
+                        "Agent has no live claim on task.",
+                        task_id=task_id,
+                        severity="info",
+                    )
+                ],
             )
+        reason, error = self._clean_reason(kwargs.get("release_reason"), "release_reason")
+        if error:
+            return {"ok": False, "error": error, "warnings": []}
+        await self.store.release_claim_mutation(
+            namespace, task_id, agent_id, reason=reason, now=utc_text()
+        )
         return await self._result(namespace, task_id, [])
 
     async def _action_checkpoint(self, agent_id, namespace, task_id, **kwargs):
         if not await self._required(namespace, task_id):
             return self._missing()
+        owner_error = await self._owner_error(agent_id, namespace, task_id, "checkpoint")
+        if owner_error:
+            return owner_error
         if "checkpoint" not in kwargs:
             return {"ok": False, "error": "task.checkpoint: checkpoint required", "warnings": []}
         return await self._update(
@@ -323,6 +642,81 @@ class TaskCoordinator:
             kwargs.get("expected_revision"),
             "checkpoint",
         )
+
+    async def _action_comment(self, agent_id, namespace, task_id, **kwargs):
+        if not await self._required(namespace, task_id):
+            return self._missing()
+        text, error = self._clean_reason(kwargs.get("comment_text"), "comment_text")
+        if error:
+            return {"ok": False, "error": error, "warnings": []}
+        await self.store.add_event(
+            namespace,
+            task_id,
+            "comment",
+            agent_id=agent_id,
+            payload={"text": text, "kind": "comment"},
+            now=utc_text(),
+        )
+        return await self._result(namespace, task_id, [])
+
+    async def _action_relate(self, agent_id, namespace, task_id, **kwargs):
+        if not await self._required(namespace, task_id):
+            return self._missing()
+        owner_error = await self._owner_error(agent_id, namespace, task_id, "relate")
+        if owner_error:
+            return owner_error
+        kind = (kwargs.get("relation_kind") or "").strip()
+        related_namespace = (kwargs.get("related_namespace") or namespace).strip()
+        related_task_id = (kwargs.get("related_task_id") or "").strip()
+        if not kind or not related_task_id:
+            return {
+                "ok": False,
+                "error": "task.relate: relation_kind and related_task_id required",
+                "warnings": [],
+            }
+        if len(kind) > 64:
+            return {
+                "ok": False,
+                "error": "task.relation_kind: maximum length is 64",
+                "warnings": [],
+            }
+        try:
+            await self.store.add_relation(
+                namespace,
+                task_id,
+                related_namespace=related_namespace,
+                related_task_id=related_task_id,
+                relation_kind=kind,
+                agent_id=agent_id,
+            )
+        except (KeyError, ValueError) as exc:
+            return {"ok": False, "error": f"task.relate: {exc}", "warnings": []}
+        return await self._result(namespace, task_id, [])
+
+    async def _action_unrelate(self, agent_id, namespace, task_id, **kwargs):
+        if not await self._required(namespace, task_id):
+            return self._missing()
+        owner_error = await self._owner_error(agent_id, namespace, task_id, "unrelate")
+        if owner_error:
+            return owner_error
+        kind = (kwargs.get("relation_kind") or "").strip()
+        related_namespace = (kwargs.get("related_namespace") or namespace).strip()
+        related_task_id = (kwargs.get("related_task_id") or "").strip()
+        if not kind or not related_task_id:
+            return {
+                "ok": False,
+                "error": "task.unrelate: relation_kind and related_task_id required",
+                "warnings": [],
+            }
+        await self.store.remove_relation(
+            namespace,
+            task_id,
+            related_namespace=related_namespace,
+            related_task_id=related_task_id,
+            relation_kind=kind,
+            agent_id=agent_id,
+        )
+        return await self._result(namespace, task_id, [])
 
     async def _action_update(self, agent_id, namespace, task_id, **kwargs):
         if not await self._required(namespace, task_id):
@@ -335,6 +729,11 @@ class TaskCoordinator:
         return await self._action_update(agent_id, namespace, task_id, **kwargs)
 
     async def _action_done(self, agent_id, namespace, task_id, **kwargs):
+        current = await self._required(namespace, task_id)
+        if not current:
+            return self._missing()
+        if current["state"] != "done" and not self._valid_result(kwargs.get("result")):
+            return {"ok": False, "error": "task.done: result required", "warnings": []}
         kwargs["state"] = "done"
         return await self._action_update(agent_id, namespace, task_id, **kwargs)
 
@@ -342,10 +741,15 @@ class TaskCoordinator:
         current = await self._required(namespace, task_id)
         if not current:
             return self._missing()
-        note = (kwargs.get("note") or "").strip()
-        if not note:
-            return {"ok": False, "error": "task.archive: note required", "warnings": []}
-        if current["state"] == "archived":
+        owner_error = await self._owner_error(agent_id, namespace, task_id, "archive")
+        if owner_error:
+            return owner_error
+        note, error = self._clean_reason(
+            kwargs.get("archive_note") or kwargs.get("note"), "archive_note"
+        )
+        if error:
+            return {"ok": False, "error": error, "warnings": []}
+        if current.get("archived_at") is not None:
             return await self._result(
                 namespace,
                 task_id,
@@ -358,15 +762,16 @@ class TaskCoordinator:
                     )
                 ],
             )
+        now = utc_text()
         return await self._update(
             agent_id,
             namespace,
             task_id,
-            {"state": "archived"},
+            {"archived_at": now, "archive_note": note},
             kwargs.get("expected_revision"),
             "archived",
             release_claims_reason="task_archived",
-            event_extra={"note": note},
+            event_extra={"archive_note": note, "state": current["state"]},
         )
 
     async def _update_from_kwargs(self, agent_id, namespace, task_id, kwargs):
@@ -382,53 +787,69 @@ class TaskCoordinator:
             "description": "description",
             "next_action": "next_action",
             "resource_context": "resource",
-            "review_requirements": "reviews",
             "cooperative": "cooperative",
             "checkpoint": "checkpoint",
             "candidate_ref": "candidate_ref",
+            "result": "result",
+            "tags": "tags",
         }
         for external, internal in mapping.items():
             if kwargs.get(external) is not None:
                 fields[internal] = kwargs[external]
+        if kwargs.get("tags") is not None:
+            try:
+                fields["tags"] = self._normalize_tags(kwargs["tags"])
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc), "warnings": []}
         if kwargs.get("priority") is not None:
             fields["priority"] = PRIORITY_VALUE.get(kwargs["priority"], -1)
         error = self._validate(
             lane=kwargs.get("lane"),
             priority=kwargs.get("priority"),
             state=kwargs.get("state"),
-            dimensions=kwargs.get("review_requirements"),
         )
         if error:
             return {"ok": False, "error": error, "warnings": []}
         warnings = []
         target_state = kwargs.get("state")
+        claims = await self._live_claims(namespace, task_id)
+        owner = claims[0]["agent_id"] if claims else None
+        unsafe_fields = set(fields) - SAFE_PARTICIPANT_FIELDS
+        workflow_change = bool(unsafe_fields or kwargs.get("dependencies") is not None)
+        if owner is not None and owner != agent_id and workflow_change:
+            return {
+                "ok": False,
+                "code": "owner_required",
+                "error": "task.update: live owner required for workflow-changing mutation",
+                "warnings": [],
+            }
+        if "cooperative" in fields and not bool(fields["cooperative"]) and len(claims) > 1:
+            return {
+                "ok": False,
+                "error": (
+                    "task.update: cooperative=false requires releasing extra live claims first"
+                ),
+                "warnings": [],
+            }
+        blocker_reason = None
+        if target_state == "blocked" and current["state"] != "blocked" and claims:
+            blocker_reason, blocker_error = self._clean_reason(
+                kwargs.get("blocker_reason"), "blocker_reason"
+            )
+            if blocker_error:
+                return {"ok": False, "error": blocker_error, "warnings": []}
         if target_state == "archived":
             return {
                 "ok": False,
                 "error": "task.update: use action=archive with note",
                 "warnings": [],
             }
-        if target_state == "done":
-            required = set(current.get("reviews") or [])
-            candidate = current.get("candidate_ref")
-            approvals = (
-                await self.store.reviews(namespace, task_id, candidate_ref=candidate)
-                if candidate
-                else []
-            )
-            approved = {
-                item["dimension"] for item in approvals if item["verdict"] == "NON_BLOCKING"
-            }
-            missing = sorted(required - approved)
-            if missing:
-                warnings.append(
-                    _warning(
-                        "review_incomplete",
-                        "Task is being completed without all requested review dimensions.",
-                        task_id=task_id,
-                        dimensions=missing,
-                    )
-                )
+        if (
+            target_state == "done"
+            and current["state"] != "done"
+            and not self._valid_result(kwargs.get("result"))
+        ):
+            return {"ok": False, "error": "task.done: result required", "warnings": []}
         if current["state"] in {"blocked", "archived"} and target_state not in {
             None,
             current["state"],
@@ -442,6 +863,19 @@ class TaskCoordinator:
                     to_state=target_state,
                 )
             )
+        event_extra = {}
+        if blocker_reason is not None:
+            event_extra["blocker_reason"] = blocker_reason
+        additional_events = []
+        if target_state in {"done", "blocked"}:
+            additional_events = await self._review_feedback_events(
+                current,
+                agent_id=agent_id,
+                outcome=target_state,
+                result=kwargs.get("result"),
+                blocker_reason=blocker_reason,
+                now=utc_text(),
+            )
         return await self._update(
             agent_id,
             namespace,
@@ -452,6 +886,8 @@ class TaskCoordinator:
             warnings=warnings,
             dependencies=kwargs.get("dependencies"),
             release_claims_reason="task_done" if target_state == "done" else None,
+            event_extra=event_extra or None,
+            additional_events=additional_events,
         )
 
     async def _update(
@@ -466,6 +902,7 @@ class TaskCoordinator:
         dependencies=None,
         release_claims_reason=None,
         event_extra=None,
+        additional_events=None,
     ):
         warnings = list(warnings or [])
         now = utc_text()
@@ -475,7 +912,16 @@ class TaskCoordinator:
         }
         if event_extra:
             event_payload.update(event_extra)
-        for key in ("checkpoint", "candidate_ref", "state", "lane", "priority", "next_action"):
+        for key in (
+            "checkpoint",
+            "candidate_ref",
+            "result",
+            "tags",
+            "state",
+            "lane",
+            "priority",
+            "next_action",
+        ):
             if key in fields:
                 event_payload[key] = fields[key]
         try:
@@ -488,6 +934,7 @@ class TaskCoordinator:
                 event_agent_id=agent_id,
                 event_payload=event_payload,
                 release_claims_reason=release_claims_reason,
+                additional_events=additional_events,
                 now=now,
                 **fields,
             )
@@ -681,9 +1128,9 @@ class TaskCoordinator:
             for item in rows
         ]
 
-    async def record_command(self, agent_id, command_hash, command_type):
+    async def record_command(self, agent_id, command_hash, command_type, task_refs):
         now = utc_text()
-        for item in await self.store.claims_for_agent(agent_id, active_only=True):
+        for item in task_refs:
             await self.store.add_event(
                 item["namespace"],
                 item["task_id"],

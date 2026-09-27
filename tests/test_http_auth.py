@@ -60,14 +60,14 @@ def test_bearer_actions_and_openapi(tmp_path):
     with TestClient(app) as client:
         live = client.get("/health/live")
         assert live.status_code == 200
-        assert live.json()["version"] == "0.9.2"
+        assert live.json()["version"] == "0.10.0"
         assert client.get("/actions/health").status_code == 401
         headers = {"Authorization": "Bearer alpha"}
         agent_id = start_agent(client, headers)
         health = client.get("/actions/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["agent_name"] == "anonymous"
-        assert health.json()["version"] == "0.9.2"
+        assert health.json()["version"] == "0.10.0"
 
         run = client.post(
             "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
@@ -101,7 +101,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/health",
         }
         assert set(schema["paths"]) == expected_paths
-        assert schema["info"]["version"] == "0.9.2"
+        assert schema["info"]["version"] == "0.10.0"
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
         assert set(run_request["required"]) == {"agent_id", "cmd"}
@@ -143,35 +143,75 @@ def test_bearer_actions_and_openapi(tmp_path):
             "blocked",
             "deferred",
             "done",
-            "archived",
         ]
         task_request = schema["components"]["schemas"]["TaskRequest"]
-        assert task_request["properties"]["action"]["enum"] == [
+        assert set(task_request["properties"]["action"]["enum"]) == {
             "create",
             "claim",
             "release",
             "update",
             "checkpoint",
-            "review",
+            "comment",
+            "relate",
+            "unrelate",
             "state",
             "done",
             "archive",
-        ]
+        }
         assert task_request["properties"]["priority"]["anyOf"][0]["enum"] == [
             "P0",
             "P1",
             "P2",
             "P3",
         ]
-        assert task_request["properties"]["review_requirements"]["anyOf"][0]["items"]["enum"] == [
-            "A",
-            "C",
-            "R",
-        ]
-        assert task_request["properties"]["verdict"]["anyOf"][0]["enum"] == [
-            "NON_BLOCKING",
-            "BLOCKING",
-        ]
+        for legacy_field in ("review_requirements", "dimensions", "verdict", "evidence"):
+            assert legacy_field not in task_request["properties"]
+        assert "tags" in task_request["properties"]
+        assert "force" in task_request["properties"]
+        assert "force_reason" in task_request["properties"]
+        for field in (
+            "claim_intent",
+            "blocker_reason",
+            "release_reason",
+            "archive_note",
+            "comment_text",
+            "relation_kind",
+            "related_namespace",
+            "related_task_id",
+        ):
+            assert field in task_request["properties"]
+        claim_intent = task_request["properties"]["claim_intent"]["anyOf"][0]
+        assert claim_intent["maxLength"] == 160
+        assert "tags" in schema["components"]["schemas"]["TasksRequest"]["properties"]
+        assert "task_scope" in schema["components"]["schemas"]["RunRequest"]["properties"]
+
+        task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
+        assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+        for field in (
+            "archived_at",
+            "archive_note",
+            "owner",
+            "participants",
+            "claims",
+            "relations",
+            "comments",
+        ):
+            assert field in task_card
+        claim_view = schema["components"]["schemas"]["TaskClaimView"]["properties"]
+        assert {
+            "agent_name",
+            "claimed_at",
+            "claim_age_seconds",
+            "claim_intent",
+            "role",
+        } <= set(claim_view)
+        managed_ref = schema["components"]["schemas"]["ManagedTaskRef"]["properties"]
+        assert {
+            "claimed_at",
+            "claim_age_seconds",
+            "claim_intent",
+            "role",
+        } <= set(managed_ref)
 
         created_task = client.post(
             "/actions/task",

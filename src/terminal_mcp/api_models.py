@@ -17,13 +17,15 @@ TaskAction = Literal[
     "release",
     "update",
     "checkpoint",
-    "review",
+    "comment",
+    "relate",
+    "unrelate",
     "state",
     "done",
     "archive",
 ]
 TaskLane = Literal["implementation", "review", "release", "integration", "general"]
-TaskState = Literal["ready", "blocked", "deferred", "done", "archived"]
+TaskState = Literal["ready", "blocked", "deferred", "done"]
 TaskPriority = Literal["P0", "P1", "P2", "P3"]
 ReviewDimension = Literal["A", "C", "R"]
 ReviewVerdict = Literal["NON_BLOCKING", "BLOCKING"]
@@ -50,6 +52,7 @@ class SessionStatus(BaseModel):
     pending_messages: list[str] | None = None
     alert_messages: list[str] | None = None
     reply_required_messages: list[str] | None = None
+    message_grace_remaining_seconds: int | None = None
 
 
 class RunResponse(SessionStatus):
@@ -57,6 +60,8 @@ class RunResponse(SessionStatus):
     cmd_hash: str | None = None
     queue_id: int | None = None
     queue_position: int | None = None
+    task_scope: str | None = None
+    task_targets: list[str] | None = None
     active_agents: list[str] | None = None
     error: str | None = None
 
@@ -185,11 +190,18 @@ class ManagedTaskRef(BaseModel):
     lane: TaskLane
     priority: TaskPriority
     state: TaskState
+    claimed_at: str
+    claim_age_seconds: int
+    claim_intent: str
+    role: Literal["owner", "participant"]
 
 
 class TaskClaimView(BaseModel):
     agent_name: str
     claimed_at: str
+    claim_age_seconds: int
+    claim_intent: str
+    role: Literal["owner", "participant"]
 
 
 class TaskCard(BaseModel):
@@ -202,14 +214,24 @@ class TaskCard(BaseModel):
     next_action: str = ""
     checkpoint: str | dict[str, object] = Field(default_factory=dict)
     candidate_ref: str | None = None
+    result: str | dict[str, object] | list[object] | None = None
+    tags: list[str] = Field(default_factory=list)
+    state_changed_at: str | None = None
+    ready_since: str | None = None
+    archived_at: str | None = None
+    archive_note: str | None = None
     revision: int = 1
     cooperative: bool = False
     active: bool = False
     claims: list[TaskClaimView] = Field(default_factory=list)
+    owner: TaskClaimView | None = None
+    participants: list[TaskClaimView] = Field(default_factory=list)
     review_requirements: list[ReviewDimension] = Field(default_factory=list)
     description: str | None = None
     resource_context: dict[str, object] | None = None
     dependencies: list[dict[str, object]] | None = None
+    relations: list[dict[str, object]] | None = None
+    comments: list[dict[str, object]] | None = None
     reviews: list[dict[str, object]] | None = None
     events: list[dict[str, object]] | None = None
     created_at: str | None = None
@@ -220,6 +242,7 @@ class TasksResponse(BaseModel):
     ok: bool
     summary: dict[str, object] | None = None
     recommended: dict[str, object] | None = None
+    tag_counts: dict[str, int] = Field(default_factory=dict)
     tasks: list[TaskCard] = Field(default_factory=list)
     task: TaskCard | None = None
     next_cursor: int | None = None
@@ -230,6 +253,8 @@ class TaskMutationResponse(SessionStatus):
     ok: bool
     task: TaskCard | None = None
     warnings: list[WorkflowWarning] = Field(default_factory=list)
+    code: str | None = None
+    blocking_dependencies: list[dict[str, object]] | None = None
     error: str | None = None
 
 

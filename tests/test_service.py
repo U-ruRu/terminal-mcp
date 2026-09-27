@@ -75,7 +75,7 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
         assert {"started_at", "finished_at"} <= columns
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
         status, error, started_at, finished_at = db.execute(
             "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
         ).fetchone()
@@ -230,7 +230,7 @@ async def test_stdout_and_stderr_preserve_shell_order_and_exit_error_stays_null(
 async def test_health_runs_optional_configured_command(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
     plain = await service.health("oauth")
-    assert plain["version"] == "0.9.2"
+    assert plain["version"] == "0.10.0"
     assert "custom_command" not in plain
 
     service.health_command = "printf 'health-output\\n'"
@@ -324,4 +324,4 @@ async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
     } <= tables
     assert session == ("[]", 1, "forced")
     assert event_step == 1
-    assert version == 8
+    assert version == 9

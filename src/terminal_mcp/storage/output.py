@@ -15,6 +15,7 @@ DEFAULT_COMMAND_MAX_BYTES = 8 * MIB
 DEFAULT_TARGET_BYTES = 192 * MIB
 DEFAULT_MAX_BYTES = 256 * MIB
 DEFAULT_MAX_ROWS = 1_000_000
+DEFAULT_PRUNE_ROWS = 100_000
 
 LINE_TRUNCATED_SUFFIX = " … [truncated: line exceeded 4 MiB]"
 COMMAND_TRUNCATED_SUFFIX = " … [truncated: command output exceeded 8 MiB]"
@@ -41,6 +42,7 @@ class OutputStore:
         target_bytes: int = DEFAULT_TARGET_BYTES,
         max_bytes: int = DEFAULT_MAX_BYTES,
         max_rows: int = DEFAULT_MAX_ROWS,
+        prune_rows: int = DEFAULT_PRUNE_ROWS,
     ):
         self.path = Path(path)
         self.line_max_bytes = int(line_max_bytes)
@@ -48,6 +50,8 @@ class OutputStore:
         self.target_bytes = int(target_bytes)
         self.max_bytes = int(max_bytes)
         self.max_rows = int(max_rows)
+        requested_prune_rows = int(prune_rows)
+        self.prune_rows = min(requested_prune_rows, max(1, self.max_rows // 10))
         if self.line_max_bytes <= 0 or self.command_max_bytes <= 0:
             raise ValueError("output line/command limits must be positive")
         if self.line_max_bytes > self.command_max_bytes:
@@ -56,6 +60,8 @@ class OutputStore:
             raise ValueError("output target must be positive and not exceed max bytes")
         if self.max_rows <= 0:
             raise ValueError("output max rows must be positive")
+        if requested_prune_rows <= 0:
+            raise ValueError("output prune rows must be positive")
 
     @asynccontextmanager
     async def _connect(self):
@@ -296,6 +302,8 @@ class OutputStore:
             return []
         used = stats["used_bytes"]
         lines = stats["lines"]
+        line_pressure = lines > self.max_rows
+        line_target = max(0, self.max_rows - self.prune_rows) if line_pressure else self.max_rows
         pruned: list[str] = []
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -305,7 +313,7 @@ class OutputStore:
                 )
             ).fetchall()
             for cmd_hash, stored_bytes, stored_lines in candidates:
-                if used <= self.target_bytes and lines <= self.max_rows:
+                if used <= self.target_bytes and lines <= line_target:
                     break
                 if cmd_hash in active_hashes:
                     continue
