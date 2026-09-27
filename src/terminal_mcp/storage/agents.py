@@ -296,12 +296,14 @@ class AgentStore:
         recipient_ids,
         require_reply=False,
         alert=False,
+        task_namespace=None,
+        task_id=None,
     ):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO coordination_messages("
-                "message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert) "
-                "VALUES(?,?,?,?,?,?,?)",
+                "message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert,"
+                "task_namespace,task_id) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     message_hash,
                     sender_agent_id,
@@ -310,6 +312,8 @@ class AgentStore:
                     created_at,
                     int(bool(require_reply or alert)),
                     int(bool(alert)),
+                    task_namespace,
+                    task_id,
                 ),
             )
             await db.executemany(
@@ -324,8 +328,8 @@ class AgentStore:
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
-                    "SELECT message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert "
-                    "FROM coordination_messages WHERE message_hash=?",
+                    "SELECT message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert,"
+                    "task_namespace,task_id FROM coordination_messages WHERE message_hash=?",
                     (message_hash,),
                 )
             ).fetchone()
@@ -339,6 +343,8 @@ class AgentStore:
             "created_at": row[4],
             "require_reply": bool(row[5]),
             "alert": bool(row[6]),
+            "task_namespace": row[7],
+            "task_id": row[8],
         }
 
     async def recipient_record(self, message_hash, agent_id):
@@ -367,7 +373,8 @@ class AgentStore:
             rows = await (
                 await db.execute(
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
-                    "m.require_reply,m.alert,r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
+                    "m.require_reply,m.alert,m.task_namespace,m.task_id,"
+                    "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
                     "r.read_at,r.replied_at,r.reply_message_hash "
                     "FROM coordination_message_recipients r "
                     "JOIN coordination_messages m ON m.message_hash=r.message_hash "
@@ -385,6 +392,8 @@ class AgentStore:
             "created_at",
             "require_reply",
             "alert",
+            "task_namespace",
+            "task_id",
             "delivered_at",
             "first_seen_at",
             "last_seen_at",
@@ -413,7 +422,8 @@ class AgentStore:
             rows = await (
                 await db.execute(
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
-                    "m.require_reply,m.alert,r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
+                    "m.require_reply,m.alert,m.task_namespace,m.task_id,"
+                    "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
                     "r.read_at,r.replied_at,r.reply_message_hash "
                     "FROM coordination_message_recipients r "
                     "JOIN coordination_messages m ON m.message_hash=r.message_hash "
@@ -429,6 +439,8 @@ class AgentStore:
             "created_at",
             "require_reply",
             "alert",
+            "task_namespace",
+            "task_id",
             "delivered_at",
             "first_seen_at",
             "last_seen_at",

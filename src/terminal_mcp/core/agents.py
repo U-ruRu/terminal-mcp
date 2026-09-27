@@ -18,13 +18,14 @@ from terminal_mcp.core.orchestration import (
 
 
 class AgentCoordinator:
-    ALERT_BLOCKED_TOOLS = {"run", "read", "coordinate", "agents", "agent_start"}
+    ALERT_BLOCKED_TOOLS = {"run", "read", "coordinate", "agents", "agent_start", "task"}
     SESSION_ALERT_SENDER = "system-session"
 
-    def __init__(self, store, metrics=None, policy: AgentPolicy | None = None):
+    def __init__(self, store, metrics=None, policy: AgentPolicy | None = None, task_store=None):
         self.store = store
         self.metrics = metrics
         self.policy = policy or AgentPolicy()
+        self.task_store = task_store
         # Mutable aliases preserve the existing testing/diagnostic surface.
         self.ttl_seconds = self.policy.idle_ttl_seconds
         self.task_lease_seconds = self.policy.intent_ttl_seconds
@@ -123,7 +124,22 @@ class AgentCoordinator:
         elif idle >= self.ttl_seconds:
             reason = "idle_timeout"
         if reason:
-            await self.store.expire(session["agent_id"], reason=reason, now=utc_text(current))
+            stamp = utc_text(current)
+            await self.store.expire(session["agent_id"], reason=reason, now=stamp)
+            if self.task_store is not None:
+                claims = await self.task_store.claims_for_agent(
+                    session["agent_id"], active_only=True
+                )
+                await self.task_store.release_claims(agent_id=session["agent_id"], now=stamp)
+                for claim in claims:
+                    await self.task_store.add_event(
+                        claim["namespace"],
+                        claim["task_id"],
+                        "claim_released",
+                        agent_id=session["agent_id"],
+                        payload={"reason": reason},
+                        now=stamp,
+                    )
             self._inc("terminal_mcp_agent_sessions_expired_total")
             return await self.store.get_session(session["agent_id"])
         return session
@@ -305,6 +321,8 @@ class AgentCoordinator:
             "text": item["text"],
             "require_reply": item["require_reply"],
             "alert": item["alert"],
+            "namespace": item.get("task_namespace"),
+            "task_id": item.get("task_id"),
             "created_at": item["created_at"],
             "first_seen_at": item["first_seen_at"],
             "read_at": item["read_at"],
@@ -323,7 +341,10 @@ class AgentCoordinator:
             state = "DELIVERED · READ ACK REQUIRED"
         prefix = "ALERT · " if item["alert"] else ""
         sender = public_agent_name(item["sender_agent_id"])
-        target = "all" if item["target_name"] is None else "you"
+        if item.get("task_namespace") and item.get("task_id"):
+            target = f"task {item['task_namespace']}/{item['task_id']}"
+        else:
+            target = "all" if item["target_name"] is None else "you"
         full = True
         if item["first_seen_at"]:
             seen_age = (now - parse_utc(item["first_seen_at"])).total_seconds()
@@ -524,6 +545,8 @@ class AgentCoordinator:
         message_hash=None,
         require_reply=False,
         alert=False,
+        namespace=None,
+        task_id=None,
     ):
         lifecycle = await self.validate(agent_id, "message")
         if lifecycle:
@@ -539,7 +562,13 @@ class AgentCoordinator:
                 }
             recipient = await self.store.recipient_record(message_hash, agent_id)
             if text is None:
-                if target is not None or require_reply or alert:
+                if (
+                    target is not None
+                    or require_reply
+                    or alert
+                    or namespace is not None
+                    or task_id is not None
+                ):
                     return {
                         "ok": False,
                         "agent_name": public_agent_name(agent_id),
@@ -556,9 +585,18 @@ class AgentCoordinator:
                         "error": "message.ack: caller is neither sender nor recipient",
                     }
                 receipts = await self.store.message_receipts(message_hash)
-                return self._message_response(agent_id, message_hash, receipts)
+                response = self._message_response(agent_id, message_hash, receipts)
+                response["namespace"] = original.get("task_namespace")
+                response["task_id"] = original.get("task_id")
+                return response
 
-            if target is not None or require_reply or alert:
+            if (
+                target is not None
+                or require_reply
+                or alert
+                or namespace is not None
+                or task_id is not None
+            ):
                 return {
                     "ok": False,
                     "agent_name": public_agent_name(agent_id),
@@ -582,12 +620,35 @@ class AgentCoordinator:
                 [original["sender_agent_id"]],
                 False,
                 False,
+                task_namespace=original.get("task_namespace"),
+                task_id=original.get("task_id"),
             )
-            await self.store.mark_replied(message_hash, agent_id, reply_hash, utc_text())
+            replied_at = utc_text()
+            await self.store.mark_replied(message_hash, agent_id, reply_hash, replied_at)
+            if (
+                original.get("task_namespace")
+                and original.get("task_id")
+                and self.task_store is not None
+            ):
+                await self.task_store.add_event(
+                    original["task_namespace"],
+                    original["task_id"],
+                    "message",
+                    agent_id=agent_id,
+                    payload={
+                        "message_hash": reply_hash,
+                        "reply_to": message_hash,
+                        "text": text,
+                        "delivered_to": [public_agent_name(original["sender_agent_id"])],
+                    },
+                    now=replied_at,
+                )
             receipts = await self.store.message_receipts(message_hash)
             response = self._message_response(agent_id, message_hash, receipts)
             response["reply_message_hash"] = reply_hash
             response["delivered_to"] = [public_agent_name(original["sender_agent_id"])]
+            response["namespace"] = original.get("task_namespace")
+            response["task_id"] = original.get("task_id")
             return response
 
         if not text:
@@ -595,6 +656,18 @@ class AgentCoordinator:
                 "ok": False,
                 "agent_name": public_agent_name(agent_id),
                 "error": "message.text: text is required when sending",
+            }
+        if (namespace is None) != (task_id is None):
+            return {
+                "ok": False,
+                "agent_name": public_agent_name(agent_id),
+                "error": "message.task: namespace and task_id must be provided together",
+            }
+        if target is not None and namespace is not None:
+            return {
+                "ok": False,
+                "agent_name": public_agent_name(agent_id),
+                "error": "message.target: choose either an agent target or a task target",
             }
         if target and public_agent_name(target) != target:
             return {
@@ -610,7 +683,25 @@ class AgentCoordinator:
             if current and current["state"] == "active" and current["agent_id"] != agent_id:
                 active.append(current)
         recipients = active
-        if target:
+        if namespace is not None:
+            if self.task_store is None:
+                return {
+                    "ok": False,
+                    "agent_name": public_agent_name(agent_id),
+                    "error": "message.task: task coordination unavailable",
+                }
+            task = await self.task_store.get_task(namespace, task_id)
+            if task is None:
+                return {
+                    "ok": False,
+                    "agent_name": public_agent_name(agent_id),
+                    "error": f"message.task: unknown task {namespace}/{task_id}",
+                }
+            claimed = {
+                item["agent_id"] for item in await self.task_store.active_claims(namespace, task_id)
+            }
+            recipients = [item for item in active if item["agent_id"] in claimed]
+        elif target:
             recipients = [
                 item for item in recipients if public_agent_name(item["agent_id"]) == target
             ]
@@ -620,7 +711,7 @@ class AgentCoordinator:
                     "agent_name": public_agent_name(agent_id),
                     "error": f"message.target: active agent {target!r} not found",
                 }
-        if not recipients:
+        if not recipients and namespace is None:
             return {
                 "ok": False,
                 "agent_name": public_agent_name(agent_id),
@@ -633,12 +724,30 @@ class AgentCoordinator:
             [item["agent_id"] for item in recipients],
             require_reply or alert,
             alert,
+            task_namespace=namespace,
+            task_id=task_id,
         )
         self._inc("terminal_mcp_coordination_messages_total")
+        if namespace is not None and self.task_store is not None:
+            await self.task_store.add_event(
+                namespace,
+                task_id,
+                "message",
+                agent_id=agent_id,
+                payload={
+                    "message_hash": allocated_hash,
+                    "text": text,
+                    "require_reply": bool(require_reply or alert),
+                    "alert": bool(alert),
+                    "delivered_to": [public_agent_name(item["agent_id"]) for item in recipients],
+                },
+            )
         return {
             "ok": True,
             "agent_name": public_agent_name(agent_id),
             "message_hash": allocated_hash,
+            "namespace": namespace,
+            "task_id": task_id,
             "delivered_to": [public_agent_name(item["agent_id"]) for item in recipients],
             "seen_by": [],
             "read_by": [],
@@ -648,7 +757,16 @@ class AgentCoordinator:
         }
 
     async def _create_message(
-        self, sender_agent_id, text, target_name, recipient_ids, require_reply, alert
+        self,
+        sender_agent_id,
+        text,
+        target_name,
+        recipient_ids,
+        require_reply,
+        alert,
+        *,
+        task_namespace=None,
+        task_id=None,
     ):
         created_at = utc_text()
         for _ in range(32):
@@ -663,6 +781,8 @@ class AgentCoordinator:
                     recipient_ids,
                     require_reply=require_reply,
                     alert=alert,
+                    task_namespace=task_namespace,
+                    task_id=task_id,
                 )
                 return allocated_hash
             except IntegrityError:
@@ -693,6 +813,22 @@ class AgentCoordinator:
             "finished": True,
             **await self.session_context(agent_id),
         }
+
+    async def _managed_task_refs(self, agent_id):
+        if self.task_store is None:
+            return []
+        priorities = {3: "P0", 2: "P1", 1: "P2", 0: "P3"}
+        rows = await self.task_store.claims_for_agent(agent_id, active_only=True)
+        return [
+            {
+                "namespace": item["namespace"],
+                "task_id": item["task_id"],
+                "lane": item["lane"],
+                "priority": priorities.get(int(item["priority"]), "P3"),
+                "state": item["state"],
+            }
+            for item in rows
+        ]
 
     async def overview(
         self,
@@ -748,33 +884,44 @@ class AgentCoordinator:
             )
             recent = await self.store.recent_commands(session["agent_id"], 1)
             last_command = recent[0] if recent else None
+            idle_seconds = max(
+                0, int((now - parse_utc(session["last_activity_at"])).total_seconds())
+            )
+            session_age_seconds = max(
+                0, int((now - parse_utc(session["registered_at"])).total_seconds())
+            )
             record = {
                 "name": public_agent_name(session["agent_id"]),
                 "status": await self._session_status(session, task_age=task_age),
                 "last_activity": relative_time(session["last_activity_at"], now),
                 "last_activity_at": session["last_activity_at"],
+                "idle_seconds": idle_seconds,
+                "session_age_seconds": session_age_seconds,
                 "intent": session["intent"],
                 "current_step": session["current_step"],
-                "preferred_queue_id": session["preferred_queue_id"],
-                "last_command": last_command,
                 "end_reason": session["end_reason"],
             }
             obligations = await self.store.message_obligations(session["agent_id"])
             activity = await self.store.latest_activity(session["agent_id"])
             record["last_activity_tool"] = activity["tool"] if activity else None
             record["last_activity_command_hash"] = activity["command_hash"] if activity else None
-            record["messages_awaiting_read"] = sum(1 for m in obligations if m["read_at"] is None)
-            record["messages_awaiting_reply"] = sum(
-                1 for m in obligations if m["require_reply"] and m["replied_at"] is None
-            )
-            record["alerts_pending"] = sum(
-                1 for m in obligations if m["alert"] and m["replied_at"] is None
-            )
+            unread = sum(1 for m in obligations if m["read_at"] is None)
+            replies = sum(1 for m in obligations if m["require_reply"] and m["replied_at"] is None)
+            alerts = sum(1 for m in obligations if m["alert"] and m["replied_at"] is None)
+            if unread:
+                record["messages_awaiting_read"] = unread
+            if replies:
+                record["messages_awaiting_reply"] = replies
+            if alerts:
+                record["alerts_pending"] = alerts
             if target:
                 message_journal = await self.store.message_journal(session["agent_id"], cutoff)
                 record["message_journal"] = [
                     self._message_obligation_record(item) for item in message_journal
                 ]
+            if show_commands or target:
+                record["last_command"] = last_command
+                record["preferred_queue_id"] = session["preferred_queue_id"]
             if show_details:
                 record.update(
                     {
@@ -785,6 +932,9 @@ class AgentCoordinator:
                         "ended_at": session["ended_at"],
                     }
                 )
+            managed_tasks = await self._managed_task_refs(session["agent_id"])
+            if managed_tasks:
+                record["managed_tasks"] = managed_tasks
             records.append(record)
 
         selected = sessions[0] if sessions else None
@@ -808,17 +958,25 @@ class AgentCoordinator:
                 idle = max(0, int((now - parse_utc(session["last_activity_at"])).total_seconds()))
                 if agent_id and session["agent_id"] == agent_id:
                     continue
-                active_records.append(
-                    {
-                        "name": record["name"],
-                        "idle_seconds": idle,
-                        "task_summary": session["task_summary"],
-                        "intent": session["intent"],
-                        "work_scope": session["work_scope"],
-                        "current_step": session["current_step"],
-                        "recent_commands": await self.store.recent_commands(session["agent_id"], 3),
-                    }
-                )
+                active_record = {
+                    "name": record["name"],
+                    "status": record["status"],
+                    "session_age_seconds": record["session_age_seconds"],
+                    "idle_seconds": idle,
+                    "intent": session["intent"],
+                    "current_step": session["current_step"],
+                }
+                if show_details:
+                    active_record["task_summary"] = session["task_summary"]
+                    active_record["work_scope"] = session["work_scope"]
+                if show_commands:
+                    active_record["recent_commands"] = await self.store.recent_commands(
+                        session["agent_id"], 3
+                    )
+                managed_tasks = await self._managed_task_refs(session["agent_id"])
+                if managed_tasks:
+                    active_record["managed_tasks"] = managed_tasks
+                active_records.append(active_record)
 
         own = await self.store.get_session(agent_id) if agent_id else None
         self_payload = None
@@ -834,6 +992,9 @@ class AgentCoordinator:
                 "current_step": own["current_step"],
                 "preferred_queue_id": own["preferred_queue_id"],
             }
+            managed_tasks = await self._managed_task_refs(agent_id)
+            if managed_tasks:
+                self_payload["managed_tasks"] = managed_tasks
             if reveal_self_id:
                 self_payload["agent_id"] = agent_id
         overlaps = find_scope_overlaps(own["work_scope"] if own else [], active_records)
@@ -842,9 +1003,9 @@ class AgentCoordinator:
             "self": self_payload,
             "active": active_records[: self.policy.max_active_agents],
             "sessions": records,
-            "intent_journal": intent_journal,
-            "command_journal": command_journal,
-            "overlaps": overlaps,
+            "intent_journal": intent_journal or None,
+            "command_journal": command_journal or None,
+            "overlaps": overlaps or None,
             "additional_active_agents": max(0, len(active_records) - self.policy.max_active_agents),
             **caller_context,
         }

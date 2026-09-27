@@ -4,8 +4,10 @@ from sqlite3 import IntegrityError
 
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.agents import AgentCoordinator
-from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
+from terminal_mcp.core.orchestration import normalize_preview, public_agent_name, utc_text
+from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.agents import AgentStore
+from terminal_mcp.storage.tasks import TaskStore
 
 DEFAULT_READ_LINES = 500
 MAX_READ_LINES = 1000
@@ -26,6 +28,30 @@ def _budget(seconds):
 def _error(method, stage, exc):
     reason = str(exc).strip() or exc.__class__.__name__
     return f"{method}.{stage}: {reason}"
+
+
+def _compact_context(context):
+    """Return only coordination data that changes the caller's next action."""
+    keep = {}
+    truthy = (
+        "session_expired",
+        "registration_required",
+        "task_context_expired",
+        "coordination_message_pending",
+        "unread_message_pending",
+        "reply_required_pending",
+        "alert_pending",
+    )
+    for key in truthy:
+        if context.get(key):
+            keep[key] = True
+    for key in ("pending_messages", "alert_messages", "reply_required_messages"):
+        if context.get(key):
+            keep[key] = context[key]
+    if context.get("session_warning"):
+        keep["session_warning"] = context["session_warning"]
+        keep["session_remaining_seconds"] = context.get("session_remaining_seconds")
+    return keep
 
 
 class TerminalService:
@@ -50,11 +76,34 @@ class TerminalService:
         self.events = events
         self.metrics = metrics
         self.agent_policy = agent_policy or AgentPolicy()
+        self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
+        self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
         self.agent_coordinator = (
-            AgentCoordinator(AgentStore(repo.path), metrics, self.agent_policy)
-            if hasattr(repo, "path")
+            AgentCoordinator(
+                self.agent_store, metrics, self.agent_policy, task_store=self.task_store
+            )
+            if self.agent_store
             else None
         )
+        self.task_coordinator = (
+            TaskCoordinator(
+                self.task_store,
+                self.agent_store,
+                metrics,
+                session_ttl_seconds=self.agent_policy.idle_ttl_seconds,
+                max_session_seconds=self.agent_policy.max_session_seconds,
+            )
+            if self.task_store
+            else None
+        )
+
+    async def _operational_context(self, agent_id, tool):
+        if not agent_id or not self.agent_coordinator:
+            return {}
+        lifecycle = await self.agent_coordinator.touch_if_active(agent_id, tool)
+        if lifecycle:
+            return _compact_context(lifecycle)
+        return _compact_context(await self.awareness(agent_id, surface_messages=True))
 
     async def awareness(self, agent_id=None, *, surface_messages=False):
         active_agents = (
@@ -73,9 +122,7 @@ class TerminalService:
         return {
             "active_agents": active_agents,
             **await self.agent_coordinator.session_context(agent_id),
-            **await self.agent_coordinator.message_state(
-                agent_id, surface=surface_messages
-            ),
+            **await self.agent_coordinator.message_state(agent_id, surface=surface_messages),
         }
 
     async def _create_with_hash(
@@ -91,9 +138,7 @@ class TerminalService:
                     cmd_hash=cmd_hash,
                     agent_id=attribution_agent_id,
                     command_type=command_type,
-                    command_preview=normalize_preview(
-                        cmd, self.agent_policy.command_preview_chars
-                    ),
+                    command_preview=normalize_preview(cmd, self.agent_policy.command_preview_chars),
                     queue_id=queue_id,
                 )
             except IntegrityError:
@@ -110,9 +155,7 @@ class TerminalService:
             )
         if requested_queue_id is not None:
             if requested_queue_id < 1 or requested_queue_id > self.terminal.queue_workers:
-                raise ValueError(
-                    f"queue_id must be between 1 and {self.terminal.queue_workers}"
-                )
+                raise ValueError(f"queue_id must be between 1 and {self.terminal.queue_workers}")
             return requested_queue_id
         return await self.terminal.least_loaded_queue()
 
@@ -135,7 +178,7 @@ class TerminalService:
                     }
                 )
                 return response
-            gate_context = gate["context"]
+            gate_context = _compact_context(gate["context"])
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -152,9 +195,9 @@ class TerminalService:
                 await self.terminal.submit(command)
                 submitted = True
             if agent_id and self.agent_coordinator:
-                await self.agent_coordinator.record_command(
-                    agent_id, "run", command.cmd_hash
-                )
+                await self.agent_coordinator.record_command(agent_id, "run", command.cmd_hash)
+                if self.task_coordinator:
+                    await self.task_coordinator.record_command(agent_id, command.cmd_hash, "run")
             position = await self.repo.queue_position(command.cmd_hash)
             return {
                 "ok": True,
@@ -163,15 +206,6 @@ class TerminalService:
                 "queue_position": position,
                 "error": None,
                 **gate_context,
-                **(
-                    {
-                        "active_agents": await self.agent_coordinator.active_snapshot(
-                            exclude_agent_id=agent_id
-                        )
-                    }
-                    if agent_id and self.agent_coordinator
-                    else {}
-                ),
             }
         except asyncio.CancelledError:
             if command is not None and not submitted:
@@ -196,11 +230,7 @@ class TerminalService:
                 "queue_id": None,
                 "queue_position": None,
                 "error": f"run.{stage}: timed out after 2000 ms",
-                **(
-                    await self.awareness(agent_id)
-                    if agent_id
-                    else {}
-                ),
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
         except Exception as exc:
             if command is not None:
@@ -212,11 +242,7 @@ class TerminalService:
                 "queue_id": None,
                 "queue_position": None,
                 "error": _error("run", stage, exc),
-                **(
-                    await self.awareness(agent_id)
-                    if agent_id
-                    else {}
-                ),
+                **(await self.awareness(agent_id) if agent_id else {}),
             }
 
     @staticmethod
@@ -237,14 +263,10 @@ class TerminalService:
             )
         return rendered
 
-    async def read(
-        self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None, agent_id=None
-    ):
+    async def read(self, cmd_hash=None, lines_count=DEFAULT_READ_LINES, offset=None, agent_id=None):
         gate_context = {}
         if agent_id and self.agent_coordinator:
-            gate = await self.agent_coordinator.gate(
-                agent_id, "read", surface_messages=True
-            )
+            gate = await self.agent_coordinator.gate(agent_id, "read", surface_messages=True)
             if gate["blocked"]:
                 return {
                     "lines": [],
@@ -262,18 +284,12 @@ class TerminalService:
                     "output_bytes": None,
                     **gate["response"],
                 }
-            gate_context = gate["context"]
+            gate_context = _compact_context(gate["context"])
         if self.runtime:
             await self.runtime.before_tool_call()
         limit = max(1, min(int(lines_count), MAX_READ_LINES))
         result = {
             "ok": True,
-            "agent_name": public_agent_name(agent_id),
-            "active_agents": (
-                await self.agent_coordinator.active_snapshot(exclude_agent_id=agent_id)
-                if self.agent_coordinator
-                else []
-            ),
             **gate_context,
             "lines": [],
             "next_offset": 0,
@@ -360,10 +376,7 @@ class TerminalService:
 
     async def recovery(self, cmd, agent_id=None):
         caller_agent_id = agent_id or ANONYMOUS_AGENT_ID
-        context = {}
-        if agent_id and self.agent_coordinator:
-            await self.agent_coordinator.touch_if_active(agent_id, "recovery")
-            context = await self.awareness(agent_id, surface_messages=True)
+        context = await self._operational_context(agent_id, "recovery")
         if self.runtime:
             await self.runtime.before_tool_call()
         command = None
@@ -374,9 +387,11 @@ class TerminalService:
                 cmd, "running", caller_agent_id, "recovery", queue_id=None
             )
             if agent_id and self.agent_coordinator:
-                await self.agent_coordinator.record_command(
-                    agent_id, "recovery", command.cmd_hash
-                )
+                await self.agent_coordinator.record_command(agent_id, "recovery", command.cmd_hash)
+                if self.task_coordinator:
+                    await self.task_coordinator.record_command(
+                        agent_id, command.cmd_hash, "recovery"
+                    )
             stage = "execute"
             duration_ms = await self.terminal.recovery(
                 command, timeout_seconds=_budget(RECOVERY_TIMEOUT_SECONDS)
@@ -438,10 +453,7 @@ class TerminalService:
             }
 
     async def cancel(self, cmd_hash, agent_id=None):
-        context = {}
-        if agent_id and self.agent_coordinator:
-            await self.agent_coordinator.touch_if_active(agent_id, "cancel")
-            context = await self.awareness(agent_id, surface_messages=True)
+        context = await self._operational_context(agent_id, "cancel")
         if self.runtime:
             await self.runtime.before_tool_call()
         stage = "lookup"
@@ -491,10 +503,7 @@ class TerminalService:
             }
 
     async def health(self, auth_mode, agent_id=None):
-        context = {}
-        if agent_id and self.agent_coordinator:
-            await self.agent_coordinator.touch_if_active(agent_id, "health")
-            context = await self.awareness(agent_id, surface_messages=True)
+        context = await self._operational_context(agent_id, "health")
         if self.runtime:
             await self.runtime.before_tool_call()
         timeout = 5 if self.health_command else HEALTH_TIMEOUT_SECONDS
@@ -521,6 +530,8 @@ class TerminalService:
                     "terminal": terminal,
                     **context,
                 }
+                if self.task_coordinator:
+                    result["workflow"] = await self.task_coordinator.health()
                 if self.health_command:
                     custom = await self.terminal.capture(
                         self.health_command,
@@ -588,6 +599,8 @@ class TerminalService:
         message_hash=None,
         require_reply=False,
         alert=False,
+        namespace=None,
+        task_id=None,
     ):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
@@ -598,9 +611,17 @@ class TerminalService:
             message_hash=message_hash,
             require_reply=require_reply,
             alert=alert,
+            namespace=namespace,
+            task_id=task_id,
         )
-        result.update(await self.agent_coordinator.session_context(agent_id))
-        result.update(await self.agent_coordinator.message_state(agent_id, surface=True))
+        result.update(
+            _compact_context(
+                {
+                    **await self.agent_coordinator.session_context(agent_id),
+                    **await self.agent_coordinator.message_state(agent_id, surface=True),
+                }
+            )
+        )
         return result
 
     async def agents(
@@ -626,10 +647,50 @@ class TerminalService:
             since_minutes=since_minutes,
         )
 
+    async def tasks(
+        self,
+        *,
+        namespace=None,
+        task_id=None,
+        lane=None,
+        state=None,
+        show_details=False,
+        show_done=False,
+        limit=50,
+        cursor=None,
+    ):
+        if not self.task_coordinator:
+            return {"ok": False, "error": "task coordination unavailable"}
+        return await self.task_coordinator.list(
+            namespace=namespace,
+            task_id=task_id,
+            lane=lane,
+            state=state,
+            show_details=show_details,
+            show_done=show_done,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    async def task(self, agent_id, **kwargs):
+        if not self.task_coordinator or not self.agent_coordinator:
+            return {"ok": False, "error": "task coordination unavailable", "warnings": []}
+        gate = await self.agent_coordinator.gate(agent_id, "task", surface_messages=True)
+        if gate["blocked"]:
+            response = gate["response"]
+            response.setdefault("warnings", [])
+            response.setdefault("task", None)
+            return response
+        result = await self.task_coordinator.mutate(agent_id, **kwargs)
+        result.update(_compact_context(gate["context"]))
+        return result
+
     async def agent_finish(self, agent_id):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
         pending = await self.agent_coordinator.message_state(agent_id, surface=True)
+        if self.task_coordinator:
+            await self.task_coordinator.store.release_claims(agent_id=agent_id, now=utc_text())
         result = await self.agent_coordinator.finish(agent_id)
-        result.update(pending)
+        result.update(_compact_context(pending))
         return result

@@ -138,7 +138,8 @@ class SqliteRepository:
                 CREATE TABLE IF NOT EXISTS coordination_messages(
                     message_hash TEXT PRIMARY KEY, sender_agent_id TEXT NOT NULL,
                     target_name TEXT, text TEXT NOT NULL, created_at TEXT NOT NULL,
-                    require_reply INTEGER NOT NULL DEFAULT 0, alert INTEGER NOT NULL DEFAULT 0
+                    require_reply INTEGER NOT NULL DEFAULT 0, alert INTEGER NOT NULL DEFAULT 0,
+                    task_namespace TEXT, task_id TEXT
                 );
                 CREATE TABLE IF NOT EXISTS coordination_message_recipients(
                     message_hash TEXT NOT NULL, recipient_agent_id TEXT NOT NULL,
@@ -147,6 +148,42 @@ class SqliteRepository:
                     replied_at TEXT, reply_message_hash TEXT,
                     PRIMARY KEY(message_hash, recipient_agent_id)
                 );
+                CREATE TABLE IF NOT EXISTS work_items(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
+                    lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
+                    description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+                    resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
+                    cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT,
+                    revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(namespace, task_id)
+                );
+                CREATE TABLE IF NOT EXISTS work_claims(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, task_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL, claimed_at TEXT NOT NULL, released_at TEXT,
+                    FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS work_dependencies(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL,
+                    dependency_namespace TEXT NOT NULL, dependency_task_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(namespace,task_id,dependency_namespace,dependency_task_id),
+                    FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS work_reviews(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL, candidate_ref TEXT NOT NULL DEFAULT '',
+                    dimension TEXT NOT NULL CHECK(dimension IN ('A','C','R')), verdict TEXT NOT NULL,
+                    agent_id TEXT NOT NULL, evidence_json TEXT NOT NULL DEFAULT '{}',
+                    warnings_json TEXT NOT NULL DEFAULT '[]', reviewed_at TEXT NOT NULL,
+                    PRIMARY KEY(namespace,task_id,candidate_ref,dimension),
+                    FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS work_events(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, task_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL, agent_id TEXT, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+                    FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+                );
                 CREATE INDEX IF NOT EXISTS ix_agent_sessions_last_activity ON agent_sessions(last_activity_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_agent_task_events_agent ON agent_task_events(agent_id, id DESC);
                 CREATE INDEX IF NOT EXISTS ix_command_agent_agent ON command_agent_attribution(agent_id, created_at DESC);
@@ -154,6 +191,20 @@ class SqliteRepository:
                 CREATE INDEX IF NOT EXISTS ix_agent_activity_agent ON agent_activity_events(agent_id, id DESC);
                 CREATE INDEX IF NOT EXISTS ix_coord_message_recipient_legacy
                     ON coordination_message_recipients(recipient_agent_id, read_at);
+                CREATE INDEX IF NOT EXISTS ix_work_items_state
+                    ON work_items(namespace,state,priority DESC,updated_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_work_items_lane
+                    ON work_items(namespace,lane,state,priority DESC,updated_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_work_claims_active
+                    ON work_claims(namespace,task_id,released_at,claimed_at DESC);
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_work_claims_agent_active
+                    ON work_claims(namespace,task_id,agent_id) WHERE released_at IS NULL;
+                CREATE INDEX IF NOT EXISTS ix_work_dependencies_target
+                    ON work_dependencies(dependency_namespace,dependency_task_id);
+                CREATE INDEX IF NOT EXISTS ix_work_reviews_task
+                    ON work_reviews(namespace,task_id,candidate_ref,dimension);
+                CREATE INDEX IF NOT EXISTS ix_work_events_task
+                    ON work_events(namespace,task_id,id DESC);
                 """
             )
             await self._migrate(db)
@@ -164,7 +215,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=5")
+            await db.execute("PRAGMA user_version=7")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
@@ -206,6 +257,8 @@ class SqliteRepository:
             [
                 ("require_reply", "INTEGER NOT NULL DEFAULT 0"),
                 ("alert", "INTEGER NOT NULL DEFAULT 0"),
+                ("task_namespace", "TEXT"),
+                ("task_id", "TEXT"),
             ],
         )
         recipient_columns = await add_columns(
@@ -245,6 +298,10 @@ class SqliteRepository:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_coord_message_recipient "
             "ON coordination_message_recipients(recipient_agent_id, read_at, replied_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_coord_messages_task "
+            "ON coordination_messages(task_namespace,task_id,created_at)"
         )
 
     async def _migrate_legacy_output(self, db):

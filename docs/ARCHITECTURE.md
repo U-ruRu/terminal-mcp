@@ -2,7 +2,7 @@
 
 ## Layers
 
-`terminal_mcp.core` owns command orchestration, Agent Session policy, coordination messages and queue selection. `terminal_mcp.storage` owns durable SQLite state, the disposable output-cache and atomic command transitions. MCP and HTTP are thin transports over one `TerminalService`. `terminal_mcp.terminal` owns process spawning, bounded output capture and worker execution.
+`terminal_mcp.core` owns command orchestration, Agent Session policy, coordination messages, optional managed-task coordination and queue selection. `terminal_mcp.storage` owns durable SQLite state, managed-task persistence, the disposable output-cache and atomic command transitions. MCP and HTTP are thin transports over one `TerminalService`. `terminal_mcp.terminal` owns process spawning, bounded output capture and worker execution.
 
 ## Agent policy
 
@@ -24,7 +24,7 @@ Messages use a recipient state machine persisted in SQLite:
 
 `seen` means Terminal MCP surfaced the message in a tool response. `read` requires an explicit `message(agent_id, message_hash=...)` acknowledgement. A seen but unacknowledged message keeps its full text visible for at least 180 seconds and at least five surfaced responses; afterward it remains as a compact reminder until acknowledgement.
 
-`require_reply=true` keeps `run` blocked after acknowledgement until the recipient sends `message(agent_id, message_hash=..., text=...)`. `alert=true` implies a required reply and is rendered as `ALERT` in every permitted agent-bound response until replied. Automatic session ALERTs are ordinary persisted alerts from the system sender and can therefore be acknowledged/replied through the same API; a later alert is created after the configured repeat interval if the session continues. Broadcast messages snapshot recipients at send time and keep per-recipient receipts.
+`require_reply=true` keeps `run` blocked after acknowledgement until the recipient sends `message(agent_id, message_hash=..., text=...)`. `alert=true` implies a required reply and is rendered as `ALERT` in every permitted agent-bound response until replied. Automatic session ALERTs are ordinary persisted alerts from the system sender and can therefore be acknowledged/replied through the same API; a later alert is created after the configured repeat interval if the session continues. Broadcast messages snapshot recipients at send time and keep per-recipient receipts. A send with `namespace + task_id` addresses the managed task: current live claimants are snapshotted as recipients while the message reference and body are also appended to durable task history, preserving the coordination note across claimant turnover.
 
 ## Numbered execution queues
 
@@ -36,11 +36,23 @@ Agent sessions store only `preferred_queue_id`. The first `run` without an expli
 
 Workers reconcile SQLite periodically in addition to wake-up events, so a persisted queued row is eventually claimed even if an event is lost. `recovery` remains a separate immediate execution path outside numbered queues.
 
+## Managed task coordination
+
+Managed tasks are optional durable coordination state layered over Agent Sessions. Ad-hoc server work requires no task. Every managed task belongs to a required namespace and uses one fixed lane: `implementation`, `review`, `release`, `integration` or `general`. Durable states are intentionally generic: `ready`, `blocked`, `deferred`, `done`; current activity is derived from live claims.
+
+Task ownership is advisory and observable. Multiple active claims are permitted, with structured warnings carrying the current claim set. Dependency, self-review, stale-candidate and unusual-transition conditions are also warnings rather than workflow locks. Hard blocking remains the responsibility of the existing Agent Session gate for alerts/lifecycle safety.
+
+Review is modeled as dimensions on one candidate: `A` architecture, `C` correctness/contracts and `R` runtime quality. A qualified independent agent may cover multiple dimensions in one pass. Candidate references, dimensions, verdicts and evidence are persisted separately from task metadata.
+
+The task store persists `work_items`, claims, dependencies, reviews and append-only events in durable SQLite. Optimistic task revisions make concurrent updates observable. Repository metadata is optional resource context rather than a storage prerequisite. Finishing an Agent Session releases its live task claims while retaining durable task/checkpoint history. Active claims are projected into compact `agents()` records, task-bound terminal commands append attribution events, and workflow health exposes only aggregate state/lane/claim/review counts plus stale-claim count.
+
+`tasks` is the compact read-only observation surface; `task` is the explicit mutation surface. The scheduler returns pressure/recommendations and leaves task selection to agents. MCP and OpenAPI Actions call the same service/domain implementation.
+
 ## Observation and journals
 
-`agents()` is also an anonymous read-only observer. It can return recent sessions without creating an Agent Session. `target` selects a public agent name and returns its last activity tool plus the persisted recipient message journal with `delivered`, `seen`, `read`, and `replied` states. `show_details`, `show_intents`, and `show_commands` expand the current plan, the persisted intent journal and the command journal. `command_hash` returns the full original command metadata, while output remains the responsibility of `read`. `since_minutes` provides a relative history window.
+`agents()` is also an anonymous read-only observer. Compact output is the default: enough session/fleet state for the next coordination decision, with task references when present. `target` selects one public agent. `show_details`, `show_intents`, and `show_commands` expand plans and journals only when requested; `command_hash` returns the full original command metadata, while output remains the responsibility of `read`. `since_minutes` provides a relative history window. Normal `run`/`read` success responses avoid repeating fleet/session context and attach it when warnings, messages, alerts or other exceptional coordination state make it actionable.
 
-Durable SQLite persists sessions, task events, activity, command attribution, queue metadata, messages and receipts. Schema v5 migrates legacy output from the durable `lines` table into a separate disposable output-cache, removes both legacy line indexes (including the duplicate `idx_lines_hash_seq`), drops `lines`, then compacts durable SQLite. Legacy `expired` lifecycle rows are normalized to `forced`; legacy sessions that cannot satisfy the current plan schema receive an explicit forced end reason.
+Durable SQLite persists sessions, task events, activity, command attribution, queue metadata, messages, receipts and managed task state. Schema v7 adds task-addressed message metadata/indexing on top of the v6 task registry; schema v6 adds the task registry on top of the v5 output-cache migration; schema v5 migrates legacy output from the durable `lines` table into a separate disposable output-cache, removes both legacy line indexes (including the duplicate `idx_lines_hash_seq`), drops `lines`, then compacts durable SQLite. Legacy `expired` lifecycle rows are normalized to `forced`; legacy sessions that cannot satisfy the current plan schema receive an explicit forced end reason.
 
 ## Bounded output persistence
 

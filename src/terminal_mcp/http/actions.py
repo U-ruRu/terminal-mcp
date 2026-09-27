@@ -14,6 +14,8 @@ from terminal_mcp.api_models import (
     ReadResponse,
     RecoveryResponse,
     RunResponse,
+    TaskMutationResponse,
+    TasksResponse,
 )
 from terminal_mcp.core.orchestration import public_agent_name
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
@@ -46,9 +48,7 @@ class AgentStartRequest(StrictRequest):
     def validate_start(self):
         if self.agent_id is None:
             if self.task_summary is None or self.intent is None or self.details is None:
-                raise ValueError(
-                    "new registration requires task_summary, intent and details"
-                )
+                raise ValueError("new registration requires task_summary, intent and details")
         elif all(
             value is None
             for value in (self.task_summary, self.intent, self.details, self.work_scope)
@@ -75,14 +75,26 @@ class MessageRequest(AgentRequest):
     message_hash: str | None = Field(default=None, min_length=8, max_length=8)
     require_reply: bool = False
     alert: bool = False
+    namespace: str | None = Field(default=None, min_length=1, max_length=120)
+    task_id: str | None = Field(default=None, min_length=1, max_length=120)
 
     @model_validator(mode="after")
     def validate_message(self):
         if self.message_hash is not None:
-            if self.target is not None or self.require_reply or self.alert:
+            if (
+                self.target is not None
+                or self.require_reply
+                or self.alert
+                or self.namespace is not None
+                or self.task_id is not None
+            ):
                 raise ValueError("acknowledgement/reply inherits target and message policy")
         elif self.text is None:
             raise ValueError("sending requires text")
+        if (self.namespace is None) != (self.task_id is None):
+            raise ValueError("namespace and task_id must be provided together")
+        if self.target is not None and self.namespace is not None:
+            raise ValueError("choose either target or namespace+task_id")
         return self
 
 
@@ -93,6 +105,39 @@ class AgentsRequest(OptionalAgentRequest):
     show_commands: bool = False
     command_hash: str | None = Field(default=None, min_length=8, max_length=8)
     since_minutes: int | None = Field(default=None, ge=1, le=10080)
+
+
+class TasksRequest(StrictRequest):
+    namespace: str | None = Field(default=None, min_length=1, max_length=120)
+    task_id: str | None = Field(default=None, min_length=1, max_length=120)
+    lane: str | None = Field(default=None, max_length=32)
+    state: str | None = Field(default=None, max_length=32)
+    show_details: bool = False
+    show_done: bool = False
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: int | None = Field(default=None, ge=0)
+
+
+class TaskRequest(AgentRequest):
+    action: str = Field(min_length=1, max_length=24)
+    namespace: str = Field(min_length=1, max_length=120)
+    task_id: str | None = Field(default=None, max_length=120)
+    title: str | None = Field(default=None, max_length=200)
+    lane: str | None = Field(default=None, max_length=32)
+    priority: str | None = Field(default=None, max_length=2)
+    state: str | None = Field(default=None, max_length=32)
+    description: str | None = Field(default=None, max_length=8000)
+    next_action: str | None = Field(default=None, max_length=2000)
+    resource_context: dict[str, object] | None = None
+    review_requirements: list[str] | None = Field(default=None, max_length=3)
+    cooperative: bool | None = None
+    checkpoint: str | dict[str, object] | None = None
+    candidate_ref: str | None = Field(default=None, max_length=200)
+    dependencies: list[dict[str, str]] | None = Field(default=None, max_length=100)
+    dimensions: list[str] | None = Field(default=None, max_length=3)
+    verdict: str | None = Field(default=None, max_length=32)
+    evidence: str | dict[str, object] | None = None
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class RunRequest(AgentRequest):
@@ -174,6 +219,8 @@ def build_actions_router(service, auth_mode="none"):
                 message_hash=body.message_hash,
                 require_reply=body.require_reply,
                 alert=body.alert,
+                namespace=body.namespace,
+                task_id=body.task_id,
             ),
         )
 
@@ -208,11 +255,51 @@ def build_actions_router(service, auth_mode="none"):
     async def agent_finish(body: AgentRequest):
         return await observed(service, "rest", "agent_finish", service.agent_finish(body.agent_id))
 
+    @router.post(
+        "/tasks",
+        operation_id="listTasks",
+        response_model=TasksResponse,
+        response_model_exclude_none=True,
+    )
+    async def tasks(body: TasksRequest):
+        return await observed(
+            service,
+            "rest",
+            "tasks",
+            service.tasks(
+                namespace=body.namespace,
+                task_id=body.task_id,
+                lane=body.lane,
+                state=body.state,
+                show_details=body.show_details,
+                show_done=body.show_done,
+                limit=body.limit,
+                cursor=body.cursor,
+            ),
+        )
+
+    @router.post(
+        "/task",
+        operation_id="mutateTask",
+        response_model=TaskMutationResponse,
+        response_model_exclude_none=True,
+    )
+    async def task(body: TaskRequest):
+        payload = body.model_dump(exclude={"agent_id", "action", "namespace"}, exclude_none=True)
+        return await observed(
+            service,
+            "rest",
+            "task",
+            service.task(body.agent_id, action=body.action, namespace=body.namespace, **payload),
+        )
+
     @router.post("/run", operation_id="runCommand", response_model=RunResponse)
     async def run_command(body: RunRequest):
         return await observed(
-            service, "rest", "run",
-            service.run(body.cmd, agent_id=body.agent_id, queue_id=body.queue_id)
+            service,
+            "rest",
+            "run",
+            service.run(body.cmd, agent_id=body.agent_id, queue_id=body.queue_id),
         )
 
     @router.post("/recovery", operation_id="recoveryCommand", response_model=RecoveryResponse)

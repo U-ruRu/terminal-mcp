@@ -153,7 +153,7 @@ async def test_alert_blocks_work_surface_and_keeps_emergency_operations_availabl
         await service.message(receiver, message_hash=message_hash, text="Received, returning")
         unblocked = await service.read(agent_id=receiver)
         assert unblocked["ok"] is True
-        assert unblocked["alert_pending"] is False
+        assert unblocked.get("alert_pending", False) is False
     finally:
         await terminal.stop()
 
@@ -332,7 +332,7 @@ def test_v07_database_migrates_to_v08_without_reset(tmp_path):
             "SELECT cmd FROM commands WHERE hash='deadbeef'"
         ).fetchone()[0]
         assert old_command == "printf old"
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 @pytest.mark.asyncio
@@ -390,7 +390,7 @@ async def test_message_tool_response_counts_as_seen_and_observer_tracks_receipt_
             if item["message_hash"] == message_hash
         )
         assert entry["state"] == "replied"
-        assert replied["sessions"][0]["messages_awaiting_reply"] == 0
+        assert replied["sessions"][0].get("messages_awaiting_reply", 0) == 0
     finally:
         await terminal.stop()
 

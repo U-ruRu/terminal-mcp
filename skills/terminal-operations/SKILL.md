@@ -1,10 +1,10 @@
 ---
 name: terminal-operations
 description: Управляет и диагностирует Linux-сервер через подключённый терминальный инструмент. Используй для проверки здоровья и ресурсов, чтения журналов и документации, работы с репозиториями, изменения конфигурации, деплоя, перезапуска сервисов, отмены зависших команд и аварийного доступа вне numbered execution queues.
-compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, health, run, read, cancel и recovery.
+compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, agent_finish, tasks, task, health, run, read, cancel и recovery.
 metadata:
   author: U-ruRu
-  version: "1.4.0"
+  version: "1.5.0"
   language: ru
 ---
 
@@ -64,11 +64,12 @@ metadata:
 4. Если `ALERT` явно требует остановиться и вернуться к пользователю, прекрати дальнейшую работу на ближайшей безопасной точке, ответь на ALERT, заверши Agent Session через `agent_finish` и вернись в пользовательский чат. Не продолжай реализацию и не веди дополнительную coordination-переписку вместо возврата.
 5. Просматривай `pending_messages`, `reply_required_messages` и `alert_messages`. Показ сообщения означает `seen`; осознанное прочтение подтверждай `message(agent_id, message_hash=...)`.
 6. Сообщение с required reply закрывай через `message(agent_id, message_hash=..., text=...)`. `ALERT` требует ответа и блокирует normal work surface.
-7. Для отправки используй `message(agent_id, text, target=...)`; `require_reply=true` требует ответа, `alert=true` создаёт срочное обязательство. Без target выполняется broadcast active peers snapshot.
+7. Для отправки используй direct `message(agent_id, text, target=...)`, broadcast без target или task target `message(agent_id, text, namespace=..., task_id=...)`. Task target snapshot-доставляется текущим live claimants и сохраняется в durable task history. `require_reply=true` требует ответа, `alert=true` создаёт срочное обязательство.
 8. `run(agent_id, cmd, queue_id?)` запускает работу в numbered FIFO lane. Первый вызов без queue выбирает least-loaded lane, последующие используют `preferred_queue_id`. Явный номер меняет affinity.
 9. `read(agent_id?, cmd_hash?, ...)` позволяет независимо выбрать command scope и agent context. Обычное unread message не мешает read; ALERT блокирует его до reply.
-10. `agents()` используй как anonymous observer. `target` показывает last activity и message receipt journal (`delivered/seen/read/replied`); `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` дают полный handoff/journal без новой регистрации.
-11. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. Уже запущенные terminal commands продолжают жить в своих queues.
+10. `agents()` используй как anonymous observer. По умолчанию он возвращает compact fleet state; `target`, `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` раскрывают нужный контекст по запросу.
+11. Managed work веди через `tasks()` и `task(...)`: backlog локален серверу, namespace обязателен, scheduler рекомендует работу, claims явные, workflow anomalies приходят как warnings. Для ad-hoc server work managed task не требуется.
+12. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. Уже запущенные terminal commands продолжают жить в своих queues.
 
 Agent statuses: `started`, `active`, `idle`, `finished`, `forced`. Источник истины для command queue — SQLite; queue state сохраняется отдельно от Agent Session.
 

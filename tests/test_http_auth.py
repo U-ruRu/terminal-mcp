@@ -86,6 +86,8 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/message",
             "/actions/agents",
             "/actions/agent/finish",
+            "/actions/tasks",
+            "/actions/task",
             "/actions/run",
             "/actions/read",
             "/actions/recovery",
@@ -120,6 +122,35 @@ def test_bearer_actions_and_openapi(tmp_path):
         message_request = schema["components"]["schemas"]["MessageRequest"]
         assert set(message_request["required"]) == {"agent_id"}
         assert message_request["properties"]["message_hash"]["anyOf"][0]["maxLength"] == 8
+        assert message_request["properties"]["namespace"]["anyOf"][0]["maxLength"] == 120
+        assert message_request["properties"]["task_id"]["anyOf"][0]["maxLength"] == 120
+
+        created_task = client.post(
+            "/actions/task",
+            json={
+                "agent_id": agent_id,
+                "action": "create",
+                "namespace": "http",
+                "task_id": "TASK-1",
+                "title": "HTTP task target",
+            },
+            headers=headers,
+        )
+        assert created_task.status_code == 200 and created_task.json()["ok"] is True
+        task_message = client.post(
+            "/actions/message",
+            json={
+                "agent_id": agent_id,
+                "text": "Durable task note",
+                "namespace": "http",
+                "task_id": "TASK-1",
+            },
+            headers=headers,
+        )
+        assert task_message.status_code == 200
+        assert task_message.json()["namespace"] == "http"
+        assert task_message.json()["task_id"] == "TASK-1"
+        assert task_message.json()["delivered_to"] == []
 
         accepted_coordinate = client.post(
             "/actions/coordinate",

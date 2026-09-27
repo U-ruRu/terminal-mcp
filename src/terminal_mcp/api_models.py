@@ -30,9 +30,9 @@ class SessionStatus(BaseModel):
     unread_message_pending: bool | None = None
     reply_required_pending: bool | None = None
     alert_pending: bool | None = None
-    pending_messages: list[str] = Field(default_factory=list)
-    alert_messages: list[str] = Field(default_factory=list)
-    reply_required_messages: list[str] = Field(default_factory=list)
+    pending_messages: list[str] | None = None
+    alert_messages: list[str] | None = None
+    reply_required_messages: list[str] | None = None
 
 
 class RunResponse(SessionStatus):
@@ -40,13 +40,13 @@ class RunResponse(SessionStatus):
     cmd_hash: str | None = None
     queue_id: int | None = None
     queue_position: int | None = None
-    active_agents: list[str] = Field(default_factory=list)
+    active_agents: list[str] | None = None
     error: str | None = None
 
 
 class ReadResponse(SessionStatus):
     ok: bool
-    active_agents: list[str] = Field(default_factory=list)
+    active_agents: list[str] | None = None
     lines: list[str]
     next_offset: int
     overall_lines_count: int | None = None
@@ -137,6 +137,7 @@ class HealthResponse(SessionStatus):
     storage: str
     auth_mode: str
     terminal: TerminalHealth
+    workflow: dict[str, object] | None = None
     custom_command: HealthCommandResult | None = None
 
 
@@ -152,6 +153,68 @@ class RecentCommand(BaseModel):
     finished_at: str | None = None
 
 
+class WorkflowWarning(BaseModel):
+    code: str
+    severity: str = "warning"
+    message: str
+    task_id: str | None = None
+    context: dict[str, object] = Field(default_factory=dict)
+
+
+class ManagedTaskRef(BaseModel):
+    namespace: str
+    task_id: str
+    lane: str
+    priority: str
+    state: str
+
+
+class TaskClaimView(BaseModel):
+    agent_name: str
+    claimed_at: str
+
+
+class TaskCard(BaseModel):
+    namespace: str
+    task_id: str
+    title: str
+    lane: str
+    priority: str
+    state: str
+    next_action: str = ""
+    checkpoint: str | dict[str, object] = Field(default_factory=dict)
+    candidate_ref: str | None = None
+    revision: int = 1
+    cooperative: bool = False
+    active: bool = False
+    claims: list[TaskClaimView] = Field(default_factory=list)
+    review_requirements: list[str] = Field(default_factory=list)
+    description: str | None = None
+    resource_context: dict[str, object] | None = None
+    dependencies: list[dict[str, object]] | None = None
+    reviews: list[dict[str, object]] | None = None
+    events: list[dict[str, object]] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class TasksResponse(BaseModel):
+    ok: bool
+    summary: dict[str, object] | None = None
+    recommended: dict[str, object] | None = None
+    tasks: list[TaskCard] = Field(default_factory=list)
+    task: TaskCard | None = None
+    next_cursor: int | None = None
+    error: str | None = None
+
+
+class TaskMutationResponse(SessionStatus):
+    ok: bool
+    task: TaskCard | None = None
+    warnings: list[WorkflowWarning] = Field(default_factory=list)
+    error: str | None = None
+
+
 class AgentSelf(BaseModel):
     name: str
     agent_id: str | None = None
@@ -163,16 +226,20 @@ class AgentSelf(BaseModel):
     details: list[str] = Field(default_factory=list)
     current_step: int
     preferred_queue_id: int | None = None
+    managed_tasks: list[ManagedTaskRef] | None = None
 
 
 class ActiveAgent(BaseModel):
     name: str
+    status: str | None = None
+    session_age_seconds: int | None = None
     idle_seconds: int
-    task_summary: str
     intent: str
-    work_scope: list[str] = Field(default_factory=list)
-    current_step: int
-    recent_commands: list[RecentCommand]
+    current_step: int | None = None
+    task_summary: str | None = None
+    work_scope: list[str] | None = None
+    recent_commands: list[RecentCommand] | None = None
+    managed_tasks: list[ManagedTaskRef] | None = None
 
 
 class ScopeOverlap(BaseModel):
@@ -199,22 +266,25 @@ class AgentSessionRecord(BaseModel):
     status: str
     last_activity: str
     last_activity_at: str
+    idle_seconds: int | None = None
     last_activity_tool: str | None = None
     last_activity_command_hash: str | None = None
     intent: str
     current_step: int
     preferred_queue_id: int | None = None
+    session_age_seconds: int | None = None
     last_command: RecentCommand | None = None
     end_reason: str | None = None
-    messages_awaiting_read: int = 0
-    messages_awaiting_reply: int = 0
-    alerts_pending: int = 0
-    message_journal: list[MessageJournalEntry] = Field(default_factory=list)
+    messages_awaiting_read: int | None = None
+    messages_awaiting_reply: int | None = None
+    alerts_pending: int | None = None
+    message_journal: list[MessageJournalEntry] | None = None
     task_summary: str | None = None
     details: list[str] | None = None
     work_scope: list[str] | None = None
     registered_at: str | None = None
     ended_at: str | None = None
+    managed_tasks: list[ManagedTaskRef] | None = None
 
 
 class IntentJournalEntry(BaseModel):
@@ -246,10 +316,10 @@ class AgentOverviewResponse(SessionStatus):
     self: AgentSelf | None = None
     active: list[ActiveAgent] = Field(default_factory=list)
     sessions: list[AgentSessionRecord] = Field(default_factory=list)
-    intent_journal: list[IntentJournalEntry] = Field(default_factory=list)
-    command_journal: list[RecentCommand] = Field(default_factory=list)
+    intent_journal: list[IntentJournalEntry] | None = None
+    command_journal: list[RecentCommand] | None = None
     command: CommandDetail | None = None
-    overlaps: list[ScopeOverlap] = Field(default_factory=list)
+    overlaps: list[ScopeOverlap] | None = None
     additional_active_agents: int = 0
     detail: str | None = None
     error: str | None = None
@@ -261,7 +331,7 @@ class CoordinateResponse(SessionStatus):
     intent: str | None = None
     detail: str | None = None
     other_details: list[str] = Field(default_factory=list)
-    active_agents: list[str] = Field(default_factory=list)
+    active_agents: list[str] | None = None
     error: str | None = None
 
 
@@ -269,6 +339,8 @@ class MessageResponse(SessionStatus):
     ok: bool
     message_hash: str | None = None
     reply_message_hash: str | None = None
+    namespace: str | None = None
+    task_id: str | None = None
     delivered_to: list[str] = Field(default_factory=list)
     seen_by: list[str] = Field(default_factory=list)
     read_by: list[str] = Field(default_factory=list)
