@@ -2,172 +2,128 @@
 
 ## Интерфейс
 
-Подключённый terminal MCP предоставляет методы `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel` и `recovery`. Agent Session TTL составляет 300 секунд. Task lease для `run` составляет 180 секунд и обновляется registration, `agent_start(agent_id=...)` и `coordinate(step + intent)`.
+Terminal MCP 0.9.2 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
-MCP и REST Actions могут использовать общий service layer и одинаковые response-модели.
+## Agent Session
 
-## Общие статусы
+По умолчанию idle TTL равен 300 секундам, intent lease — 180 секундам, абсолютная длительность регистрации — 1500 секундам. Non-blocking warning начинается после 1200 секунд. На 1380-й секунде появляется blocking session ALERT; после reply он снимается и при продолжающейся сессии может появиться снова через 60 секунд. Пороги, repeat interval, флаг включения и текст ALERT задаются конфигурацией сервера.
 
-Статус возвращается методом `read`:
+Agent-bound operational success по умолчанию возвращает только результат операции. Session/message context добавляется, когда он меняет следующее действие: warning, unread/reply-required message, ALERT, expiry или registration requirement. Полный session/fleet context читается через observation tools.
 
-- `queued`
-- `running`
-- `completed`
-- `failed`
-- `cancelled`
-- `not_found`
-
-Поле `error` предназначено для ошибок инструмента и таймаутов. Формат: `<method>.<stage>: <reason>`. Ненулевой exit code shell-команды отражается в `exit_code`, а stderr находится в `lines`.
-
-## `health(agent_id?)`
-
-`agent_id` необязателен. Без него health остаётся anonymous диагностикой. С живым ID вызов продлевает Session TTL и включает pending messages. Возвращает состояние приложения, storage, авторизации, terminal adapter и FIFO-планировщика:
-
-- `ok`, `application`, `storage`, `auth_mode`;
-- `terminal.ok`, `user`, `uid`, `gid`, `cwd`, `privilege`, `shell`, `terminal_user`;
-- `terminal.scheduler`, `parallelism`, `queue_size`, `running_commands`;
-- необязательный `custom_command` с `command`, `lines`, `status`, `exit_code`, `error`, `ok`, `duration_ms`.
-
-Настроенная health-команда выполняется отдельно от пользовательской FIFO-очереди.
+Статусы агента: `started`, `active`, `idle`, `finished`, `forced`. `finished` означает явный `agent_finish`; `forced` имеет persisted reason.
 
 ## `agent_start(...)`
 
-Новая регистрация требует `task_summary`, `intent` и `details` (1–12 шагов по максимум 160 символов). `work_scope` optional: до четырёх элементов по 80 символов. Новый агент единственный раз получает полный внутренний ID. Существующий `agent_id` превращает вызов в update текущего плана.
+Новая регистрация требует `task_summary`, `intent` и `details`. Она единственный раз возвращает полный credential-like `agent_id`. `work_scope` остаётся optional cooperative metadata. Вызов с существующим полным `agent_id` обновляет план текущей живой сессии.
 
 ## `coordinate(agent_id, step?, intent?, show_details=false)`
 
-Только ID возвращает текущий step/intent/detail. `step` выбирает detail. `step + intent` обновляет current work и task lease. `show_details=true` добавляет compact планы peers. Intent без step недопустим.
+Читает текущий step/intent/detail. `step + intent` фиксирует новый intent event и обновляет intent lease. `show_details=true` сохраняется для compact peer coordination; историческое наблюдение выполняется через `agents`.
 
-## `message(agent_id, text?, target?, message_hash?)`
+## `message(...)`
 
-Send mode использует `text` и optional public-name `target`; без target recipients фиксируются как snapshot всех текущих active peers. Ack mode использует только `message_hash` и возвращает `read_by`.
+Send mode:
 
-```text
-HH:MM:SS a1b2c3d4 India → you: text | ack: message(a1b2c3d4)
-HH:MM:SS e5f6a7b8 India → all: text | ack: message(e5f6a7b8)
-```
+`message(agent_id, text, target?, namespace?, task_id?, require_reply=false, alert=false)`
 
-Unread message блокирует новую `run`, но не `read`, `message`, `coordinate`, `health`, `cancel` или `recovery`.
+`target` адресует active agent, отсутствие target или `target="broadcast"` создаёт broadcast active peers snapshot, а `namespace + task_id` адресуют managed task: сообщение snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history. Agent target и task target взаимоисключающие. `alert=true` автоматически требует reply.
 
-## `run(agent_id, cmd)`
+Read acknowledgement:
 
-Сохраняет команду и добавляет её в FIFO. Операция ограничена таймаутом инструмента. При невозможности завершить enqueue созданная запись должна быть удалена и не должна выполниться позднее.
+`message(agent_id, message_hash)`
 
-Запрос:
+Получатель явно подтверждает, что сообщение прочитано. Сам показ сообщения выставляет только `seen`. До acknowledgement обычное сообщение блокирует новую `run` и повторно показывается. Полный текст гарантирован минимум 180 секунд и минимум пять surfaced responses, затем остаётся compact reminder.
 
-```json
-{"cmd":"..."}
-```
+Reply:
 
-Успешный ответ:
+`message(agent_id, message_hash, text)`
 
-```json
-{"ok":true,"cmd_hash":"1a2b3c4d","error":null}
-```
+Создаёт связанный ответ исходному отправителю и закрывает reply obligation. `require_reply` блокирует `run` до reply. `ALERT` блокирует normal work surface до reply; `message`, `health`, `cancel`, `recovery` и `agent_finish` сохраняют доступ. Late-session ALERT создаётся системным sender и после снятия повторяется по configured interval, пока та же сессия продолжает использоваться.
 
-Ответ при ошибке инструмента:
+После normal `agent_finish` exact old `agent_id` в течение 300 секунд может только ACK/reply уже delivered ему message hash; grace не разрешает новые sends или другие agent tools.
 
-```json
-{"ok":false,"cmd_hash":null,"error":"run.enqueue: ..."}
-```
+Sender inspection через `message(sender_id, message_hash)` возвращает `delivered_to`, `seen_by`, `read_by`, `replied_by`.
 
-`cmd_hash` — восемь lowercase hex-символов.
+## `agents(...)`
+
+`agents()` без параметров — read-only fleet observer, регистрация для просмотра не требуется.
+
+Параметры:
+
+- `agent_id?` — контекст вызывающей Agent Session;
+- `target?` — public agent name;
+- `show_details` — план, scope и lifecycle details;
+- `show_intents` — intent journal;
+- `show_commands` — command journal с preview до configured limit;
+- `command_hash?` — полная исходная команда и metadata;
+- `since_minutes?` — относительное окно истории.
+
+По умолчанию overview компактный: status, activity age, intent/step и managed-task refs. `show_details` раскрывает plan/scope, `show_commands` — command data, `target` — выбранную session и message journal с persisted receipt state `delivered|seen|read|replied`.
+
+
+## `tasks(namespace?, task_id?, lane?, state?, tags?, show_details=false, show_done=false, show_archived=false, limit=50, cursor?)`
+
+Read-only backlog observer. `tags` uses AND semantics; `tag_counts` exposes vocabulary. Default response returns active backlog, `claimable_count`, weighted pressure and recommended task; priority sorts first, equal priority uses oldest `ready_since`. Summary includes `oldest_claimable_ready_since` / age and `missing_dependency_count`. Detailed lookup exposes dependencies, relations, claims, comments/history, archive lifecycle metadata and legacy reviews. `show_archived=true` selects archived lifecycle records; archive is not a workflow state.
+
+## `task(agent_id, action, namespace, ...)`
+
+Workflow states are `ready|blocked|deferred|done`. `done` means goal reached and requires meaningful `result`. Claimed blocked requires `blocker_reason`; release live claim requires `release_reason`. `action=comment` with `comment_text` appends durable history distinct from mutable description.
+
+Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
+
+Dependencies are a validated directed graph: self edge and cycle reject before persistence. Missing target is allowed, represented as `missing` and remains blocking. Completion satisfies prerequisite independently of archive visibility: archived done satisfied; archived unfinished blocking. `force=true` + `force_reason` is durable conscious override only for dependency claim gate.
+
+Generic relation mutations are `action=relate` / `unrelate` with `relation_kind`, `related_namespace`, `related_task_id`. Relation view entries expose direction/kind/namespace/task_id/created_at. Review uses relation kind `review_of`; success is ordinary done(result), blocking findings are comment + blocked. Reviewed task receives linked `review_feedback` event with review reference, `outcome=done|blocked`, candidate_ref and result or findings/blocker_reason.
+
+`archive` requires `archive_note`, preserves workflow state, stores `archived_at` / archive evidence, releases live claims and removes task from active backlog/pressure/recommendation. Legacy v8 archived-state rows migrate deterministically into v9 lifecycle representation. Ad-hoc terminal work still requires no managed task.
+
+## `run(agent_id, cmd, queue_id?, task_scope?)`
+
+Сохраняет команду в SQLite и помещает её в numbered FIFO lane. Первый вызов без `queue_id` выбирает least-loaded lane и сохраняет affinity. Следующие вызовы используют preferred queue. Явный `queue_id` меняет affinity.
+
+При наличии active task claims `task_scope` обязателен до enqueue: `none`, `all` или одна собственная claimed `namespace/task_id`. Scope управляет только task command events; без claims scope можно опустить или использовать `none`. Успешный ответ содержит `cmd_hash`, `queue_id` и `queue_position` (position может стать `null`, если worker уже atomically claimed команду).
+
+`run` требует live session, fresh intent, read acknowledgement всех unread messages и replies для обязательных сообщений.
 
 ## `read(agent_id?, cmd_hash?, lines_count=500, offset?)`
 
-Возвращает ограниченное окно строк. Для известного `cmd_hash` используй scoped-чтение.
+`agent_id` и `cmd_hash` независимы. `cmd_hash` выбирает scoped command output; отсутствие hash читает global stream. Обычный successful read остаётся компактным; agent context добавляется при actionable coordination state. Обычное unread message отображается и не блокирует read. `ALERT` блокирует read до reply.
 
-Для конкретной команды ответ содержит:
+Scoped response содержит `status`, `exit_code`, `queue_id`, `queue_position`, line counters, `output_truncated`, `output_retained`, `output_pruned_at`, `output_bytes` и `error`. Persisted output ограничен 4 MiB на логическую строку и 8 MiB на команду. Global lines имеют форму:
 
-- `ok`;
-- `lines`;
-- `next_offset`;
-- `overall_lines_count`;
-- `displayed_lines_count`;
-- `cmd_hash`;
-- `status`;
-- `exit_code`;
-- `error`.
+`HH:MM:SS <public-name|anonymous> <cmd_hash> qN <output>`
 
-Положительный offset задаёт позицию от начала. Отрицательный offset задаёт позицию от конца. `next_offset` передаётся в следующий вызов для последовательного чтения новых строк.
-
-Глобальное чтение без `agent_id` и `cmd_hash` предназначено для общего журнала и диагностики потерянного хэша. Команды без agent context отображаются как `anonymous`. Его cursor-семантика определяется контрактом конкретного инструмента.
+Recovery-команды без numbered lane могут не иметь `qN`.
 
 ## `cancel(cmd_hash, agent_id?)`
 
-Отменяет queued или running-команду. Ответ подтверждает принятие операции, а фактический итоговый статус проверяется через `read(cmd_hash)`.
-
-Пример ответа:
-
-```json
-{"ok":true,"cmd_hash":"1a2b3c4d","error":null}
-```
+Работает для команды любой очереди и любого агента. Queued cancellation atomically выполняет `queued -> cancelled`. Running cancellation останавливает process group и фиксирует `running -> cancelled`. Итог проверяется через `read`.
 
 ## `recovery(cmd, agent_id?)`
 
-Создаёт команду с собственным `cmd_hash`, сохраняет её и выполняет немедленно вне FIFO. Клиент ждёт завершения или таймаута инструмента.
+Persisted emergency execution вне numbered queues. Выполняется независимо от занятых lanes и остаётся доступным при ALERT. Вывод сохраняется в общем bounded output-cache и читается через `read`.
 
-Запрос содержит `cmd`. Ответ обычно содержит:
+## `health(agent_id?)`
 
-- `ok`;
-- `cmd_hash`;
-- `lines`;
-- `overall_lines_count`;
-- `displayed_lines_count`;
-- `exit_code`;
-- `error`;
-- `duration_ms`.
+Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
 
-Полный вывод после завершения или таймаута дочитывается через `read(cmd_hash)`.
+## Command status
+
+`queued`, `running`, `completed`, `failed`, `cancelled`, `not_found`.
+
+Queue lifecycle использует guarded transitions: `queued -> running|cancelled`, затем `running -> completed|failed|cancelled`.
 
 ## REST Actions
-
-Типичный HTTP-контракт:
 
 - `POST /actions/agent/start`
 - `POST /actions/coordinate`
 - `POST /actions/message`
 - `POST /actions/agents`
 - `POST /actions/agent/finish`
+- `POST /actions/tasks`
+- `POST /actions/task`
 - `POST /actions/run`
 - `POST /actions/read`
 - `POST /actions/cancel`
 - `POST /actions/recovery`
 - `GET /actions/health`
-
-Точные лимиты и дополнительные поля определяются актуальным описанием подключённого инструмента.
-
-## Метаданные безопасности клиента
-
-Клиент должен учитывать read-only и consequential/destructive metadata, опубликованные терминальным инструментом, и сопоставлять их с фактической семантикой операции.
-
-## Семантика вывода
-
-- timestamps обычно выводятся в UTC;
-- stdout и stderr сохраняют порядок, установленный реализацией;
-- structured MCP tools могут возвращать типизированный объект в `structuredContent`;
-- полный вывод команды может сохраняться в серверном storage независимо от размера response window.
-
-## Compact agent awareness
-
-`work_scope` является optional metadata. Основная координация хранится в `details`, `current_step`, `intent` и message mailbox.
-
-`RunResponse.active_agents` и `ReadResponse.active_agents` — `string[]`. Каждая строка:
-
-```text
-HH:MM:SS <public-name> <cmd_hash|started|finished> — <intent>
-```
-
-Active-awareness использует Session TTL 300 секунд; любой вызов с живым `agent_id` продлевает этот TTL. До первой команды активный агент отображается как `started`. После завершения сессии `finished` остаётся видимым 180 секунд. Внутренний suffix agent ID в этих строках не публикуется.
-
-Scoped terminal line:
-
-```text
-HH:MM:SS <output>
-```
-
-Global terminal line:
-
-```text
-HH:MM:SS <public-name|anonymous> <cmd_hash> <output>
-```

@@ -116,14 +116,25 @@ class OAuthStore:
         h = self.digest(token)
         now = int(time.time())
         async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA busy_timeout=5000")
+            await db.execute("BEGIN IMMEDIATE")
             row = await (
                 await db.execute(
-                    "SELECT client_id,scope,expires_at,revoked FROM oauth_refresh_tokens WHERE token_hash=?",  # noqa: E501
-                    (h,),
+                    "SELECT client_id,scope FROM oauth_refresh_tokens "
+                    "WHERE token_hash=? AND revoked=0 AND expires_at>=?",
+                    (h, now),
                 )
             ).fetchone()
-            if not row or row[2] < now or row[3]:
+            if not row:
+                await db.rollback()
                 return None
-            await db.execute("UPDATE oauth_refresh_tokens SET revoked=1 WHERE token_hash=?", (h,))
+            cursor = await db.execute(
+                "UPDATE oauth_refresh_tokens SET revoked=1 "
+                "WHERE token_hash=? AND revoked=0 AND expires_at>=?",
+                (h, now),
+            )
+            if cursor.rowcount != 1:
+                await db.rollback()
+                return None
             await db.commit()
         return row[0], row[1]

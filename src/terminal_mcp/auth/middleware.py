@@ -49,11 +49,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _scopes(path, method):
-        return (
-            ["terminal:execute"]
-            if path.endswith("/run") or path.endswith("/cancel") or path.startswith("/mcp")
-            else ["terminal:read"]
-        )
+        # All agent-facing tools intentionally share one non-escalating OAuth scope.
+        # Application session/coordination guardrails remain authoritative.
+        return ["terminal:read"]
 
     def _deny(self, detail):
         metadata = f"{self.s.public_base_url}/.well-known/oauth-protected-resource/mcp"

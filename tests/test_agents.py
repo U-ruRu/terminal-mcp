@@ -161,11 +161,16 @@ async def test_multi_agent_overlap_compact_limits_and_persistence(tmp_path):
     bid = b["self"]["agent_id"]
     seen = next(item for item in b["active"] if item["name"] == public_agent_name(aid))
     assert seen["intent"] == "Edit SQLite schema"
-    assert seen["recent_commands"][0]["command_hash"] == command["cmd_hash"]
+    assert "recent_commands" not in seen
+    with_commands = await service.agents(bid, show_commands=True)
+    seen_commands = next(
+        item for item in with_commands["active"] if item["name"] == public_agent_name(aid)
+    )
+    assert seen_commands["recent_commands"][0]["command_hash"] == command["cmd_hash"]
     overlap = await service.coordinate(bid, step=1, intent="Edit storage adapter")
     assert overlap["ok"] is True
     b_overview = await service.agents(bid)
-    assert b_overview["overlaps"] == []
+    assert b_overview["overlaps"] is None
     assert b_overview["self"]["work_scope"] == ["repo:mcp"]
 
     global_read = await service.read(None, 20, 0)
@@ -174,7 +179,9 @@ async def test_multi_agent_overlap_compact_limits_and_persistence(tmp_path):
         for line in global_read["lines"]
     )
     assert len(b_overview["active"]) <= 8
-    assert all(len(item["recent_commands"]) <= 3 for item in b_overview["active"])
+    assert all("recent_commands" not in item for item in b_overview["active"])
+    detailed_commands = await service.agents(bid, show_commands=True)
+    assert all(len(item.get("recent_commands", [])) <= 3 for item in detailed_commands["active"])
 
     await terminal.stop()
     repo2 = SqliteRepository(repo.path)
@@ -207,7 +214,7 @@ async def test_active_filtering_and_finish(tmp_path):
     assert finished["ok"] is True
     assert finished["agent_name"] == public_agent_name(fid)
     assert finished["finished"] is True
-    assert finished["pending_messages"] == []
+    assert finished.get("pending_messages", []) == []
     assert (await service.agents(fid))["registration_required"] is True
     await terminal.stop()
 
@@ -263,7 +270,7 @@ async def test_anonymous_command_attribution_is_persisted(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_and_read_expose_public_active_agent_awareness(tmp_path):
+async def test_run_and_read_use_compact_context_and_agents_exposes_awareness(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     first = await register(service, "First", "Observe peer", ["repo:first"])
     first_id = first["self"]["agent_id"]
@@ -272,10 +279,11 @@ async def test_run_and_read_expose_public_active_agent_awareness(tmp_path):
     second_name = public_agent_name(second_id)
 
     first_command = await service.run("printf 'first\n'", agent_id=first_id)
-    assert any(
-        f"{second_name} started — Run peer command" in line
-        for line in first_command["active_agents"]
-    )
+    assert "active_agents" not in first_command
+    overview = await service.agents(first_id)
+    peer = next(item for item in overview["active"] if item["name"] == second_name)
+    assert peer["intent"] == "Run peer command"
+    assert second_id not in str(peer)
     await wait_finished(service, first_id, first_command["cmd_hash"])
 
     peer_run = await service.run("sleep 0.2; printf 'peer\n'", agent_id=second_id)
@@ -287,36 +295,30 @@ async def test_run_and_read_expose_public_active_agent_awareness(tmp_path):
     assert peer_command.status == "running"
 
     own_run = await service.run("printf 'own\n'", agent_id=first_id)
-    peers = own_run["active_agents"]
-    assert any(f"{second_name} {peer_run['cmd_hash']} — Run peer command" in line for line in peers)
-    assert not any(f"{second_name} started" in line for line in peers)
-    assert all(re.match(r"^\d{2}:\d{2}:\d{2} ", line) for line in peers)
-    assert second_id not in str(peers)
-    assert "sleep 0.2" not in str(peers)
+    assert "active_agents" not in own_run
+    command_overview = await service.agents(first_id, show_commands=True)
+    peer = next(item for item in command_overview["active"] if item["name"] == second_name)
+    assert peer["recent_commands"][0]["command_hash"] == peer_run["cmd_hash"]
+    assert second_id not in str(peer)
+    assert peer["recent_commands"][0]["preview"].startswith("sleep 0.2")
 
     own_read = await service.read(first_command["cmd_hash"], agent_id=first_id)
-    assert own_read["agent_name"] == public_agent_name(first_id)
-    assert any(
-        f"{second_name} {peer_run['cmd_hash']} — Run peer command" in line
-        for line in own_read["active_agents"]
-    )
+    assert "active_agents" not in own_read
 
     await wait_finished(service, second_id, peer_run["cmd_hash"])
-    finished_read = await service.read(first_command["cmd_hash"], agent_id=first_id)
-    assert any(
-        f"{second_name} {peer_run['cmd_hash']} — Run peer command" in line
-        for line in finished_read["active_agents"]
-    )
+    finished_overview = await service.agents(first_id, show_commands=True)
+    peer = next(item for item in finished_overview["active"] if item["name"] == second_name)
+    assert peer["recent_commands"][0]["command_hash"] == peer_run["cmd_hash"]
+    assert peer["recent_commands"][0]["status"] == "completed"
 
     await service.agent_finish(second_id)
-    lifecycle_read = await service.read(first_command["cmd_hash"], agent_id=first_id)
-    assert any(
-        f"{second_name} finished — Run peer command" in line
-        for line in lifecycle_read["active_agents"]
-    )
+    lifecycle = await service.agents(first_id, target=second_name, show_commands=True)
+    assert lifecycle["sessions"][0]["status"] == "finished"
+    assert lifecycle["sessions"][0]["name"] == second_name
 
     await wait_finished(service, first_id, own_run["cmd_hash"])
     await terminal.stop()
+
 
 @pytest.mark.asyncio
 async def test_agent_actions_refresh_session_not_task_lease(tmp_path):
@@ -367,7 +369,7 @@ async def test_agent_actions_refresh_session_not_task_lease(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_public_name_is_reserved_for_full_session_ttl_after_finish(tmp_path, monkeypatch):
+async def test_public_name_is_reusable_after_finished_session(tmp_path, monkeypatch):
     repo, terminal, service = await runtime(tmp_path)
     ids = iter(["India-1111", "India-2222", "Juliett-3333"])
     monkeypatch.setattr(agents_module, "generate_agent_id", lambda: next(ids))
@@ -377,8 +379,8 @@ async def test_public_name_is_reserved_for_full_session_ttl_after_finish(tmp_pat
     assert (await service.agent_finish("India-1111"))["finished"] is True
 
     second = await register(service, "Second", "Work", ["repo:second"])
-    assert second["self"]["agent_id"] == "Juliett-3333"
-    assert second["self"]["name"] == "Juliett"
+    assert second["self"]["agent_id"] == "India-2222"
+    assert second["self"]["name"] == "India"
     await terminal.stop()
 
 
@@ -521,7 +523,7 @@ async def test_direct_message_delivery_blocks_run_until_ack(tmp_path):
     ack = await service.message(receiver_id, message_hash=message_hash)
     assert ack["ok"] is True
     assert ack["read_by"] == [receiver_name]
-    assert ack["pending_messages"] == []
+    assert ack.get("pending_messages", []) == []
 
     submitted = await service.run("printf 'after-ack\n'", agent_id=receiver_id)
     assert submitted["ok"] is True
@@ -549,7 +551,7 @@ async def test_broadcast_message_snapshots_recipients_and_receipts(tmp_path):
     later = await register(service, "Later", "Joined later", details=["Joined later"])
     later_id = later["self"]["agent_id"]
     later_read = await service.read("deadbeef", agent_id=later_id)
-    assert sent["message_hash"] not in str(later_read["pending_messages"])
+    assert sent["message_hash"] not in str(later_read.get("pending_messages", []))
 
     sender_status = await service.message(sender_id, message_hash=sent["message_hash"])
     assert sender_status["ok"] is True

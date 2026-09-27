@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
+from terminal_mcp.auth.middleware import AuthMiddleware
+from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
 
 
@@ -56,12 +58,16 @@ def start_agent(client, headers):
 def test_bearer_actions_and_openapi(tmp_path):
     app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha,beta"))
     with TestClient(app) as client:
+        live = client.get("/health/live")
+        assert live.status_code == 200
+        assert live.json()["version"] == "0.10.0"
         assert client.get("/actions/health").status_code == 401
         headers = {"Authorization": "Bearer alpha"}
         agent_id = start_agent(client, headers)
         health = client.get("/actions/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["agent_name"] == "anonymous"
+        assert health.json()["version"] == "0.10.0"
 
         run = client.post(
             "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
@@ -86,6 +92,8 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/message",
             "/actions/agents",
             "/actions/agent/finish",
+            "/actions/tasks",
+            "/actions/task",
             "/actions/run",
             "/actions/read",
             "/actions/recovery",
@@ -93,6 +101,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/health",
         }
         assert set(schema["paths"]) == expected_paths
+        assert schema["info"]["version"] == "0.10.0"
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
         assert set(run_request["required"]) == {"agent_id", "cmd"}
@@ -105,8 +114,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         health_operation = schema["paths"]["/actions/health"]["get"]
         health_params = health_operation.get("parameters", [])
         assert any(
-            item["name"] == "agent_id" and item["required"] is False
-            for item in health_params
+            item["name"] == "agent_id" and item["required"] is False for item in health_params
         )
         start_request = schema["components"]["schemas"]["AgentStartRequest"]
         assert start_request["properties"]["task_summary"]["anyOf"][0]["maxLength"] == 120
@@ -120,6 +128,117 @@ def test_bearer_actions_and_openapi(tmp_path):
         message_request = schema["components"]["schemas"]["MessageRequest"]
         assert set(message_request["required"]) == {"agent_id"}
         assert message_request["properties"]["message_hash"]["anyOf"][0]["maxLength"] == 8
+        assert message_request["properties"]["namespace"]["anyOf"][0]["maxLength"] == 120
+        assert message_request["properties"]["task_id"]["anyOf"][0]["maxLength"] == 120
+        tasks_request = schema["components"]["schemas"]["TasksRequest"]
+        assert tasks_request["properties"]["lane"]["anyOf"][0]["enum"] == [
+            "implementation",
+            "review",
+            "release",
+            "integration",
+            "general",
+        ]
+        assert tasks_request["properties"]["state"]["anyOf"][0]["enum"] == [
+            "ready",
+            "blocked",
+            "deferred",
+            "done",
+        ]
+        task_request = schema["components"]["schemas"]["TaskRequest"]
+        assert set(task_request["properties"]["action"]["enum"]) == {
+            "create",
+            "claim",
+            "release",
+            "update",
+            "checkpoint",
+            "comment",
+            "relate",
+            "unrelate",
+            "state",
+            "done",
+            "archive",
+        }
+        assert task_request["properties"]["priority"]["anyOf"][0]["enum"] == [
+            "P0",
+            "P1",
+            "P2",
+            "P3",
+        ]
+        for legacy_field in ("review_requirements", "dimensions", "verdict", "evidence"):
+            assert legacy_field not in task_request["properties"]
+        assert "tags" in task_request["properties"]
+        assert "force" in task_request["properties"]
+        assert "force_reason" in task_request["properties"]
+        for field in (
+            "claim_intent",
+            "blocker_reason",
+            "release_reason",
+            "archive_note",
+            "comment_text",
+            "relation_kind",
+            "related_namespace",
+            "related_task_id",
+        ):
+            assert field in task_request["properties"]
+        claim_intent = task_request["properties"]["claim_intent"]["anyOf"][0]
+        assert claim_intent["maxLength"] == 160
+        assert "tags" in schema["components"]["schemas"]["TasksRequest"]["properties"]
+        assert "task_scope" in schema["components"]["schemas"]["RunRequest"]["properties"]
+
+        task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
+        assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+        for field in (
+            "archived_at",
+            "archive_note",
+            "owner",
+            "participants",
+            "claims",
+            "relations",
+            "comments",
+        ):
+            assert field in task_card
+        claim_view = schema["components"]["schemas"]["TaskClaimView"]["properties"]
+        assert {
+            "agent_name",
+            "claimed_at",
+            "claim_age_seconds",
+            "claim_intent",
+            "role",
+        } <= set(claim_view)
+        managed_ref = schema["components"]["schemas"]["ManagedTaskRef"]["properties"]
+        assert {
+            "claimed_at",
+            "claim_age_seconds",
+            "claim_intent",
+            "role",
+        } <= set(managed_ref)
+
+        created_task = client.post(
+            "/actions/task",
+            json={
+                "agent_id": agent_id,
+                "action": "create",
+                "namespace": "http",
+                "task_id": "TASK-1",
+                "title": "HTTP task target",
+            },
+            headers=headers,
+        )
+        assert created_task.status_code == 200 and created_task.json()["ok"] is True
+        task_message = client.post(
+            "/actions/message",
+            json={
+                "agent_id": agent_id,
+                "text": "Durable task note",
+                "namespace": "http",
+                "task_id": "TASK-1",
+            },
+            headers=headers,
+        )
+        assert task_message.status_code == 200
+        assert task_message.json()["namespace"] == "http"
+        assert task_message.json()["task_id"] == "TASK-1"
+        assert task_message.json()["delivered_to"] == []
 
         accepted_coordinate = client.post(
             "/actions/coordinate",
@@ -156,10 +275,11 @@ def test_bearer_actions_and_openapi(tmp_path):
         global_read = client.post("/actions/read", json={}, headers=headers)
         assert global_read.status_code == 200
         assert global_read.json()["agent_name"] == "anonymous"
-        one_sided_read = client.post(
+        command_only_read = client.post(
             "/actions/read", json={"cmd_hash": cmd_hash}, headers=headers
         )
-        assert one_sided_read.status_code == 422
+        assert command_only_read.status_code == 200
+        assert command_only_read.json()["status"] == "completed"
 
         anonymous_cancel = client.post(
             "/actions/cancel", json={"cmd_hash": "deadbeef"}, headers=headers
@@ -206,7 +326,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
             "client_id": client_id,
             "redirect_uri": "https://chat.example/callback",
             "response_type": "code",
-            "scope": "terminal:read terminal:execute",
+            "scope": "terminal:read",
             "state": "abc",
             "code_challenge": pkce(verifier),
             "code_challenge_method": "S256",
@@ -246,10 +366,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
 
         headers = {"Authorization": f"Bearer {tokens['access_token']}"}
         start_agent(client, headers)
-        assert (
-            client.get("/actions/health", headers=headers).status_code
-            == 200
-        )
+        assert client.get("/actions/health", headers=headers).status_code == 200
         refreshed = client.post(
             "/oauth/token",
             data={
@@ -269,10 +386,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
         )
         assert reused.status_code == 400
         asyncio.run(app.state.oauth_store.delete_client(client_id))
-        assert (
-            client.get("/actions/health", headers=headers).status_code
-            == 401
-        )
+        assert client.get("/actions/health", headers=headers).status_code == 401
 
 
 def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
@@ -306,7 +420,7 @@ def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
                 data={
                     "client_id": registration["client_id"],
                     "redirect_uri": redirect_uri,
-                    "scope": "terminal:read terminal:execute",
+                    "scope": "terminal:read",
                     "state": f"state-{index}",
                     "code_challenge": pkce(verifier),
                     "code_challenge_method": "S256",
@@ -339,3 +453,31 @@ def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
                 ).status_code
                 == 200
             )
+
+
+def test_agent_facing_oauth_uses_one_read_scope():
+    for path in (
+        "/actions/run",
+        "/actions/recovery",
+        "/actions/cancel",
+        "/actions/task",
+        "/actions/agent/start",
+        "/actions/read",
+        "/mcp",
+    ):
+        assert AuthMiddleware._scopes(path, "POST") == ["terminal:read"]
+
+
+def test_refresh_rotation_is_single_use_under_concurrency(tmp_path):
+    async def scenario():
+        store = OAuthStore(tmp_path / "refresh-race.sqlite3")
+        await store.initialize()
+        client_id, _ = await store.register_client(
+            ["https://client.example/callback"], "Concurrent client", "none"
+        )
+        token = await store.create_refresh(client_id, "terminal:read", 3600)
+        results = await asyncio.gather(*(store.rotate_refresh(token) for _ in range(20)))
+        return results
+
+    results = asyncio.run(scenario())
+    assert sum(result is not None for result in results) == 1

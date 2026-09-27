@@ -1,10 +1,10 @@
 ---
 name: terminal-operations
-description: Управляет и диагностирует Linux-сервер через подключённый терминальный инструмент. Используй для проверки здоровья и ресурсов, чтения журналов и документации, работы с репозиториями, изменения конфигурации, деплоя, перезапуска сервисов, отмены зависших команд и аварийного доступа вне FIFO-очереди.
-compatibility: Требуется подключённый терминальный инструмент с методами health, run, read, cancel и recovery.
+description: Управляет и диагностирует Linux-сервер через подключённый терминальный инструмент. Используй для проверки здоровья и ресурсов, чтения журналов и документации, работы с репозиториями, изменения конфигурации, деплоя, перезапуска сервисов, отмены зависших команд и аварийного доступа вне numbered execution queues.
+compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, agent_finish, tasks, task, health, run, read, cancel и recovery.
 metadata:
   author: U-ruRu
-  version: "1.2.0"
+  version: "1.5.1"
   language: ru
 ---
 
@@ -12,7 +12,7 @@ metadata:
 
 ## Цель
 
-Выполняй серверные задачи предсказуемо и безопасно. Перед работой внимательно изучай контекст сервера, доступные инструменты, их контракты, доступные терминальные команды и ограничения окружения. Учитывай FIFO-очередь и доводи каждое изменение до проверенного результата.
+Выполняй серверные задачи предсказуемо и безопасно. Перед работой внимательно изучай контекст сервера, доступные инструменты, их контракты, доступные терминальные команды и ограничения окружения. Учитывай numbered execution queues, Agent Session lifecycle и coordination obligations; доводи каждое изменение до проверенного результата.
 
 ## Контекст сервера
 
@@ -20,7 +20,7 @@ metadata:
 
 1. Определи целевой сервер и доступный терминальный инструмент из текущего контекста задачи.
 2. Изучи описание инструмента, его методы, аргументы, ограничения и семантику ответов.
-3. Вызови `health` и изучи состояние приложения, хранилища, пользователя, рабочей директории, очереди и выполняющихся команд.
+3. Вызови `health` и изучи фактическую application version, состояние хранилища, пользователя, рабочей директории, очереди и выполняющихся команд.
 4. Изучи доступный контекст сервера: MOTD, документацию, сведения о сервисах, путях, deployment и эксплуатационных правилах.
 5. Определи доступные терминальные команды и штатные способы работы с Git, конфигурацией, сервисами, логами и deployment.
 6. Используй фактический контекст сервера как источник истины для путей, сервисов и настроек.
@@ -49,25 +49,33 @@ metadata:
 
 - доступность приложения и хранилища;
 - пользователя, рабочую директорию и привилегии;
-- размер и состояние FIFO-очереди;
+- состояние numbered queues и их workers;
+- состояние output-cache, retention ceilings и признаки truncation/pruning;
 - выполняющиеся команды;
 - доступный эксплуатационный контекст.
 
 ### Coordination + `run` + `read`
 
-Новая рабочая сессия начинается с `agent_start` с коротким `intent` и обязательным `details`-планом. `work_scope` передавай только как дополнительную metadata, когда она полезна.
+Новая рабочая сессия начинается с `agent_start` с коротким `intent` и обязательным `details`-планом. Полный `agent_id` является credential текущей регистрации; public name используется для наблюдения и адресации сообщений.
 
-Перед конкретным этапом вызывай `coordinate(agent_id, step, intent)`. `intent` — до 160 символов; `step` — номер элемента `details`.
+1. Перед этапом вызывай `coordinate(agent_id, step, intent)`. Intent lease по умолчанию 180 секунд.
+2. Просматривай session timing и `session_warning` в каждом agent-bound ответе. Абсолютный lifetime по умолчанию 25 минут и активностью не продлевается; warning начинается на 20-й минуте.
+3. На warning дойди до безопасной точки и подготовь промежуточный отчёт. По умолчанию на 23-й минуте появляется blocking session `ALERT`, который после reply может повториться через 60 секунд, если сессия продолжается.
+4. Если `ALERT` явно требует остановиться и вернуться к пользователю, прекрати дальнейшую работу на ближайшей безопасной точке, ответь на ALERT, заверши Agent Session через `agent_finish` и вернись в пользовательский чат. Не продолжай реализацию и не веди дополнительную coordination-переписку вместо возврата.
+5. Просматривай `pending_messages`, `reply_required_messages` и `alert_messages`. Показ сообщения означает `seen`; осознанное прочтение подтверждай `message(agent_id, message_hash=...)`.
+6. Сообщение с required reply закрывай через `message(agent_id, message_hash=..., text=...)`. `ALERT` требует ответа и блокирует normal work surface.
+7. Для отправки используй direct `message(agent_id, text, target=...)`, broadcast без target или явный `target="broadcast"`, или task target `message(agent_id, text, namespace=..., task_id=...)`. Task target snapshot-доставляется текущим live claimants и сохраняется в durable task history. `require_reply=true` требует ответа, `alert=true` создаёт срочное обязательство.
+8. `run(agent_id, cmd, queue_id?, task_scope?)` запускает работу в numbered FIFO lane. Без live task claims scope можно опустить; при live claims обязательно выбери `none`, `all` или конкретную claimed `namespace/task_id`. `none` не создаёт task command event, `all` пишет event во все свои live claims, конкретный scope — только в выбранную task. Ошибка scope возвращается до enqueue. Первый вызов без queue выбирает least-loaded lane, последующие используют `preferred_queue_id`.
+9. `read(agent_id?, cmd_hash?, ...)` позволяет независимо выбрать command scope и agent context. Обычное unread message не мешает read; ALERT блокирует его до reply.
+10. `agents()` используй как anonymous observer. По умолчанию он возвращает compact fleet state; `target`, `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` раскрывают нужный контекст по запросу.
+11. Managed work веди через `tasks()` и `task(...)`: namespace обязателен, fixed lanes едины для всех сценариев, review — обычная `lane=review` task. Первичный claim делай с непустым `claim_intent`. Самый ранний live claim — owner, остальные cooperative claims — participants; workflow-changing mutations выполняет owner.
+12. `done` используй только когда цель task и acceptance criteria реально достигнуты, всегда с meaningful `result`. При найденном препятствии переводи claimed task в `blocked` с `blocker_reason`. Освобождая active claim, оставляй `release_reason`; подробные findings сохраняй через `action=comment` + `comment_text`. Description описывает текущую работу, comments/history — её хронологию.
+13. Open или missing dependency блокирует claim. Self-dependency и dependency cycle недопустимы. Emergency `force=true` + содержательный `force_reason` используй как сознательное исключение только dependency gate; force не обходит ownership. Archived done dependency остаётся satisfied, archived unfinished — blocking.
+14. Relations создавай через `action=relate` с `relation_kind`, `related_namespace`, `related_task_id`; review использует `relation_kind=review_of`. Review success — `done(result=...)`, blocking findings — comments + `blocked(blocker_reason=...)`. Linked feedback остаётся в history reviewed task.
+15. Archive — lifecycle/visibility, а не workflow state. Архивируй с непустым `archive_note`; archive сохраняет state/history и освобождает claims. `tasks()` recommendation/pressure учитывает только claimable active READY work и показывает raw claimable/missing-dependency/oldest-ready observability; tags и `tag_counts` используй для discovery/filtering. Для ad-hoc server work managed task не требуется.
+16. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. После normal finish прежний exact `agent_id` ещё 300 секунд пригоден только для ACK/reply уже delivered message hash; это не продолжение Agent Session. Уже запущенные terminal commands продолжают жить в своих queues.
 
-1. Просматривай `active_agents`: `HH:MM:SS name hash|started|finished — intent`.
-2. Просматривай `pending_messages` в каждом agent-bound ответе.
-3. Pending message прочитай и подтверди через `message(agent_id, message_hash=...)`. Новый `run` до ack блокируется.
-4. Если message меняет распределение работы, обнови `coordinate(step, intent)`.
-5. Direct message: `message(agent_id, text, target="India")`. Без target — broadcast текущим active peers.
-6. `coordinate(agent_id, show_details=true)` используй для просмотра планов peers.
-7. Затем `run(agent_id, cmd)` и `read(agent_id, cmd_hash, ...)`. Global stream — `read()` без ID/hash.
-
-Session TTL — 300 секунд и продлевается любым действием с живым ID. Task lease — 180 секунд и обновляется registration/plan update/`coordinate(step + intent)`.
+Agent statuses: `started`, `active`, `idle`, `finished`, `forced`. Источник истины для command queue — SQLite; queue state сохраняется отдельно от Agent Session.
 
 ### `cancel`
 
@@ -75,7 +83,7 @@ Session TTL — 300 секунд и продлевается любым дейс
 
 ### `recovery`
 
-`recovery(cmd)` — независимый аварийный запуск вне FIFO с сохранением команды и вывода в SQLite. Метод создаёт `cmd_hash`, выполняет команду параллельно основной очереди и ждёт завершения или фиксированного таймаута.
+`recovery(cmd)` — независимый аварийный запуск вне numbered queues с сохранением команды и bounded output в отдельном output-cache. Метод создаёт `cmd_hash`, выполняет команду параллельно numbered workers и ждёт завершения или фиксированного таймаута.
 
 Допустимые задачи:
 
@@ -90,7 +98,7 @@ Session TTL — 300 секунд и продлевается любым дейс
 - учитывай жёсткий лимит времени инструмента;
 - полный вывод дочитывай через `read(cmd_hash)`;
 - помни, что команда и вывод сохраняются в общем журнале;
-- используй recovery для аварийного восстановления, а штатную работу проводи через FIFO;
+- используй recovery для аварийного восстановления, а штатную работу проводи через numbered queues;
 - воздействуй точечно: сначала идентифицируй процесс, затем заверши именно его;
 - после восстановления снова проверь `health`, состояние очереди и затронутый сервис штатными методами.
 
@@ -133,7 +141,7 @@ Session TTL — 300 секунд и продлевается любым дейс
 3. Дочитай результат через `read` до конечного статуса; отдельно проверь чтение последних строк.
 4. Проверь последовательное чтение команды, которая выдаёт несколько строк с паузой.
 5. Проверь `cancel` на отдельной длительной команде и подтверди `cancelled`.
-6. Проверяй `recovery` при занятой очереди только по прямой необходимости задачи или при разработке самого terminal gateway.
+6. Проверяй `recovery` при занятых очередях только по прямой необходимости задачи или при разработке самого terminal gateway.
 7. Сопоставь структуру ответов, статусы, timestamps, `next_offset`, время выполнения и ошибки с контрактом инструмента.
 8. Заверши тестовые процессы и освободи временные ресурсы.
 
@@ -160,7 +168,7 @@ Session TTL — 300 секунд и продлевается любым дейс
 - изучены доступные инструменты и терминальные команды;
 - использован подходящий метод терминала;
 - длительная команда дочитана до конечного статуса;
-- очередь освобождена;
+- состояние затронутых queues проверено;
 - секреты защищены от вывода;
 - изменения проверены после применения;
 - commit, push и deployment описаны раздельно;

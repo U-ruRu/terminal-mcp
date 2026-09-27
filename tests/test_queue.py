@@ -31,9 +31,10 @@ async def wait_status(service, cmd_hash, statuses, attempts=300):
 @pytest.mark.asyncio
 async def test_short_hash_and_fifo_queue(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    first = await service.run("sleep 0.2; printf 'first\\n'")
-    second = await service.run("printf 'second\\n'")
-    assert set(first) == {"ok", "cmd_hash", "error"}
+    first = await service.run("sleep 0.2; printf 'first\\n'", queue_id=1)
+    second = await service.run("printf 'second\\n'", queue_id=1)
+    assert {"ok", "cmd_hash", "error", "queue_id", "queue_position"} <= set(first)
+    assert first["queue_id"] == second["queue_id"] == 1
     assert first["ok"] is True and first["error"] is None
     assert len(first["cmd_hash"]) == 8
     assert len(second["cmd_hash"]) == 8
@@ -210,15 +211,32 @@ async def test_recovery_can_stop_stuck_fifo_process_and_release_queue(tmp_path):
 async def test_run_restarts_failed_fifo_worker_before_enqueue(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
     await terminal.start()
-    terminal.worker.cancel()
+    worker = terminal.workers[1]
+    worker.cancel()
     try:
-        await terminal.worker
+        await worker
     except asyncio.CancelledError:
         pass
-    assert terminal.worker.done()
+    assert worker.done()
 
-    submitted = await service.run("printf 'worker-restarted\\n'")
+    submitted = await service.run("printf 'worker-restarted\\n'", queue_id=1)
     assert submitted["ok"] is True
     completed = await wait_status(service, submitted["cmd_hash"], "completed")
     assert completed["lines"][0].endswith("worker-restarted")
     await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_kills_process_that_ignores_sigterm(tmp_path):
+    repo = SqliteRepository(tmp_path / "shutdown.sqlite3")
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.05)
+    process = await terminal._spawn()
+    terminal.processes["stubborn"] = process
+    process.stdin.write(b"trap '' TERM\nsleep 60\n")
+    await process.stdin.drain()
+    process.stdin.close()
+    await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(terminal.stop(), 1.0)
+    assert process.returncode is not None

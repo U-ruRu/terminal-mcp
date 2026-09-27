@@ -27,7 +27,7 @@ class FakeService:
                 "current_step": 1,
             },
             "active": [],
-            "overlaps": [],
+            "overlaps": None,
             "additional_active_agents": 0,
             "pending_messages": [],
         }
@@ -46,17 +46,39 @@ class FakeService:
             "pending_messages": [],
         }
 
-    async def message(self, agent_id, text=None, target=None, message_hash=None):
+    async def message(
+        self,
+        agent_id,
+        text=None,
+        target=None,
+        message_hash=None,
+        require_reply=False,
+        alert=False,
+        namespace=None,
+        task_id=None,
+    ):
         return {
             "ok": True,
             "agent_name": "Kilo",
             "message_hash": message_hash or "a1b2c3d4",
-            "delivered_to": [] if message_hash else [target or "India"],
+            "namespace": namespace,
+            "task_id": task_id,
+            "delivered_to": [] if message_hash or namespace else [target or "India"],
             "read_by": ["Kilo"] if message_hash else [],
             "pending_messages": [],
         }
 
-    async def agents(self, agent_id):
+    async def agents(
+        self,
+        agent_id=None,
+        *,
+        target=None,
+        show_details=False,
+        show_intents=False,
+        show_commands=False,
+        command_hash=None,
+        since_minutes=None,
+    ):
         return {
             "ok": True,
             "self": {
@@ -70,7 +92,7 @@ class FakeService:
                 "current_step": 1,
             },
             "active": [],
-            "overlaps": [],
+            "overlaps": None,
             "additional_active_agents": 0,
             "pending_messages": [],
         }
@@ -90,11 +112,13 @@ class FakeService:
             "pending_messages": [],
         }
 
-    async def run(self, cmd, agent_id=None):
+    async def run(self, cmd, agent_id=None, queue_id=None, task_scope=None):
         return {
             "ok": True,
             "cmd_hash": "1234abcd",
             "error": None,
+            "queue_id": queue_id or 1,
+            "queue_position": 1,
             "agent_name": "Kilo",
             "active_agents": ["23:00:01 India deadbeef — Inspect tests"],
             "pending_messages": [],
@@ -145,6 +169,7 @@ class FakeService:
             "agent_name": "Kilo" if agent_id else "anonymous",
             "pending_messages": [],
             "application": "terminal-mcp",
+            "version": "0.10.0",
             "storage": "ok",
             "auth_mode": auth_mode,
             "terminal": {
@@ -156,12 +181,15 @@ class FakeService:
                 "privilege": "root",
                 "shell": "/bin/bash",
                 "terminal_user": "root",
-                "scheduler": "fifo",
-                "parallelism": 1,
+                "scheduler": "numbered-fifo",
+                "parallelism": 4,
                 "queue_size": 0,
                 "running_commands": [],
+                "queues": [],
+                "worker_health": {},
             },
         }
+
 
 def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     mcp = build_mcp(FakeService())
@@ -172,6 +200,8 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         "message",
         "agents",
         "agent_finish",
+        "tasks",
+        "task",
         "run",
         "recovery",
         "read",
@@ -182,10 +212,10 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         assert tool.output_schema is not None and tool.output_schema["type"] == "object"
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.openWorldHint is False
-    assert tools["agents"].annotations.readOnlyHint is True
-    assert tools["health"].annotations.readOnlyHint is True
-    assert tools["read"].annotations.readOnlyHint is True
+    assert all(tool.annotations.readOnlyHint is True for tool in tools.values())
     assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
+    assert tools["run"].parameters["properties"]["queue_id"]["anyOf"][0]["minimum"] == 1
+    assert tools["agents"].parameters.get("required", []) == []
     assert tools["recovery"].parameters["required"] == ["cmd"]
     assert tools["cancel"].parameters["required"] == ["cmd_hash"]
     assert tools["health"].parameters.get("required", []) == []
@@ -203,6 +233,102 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert tools["message"].parameters["required"] == ["agent_id"]
     message = tools["message"].parameters["properties"]
     assert message["message_hash"]["anyOf"][0]["maxLength"] == 8
+    assert message["require_reply"]["default"] is False
+    assert message["alert"]["default"] is False
+    assert message["namespace"]["anyOf"][0]["maxLength"] == 120
+    assert message["task_id"]["anyOf"][0]["maxLength"] == 120
+    tasks = tools["tasks"].parameters["properties"]
+    assert tasks["lane"]["anyOf"][0]["enum"] == [
+        "implementation",
+        "review",
+        "release",
+        "integration",
+        "general",
+    ]
+    assert tasks["state"]["anyOf"][0]["enum"] == [
+        "ready",
+        "blocked",
+        "deferred",
+        "done",
+    ]
+    task = tools["task"].parameters["properties"]
+    assert set(task["action"]["enum"]) == {
+        "create",
+        "claim",
+        "release",
+        "update",
+        "checkpoint",
+        "comment",
+        "relate",
+        "unrelate",
+        "state",
+        "done",
+        "archive",
+    }
+    assert task["priority"]["anyOf"][0]["enum"] == ["P0", "P1", "P2", "P3"]
+    assert "review_requirements" not in task
+    assert "dimensions" not in task
+    assert "verdict" not in task
+    assert "evidence" not in task
+    assert "tags" in task
+    assert "force" in task
+    assert "force_reason" in task
+    for field in (
+        "claim_intent",
+        "blocker_reason",
+        "release_reason",
+        "archive_note",
+        "comment_text",
+        "relation_kind",
+        "related_namespace",
+        "related_task_id",
+    ):
+        assert field in task
+    assert task["claim_intent"]["anyOf"][0]["maxLength"] == 160
+    assert "tags" in tasks
+    assert "task_scope" in tools["run"].parameters["properties"]
+
+    task_card = tools["tasks"].output_schema["$defs"]["TaskCard"]["properties"]
+    assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+    for field in (
+        "archived_at",
+        "archive_note",
+        "owner",
+        "participants",
+        "claims",
+        "relations",
+        "comments",
+    ):
+        assert field in task_card
+    claim = tools["tasks"].output_schema["$defs"]["TaskClaimView"]["properties"]
+    assert {
+        "agent_name",
+        "claimed_at",
+        "claim_age_seconds",
+        "claim_intent",
+        "role",
+    } <= set(claim)
+    managed_ref = tools["agents"].output_schema["$defs"]["ManagedTaskRef"]["properties"]
+    assert {
+        "claimed_at",
+        "claim_age_seconds",
+        "claim_intent",
+        "role",
+    } <= set(managed_ref)
+    task_description = tools["task"].description.lower()
+    for term in (
+        "claim_intent",
+        "owner",
+        "blocker_reason",
+        "release_reason",
+        "comment",
+        "relation",
+        "archive",
+    ):
+        assert term in task_description
+    tasks_description = tools["tasks"].description.lower()
+    assert "claimable" in tasks_description
+    assert "missing" in tasks_description
 
 
 @pytest.mark.asyncio
@@ -235,10 +361,22 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert sent.structuredContent["message_hash"] == "a1b2c3d4"
     assert sent.structuredContent["delivered_to"] == ["India"]
 
+    task_sent = await tools["message"].run(
+        {
+            "agent_id": "Kilo-7K2M",
+            "text": "Task note",
+            "namespace": "project",
+            "task_id": "REV-1",
+        },
+        convert_result=True,
+    )
+    assert task_sent.structuredContent["namespace"] == "project"
+    assert task_sent.structuredContent["task_id"] == "REV-1"
+    assert task_sent.structuredContent["delivered_to"] == []
+
     run = await tools["run"].run({"agent_id": "Kilo-7K2M", "cmd": "printf ok"}, convert_result=True)
     assert run.content[0].text == "Command 1234abcd queued."
     assert run.structuredContent["agent_name"] == "Kilo"
-    assert "India deadbeef — Inspect tests" in run.structuredContent["active_agents"][0]
     assert "7K2M" not in str(run.structuredContent)
 
     recovery = await tools["recovery"].run(
@@ -247,11 +385,13 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert recovery.structuredContent["cmd_hash"] == "abcd1234"
     assert recovery.structuredContent["displayed_lines_count"] == 1
 
+
 @pytest.mark.asyncio
 async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     health = await tools["health"].run({}, convert_result=True)
+    assert health.structuredContent["version"] == "0.10.0"
     assert health.structuredContent["ok"] is True
     assert health.structuredContent["agent_name"] == "anonymous"
     recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)
@@ -259,8 +399,9 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     cancelled = await tools["cancel"].run({"cmd_hash": "1234abcd"}, convert_result=True)
     assert cancelled.structuredContent["agent_name"] == "anonymous"
 
+
 @pytest.mark.asyncio
-async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
+async def test_mcp_read_supports_independent_agent_and_command_scope():
     mcp = build_mcp(FakeService())
     read = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["read"]
     global_read = await read.run({}, convert_result=True)
@@ -273,8 +414,10 @@ async def test_mcp_read_requires_both_agent_id_and_cmd_hash_or_neither():
     assert scoped.structuredContent["ok"] is True
     assert scoped.structuredContent["status"] == "completed"
     assert scoped.structuredContent["agent_name"] == "Kilo"
-    assert "India deadbeef — Inspect tests" in scoped.structuredContent["active_agents"][0]
     assert "7K2M" not in str(scoped.structuredContent)
-    one_sided = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
-    assert one_sided.structuredContent["ok"] is False
-    assert one_sided.structuredContent["error"].startswith("read.scope:")
+    command_only = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
+    assert command_only.structuredContent["ok"] is True
+    assert command_only.structuredContent["status"] == "completed"
+    agent_global = await read.run({"agent_id": "Kilo-7K2M"}, convert_result=True)
+    assert agent_global.structuredContent["ok"] is True
+    assert agent_global.structuredContent["agent_name"] == "Kilo"

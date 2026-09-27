@@ -1,5 +1,7 @@
 # terminal-mcp
 
+Application release: **0.10.0**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
+
 `terminal-mcp` предоставляет MCP и OpenAPI-интерфейсы для управления Linux-терминалом.
 
 Готовый skill для установки: [`dist/terminal-operations.skill`](dist/terminal-operations.skill).
@@ -9,9 +11,9 @@
 - Пользователь процесса: `root`.
 - Пользователь терминала: `root`.
 - Рабочая директория: `/`.
-- Планировщик: FIFO.
-- Параллелизм: одна команда.
-- Хранилище: SQLite.
+- Планировщик: numbered FIFO lanes, SQLite-backed.
+- Параллелизм: configurable workers, по одному процессу на lane.
+- Durable state: SQLite. Terminal output: отдельный disposable SQLite cache.
 - ASGI workers: `1`.
 
 Команда передаётся `/bin/bash -s` через stdin. Размер команды определяется лимитами HTTP-сервера и reverse proxy.
@@ -31,42 +33,51 @@
 
 ## MCP
 
-Endpoint: `/mcp`. Каждый новый рабочий агент начинает с `agent_start`.
+Endpoint: `/mcp`. Набор tools остаётся компактным: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`.
 
-- `agent_start(task_summary, intent, details, work_scope?, agent_id?)`: новая регистрация требует summary, короткий intent и непустой `details`-план. `work_scope` — optional metadata.
-- Новая регистрация создаёт внутренний NATO call sign вида `Foxtrot-7K2M`, открывает 180-секундный task lease и единственный раз возвращает полный `agent_id`.
-- Повторный `agent_start(agent_id=...)` обновляет существующий план/описание/optional scope без новой identity и без повторной публикации suffix.
-- Во всех остальных публичных выводах используется только короткое имя.
-- `coordinate(agent_id, step?, intent?, show_details=false)` читает или обновляет текущий шаг. `step + intent` обновляет 180-секундный task lease; `show_details=true` показывает планы peers.
-- `message(agent_id, text?, target?, message_hash?)` отправляет или подтверждает coordination message. Target — только короткое публичное имя; без target используется broadcast по snapshot текущих active peers.
-- Unread coordination message блокирует только новую обычную `run`. `read`, `message`, `coordinate`, `health`, `cancel` и `recovery` остаются доступны.
-- `health(agent_id?)` работает и без Agent Session; с живым ID продлевает Session TTL и показывает pending messages.
-- `read` работает либо с парой `agent_id + cmd_hash`, либо без обоих параметров как global stream.
+Agent Session по умолчанию имеет idle TTL 300 секунд, intent lease 180 секунд и жёсткий lifetime 1500 секунд. На 1200-й секунде каждый agent-bound ответ начинает содержать non-blocking warning. На 1380-й секунде Terminal MCP создаёт системный `ALERT`: он блокирует normal work surface до reply, после reply снимается и при продолжающейся сессии появляется снова через 60 секунд. Все пороги, repeat interval, включение ALERT и его текст задаются конфигурацией. Terminal commands живут независимо от Agent Session.
 
-Agent Session TTL — 300 секунд и продлевается любым действием с живым `agent_id`. Task lease для `run` — 180 секунд и обновляется новой регистрацией, update плана через `agent_start(agent_id=...)` и `coordinate(step + intent)`. `finished` остаётся видимым 180 секунд.
+`message` хранит состояния `delivered -> seen -> read -> replied`. Показ сообщения отмечает `seen`; `read` требует явного `message(agent_id, message_hash=...)`. Отправка поддерживает direct target, broadcast как отсутствующий `target` или явный alias `target="broadcast"`, и task target через `namespace + task_id`: task message snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history, поэтому остаётся видимым после смены исполнителя. После нормального `agent_finish` точный прежний `agent_id` ещё 300 секунд может только ACK/reply уже доставленного ему `message_hash`; grace не восстанавливает сессию и не открывает новые work/send операции. Unacknowledged message продолжает показываться полным минимум три минуты и минимум пять ответов. `require_reply=true` удерживает `run` до связанного ответа. `alert=true` дополнительно блокирует normal work surface до reply, сохраняя `message`, `health`, `cancel`, `recovery` и `agent_finish`. Автоматический late-session ALERT использует ту же state machine и повторяется по configured interval, если после снятия ALERT сессия всё ещё используется.
 
-`active_agents` — compact `string[]`:
+`run(agent_id, cmd, queue_id?, task_scope?)` использует numbered FIFO lanes. Без active task claims `task_scope` можно опустить или передать `none`. При active claims scope обязателен: `none` выполняет команду без task event, `all` пишет command event во все текущие claimed tasks, а `namespace/task_id` — только в указанную task при наличии собственного live claim. Неверный/отсутствующий scope отклоняется до enqueue. Первый run без номера выбирает least-loaded queue и запоминает affinity; следующие используют preferred queue. Явный `queue_id` выбирает lane и обновляет affinity. SQLite является источником queue state; workers используют atomic `queued -> running` claim и guarded terminal transitions.
 
-```text
-23:32:38 November 10de68b3 — Проверить regression suite
-23:31:02 India started — Обновить storage
-23:34:15 Juliett finished — Проверить HTTP contract
-```
+`read` принимает `agent_id` и `cmd_hash` независимо. Обычный scoped read возвращает requested output и компактную command/queue metadata; session context добавляется при значимом warning/message/alert. Global stream имеет вид `HH:MM:SS <name> <hash> qN <output>`. Одна логическая строка output ограничена 4 MiB, весь persisted output одной команды — 8 MiB.
 
-Pending messages тоже compact:
+`agents()` работает без регистрации как observer и по умолчанию возвращает компактную картину fleet/session state. `target` выбирает одну session. `show_details`, `show_intents`, `show_commands`, `command_hash` и `since_minutes` раскрывают план, journals и исходную команду только по запросу.
 
-```text
-23:35:10 a1b2c3d4 India → you: Storage правлю я, возьми MCP contract | ack: message(a1b2c3d4)
-23:35:12 e5f6a7b8 Juliett → all: Не трогайте migration до проверки | ack: message(e5f6a7b8)
-```
+Подробный контракт: [`skills/terminal-operations/references/tool-contract.md`](skills/terminal-operations/references/tool-contract.md).
 
-Terminal output:
-- scoped `read`: `HH:MM:SS <output>`;
-- global `read`: `HH:MM:SS <public-name|anonymous> <cmd_hash> <output>`.
+### Managed tasks
 
-Лимиты: `task_summary` — 120 символов, `intent` — 160, `details` — до 12 шагов по 160 символов, optional `work_scope` — до четырёх элементов по 80 символов.
+Managed task workflow является опциональным слоем поверх обычных Agent Sessions: ad-hoc terminal work продолжает работать без task card. Каждая managed task имеет обязательный `namespace`, стабильный `task_id`, одну fixed lane (`implementation`, `review`, `release`, `integration`, `general`) и workflow state `ready`, `blocked`, `deferred` или `done`. `done` означает, что цель task и acceptance criteria достигнуты; завершение Agent Session само по себе task не завершает. Незаконченная работа с препятствием переводится в `blocked`.
 
-Workflow: `agent_start` → `coordinate(step, intent)` → `run/read`; при pending message сначала `message(message_hash)` для ack и при необходимости новый `coordinate`; затем продолжение работы → `agent_finish`.
+Archive является отдельной lifecycle dimension, а не workflow state. `archive` требует непустой `archive_note`, сохраняет `archived_at` + audit evidence, освобождает live claims, исключает task из обычного backlog/pressure/recommendation и сохраняет исходный workflow state. Archived `done` остаётся completed; archived `ready|blocked|deferred` остаётся незавершённой. `show_archived=true` и direct lookup показывают lifecycle metadata. Draft schema v9 детерминированно мигрирует production-style v8 `state=archived` rows, используя имеющуюся event history для восстановления предыдущего workflow state и сохраняя migration provenance при fallback.
+
+`tasks()` — read-only observation surface. Без selector он показывает active backlog, `claimable_count`, weighted pressure и recommended next task; priority является первым ключом, внутри priority используется oldest `ready_since`. Summary также показывает `oldest_claimable_ready_since` / age и `missing_dependency_count`. `namespace`/`task_id` сужают выборку, `show_details=true` раскрывает description, resources, dependencies, relations, claims, comments/history и legacy review records. `show_done=true` включает completed tasks, `show_archived=true` — lifecycle-archived tasks. `tag_counts` показывает фактически используемый custom tag vocabulary; tag filter имеет AND semantics.
+
+Claims описывают ownership и участников. У task максимум один live owner — самый ранний live claim. При `cooperative=false` разрешён один live claim; при `cooperative=true` первый claimant остаётся owner, остальные видны в `participants`. После release/finish/expire owner детерминированно переходит к самому раннему оставшемуся claim. Первичный `claim` требует непустой `claim_intent` до 160 символов; повторный claim того же агента обновляет intent без reclaim. Task/agent observation показывает `claimed_at`, `claim_age_seconds`, `claim_intent` и `role`.
+
+Workflow-changing mutations claimed task выполняет owner: checkpoint, state transition, blocked/done, dependencies и cooperative changes, влияющие на ownership invariants. Participant может добавлять comments, выполнять команды через собственный `task_scope` и менять только safe metadata, определённую общим domain layer. Переход `cooperative=true -> false` при нескольких live claims отклоняется. `done` требует meaningful `result` в text или structured JSON-like форме; claimed `blocked` требует `blocker_reason`; release active claim требует `release_reason`. Эти причины остаются в append-only history.
+
+Универсальный `action=comment` + `comment_text` добавляет durable append-only task comment для findings, blockers, handoff, review feedback и решений. Description остаётся текущим описанием работы, comments/history — хронологией. Generic relations управляются `action=relate` / `unrelate` через `relation_kind`, `related_namespace`, `related_task_id`. Review использует kind `review_of`: review-task остаётся обычной `lane=review` task, success — `done(result=...)`, blocking findings — comments + `blocked(blocker_reason=...)`. Review completion/blocking feedback автоматически отражается событием `review_feedback` в history reviewed task с review reference, author/timestamp, outcome, findings/result и `candidate_ref` при наличии.
+
+Dependencies образуют validated directed prerequisite graph. Self-dependency и cycles отклоняются validation error до persistent mutation. Dependency на ещё не существующую task разрешена, отображается status `missing` и остаётся hard blocking dependency. Dependency удовлетворена только normal completion semantics; archived done dependency satisfied, archived unfinished blocking. Open/missing dependency claim отклоняется с `dependency_open`. `force=true` с непустым `force_reason` является сознательным emergency override только dependency gate, durably audited и не обходит ownership или другие safety constraints.
+
+Task содержит generic custom `tags`; durable `state_changed_at` меняется только при workflow state transition, `ready_since` устанавливается при входе в READY и очищается при выходе. Pressure/recommendation исключают archived, done, blocked/deferred, open/missing-dependency и owned non-cooperative work; cooperative task с live participants может оставаться claimable. Explicit `run.task_scope` определяет command provenance независимо от claim intent/ownership. MCP и OpenAPI Actions используют один service/domain layer.
+
+### Output cache и retention
+
+Terminal output не хранится в durable database. Он пишется batch-транзакциями в отдельный disposable cache (`/var/cache/terminal-mcp/output.sqlite3` в production) и не входит в штатный backup durable state. Лимиты output-cache retention не распространяются на managed tasks, task events, claims, reviews или coordination messages: они находятся в `/var/lib/terminal-mcp/terminal-mcp.sqlite3` и входят в durable backup.
+
+Defaults:
+
+- максимум одной строки: 4 MiB;
+- максимум persisted output одной команды: 8 MiB;
+- retention target: 192 MiB logical output;
+- hard retention ceiling: 256 MiB logical output;
+- дополнительный ceiling: 1 000 000 строк.
+
+При byte ceiling output самых старых завершённых команд удаляется целиком до byte target. При line ceiling около 1 000 000 строк pruning создаёт отдельный headroom примерно 100 000 строк (целевой уровень около 900 000), сохраняя целые command-output chunks; на малых test limits batch пропорционально масштабируется. Queued/running команды eviction не затрагивает. `health.terminal.output_cache` показывает logical/allocated bytes, строки, retained/truncated commands и время последнего prune. Schema v5 переносит legacy `lines` из durable DB в cache, удаляет исторический duplicate index и один раз compact'ит durable DB через `VACUUM`.
 
 ## OpenAPI Actions
 
@@ -77,13 +88,14 @@ Schema: `/openapi.json`. Actions используют тот же service layer 
 - `POST /actions/message`
 - `POST /actions/agents`
 - `POST /actions/agent/finish`
+- task observation/mutation Actions с теми же контрактами, что `tasks`/`task` в MCP
 - `POST /actions/run`
 - `POST /actions/recovery`
 - `POST /actions/read`
 - `POST /actions/cancel`
 - `GET /actions/health`
 
-Все published Actions содержат `x-openai-isConsequential: false`. MCP tools публикуют `destructiveHint=false` и `openWorldHint=false`; `agents`, `health` и `read` помечены read-only.
+Все published Actions содержат `x-openai-isConsequential: false`. Все MCP tools намеренно публикуют `readOnlyHint=true`, `destructiveHint=false` и `openWorldHint=false`, чтобы агент мог вызывать terminal/workflow операции без per-call confirmation. Это UI/consent-классификация; фактические side effects команд остаются частью контракта самих tools.
 
 ## Авторизация
 
@@ -110,10 +122,7 @@ Endpoints:
 - `POST /oauth/authorize`
 - `POST /oauth/token`
 
-Scopes:
-
-- `terminal:read`
-- `terminal:execute`
+Agent-facing OAuth uses one scope: `terminal:read`. All published terminal and workflow operations intentionally use the same consent tier; command execution does not request a separate execute permission.
 
 ## Admin UI
 
@@ -141,10 +150,10 @@ Admin UI использует CSRF-токены для формы входа и 
 
 ## Защита хранилища
 
-SQLite содержит полные тексты команд, их вывод, OAuth clients, коды авторизации и refresh tokens. Это секретосодержащее хранилище.
+Durable SQLite содержит полные тексты команд, Agent Session/coordination state, managed tasks/claims/reviews/history, OAuth clients, коды авторизации и refresh tokens. Terminal output хранится отдельно в disposable output-cache. Оба файла могут содержать чувствительные данные.
 
 - Каталог данных создаётся и восстанавливается с режимом `0700`.
-- Файл SQLite создаётся и восстанавливается с режимом `0600`.
+- Durable SQLite и output-cache создаются с режимом `0600`.
 - Каталог резервных копий имеет режим `0700`.
 - Каждый SQLite backup получает режим `0600`; установщик также нормализует права существующих backup-файлов.
 - Storage layer повторно применяет режимы при запуске, поэтому обновление и ручная замена файла не оставляют базу доступной другим локальным пользователям.
@@ -170,13 +179,14 @@ sudo ./deploy/install.sh doctor
 sudo ./deploy/install.sh update
 ```
 
-Установщик создаёт версионированный virtualenv, env-файл, systemd unit и защищённое SQLite-хранилище. Перед обновлением создаётся SQLite backup. Health check подтверждает активацию release. Ошибка health check активирует предыдущий release. Пути установки, systemd command и health URL поддерживают переопределение переменными `TERMINAL_MCP_INSTALL_ROOT`, `TERMINAL_MCP_ENV_DIR`, `TERMINAL_MCP_DATA_DIR`, `TERMINAL_MCP_BACKUP_DIR`, `TERMINAL_MCP_UNIT_FILE`, `TERMINAL_MCP_SYSTEMCTL` и `TERMINAL_MCP_HEALTH_URL`.
+Установщик создаёт версионированный virtualenv, env-файл, systemd unit, защищённое durable SQLite-хранилище и отдельный cache directory. Перед обновлением создаётся backup только durable SQLite; output-cache является disposable и в backup не входит. Staging считается завершённым только после успешной установки package и проверки executable `bin/terminal-mcp`; incomplete release удаляется до переключения `current`. Health check подтверждает активацию release. Ошибка health check активирует предыдущий release. Пути установки, systemd command и health URL поддерживают переопределение переменными `TERMINAL_MCP_INSTALL_ROOT`, `TERMINAL_MCP_ENV_DIR`, `TERMINAL_MCP_DATA_DIR`, `TERMINAL_MCP_CACHE_DIR`, `TERMINAL_MCP_BACKUP_DIR`, `TERMINAL_MCP_UNIT_FILE`, `TERMINAL_MCP_SYSTEMCTL`, `TERMINAL_MCP_HEALTH_URL` и `TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC`. Activation health timeout по умолчанию 600 секунд, чтобы one-time storage migration успевала завершиться на больших legacy databases.
 
 ## Пути
 
 - Приложение: `/opt/terminal-mcp`.
 - Конфигурация: `/etc/terminal-mcp/terminal-mcp.env`.
-- Данные: `/var/lib/terminal-mcp/terminal-mcp.sqlite3`.
+- Durable data: `/var/lib/terminal-mcp/terminal-mcp.sqlite3`.
+- Output cache: `/var/cache/terminal-mcp/output.sqlite3`.
 - Backup: `/var/backups/terminal-mcp`.
 
 ## Разработка

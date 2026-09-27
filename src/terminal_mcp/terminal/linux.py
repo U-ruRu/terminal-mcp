@@ -3,88 +3,106 @@ import os
 import pwd
 import signal
 import time
-from collections import deque
 from datetime import UTC, datetime
 
 
 class LinuxTerminalAdapter:
-    def __init__(self, repo, shell, cwd, grace, user="root"):
+    def __init__(
+        self,
+        repo,
+        shell,
+        cwd,
+        grace,
+        user="root",
+        queue_workers=4,
+        queue_reconcile_sec=1.0,
+    ):
         self.repo = repo
         self.shell = shell
         self.cwd = cwd
         self.grace = grace
         self.user = user
+        self.queue_workers = max(1, int(queue_workers))
+        self.queue_reconcile_sec = max(0.05, float(queue_reconcile_sec))
         self.processes = {}
+        self.process_queues = {}
         self.capture_processes = set()
-        self.queue = deque()
-        self.queue_event = asyncio.Event()
+        self.queue_events = {
+            queue_id: asyncio.Event() for queue_id in range(1, self.queue_workers + 1)
+        }
+        self.workers = {}
         self.cancel_requested = set()
-        self.worker = None
         self.stopping = False
+        self.queue = ()  # compatibility surface; SQLite is the queue source of truth.
 
     async def start(self):
-        if self.worker is None or self.worker.done():
-            self.stopping = False
-            self.worker = asyncio.create_task(self._worker(), name="terminal-worker")
+        self.stopping = False
+        for queue_id in range(1, self.queue_workers + 1):
+            worker = self.workers.get(queue_id)
+            if worker is None or worker.done():
+                self.workers[queue_id] = asyncio.create_task(
+                    self._worker(queue_id), name=f"terminal-worker-q{queue_id}"
+                )
 
     async def stop(self):
         self.stopping = True
         processes = [*self.processes.values(), *self.capture_processes]
-        for process in processes:
-            if process.returncode is None:
-                os.killpg(process.pid, signal.SIGTERM)
         if processes:
-            await asyncio.gather(*(process.wait() for process in processes), return_exceptions=True)
+            await asyncio.gather(
+                *(self._terminate(process, grace_seconds=self.grace) for process in processes),
+                return_exceptions=True,
+            )
             await asyncio.sleep(0)
-        if self.worker:
-            self.worker.cancel()
-            try:
-                await self.worker
-            except asyncio.CancelledError:
-                pass
-            self.worker = None
+        workers = list(self.workers.values())
+        for worker in workers:
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        self.workers.clear()
+
+    def _valid_queue(self, queue_id):
+        return isinstance(queue_id, int) and 1 <= queue_id <= self.queue_workers
 
     async def submit(self, command):
-        if self.worker is None or self.worker.done():
+        if not self._valid_queue(command.queue_id):
+            raise ValueError(
+                f"queue_id must be between 1 and {self.queue_workers}, got {command.queue_id!r}"
+            )
+        if not self.workers or any(worker.done() for worker in self.workers.values()):
             await self.start()
-        self.queue.append(command)
-        self.queue_event.set()
+        self.queue_events[command.queue_id].set()
 
     async def discard_queued(self, cmd_hash):
-        for command in self.queue:
-            if command.cmd_hash == cmd_hash:
-                self.queue.remove(command)
-                if not self.queue:
-                    self.queue_event.clear()
-                return True
-        return False
+        command = await self.repo.get(cmd_hash)
+        if command is None or command.status != "queued":
+            return False
+        removed = await self.repo.cancel_queued(cmd_hash)
+        if removed and command.queue_id in self.queue_events:
+            self.queue_events[command.queue_id].set()
+        return removed
 
-    async def _next_command(self):
-        while True:
-            if self.queue:
-                command = self.queue.popleft()
-                if not self.queue:
-                    self.queue_event.clear()
-                return command
-            self.queue_event.clear()
-            await self.queue_event.wait()
+    async def _wait_for_work(self, queue_id):
+        event = self.queue_events[queue_id]
+        event.clear()
+        try:
+            await asyncio.wait_for(event.wait(), self.queue_reconcile_sec)
+        except TimeoutError:
+            pass
 
-    async def _worker(self):
+    async def _worker(self, queue_id):
         while not self.stopping:
-            command = await self._next_command()
-            if self.stopping:
-                return
+            command = await self.repo.claim_next(queue_id)
+            if command is None:
+                await self._wait_for_work(queue_id)
+                continue
             try:
-                current = await self.repo.get(command.cmd_hash)
-                if current and current.status == "queued":
-                    await self._execute(current, method="run")
+                await self._execute(command, method="run")
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                command.status = "failed"
-                command.error = f"run.worker: {exc}"
-                try:
-                    await self.repo.update(command)
-                except Exception:
-                    pass
+                await self.repo.finish_running(
+                    command.cmd_hash, "failed", command.exit_code, f"run.worker: {exc}"
+                )
 
     def _drop_privileges(self):
         account = pwd.getpwnam(self.user)
@@ -111,22 +129,79 @@ class LinuxTerminalAdapter:
 
     async def _pipe_output(self, command, reader):
         pending = b""
+        batch = []
+        batch_bytes = 0
+        discarding_long_line = False
+        accepting = True
+        overflow_marked = False
+        line_limit = max(1, int(getattr(self.repo, "output_line_max_bytes", 4 * 1024 * 1024)))
+
+        async def flush():
+            nonlocal batch, batch_bytes, accepting
+            if not batch or not accepting:
+                batch = []
+                batch_bytes = 0
+                return
+            result = await self.repo.append_lines(command.cmd_hash, batch)
+            accepting = bool(result.get("accepting", True))
+            batch = []
+            batch_bytes = 0
+
+        async def add_raw(raw):
+            nonlocal batch_bytes
+            if not accepting:
+                return
+            text = raw.rstrip(b"\r").decode(errors="replace")
+            batch.append(text)
+            batch_bytes += len(raw)
+            if len(batch) >= 64 or batch_bytes >= 256 * 1024:
+                await flush()
+
         while True:
             chunk = await reader.read(65536)
             if not chunk:
                 break
-            pending += chunk
-            while b"\n" in pending:
-                raw, pending = pending.split(b"\n", 1)
-                await self.repo.append_line(
-                    command.cmd_hash,
-                    raw.rstrip(b"\r").decode(errors="replace"),
-                )
-        if pending:
-            await self.repo.append_line(
-                command.cmd_hash,
-                pending.rstrip(b"\r").decode(errors="replace"),
-            )
+            if not accepting:
+                if not overflow_marked:
+                    await self.repo.mark_output_truncated(command.cmd_hash)
+                    overflow_marked = True
+                continue
+            data = chunk
+            while data:
+                if discarding_long_line:
+                    newline = data.find(b"\n")
+                    if newline < 0:
+                        data = b""
+                        continue
+                    data = data[newline + 1 :]
+                    discarding_long_line = False
+                    continue
+
+                newline = data.find(b"\n")
+                if newline >= 0:
+                    raw = pending + data[:newline]
+                    pending = b""
+                    data = data[newline + 1 :]
+                    await add_raw(raw)
+                    continue
+
+                if len(pending) + len(data) > line_limit:
+                    # Keep one byte beyond the configured limit so OutputStore records
+                    # the line as truncated, then discard the rest until the newline.
+                    take = max(0, line_limit + 1 - len(pending))
+                    raw = pending + data[:take]
+                    pending = b""
+                    data = data[take:]
+                    await add_raw(raw)
+                    discarding_long_line = True
+                    continue
+
+                pending += data
+                data = b""
+
+        if accepting and pending and not discarding_long_line:
+            await add_raw(pending)
+        await flush()
 
     async def _terminate(self, process, grace_seconds=1.0):
         if process.returncode is not None:
@@ -145,22 +220,27 @@ class LinuxTerminalAdapter:
 
     async def _execute(self, command, *, method, timeout_seconds=None):
         started = time.monotonic()
-        command.status = "running"
-        command.error = None
-        await self.repo.update(command)
+        current = await self.repo.get(command.cmd_hash)
+        if current is None or current.status != "running":
+            return round((time.monotonic() - started) * 1000)
+        command = current
         if command.cmd_hash in self.cancel_requested:
-            command.status = "cancelled"
-            await self.repo.update(command)
+            await self.repo.finish_running(command.cmd_hash, "cancelled")
             self.cancel_requested.discard(command.cmd_hash)
             return round((time.monotonic() - started) * 1000)
 
         process = None
         pipe_task = None
+        error = None
+        final_status = None
         try:
             process = await self._spawn()
             self.processes[command.cmd_hash] = process
+            self.process_queues[command.cmd_hash] = command.queue_id
             command.pid = process.pid
-            await self.repo.update(command)
+            if not await self.repo.set_pid(command.cmd_hash, process.pid):
+                await self._terminate(process, grace_seconds=0.1)
+                return round((time.monotonic() - started) * 1000)
             process.stdin.write(command.cmd.encode())
             await process.stdin.drain()
             process.stdin.close()
@@ -173,18 +253,16 @@ class LinuxTerminalAdapter:
                 else:
                     await asyncio.wait_for(asyncio.shield(execution), timeout_seconds)
             except TimeoutError:
-                command.error = (
-                    f"{method}.timeout: command exceeded {round(timeout_seconds * 1000)} ms"
-                )
+                error = f"{method}.timeout: command exceeded {round(timeout_seconds * 1000)} ms"
                 self.cancel_requested.add(command.cmd_hash)
                 await self._terminate(process, grace_seconds=0.5)
                 await execution
 
             command.exit_code = process.returncode
             if command.cmd_hash in self.cancel_requested:
-                command.status = "cancelled"
+                final_status = "cancelled"
             else:
-                command.status = "completed" if process.returncode == 0 else "failed"
+                final_status = "completed" if process.returncode == 0 else "failed"
         except asyncio.CancelledError:
             if process and process.returncode is None:
                 self.cancel_requested.add(command.cmd_hash)
@@ -192,12 +270,13 @@ class LinuxTerminalAdapter:
                 if pipe_task and not pipe_task.done():
                     await asyncio.gather(pipe_task, return_exceptions=True)
                 command.exit_code = process.returncode
-            command.status = "cancelled"
-            command.error = f"{method}.cancelled: upstream disconnected"
+            final_status = "cancelled"
+            error = f"{method}.cancelled: upstream disconnected"
+            await self.repo.finish_running(command.cmd_hash, final_status, command.exit_code, error)
             raise
         except Exception as exc:
-            command.status = "failed"
-            command.error = f"{method}.execute: {exc}"
+            final_status = "failed"
+            error = f"{method}.execute: {exc}"
             if process and process.returncode is None:
                 await self._terminate(process, grace_seconds=0.5)
                 command.exit_code = process.returncode
@@ -205,8 +284,15 @@ class LinuxTerminalAdapter:
                 pipe_task.cancel()
         finally:
             self.processes.pop(command.cmd_hash, None)
-            await self.repo.update(command)
+            self.process_queues.pop(command.cmd_hash, None)
+            if final_status is not None:
+                await self.repo.finish_running(
+                    command.cmd_hash, final_status, command.exit_code, error
+                )
+                await self.repo.prune_output_cache()
             self.cancel_requested.discard(command.cmd_hash)
+            if command.queue_id in self.queue_events:
+                self.queue_events[command.queue_id].set()
         return round((time.monotonic() - started) * 1000)
 
     async def recovery(self, command, timeout_seconds=20):
@@ -253,11 +339,9 @@ class LinuxTerminalAdapter:
         started = time.monotonic()
         deadline = started + timeout_seconds
         if command.status == "queued":
-            removed = await self.discard_queued(command.cmd_hash)
-            if removed:
-                command.status = "cancelled"
-                command.error = None
-                await self.repo.update(command)
+            if await self.repo.cancel_queued(command.cmd_hash):
+                if command.queue_id in self.queue_events:
+                    self.queue_events[command.queue_id].set()
                 return True, None
             command = await self.repo.get(command.cmd_hash)
             if command is None:
@@ -265,6 +349,18 @@ class LinuxTerminalAdapter:
 
         if command.status not in {"queued", "running"}:
             return False, f"cancel.state: command is already {command.status}"
+
+        if command.status == "queued":
+            if await self.repo.cancel_queued(command.cmd_hash):
+                return True, None
+            command = await self.repo.get(command.cmd_hash) or command
+
+        if command.status != "running":
+            return command.status == "cancelled", (
+                None
+                if command.status == "cancelled"
+                else f"cancel.state: command is already {command.status}"
+            )
 
         self.cancel_requested.add(command.cmd_hash)
         process = self.processes.get(command.cmd_hash)
@@ -274,6 +370,7 @@ class LinuxTerminalAdapter:
                 self.cancel_requested.discard(command.cmd_hash)
                 return False, "cancel.lookup: command not found"
             if refreshed.status == "cancelled":
+                self.cancel_requested.discard(command.cmd_hash)
                 return True, None
             if refreshed.status not in {"queued", "running"}:
                 self.cancel_requested.discard(command.cmd_hash)
@@ -283,11 +380,10 @@ class LinuxTerminalAdapter:
                 await asyncio.sleep(0.01)
 
         if process is None:
+            changed = await self.repo.finish_running(command.cmd_hash, "cancelled")
             self.cancel_requested.discard(command.cmd_hash)
             return (
-                False,
-                "cancel.wait_process: process did not become available within "
-                f"{round(timeout_seconds * 1000)} ms",
+                (True, None) if changed else (False, "cancel.wait_process: command changed state")
             )
 
         if process.returncode is None:
@@ -302,23 +398,26 @@ class LinuxTerminalAdapter:
                     await asyncio.wait_for(process.wait(), kill_wait)
                 except TimeoutError:
                     self.cancel_requested.discard(command.cmd_hash)
-                    return (
-                        False,
+                    return False, (
                         "cancel.wait_process: process did not stop within "
-                        f"{round(timeout_seconds * 1000)} ms",
+                        f"{round(timeout_seconds * 1000)} ms"
                     )
 
-        command = await self.repo.get(command.cmd_hash) or command
-        command.status = "cancelled"
-        command.exit_code = process.returncode
-        command.error = None
-        await self.repo.update(command)
-        return True, None
+        await self.repo.finish_running(command.cmd_hash, "cancelled", process.returncode, None)
+        current = await self.repo.get(command.cmd_hash)
+        return (current is not None and current.status == "cancelled"), None
+
+    async def least_loaded_queue(self):
+        loads = await self.repo.queue_loads(self.queue_workers)
+        return min(loads, key=lambda queue_id: (loads[queue_id], queue_id))
 
     async def health(self):
         uid = os.geteuid()
+        queues = await self.repo.queue_snapshot(self.queue_workers)
+        running = [item["running"] for item in queues if item["running"]]
+        output_cache = await self.repo.output_cache_stats()
         return {
-            "ok": self.worker is not None and not self.worker.done(),
+            "ok": bool(self.workers) and all(not worker.done() for worker in self.workers.values()),
             "user": pwd.getpwuid(uid).pw_name,
             "uid": uid,
             "gid": os.getegid(),
@@ -326,8 +425,13 @@ class LinuxTerminalAdapter:
             "privilege": "root" if uid == 0 else "user",
             "shell": self.shell,
             "terminal_user": self.user,
-            "scheduler": "fifo",
-            "parallelism": 1,
-            "queue_size": len(self.queue),
-            "running_commands": list(self.processes),
+            "scheduler": "numbered-fifo",
+            "parallelism": self.queue_workers,
+            "queue_size": sum(item["queued"] for item in queues),
+            "running_commands": running,
+            "queues": queues,
+            "worker_health": {
+                str(queue_id): not worker.done() for queue_id, worker in self.workers.items()
+            },
+            "output_cache": output_cache,
         }
