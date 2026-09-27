@@ -270,7 +270,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
-            "Mutate one unified managed task. claim requires claim_intent. cooperative controls "
+            "Mutate one unified managed task. create requires an explicit isolation_hint (use 'none' when no isolation is required); the hint is stored/exposed without interpretation. claim requires claim_intent. cooperative controls "
             "concurrent participation, not task visibility. The first live claimant is owner; later "
             "cooperative claimants are participants that may comment and edit safe metadata, while "
             "workflow changes require owner. blocked requires blocker_reason for a claimed task; "
@@ -292,6 +292,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         state: TaskState | None = None,
         description: Annotated[str | None, Field(max_length=8000)] = None,
         next_action: Annotated[str | None, Field(max_length=2000)] = None,
+        isolation_hint: Annotated[str | None, Field(min_length=1, max_length=160)] = None,
         resource_context: dict[str, object] | None = None,
         cooperative: bool | None = None,
         checkpoint: str | dict[str, object] | list[object] | None = None,
@@ -320,6 +321,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             "state": state,
             "description": description,
             "next_action": next_action,
+            "isolation_hint": isolation_hint,
             "resource_context": resource_context,
             "cooperative": cooperative,
             "checkpoint": checkpoint,

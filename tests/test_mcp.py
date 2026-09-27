@@ -273,6 +273,8 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert "tags" in task
     assert "force" in task
     assert "force_reason" in task
+    assert task["isolation_hint"]["anyOf"][0]["minLength"] == 1
+    assert task["isolation_hint"]["anyOf"][0]["maxLength"] == 160
     for field in (
         "claim_intent",
         "blocker_reason",
@@ -291,10 +293,12 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert "required on every command" in tools["run"].description
     assert "concurrent participation" in tools["task"].description
     assert "durable handoff history" in tools["task"].description
+    assert "explicit isolation_hint" in tools["task"].description
     assert "ACK REQUIRED" in tools["message"].description
 
     task_card = tools["tasks"].output_schema["$defs"]["TaskCard"]["properties"]
     assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+    assert "isolation_hint" in task_card
     for field in (
         "archived_at",
         "archive_note",
@@ -319,6 +323,7 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         "claim_age_seconds",
         "claim_intent",
         "role",
+        "isolation_hint",
     } <= set(managed_ref)
     task_description = tools["task"].description.lower()
     for term in (

@@ -110,6 +110,7 @@ class TaskStore:
             "revision": row[19],
             "created_at": row[20],
             "updated_at": row[21],
+            "isolation_hint": row[22],
         }
 
     async def create_task(
@@ -123,6 +124,7 @@ class TaskStore:
         state: str = "ready",
         description: str = "",
         next_action: str = "",
+        isolation_hint: str = "none",
         resource: Any = None,
         reviews: Any = None,
         cooperative: bool = False,
@@ -139,9 +141,9 @@ class TaskStore:
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute(
-                "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,"
+                "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,"
                 "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,revision,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                 (
                     namespace,
                     task_id,
@@ -151,6 +153,7 @@ class TaskStore:
                     state,
                     description,
                     next_action,
+                    isolation_hint,
                     self._json(resource or {}),
                     self._json(reviews or []),
                     int(bool(cooperative)),
@@ -178,6 +181,7 @@ class TaskStore:
         state: str = "ready",
         description: str = "",
         next_action: str = "",
+        isolation_hint: str = "none",
         resource: Any = None,
         reviews: Any = None,
         cooperative: bool = False,
@@ -201,9 +205,9 @@ class TaskStore:
             try:
                 await self._validate_dependency_graph_tx(db, namespace, task_id, normalized)
                 await db.execute(
-                    "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,"
+                    "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,"
                     "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,revision,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                     (
                         namespace,
                         task_id,
@@ -213,6 +217,7 @@ class TaskStore:
                         state,
                         description,
                         next_action,
+                        isolation_hint,
                         self._json(resource or {}),
                         self._json(reviews or []),
                         int(bool(cooperative)),
@@ -258,7 +263,7 @@ class TaskStore:
             row = await (
                 await db.execute(
                     "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
-                    "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at "
+                    "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint "
                     "FROM work_items WHERE namespace=? AND task_id=?",
                     (namespace, task_id),
                 )
@@ -301,7 +306,7 @@ class TaskStore:
         query = (
             "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
             "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,"
-            "state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at "
+            "state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint "
             f"FROM work_items{clause} "
             "ORDER BY priority DESC,"
             "CASE WHEN state='ready' THEN 0 ELSE 1 END,"
@@ -635,7 +640,7 @@ class TaskStore:
             rows = await (
                 await db.execute(
                     "SELECT c.namespace,c.task_id,c.claimed_at,c.released_at,c.claim_intent,"
-                    "w.lane,w.priority,w.state,w.cooperative "
+                    "w.lane,w.priority,w.state,w.cooperative,w.isolation_hint "
                     "FROM work_claims c JOIN work_items w ON w.namespace=c.namespace AND w.task_id=c.task_id "
                     "WHERE c.agent_id=?" + clause + " ORDER BY c.claimed_at,c.id",
                     (agent_id,),
@@ -652,6 +657,7 @@ class TaskStore:
                 "priority": r[6],
                 "state": r[7],
                 "cooperative": bool(r[8]),
+                "isolation_hint": r[9],
             }
             for r in rows
         ]

@@ -46,9 +46,21 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
     try:
         one = await register(service, "one")
         two = await register(service, "two")
-        await service.task(one, action="create", namespace="ns", task_id="DEP", title="dependency")
         await service.task(
-            one, action="create", namespace="ns", task_id="EXCLUSIVE", title="exclusive"
+            one,
+            action="create",
+            isolation_hint="none",
+            namespace="ns",
+            task_id="DEP",
+            title="dependency",
+        )
+        await service.task(
+            one,
+            action="create",
+            isolation_hint="none",
+            namespace="ns",
+            task_id="EXCLUSIVE",
+            title="exclusive",
         )
         first = await service.task(
             one,
@@ -85,6 +97,7 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
         await service.task(
             one,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="COOP",
             title="cooperative",
@@ -114,6 +127,7 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
         await service.task(
             one,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="BLOCKED-BY-DEP",
             title="dependency gated",
@@ -182,6 +196,7 @@ async def test_result_review_ready_timestamps_and_reopen(tmp_path):
         created = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="REV-10",
             title="Unified review",
@@ -281,6 +296,7 @@ async def test_tags_filter_discovery_pressure_and_oldest_ready(tmp_path):
             return await service.task(
                 one,
                 action="create",
+                isolation_hint="none",
                 namespace="ns",
                 task_id=task_id,
                 title=task_id,
@@ -416,6 +432,7 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
             await service.task(
                 agent,
                 action="create",
+                isolation_hint="none",
                 namespace="ns",
                 task_id=task_id,
                 title=task_id,
@@ -456,6 +473,7 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
         await service.task(
             other,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="FOREIGN",
             title="foreign",
@@ -650,7 +668,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(
@@ -731,6 +749,7 @@ async def test_non_cooperative_concurrent_claim_has_single_winner(tmp_path):
         created = await service.task(
             one,
             action="create",
+            isolation_hint="none",
             namespace="race",
             task_id="ONE-OWNER",
             title="single live owner",
@@ -769,6 +788,7 @@ async def test_archived_dependency_stays_blocking_and_done_create_requires_resul
         missing_result = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="DONE-NO-RESULT",
             title="invalid done create",
@@ -779,6 +799,7 @@ async def test_archived_dependency_stays_blocking_and_done_create_requires_resul
         empty_create = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="DONE-EMPTY-RESULT",
             title="invalid empty result",
@@ -791,6 +812,7 @@ async def test_archived_dependency_stays_blocking_and_done_create_requires_resul
         with_result = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="DONE-WITH-RESULT",
             title="valid done create",
@@ -803,6 +825,7 @@ async def test_archived_dependency_stays_blocking_and_done_create_requires_resul
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="ARCHIVED-DEP",
             title="archived incomplete dependency",
@@ -819,6 +842,7 @@ async def test_archived_dependency_stays_blocking_and_done_create_requires_resul
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="ns",
             task_id="NEEDS-ARCHIVED",
             title="must remain gated",

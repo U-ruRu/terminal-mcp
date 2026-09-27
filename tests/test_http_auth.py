@@ -171,6 +171,13 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert "tags" in task_request["properties"]
         assert "force" in task_request["properties"]
         assert "force_reason" in task_request["properties"]
+        isolation_hint = task_request["properties"]["isolation_hint"]["anyOf"][0]
+        assert isolation_hint["minLength"] == 1
+        assert isolation_hint["maxLength"] == 160
+        assert (
+            "Required for action=create"
+            in task_request["properties"]["isolation_hint"]["description"]
+        )
         for field in (
             "claim_intent",
             "blocker_reason",
@@ -192,6 +199,7 @@ def test_bearer_actions_and_openapi(tmp_path):
 
         task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
         assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+        assert "isolation_hint" in task_card
         for field in (
             "archived_at",
             "archive_note",
@@ -216,13 +224,28 @@ def test_bearer_actions_and_openapi(tmp_path):
             "claim_age_seconds",
             "claim_intent",
             "role",
+            "isolation_hint",
         } <= set(managed_ref)
+
+        missing_isolation = client.post(
+            "/actions/task",
+            json={
+                "agent_id": agent_id,
+                "action": "create",
+                "namespace": "http",
+                "task_id": "TASK-MISSING-HINT",
+                "title": "missing isolation hint",
+            },
+            headers=headers,
+        )
+        assert missing_isolation.status_code == 422
 
         created_task = client.post(
             "/actions/task",
             json={
                 "agent_id": agent_id,
                 "action": "create",
+                "isolation_hint": "none",
                 "namespace": "http",
                 "task_id": "TASK-1",
                 "title": "HTTP task target",

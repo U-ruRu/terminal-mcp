@@ -18,7 +18,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     with sqlite3.connect(repo.path) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == 9
+    assert version == 10
     assert {
         "work_items",
         "work_claims",
@@ -36,6 +36,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
         priority=50,
         description="Durable task registry",
         next_action="Write tests",
+        isolation_hint="separate worktree",
         resource={"repo": "/srv/repo"},
         reviews=["A", "C"],
         cooperative=True,
@@ -50,6 +51,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     assert created["cooperative"] is True
     assert created["checkpoint"] == {"done": ["schema"]}
     assert created["candidate_ref"] == "abc123"
+    assert created["isolation_hint"] == "separate worktree"
 
     await tasks.create_task("project", "DONE-1", "Old", state="done")
     await tasks.create_task("project", "ARCH-1", "Archived")
@@ -223,8 +225,10 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     tasks = TaskStore(repo.path)
+    legacy = await tasks.get_task("project", "LEGACY-1")
+    assert legacy["isolation_hint"] == "none"
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         claim = db.execute(
             "SELECT agent_id FROM work_claims WHERE namespace='project' AND task_id='LEGACY-1'"

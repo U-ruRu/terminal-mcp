@@ -209,6 +209,7 @@ class ManagedTaskRef(BaseModel):
     priority: TaskPriority
     state: TaskState
     operational_status: TaskOperationalStatus
+    isolation_hint: str
     claimed_at: str
     claim_age_seconds: int
     claim_intent: str
@@ -231,6 +232,7 @@ class TaskCard(BaseModel):
     priority: TaskPriority
     state: TaskState
     operational_status: TaskOperationalStatus
+    isolation_hint: str
     next_action: str = ""
     checkpoint: str | dict[str, object] = Field(default_factory=dict)
     candidate_ref: str | None = None

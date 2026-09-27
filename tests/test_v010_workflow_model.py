@@ -55,6 +55,7 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
         created = await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="COOP",
             title="cooperative ownership",
@@ -226,6 +227,7 @@ async def test_claimed_blocked_and_done_require_context_and_leave_history(tmp_pa
         await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="STATEFUL",
             title="stateful workflow",
@@ -307,6 +309,7 @@ async def test_comments_and_relations_are_append_only_durable_history(tmp_path):
         await service.task(
             author,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="SOURCE",
             title="source task",
@@ -315,6 +318,7 @@ async def test_comments_and_relations_are_append_only_durable_history(tmp_path):
         await service.task(
             author,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="TARGET",
             title="target task",
@@ -417,6 +421,7 @@ async def test_review_relation_propagates_blocking_and_success_feedback(tmp_path
         await service.task(
             implementer,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="IMPL",
             title="implementation",
@@ -425,6 +430,7 @@ async def test_review_relation_propagates_blocking_and_success_feedback(tmp_path
         await service.task(
             reviewer,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="REVIEW",
             title="review implementation",
@@ -534,6 +540,7 @@ async def test_generic_relation_can_be_removed_without_rewriting_task_history(tm
             await service.task(
                 agent,
                 action="create",
+                isolation_hint="none",
                 namespace="wf",
                 task_id=task_id,
                 title=task_id,
@@ -575,6 +582,7 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
         self_dep = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="SELF",
             title="self dependency",
@@ -588,6 +596,7 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
             await service.task(
                 agent,
                 action="create",
+                isolation_hint="none",
                 namespace="wf",
                 task_id=task_id,
                 title=task_id,
@@ -614,6 +623,7 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
         missing = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="MISSING-GATED",
             title="waits for future task",
@@ -648,6 +658,7 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
         forward = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="FORWARD",
             title="forward dependency on not-yet-created task",
@@ -657,6 +668,7 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
         materialized_cycle = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="FUTURE-CYCLE",
             title="would close dangling cycle",
@@ -677,6 +689,7 @@ async def test_archive_is_lifecycle_dimension_and_preserves_workflow_state(tmp_p
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="READY-ARCH",
             title="archive ready task",
@@ -713,6 +726,7 @@ async def test_archive_is_lifecycle_dimension_and_preserves_workflow_state(tmp_p
         done = await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="DONE-ARCH",
             title="completed then archived",
@@ -734,6 +748,7 @@ async def test_archive_is_lifecycle_dimension_and_preserves_workflow_state(tmp_p
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="NEEDS-DONE",
             title="depends on archived completion",
@@ -751,6 +766,7 @@ async def test_archive_is_lifecycle_dimension_and_preserves_workflow_state(tmp_p
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="UNFINISHED-ARCH",
             title="unfinished archive",
@@ -765,6 +781,7 @@ async def test_archive_is_lifecycle_dimension_and_preserves_workflow_state(tmp_p
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="NEEDS-UNFINISHED",
             title="blocked by unfinished archive",
@@ -795,6 +812,7 @@ async def test_agent_observation_shows_multiple_claim_contexts_and_finish_releas
             await service.task(
                 agent,
                 action="create",
+                isolation_hint="none",
                 namespace="wf",
                 task_id=task_id,
                 title=task_id,
@@ -840,6 +858,7 @@ async def test_expired_agent_session_releases_live_claim(tmp_path):
         await service.task(
             agent,
             action="create",
+            isolation_hint="none",
             namespace="wf",
             task_id="EXPIRE",
             title="claim follows session lifetime",
@@ -938,7 +957,7 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {
             "archived_at",
@@ -946,6 +965,7 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
             "result_json",
             "ready_since",
             "state_changed_at",
+            "isolation_hint",
         } <= columns
         table_sql = db.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'"
@@ -969,6 +989,9 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
             "retain completed history",
         )
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute("SELECT DISTINCT isolation_hint FROM work_items").fetchall() == [
+            ("none",)
+        ]
 
     terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
     service = TerminalService(repo, terminal, 5000)

@@ -37,6 +37,7 @@ async def test_expired_owner_stops_projecting_before_persisted_claim_cleanup(tmp
         created = await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="live",
             task_id="COOP",
             title="live owner projection",
@@ -127,7 +128,12 @@ async def test_operational_status_is_derived_from_live_claim_lifecycle(tmp_path)
     try:
         agent = await register(service, "status-owner")
         created = await service.task(
-            agent, action="create", namespace="status", task_id="WORK", title="derived status"
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status",
+            task_id="WORK",
+            title="derived status",
         )
         assert created["task"]["operational_status"] == "ready"
 

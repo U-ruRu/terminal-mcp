@@ -440,6 +440,12 @@ class TaskCoordinator:
                 "error": f"task.action: unsupported action {action}",
                 "warnings": [],
             }
+        if action != "create" and kwargs.get("isolation_hint") is not None:
+            return {
+                "ok": False,
+                "error": "task.isolation_hint: set only when creating the task",
+                "warnings": [],
+            }
         return await handler(agent_id, namespace, task_id, **kwargs)
 
     async def _action_create(self, agent_id, namespace, task_id, **kwargs):
@@ -463,6 +469,11 @@ class TaskCoordinator:
             tags = self._normalize_tags(kwargs.get("tags")) or []
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "warnings": []}
+        isolation_hint, isolation_error = self._clean_reason(
+            kwargs.get("isolation_hint"), "isolation_hint", max_length=160
+        )
+        if isolation_error:
+            return {"ok": False, "error": isolation_error, "warnings": []}
         now = utc_text()
         try:
             await self.store.create_task_mutation(
@@ -474,6 +485,7 @@ class TaskCoordinator:
                 state=state,
                 description=kwargs.get("description") or "",
                 next_action=kwargs.get("next_action") or "",
+                isolation_hint=isolation_hint,
                 resource=kwargs.get("resource_context") or {},
                 reviews=[],
                 cooperative=bool(kwargs.get("cooperative")),
@@ -483,7 +495,12 @@ class TaskCoordinator:
                 tags=tags,
                 dependencies=kwargs.get("dependencies"),
                 event_agent_id=agent_id,
-                event_payload={"lane": lane, "priority": priority, "state": state},
+                event_payload={
+                    "lane": lane,
+                    "priority": priority,
+                    "state": state,
+                    "isolation_hint": isolation_hint,
+                },
                 now=now,
             )
         except Exception as exc:
@@ -1163,6 +1180,7 @@ class TaskCoordinator:
                     "operational_status": item["state"]
                     if item["state"] != "ready"
                     else "in_progress",
+                    "isolation_hint": item["isolation_hint"],
                 }
             )
         return result

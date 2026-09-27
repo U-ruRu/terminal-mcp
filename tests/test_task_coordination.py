@@ -24,6 +24,63 @@ async def register(service, summary):
 
 
 @pytest.mark.asyncio
+async def test_create_requires_and_projects_isolation_hint(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent = (await register(service, "isolation"))["self"]["agent_id"]
+        missing = await service.task(
+            agent, action="create", namespace="project", task_id="ISO-MISSING", title="missing"
+        )
+        assert missing["ok"] is False
+        assert "isolation_hint" in missing["error"]
+
+        too_long = await service.task(
+            agent,
+            action="create",
+            namespace="project",
+            task_id="ISO-LONG",
+            title="too long",
+            isolation_hint="x" * 161,
+        )
+        assert too_long["ok"] is False
+        assert "maximum length is 160" in too_long["error"]
+
+        created = await service.task(
+            agent,
+            action="create",
+            namespace="project",
+            task_id="ISO-1",
+            title="isolation contract",
+            isolation_hint="  separate worktree  ",
+        )
+        assert created["ok"] is True
+        assert created["task"]["isolation_hint"] == "separate worktree"
+
+        claimed = await service.task(
+            agent,
+            action="claim",
+            namespace="project",
+            task_id="ISO-1",
+            claim_intent="verify task context",
+        )
+        assert claimed["ok"] is True
+        fleet = await service.agents(agent)
+        assert fleet["self"]["managed_tasks"][0]["isolation_hint"] == "separate worktree"
+
+        changed = await service.task(
+            agent,
+            action="update",
+            namespace="project",
+            task_id="ISO-1",
+            isolation_hint="none",
+        )
+        assert changed["ok"] is False
+        assert "set only when creating" in changed["error"]
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
 async def test_task_create_cooperative_claims_and_compact_listing(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
@@ -32,6 +89,7 @@ async def test_task_create_cooperative_claims_and_compact_listing(tmp_path):
         created = await service.task(
             one,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="REV-1",
             title="Review slice",
@@ -119,6 +177,7 @@ async def test_task_addressed_message_routes_to_live_claimants_and_persists(tmp_
         await service.task(
             sender,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="REV-2",
             title="Task mailbox",
@@ -179,6 +238,7 @@ async def test_task_addressed_message_is_durable_without_live_claimants(tmp_path
         await service.task(
             sender,
             action="create",
+            isolation_hint="none",
             namespace="server",
             task_id="TASK-1",
             title="Unclaimed task",
@@ -209,6 +269,7 @@ async def test_agent_finish_releases_claim_with_durable_event(tmp_path):
         await service.task(
             agent_id,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="FINISH-1",
             title="Finish releases claim",
@@ -243,6 +304,7 @@ async def test_review_lane_is_ordinary_task_and_requires_result_to_finish(tmp_pa
         created = await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="CANDIDATE-1",
             title="Candidate review",
@@ -286,6 +348,7 @@ async def test_invalid_dependencies_do_not_partially_create_or_update_task(tmp_p
         created = await service.task(
             agent_id,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="BAD-DEPS",
             title="Bad dependencies",
@@ -300,6 +363,7 @@ async def test_invalid_dependencies_do_not_partially_create_or_update_task(tmp_p
         await service.task(
             agent_id,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="GOOD",
             title="Original title",
@@ -323,6 +387,7 @@ async def test_invalid_dependencies_do_not_partially_create_or_update_task(tmp_p
         partial_create = await service.task(
             agent_id,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="ATOMIC-CREATE",
             title="Must roll back",
@@ -360,6 +425,7 @@ async def test_release_without_claim_does_not_create_false_release_event(tmp_pat
         await service.task(
             agent_id,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="RELEASE-1",
             title="Idempotent release",
@@ -382,6 +448,7 @@ async def test_task_events_preserve_checkpoint_and_result_history(tmp_path):
         await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="HISTORY-1",
             title="Preserve review task history",
@@ -442,6 +509,7 @@ async def test_done_atomically_releases_all_current_claims(tmp_path):
         await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="DONE-CLAIMS",
             title="Done releases current ownership",
@@ -501,6 +569,7 @@ async def test_archive_hides_task_releases_claims_and_keeps_dependency_blocked(t
         await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="ARCHIVE-1",
             title="Mistaken task",
@@ -516,6 +585,7 @@ async def test_archive_hides_task_releases_claims_and_keeps_dependency_blocked(t
         create_archived = await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="ARCHIVE-BYPASS",
             title="Cannot bypass archive note",
@@ -583,6 +653,7 @@ async def test_archive_hides_task_releases_claims_and_keeps_dependency_blocked(t
         await service.task(
             owner,
             action="create",
+            isolation_hint="none",
             namespace="project",
             task_id="ARCHIVE-2",
             title="Replacement task",

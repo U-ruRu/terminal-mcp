@@ -926,6 +926,7 @@ class AgentCoordinator:
                     "operational_status": item["state"]
                     if item["state"] != "ready"
                     else "in_progress",
+                    "isolation_hint": item["isolation_hint"],
                     "claimed_at": item["claimed_at"],
                     "claim_age_seconds": claim_age_seconds,
                     "claim_intent": item.get("claim_intent") or "",

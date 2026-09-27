@@ -141,6 +141,12 @@ class TaskRequest(AgentRequest):
     state: TaskState | None = None
     description: str | None = Field(default=None, max_length=8000)
     next_action: str | None = Field(default=None, max_length=2000)
+    isolation_hint: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+        description="Required for action=create; stored verbatim after trimming and never interpreted.",
+    )
     resource_context: dict[str, object] | None = None
     cooperative: bool | None = Field(
         default=None,
@@ -177,6 +183,14 @@ class TaskRequest(AgentRequest):
     related_task_id: str | None = Field(default=None, max_length=120)
     note: str | None = Field(default=None, max_length=2000)
     expected_revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_isolation_hint(self):
+        if self.action == "create" and self.isolation_hint is None:
+            raise ValueError("isolation_hint is required for action=create")
+        if self.action != "create" and self.isolation_hint is not None:
+            raise ValueError("isolation_hint is accepted only for action=create")
+        return self
 
 
 class RunRequest(AgentRequest):

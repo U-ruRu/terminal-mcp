@@ -157,6 +157,7 @@ class SqliteRepository:
                     priority INTEGER NOT NULL DEFAULT 0,
                     state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
                     description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+                    isolation_hint TEXT NOT NULL DEFAULT 'none',
                     resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
                     cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
                     checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT, result_json TEXT,
@@ -232,7 +233,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=9")
+            await db.execute("PRAGMA user_version=10")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
@@ -309,6 +310,8 @@ class SqliteRepository:
             "WHERE claim_intent IS NULL OR claim_intent=''"
         )
         await self._migrate_work_items_archive_lifecycle(db)
+        # Schema v10: add creator-supplied isolation metadata after the v9 work_items rebuild.
+        await add_columns("work_items", [("isolation_hint", "TEXT NOT NULL DEFAULT 'none'")])
         await db.execute(
             "UPDATE work_items SET state_changed_at=COALESCE(state_changed_at,updated_at)"
         )
