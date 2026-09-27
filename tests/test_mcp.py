@@ -47,13 +47,16 @@ class FakeService:
         }
 
     async def message(
-        self, agent_id, text=None, target=None, message_hash=None, require_reply=False, alert=False
+        self, agent_id, text=None, target=None, message_hash=None, require_reply=False, alert=False,
+        namespace=None, task_id=None,
     ):
         return {
             "ok": True,
             "agent_name": "Kilo",
             "message_hash": message_hash or "a1b2c3d4",
-            "delivered_to": [] if message_hash else [target or "India"],
+            "namespace": namespace,
+            "task_id": task_id,
+            "delivered_to": [] if message_hash or namespace else [target or "India"],
             "read_by": ["Kilo"] if message_hash else [],
             "pending_messages": [],
         }
@@ -181,6 +184,8 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         "message",
         "agents",
         "agent_finish",
+        "tasks",
+        "task",
         "run",
         "recovery",
         "read",
@@ -192,6 +197,7 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.openWorldHint is False
     assert tools["agents"].annotations.readOnlyHint is True
+    assert tools["tasks"].annotations.readOnlyHint is True
     assert tools["health"].annotations.readOnlyHint is True
     assert tools["read"].annotations.readOnlyHint is True
     assert tools["run"].parameters["required"] == ["agent_id", "cmd"]
@@ -216,6 +222,8 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert message["message_hash"]["anyOf"][0]["maxLength"] == 8
     assert message["require_reply"]["default"] is False
     assert message["alert"]["default"] is False
+    assert message["namespace"]["anyOf"][0]["maxLength"] == 120
+    assert message["task_id"]["anyOf"][0]["maxLength"] == 120
 
 
 @pytest.mark.asyncio
@@ -248,10 +256,22 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert sent.structuredContent["message_hash"] == "a1b2c3d4"
     assert sent.structuredContent["delivered_to"] == ["India"]
 
+    task_sent = await tools["message"].run(
+        {
+            "agent_id": "Kilo-7K2M",
+            "text": "Task note",
+            "namespace": "project",
+            "task_id": "REV-1",
+        },
+        convert_result=True,
+    )
+    assert task_sent.structuredContent["namespace"] == "project"
+    assert task_sent.structuredContent["task_id"] == "REV-1"
+    assert task_sent.structuredContent["delivered_to"] == []
+
     run = await tools["run"].run({"agent_id": "Kilo-7K2M", "cmd": "printf ok"}, convert_result=True)
     assert run.content[0].text == "Command 1234abcd queued."
     assert run.structuredContent["agent_name"] == "Kilo"
-    assert "India deadbeef — Inspect tests" in run.structuredContent["active_agents"][0]
     assert "7K2M" not in str(run.structuredContent)
 
     recovery = await tools["recovery"].run(
@@ -286,7 +306,6 @@ async def test_mcp_read_supports_independent_agent_and_command_scope():
     assert scoped.structuredContent["ok"] is True
     assert scoped.structuredContent["status"] == "completed"
     assert scoped.structuredContent["agent_name"] == "Kilo"
-    assert "India deadbeef — Inspect tests" in scoped.structuredContent["active_agents"][0]
     assert "7K2M" not in str(scoped.structuredContent)
     command_only = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
     assert command_only.structuredContent["ok"] is True

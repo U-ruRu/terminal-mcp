@@ -137,7 +137,7 @@ async def test_v4_lines_migrate_and_duplicate_index_is_removed(tmp_path):
         assert "lines" not in tables
         assert "ix_lines_hash_seq" not in indexes
         assert "idx_lines_hash_seq" not in indexes
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
     with sqlite3.connect(output) as db:
         indexes = {
             row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
@@ -177,7 +177,7 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
             db.commit()
         warned = await service.health("none", agent_id=agent_id)
         assert warned["session_warning"]
-        assert warned["alert_pending"] is False
+        assert warned.get("alert_pending", False) is False
 
         with sqlite3.connect(repo.path) as db:
             db.execute(
@@ -224,8 +224,11 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
             )
             db.commit()
         expired = await service.health("none", agent_id=agent_id)
-        assert expired["session_status"] == "forced"
-        assert expired["session_end_reason"] == "max_session_duration"
+        assert expired["session_expired"] is True
+        assert expired["registration_required"] is True
+        persisted = await AgentStore(repo.path).get_session(agent_id)
+        assert persisted["state"] == "forced"
+        assert persisted["end_reason"] == "max_session_duration"
     finally:
         await terminal.stop()
 
@@ -257,6 +260,6 @@ async def test_session_alert_can_be_disabled(tmp_path):
             db.commit()
         health = await service.health("none", agent_id=agent_id)
         assert health["session_warning"]
-        assert health["alert_pending"] is False
+        assert health.get("alert_pending", False) is False
     finally:
         await terminal.stop()

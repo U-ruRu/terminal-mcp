@@ -31,19 +31,31 @@
 
 ## MCP
 
-Endpoint: `/mcp`. Набор tools остаётся компактным: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel`, `recovery`.
+Endpoint: `/mcp`. Набор tools остаётся компактным: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`.
 
 Agent Session по умолчанию имеет idle TTL 300 секунд, intent lease 180 секунд и жёсткий lifetime 1500 секунд. На 1200-й секунде каждый agent-bound ответ начинает содержать non-blocking warning. На 1380-й секунде Terminal MCP создаёт системный `ALERT`: он блокирует normal work surface до reply, после reply снимается и при продолжающейся сессии появляется снова через 60 секунд. Все пороги, repeat interval, включение ALERT и его текст задаются конфигурацией. Terminal commands живут независимо от Agent Session.
 
-`message` хранит состояния `delivered -> seen -> read -> replied`. Показ сообщения отмечает `seen`; `read` требует явного `message(agent_id, message_hash=...)`. Unacknowledged message продолжает показываться полным минимум три минуты и минимум пять ответов. `require_reply=true` удерживает `run` до связанного ответа. `alert=true` дополнительно блокирует normal work surface до reply, сохраняя `message`, `health`, `cancel`, `recovery` и `agent_finish`. Автоматический late-session ALERT использует ту же state machine и повторяется по configured interval, если после снятия ALERT сессия всё ещё используется.
+`message` хранит состояния `delivered -> seen -> read -> replied`. Показ сообщения отмечает `seen`; `read` требует явного `message(agent_id, message_hash=...)`. Отправка поддерживает direct target, broadcast и task target через `namespace + task_id`: task message snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history, поэтому остаётся видимым после смены исполнителя. Unacknowledged message продолжает показываться полным минимум три минуты и минимум пять ответов. `require_reply=true` удерживает `run` до связанного ответа. `alert=true` дополнительно блокирует normal work surface до reply, сохраняя `message`, `health`, `cancel`, `recovery` и `agent_finish`. Автоматический late-session ALERT использует ту же state machine и повторяется по configured interval, если после снятия ALERT сессия всё ещё используется.
 
 `run(agent_id, cmd, queue_id?)` использует numbered FIFO lanes. Первый run без номера выбирает least-loaded queue и запоминает affinity; следующие используют preferred queue. Явный `queue_id` выбирает lane и обновляет affinity. SQLite является источником queue state; workers используют atomic `queued -> running` claim и guarded terminal transitions.
 
-`read` принимает `agent_id` и `cmd_hash` независимо. Agent-bound read показывает coordination/session context; scoped read возвращает queue metadata и `output_truncated`, `output_retained`, `output_pruned_at`, `output_bytes`. Global stream имеет вид `HH:MM:SS <name> <hash> qN <output>`. Одна логическая строка output ограничена 4 MiB, весь persisted output одной команды — 8 MiB.
+`read` принимает `agent_id` и `cmd_hash` независимо. Обычный scoped read возвращает requested output и компактную command/queue metadata; session context добавляется при значимом warning/message/alert. Global stream имеет вид `HH:MM:SS <name> <hash> qN <output>`. Одна логическая строка output ограничена 4 MiB, весь persisted output одной команды — 8 MiB.
 
-`agents()` работает без регистрации как observer. `target` показывает выбранную session вместе с `last_activity_tool`, message receipt journal (`delivered/seen/read/replied`) и coordination counters. `show_details`, `show_intents`, `show_commands`, `command_hash` и `since_minutes` добавляют план, intent journal, command journal и полную исходную команду без новых tools.
+`agents()` работает без регистрации как observer и по умолчанию возвращает компактную картину fleet/session state. `target` выбирает одну session. `show_details`, `show_intents`, `show_commands`, `command_hash` и `since_minutes` раскрывают план, journals и исходную команду только по запросу.
 
 Подробный контракт: [`skills/terminal-operations/references/tool-contract.md`](skills/terminal-operations/references/tool-contract.md).
+
+### Managed tasks
+
+Managed task workflow является опциональным слоем поверх обычных Agent Sessions: ad-hoc terminal work продолжает работать без task card. Каждая managed task имеет обязательный `namespace`, стабильный `task_id`, одну фиксированную lane (`implementation`, `review`, `release`, `integration`, `general`) и универсальное состояние `ready`, `blocked`, `deferred` или `done`.
+
+`tasks()` — read-only observation surface. Без selector он показывает компактный незавершённый backlog, counts/pressure по lane/state и recommended next task; `namespace`/`task_id` сужают выборку, `show_details=true` раскрывает description, resources, dependencies, claims, reviews и history, `show_done=true` включает завершённые задачи.
+
+`task()` выполняет явные mutations (`create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`). Scheduler рекомендует работу и не назначает её автоматически. Несколько claims разрешены и остаются наблюдаемыми. Workflow anomalies — concurrent claim, self-review, open dependency, stale candidate, unusual transition — возвращаются structured warnings вместо запрета операции; существующие Agent Session safety gates остаются отдельным механизмом.
+
+Review requirements представлены dimensions `A` (architecture), `C` (correctness/contracts) и `R` (runtime quality). Один независимый агент может закрыть несколько dimensions для одной immutable candidate.
+
+Task state хранится локально в durable SQLite данного Terminal MCP. Repository/branch/worktree/SHA являются опциональным resource context, поэтому task layer одинаково подходит для repository work, server maintenance и research. Active task claims отображаются в компактном `agents()`, command activity пишется в task history, а `health` показывает только агрегированные workflow counts без выгрузки backlog. MCP и OpenAPI Actions используют один service layer и одинаковые task semantics.
 
 ### Output cache и retention
 
@@ -68,6 +80,7 @@ Schema: `/openapi.json`. Actions используют тот же service layer 
 - `POST /actions/message`
 - `POST /actions/agents`
 - `POST /actions/agent/finish`
+- task observation/mutation Actions с теми же контрактами, что `tasks`/`task` в MCP
 - `POST /actions/run`
 - `POST /actions/recovery`
 - `POST /actions/read`
@@ -132,7 +145,7 @@ Admin UI использует CSRF-токены для формы входа и 
 
 ## Защита хранилища
 
-Durable SQLite содержит полные тексты команд, Agent Session/coordination state, OAuth clients, коды авторизации и refresh tokens. Terminal output хранится отдельно в disposable output-cache. Оба файла могут содержать чувствительные данные.
+Durable SQLite содержит полные тексты команд, Agent Session/coordination state, managed tasks/claims/reviews/history, OAuth clients, коды авторизации и refresh tokens. Terminal output хранится отдельно в disposable output-cache. Оба файла могут содержать чувствительные данные.
 
 - Каталог данных создаётся и восстанавливается с режимом `0700`.
 - Durable SQLite и output-cache создаются с режимом `0600`.

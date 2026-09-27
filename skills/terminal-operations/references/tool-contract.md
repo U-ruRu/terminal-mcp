@@ -2,13 +2,13 @@
 
 ## Интерфейс
 
-Terminal MCP 0.9 предоставляет десять методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Terminal MCP 0.9 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
 ## Agent Session
 
 По умолчанию idle TTL равен 300 секундам, intent lease — 180 секундам, абсолютная длительность регистрации — 1500 секундам. Non-blocking warning начинается после 1200 секунд. На 1380-й секунде появляется blocking session ALERT; после reply он снимается и при продолжающейся сессии может появиться снова через 60 секунд. Пороги, repeat interval, флаг включения и текст ALERT задаются конфигурацией сервера.
 
-Каждый agent-bound ответ может содержать `session_status`, `session_started_at`, `session_age_seconds`, `session_remaining_seconds`, `session_warning`, `task_age_seconds`, `max_task_age_seconds`, `preferred_queue_id` и coordination obligations.
+Agent-bound operational success по умолчанию возвращает только результат операции. Session/message context добавляется, когда он меняет следующее действие: warning, unread/reply-required message, ALERT, expiry или registration requirement. Полный session/fleet context читается через observation tools.
 
 Статусы агента: `started`, `active`, `idle`, `finished`, `forced`. `finished` означает явный `agent_finish`; `forced` имеет persisted reason.
 
@@ -24,9 +24,9 @@ Terminal MCP 0.9 предоставляет десять методов: `agent_
 
 Send mode:
 
-`message(agent_id, text, target?, require_reply=false, alert=false)`
+`message(agent_id, text, target?, namespace?, task_id?, require_reply=false, alert=false)`
 
-Без target создаётся broadcast по snapshot текущих active peers. `alert=true` автоматически требует reply.
+`target` адресует active agent, отсутствие target создаёт broadcast active peers snapshot, а `namespace + task_id` адресуют managed task: сообщение snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history. Agent target и task target взаимоисключающие. `alert=true` автоматически требует reply.
 
 Read acknowledgement:
 
@@ -56,7 +56,16 @@ Sender inspection через `message(sender_id, message_hash)` возвраща
 - `command_hash?` — полная исходная команда и metadata;
 - `since_minutes?` — относительное окно истории.
 
-Overview показывает status, относительную последнюю активность, `last_activity_tool`, preferred queue, последнюю команду и coordination counters. При `target` session также содержит `message_journal` с hash, sender, текстом и persisted receipt state `delivered|seen|read|replied` за выбранное history window.
+По умолчанию overview компактный: status, activity age, intent/step и managed-task refs. `show_details` раскрывает plan/scope, `show_commands` — command data, `target` — выбранную session и message journal с persisted receipt state `delivered|seen|read|replied`.
+
+
+## `tasks(namespace?, task_id?, lane?, state?, show_details=false, show_done=false, limit=50, cursor?)`
+
+Read-only локальный backlog observer. Без selector возвращает compact unfinished tasks, counts/pressure и `recommended`; namespace фильтрует пространство, `namespace + task_id` выбирают одну карточку. `show_details=true` раскрывает description, resource context, dependencies, reviews и recent events. `show_done=true` включает завершённые задачи. Cursor используется для истории/больших выборок.
+
+## `task(agent_id, action, namespace, ...)`
+
+Явно изменяет managed task. Базовые actions: `create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`. Namespace обязателен. Fixed lanes: `implementation`, `review`, `release`, `integration`, `general`; durable states: `ready`, `blocked`, `deferred`, `done`; review dimensions: `A`, `C`, `R`. Scheduler только рекомендует. Multiple claims разрешены. Dependency, self-review, concurrent claim, stale candidate и unusual transition возвращаются structured warnings и сохраняют наблюдаемость вместо workflow lock. Ad-hoc terminal work не требует managed task.
 
 ## `run(agent_id, cmd, queue_id?)`
 
@@ -68,7 +77,7 @@ Overview показывает status, относительную последн�
 
 ## `read(agent_id?, cmd_hash?, lines_count=500, offset?)`
 
-`agent_id` и `cmd_hash` независимы. `cmd_hash` выбирает scoped command output; отсутствие hash читает global stream. `agent_id` добавляет session/message context. Обычное unread message отображается и не блокирует read. `ALERT` блокирует read до reply.
+`agent_id` и `cmd_hash` независимы. `cmd_hash` выбирает scoped command output; отсутствие hash читает global stream. Обычный successful read остаётся компактным; agent context добавляется при actionable coordination state. Обычное unread message отображается и не блокирует read. `ALERT` блокирует read до reply.
 
 Scoped response содержит `status`, `exit_code`, `queue_id`, `queue_position`, line counters, `output_truncated`, `output_retained`, `output_pruned_at`, `output_bytes` и `error`. Persisted output ограничен 4 MiB на логическую строку и 8 MiB на команду. Global lines имеют форму:
 
@@ -86,7 +95,7 @@ Persisted emergency execution вне numbered queues. Выполняется н�
 
 ## `health(agent_id?)`
 
-Anonymous health показывает приложение, storage и terminal scheduler. `terminal.scheduler` для 0.9 — `numbered-fifo`; `terminal.queues` содержит состояние каждой lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` ответ также содержит session timing, preferred queue и message obligations.
+Anonymous health показывает приложение, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, active/stale claims и reviews без backlog payload. `terminal.scheduler` для 0.9 — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
 
 ## Command status
 
@@ -101,6 +110,8 @@ Queue lifecycle использует guarded transitions: `queued -> running|can
 - `POST /actions/message`
 - `POST /actions/agents`
 - `POST /actions/agent/finish`
+- `POST /actions/tasks`
+- `POST /actions/task`
 - `POST /actions/run`
 - `POST /actions/read`
 - `POST /actions/cancel`
