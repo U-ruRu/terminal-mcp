@@ -7,7 +7,7 @@ from terminal_mcp.core.orchestration import parse_utc, public_agent_name, utc_no
 from terminal_mcp.storage.tasks import TaskRevisionConflict
 
 LANES = ("implementation", "review", "release", "integration", "general")
-STATES = ("ready", "blocked", "deferred", "done")
+STATES = ("ready", "blocked", "deferred", "done", "archived")
 PRIORITIES = ("P0", "P1", "P2", "P3")
 REVIEW_DIMENSIONS = ("A", "C", "R")
 PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
@@ -117,6 +117,7 @@ class TaskCoordinator:
         state=None,
         show_details=False,
         show_done=False,
+        show_archived=False,
         limit=50,
         cursor=None,
     ):
@@ -140,11 +141,14 @@ class TaskCoordinator:
             lane=lane,
             state=state,
             show_done=show_done,
+            show_archived=show_archived,
             limit=limit,
             offset=offset,
         )
         tasks = [await self._decorate(item, details=show_details) for item in rows]
-        lane_counts = Counter(item["lane"] for item in tasks if item["state"] != "done")
+        lane_counts = Counter(
+            item["lane"] for item in tasks if item["state"] not in {"done", "archived"}
+        )
         state_counts = Counter(item["state"] for item in tasks)
         pressure = Counter()
         recommended = None
@@ -154,7 +158,7 @@ class TaskCoordinator:
             pressure[item["lane"]] += PRESSURE_WEIGHT[item["priority"]]
             if recommended is None and not item["claims"]:
                 deps = await self._dependencies(item["namespace"], item["task_id"])
-                if not any(dep["state"] != "done" for dep in deps):
+                if not any(dep["state"] not in {"done", "archived"} for dep in deps):
                     recommended = {
                         "namespace": item["namespace"],
                         "task_id": item["task_id"],
@@ -203,6 +207,12 @@ class TaskCoordinator:
         lane = kwargs.get("lane", "general")
         priority = kwargs.get("priority", "P2")
         state = kwargs.get("state", "ready")
+        if state == "archived":
+            return {
+                "ok": False,
+                "error": "task.create: use action=archive with note",
+                "warnings": [],
+            }
         dimensions = kwargs.get("review_requirements") or []
         error = self._validate(lane=lane, priority=priority, state=state, dimensions=dimensions)
         if error:
@@ -254,7 +264,7 @@ class TaskCoordinator:
                     cooperative=bool(current.get("cooperative")),
                 )
             )
-        if current["state"] in {"blocked", "deferred", "done"}:
+        if current["state"] in {"blocked", "deferred", "done", "archived"}:
             warnings.append(
                 _warning(
                     f"{current['state']}_task",
@@ -263,7 +273,9 @@ class TaskCoordinator:
                 )
             )
         open_deps = [
-            dep for dep in await self._dependencies(namespace, task_id) if dep["state"] != "done"
+            dep
+            for dep in await self._dependencies(namespace, task_id)
+            if dep["state"] not in {"done", "archived"}
         ]
         if open_deps:
             warnings.append(
@@ -326,6 +338,37 @@ class TaskCoordinator:
         kwargs["state"] = "done"
         return await self._action_update(agent_id, namespace, task_id, **kwargs)
 
+    async def _action_archive(self, agent_id, namespace, task_id, **kwargs):
+        current = await self._required(namespace, task_id)
+        if not current:
+            return self._missing()
+        note = (kwargs.get("note") or "").strip()
+        if not note:
+            return {"ok": False, "error": "task.archive: note required", "warnings": []}
+        if current["state"] == "archived":
+            return await self._result(
+                namespace,
+                task_id,
+                [
+                    _warning(
+                        "already_archived",
+                        "Task is already archived.",
+                        task_id=task_id,
+                        severity="info",
+                    )
+                ],
+            )
+        return await self._update(
+            agent_id,
+            namespace,
+            task_id,
+            {"state": "archived"},
+            kwargs.get("expected_revision"),
+            "archived",
+            release_claims_reason="task_archived",
+            event_extra={"note": note},
+        )
+
     async def _update_from_kwargs(self, agent_id, namespace, task_id, kwargs):
         dependency_error = self._validate_dependencies(kwargs.get("dependencies"))
         if dependency_error:
@@ -359,6 +402,12 @@ class TaskCoordinator:
             return {"ok": False, "error": error, "warnings": []}
         warnings = []
         target_state = kwargs.get("state")
+        if target_state == "archived":
+            return {
+                "ok": False,
+                "error": "task.update: use action=archive with note",
+                "warnings": [],
+            }
         if target_state == "done":
             required = set(current.get("reviews") or [])
             candidate = current.get("candidate_ref")
@@ -380,13 +429,16 @@ class TaskCoordinator:
                         dimensions=missing,
                     )
                 )
-        if current["state"] == "blocked" and target_state not in {None, "blocked"}:
+        if current["state"] in {"blocked", "archived"} and target_state not in {
+            None,
+            current["state"],
+        }:
             warnings.append(
                 _warning(
                     "unusual_transition",
-                    "Blocked task state is being changed explicitly.",
+                    f"{current['state'].capitalize()} task state is being changed explicitly.",
                     task_id=task_id,
-                    from_state="blocked",
+                    from_state=current["state"],
                     to_state=target_state,
                 )
             )
@@ -413,6 +465,7 @@ class TaskCoordinator:
         warnings=None,
         dependencies=None,
         release_claims_reason=None,
+        event_extra=None,
     ):
         warnings = list(warnings or [])
         now = utc_text()
@@ -420,6 +473,8 @@ class TaskCoordinator:
             "fields": sorted(fields),
             "warnings": [item["code"] for item in warnings],
         }
+        if event_extra:
+            event_payload.update(event_extra)
         for key in ("checkpoint", "candidate_ref", "state", "lane", "priority", "next_action"):
             if key in fields:
                 event_payload[key] = fields[key]

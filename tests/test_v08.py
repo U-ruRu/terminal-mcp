@@ -137,8 +137,7 @@ async def test_alert_blocks_work_surface_and_keeps_emergency_operations_availabl
         assert blocked_read["ok"] is False
         assert blocked_read["alert_pending"] is True
         assert any(
-            "ALERT" in line and message_hash in line
-            for line in blocked_read["alert_messages"]
+            "ALERT" in line and message_hash in line for line in blocked_read["alert_messages"]
         )
         blocked_coordinate = await service.coordinate(receiver)
         assert blocked_coordinate["ok"] is False
@@ -328,11 +327,9 @@ def test_v07_database_migrates_to_v08_without_reset(tmp_path):
         assert {"ended_at", "end_reason", "preferred_queue_id"} <= session_columns
         assert {"require_reply", "alert"} <= message_columns
         assert {"delivered_at", "first_seen_at", "seen_count", "replied_at"} <= recipient_columns
-        old_command = db.execute(
-            "SELECT cmd FROM commands WHERE hash='deadbeef'"
-        ).fetchone()[0]
+        old_command = db.execute("SELECT cmd FROM commands WHERE hash='deadbeef'").fetchone()[0]
         assert old_command == "printf old"
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 @pytest.mark.asyncio
@@ -351,7 +348,8 @@ async def test_message_tool_response_counts_as_seen_and_observer_tracks_receipt_
 
         delivered = await service.agents(target=public_agent_name(receiver))
         entry = next(
-            item for item in delivered["sessions"][0]["message_journal"]
+            item
+            for item in delivered["sessions"][0]["message_journal"]
             if item["message_hash"] == message_hash
         )
         assert entry["state"] == "delivered"
@@ -377,7 +375,8 @@ async def test_message_tool_response_counts_as_seen_and_observer_tracks_receipt_
         await service.message(receiver, message_hash=message_hash)
         acknowledged = await service.agents(target=public_agent_name(receiver))
         entry = next(
-            item for item in acknowledged["sessions"][0]["message_journal"]
+            item
+            for item in acknowledged["sessions"][0]["message_journal"]
             if item["message_hash"] == message_hash
         )
         assert entry["state"] == "read"
@@ -386,7 +385,8 @@ async def test_message_tool_response_counts_as_seen_and_observer_tracks_receipt_
         await service.message(receiver, message_hash=message_hash, text="Confirmed")
         replied = await service.agents(target=public_agent_name(receiver))
         entry = next(
-            item for item in replied["sessions"][0]["message_journal"]
+            item
+            for item in replied["sessions"][0]["message_journal"]
             if item["message_hash"] == message_hash
         )
         assert entry["state"] == "replied"

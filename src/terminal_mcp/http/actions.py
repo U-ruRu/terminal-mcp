@@ -120,6 +120,7 @@ class TasksRequest(StrictRequest):
     state: TaskState | None = None
     show_details: bool = False
     show_done: bool = False
+    show_archived: bool = False
     limit: int = Field(default=50, ge=1, le=200)
     cursor: int | None = Field(default=None, ge=0)
 
@@ -143,6 +144,7 @@ class TaskRequest(AgentRequest):
     dimensions: list[ReviewDimension] | None = Field(default=None, max_length=3)
     verdict: ReviewVerdict | None = None
     evidence: str | dict[str, object] | None = None
+    note: str | None = Field(default=None, max_length=2000)
     expected_revision: int | None = Field(default=None, ge=1)
 
 
@@ -279,6 +281,7 @@ def build_actions_router(service, auth_mode="none"):
                 state=body.state,
                 show_details=body.show_details,
                 show_done=body.show_done,
+                show_archived=body.show_archived,
                 limit=body.limit,
                 cursor=body.cursor,
             ),

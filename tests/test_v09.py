@@ -137,7 +137,7 @@ async def test_v4_lines_migrate_and_duplicate_index_is_removed(tmp_path):
         assert "lines" not in tables
         assert "ix_lines_hash_seq" not in indexes
         assert "idx_lines_hash_seq" not in indexes
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
     with sqlite3.connect(output) as db:
         indexes = {
             row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
@@ -197,6 +197,7 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
         )
         allowed = await service.run("printf allowed", agent_id=agent_id, queue_id=1)
         assert allowed["ok"] is True
+        assert (await wait_done(service, allowed["cmd_hash"]))["status"] == "completed"
 
         with sqlite3.connect(repo.path) as db:
             old = utc_text(utc_now() - timedelta(seconds=11))

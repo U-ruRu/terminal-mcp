@@ -1,6 +1,6 @@
 # terminal-mcp
 
-Application release: **0.9.1**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
+Application release: **0.9.2**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
 
 `terminal-mcp` предоставляет MCP и OpenAPI-интерфейсы для управления Linux-терминалом.
 
@@ -49,19 +49,19 @@ Agent Session по умолчанию имеет idle TTL 300 секунд, inte
 
 ### Managed tasks
 
-Managed task workflow является опциональным слоем поверх обычных Agent Sessions: ad-hoc terminal work продолжает работать без task card. Каждая managed task имеет обязательный `namespace`, стабильный `task_id`, одну фиксированную lane (`implementation`, `review`, `release`, `integration`, `general`) и универсальное состояние `ready`, `blocked`, `deferred` или `done`.
+Managed task workflow является опциональным слоем поверх обычных Agent Sessions: ad-hoc terminal work продолжает работать без task card. Каждая managed task имеет обязательный `namespace`, стабильный `task_id`, одну фиксированную lane (`implementation`, `review`, `release`, `integration`, `general`) и универсальное состояние `ready`, `blocked`, `deferred`, `done` или `archived`.
 
-`tasks()` — read-only observation surface. Без selector он показывает компактный незавершённый backlog, counts/pressure по lane/state и recommended next task; `namespace`/`task_id` сужают выборку, `show_details=true` раскрывает description, resources, dependencies, claims, reviews и history, `show_done=true` включает завершённые задачи.
+`tasks()` — read-only observation surface. Без selector он показывает компактный незавершённый backlog, counts/pressure по lane/state и recommended next task; `namespace`/`task_id` сужают выборку, `show_details=true` раскрывает description, resources, dependencies, claims, reviews и history, `show_done=true` включает завершённые задачи, `show_archived=true` — soft-archived задачи. Явный `state=archived` также выбирает архив независимо от флага.
 
-`task()` выполняет явные mutations (`create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`). Tool/OpenAPI schemas публикуют фиксированные значения action, lane, state, priority, review dimensions и verdict. Переход задачи в `done` атомарно освобождает все текущие claims и сохраняет `claim_released(reason=task_done)` в durable history; последующий явный claim завершённой задачи остаётся допустимым soft-guardrail действием с warning. Scheduler рекомендует работу и не назначает её автоматически. Несколько claims разрешены и остаются наблюдаемыми. Workflow anomalies — concurrent claim, self-review, open dependency, stale candidate, unusual transition — возвращаются structured warnings вместо запрета операции; существующие Agent Session safety gates остаются отдельным механизмом.
+`task()` выполняет явные mutations (`create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`, `archive`). `archive` требует свободный текст `note`, атомарно переводит задачу в `archived`, освобождает текущие claims и сохраняет заметку и release evidence в durable history. Архив скрыт из обычного backlog/recommendation; direct update/state в `archived` отклоняется, чтобы архивирование всегда имело audit note. Tool/OpenAPI schemas публикуют фиксированные значения action, lane, state, priority, review dimensions и verdict. Переход задачи в `done` атомарно освобождает все текущие claims и сохраняет `claim_released(reason=task_done)` в durable history; последующий явный claim завершённой задачи остаётся допустимым soft-guardrail действием с warning. Scheduler рекомендует работу и не назначает её автоматически. Несколько claims разрешены и остаются наблюдаемыми. Workflow anomalies — concurrent claim, self-review, open dependency, stale candidate, unusual transition — возвращаются structured warnings вместо запрета операции; существующие Agent Session safety gates остаются отдельным механизмом.
 
 Review requirements представлены dimensions `A` (architecture), `C` (correctness/contracts) и `R` (runtime quality). Один независимый агент может закрыть несколько dimensions для одной immutable candidate.
 
-Task state хранится локально в durable SQLite данного Terminal MCP. Repository/branch/worktree/SHA являются опциональным resource context, поэтому task layer одинаково подходит для repository work, server maintenance и research. Active task claims отображаются в компактном `agents()`, command activity пишется в task history, а `health` показывает только агрегированные workflow counts без выгрузки backlog. MCP и OpenAPI Actions используют один service layer и одинаковые task semantics.
+Task state хранится локально в durable SQLite данного Terminal MCP. Архивированные задачи, их note, claims/reviews/events и остальная task history сохраняются там же без автоматического task-retention. Repository/branch/worktree/SHA являются опциональным resource context, поэтому task layer одинаково подходит для repository work, server maintenance и research. Active task claims отображаются в компактном `agents()`, command activity пишется в task history, а `health` показывает только агрегированные workflow counts без выгрузки backlog. MCP и OpenAPI Actions используют один service layer и одинаковые task semantics.
 
 ### Output cache и retention
 
-Terminal output не хранится в durable database. Он пишется batch-транзакциями в отдельный disposable cache (`/var/cache/terminal-mcp/output.sqlite3` в production) и не входит в штатный backup durable state.
+Terminal output не хранится в durable database. Он пишется batch-транзакциями в отдельный disposable cache (`/var/cache/terminal-mcp/output.sqlite3` в production) и не входит в штатный backup durable state. Лимиты output-cache retention не распространяются на managed tasks, task events, claims, reviews или coordination messages: они находятся в `/var/lib/terminal-mcp/terminal-mcp.sqlite3` и входят в durable backup.
 
 Defaults:
 

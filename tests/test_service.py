@@ -75,7 +75,7 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
         assert {"started_at", "finished_at"} <= columns
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
         status, error, started_at, finished_at = db.execute(
             "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
         ).fetchone()
@@ -230,7 +230,7 @@ async def test_stdout_and_stderr_preserve_shell_order_and_exit_error_stays_null(
 async def test_health_runs_optional_configured_command(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
     plain = await service.health("oauth")
-    assert plain["version"] == "0.9.1"
+    assert plain["version"] == "0.9.2"
     assert "custom_command" not in plain
 
     service.health_command = "printf 'health-output\\n'"
@@ -249,9 +249,9 @@ async def test_health_runs_optional_configured_command(tmp_path):
 def test_render_normalizes_legacy_z_timestamp():
     lines = [Line(1, "deadbeef", "12:34:56Z", "legacy")]
     assert TerminalService._render(lines, scoped=True) == ["12:34:56 legacy"]
-    assert TerminalService._render(
-        lines, scoped=False, agent_map={"deadbeef": "India-1111"}
-    ) == ["12:34:56 India deadbeef legacy"]
+    assert TerminalService._render(lines, scoped=False, agent_map={"deadbeef": "India-1111"}) == [
+        "12:34:56 India deadbeef legacy"
+    ]
 
 
 @pytest.mark.asyncio
@@ -306,9 +306,7 @@ async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
         }
         tables = {
             row[0]
-            for row in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         session = db.execute(
             "SELECT details,current_step,state FROM agent_sessions WHERE agent_id='India-1111'"
@@ -326,4 +324,4 @@ async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
     } <= tables
     assert session == ("[]", 1, "forced")
     assert event_step == 1
-    assert version == 7
+    assert version == 8

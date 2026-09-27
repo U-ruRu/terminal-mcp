@@ -2,7 +2,7 @@
 
 ## Интерфейс
 
-Terminal MCP 0.9.1 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Terminal MCP 0.9.2 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
 ## Agent Session
 
@@ -59,13 +59,13 @@ Sender inspection через `message(sender_id, message_hash)` возвраща
 По умолчанию overview компактный: status, activity age, intent/step и managed-task refs. `show_details` раскрывает plan/scope, `show_commands` — command data, `target` — выбранную session и message journal с persisted receipt state `delivered|seen|read|replied`.
 
 
-## `tasks(namespace?, task_id?, lane?, state?, show_details=false, show_done=false, limit=50, cursor?)`
+## `tasks(namespace?, task_id?, lane?, state?, show_details=false, show_done=false, show_archived=false, limit=50, cursor?)`
 
-Read-only локальный backlog observer. Без selector возвращает compact unfinished tasks, counts/pressure и `recommended`; namespace фильтрует пространство, `namespace + task_id` выбирают одну карточку. `show_details=true` раскрывает description, resource context, dependencies, reviews и recent events. `show_done=true` включает завершённые задачи. Cursor используется для истории/больших выборок.
+Read-only локальный backlog observer. Без selector возвращает compact unfinished tasks, counts/pressure и `recommended`; namespace фильтрует пространство, `namespace + task_id` выбирают одну карточку. `show_details=true` раскрывает description, resource context, dependencies, reviews и recent events. `show_done=true` включает завершённые задачи, `show_archived=true` — архив. `state=archived` выбирает архив напрямую. Cursor используется для истории/больших выборок.
 
 ## `task(agent_id, action, namespace, ...)`
 
-Явно изменяет managed task. Базовые actions: `create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`. Namespace обязателен. Fixed lanes: `implementation`, `review`, `release`, `integration`, `general`; durable states: `ready`, `blocked`, `deferred`, `done`; review dimensions: `A`, `C`, `R`. Tool schemas публикуют фиксированные enum для action, lane, state, priority, review dimensions и verdict. Переход в `done` атомарно освобождает все текущие claims и сохраняет release events; последующий явный claim завершённой задачи остаётся разрешённым с warning. Scheduler только рекомендует. Multiple claims разрешены. Dependency, self-review, concurrent claim, stale candidate и unusual transition возвращаются structured warnings и сохраняют наблюдаемость вместо workflow lock. Ad-hoc terminal work не требует managed task.
+Явно изменяет managed task. Базовые actions: `create`, `claim`, `release`, `update`, `checkpoint`, `review`, `state`, `done`, `archive`. `archive` требует свободный текст `note`, переводит task в `archived`, освобождает live claims и сохраняет note/release evidence в durable history. Архив скрывается из обычного backlog; прямой `update/state` в `archived` отклоняется, чтобы audit note был обязательным. Namespace обязателен. Fixed lanes: `implementation`, `review`, `release`, `integration`, `general`; durable states: `ready`, `blocked`, `deferred`, `done`, `archived`; review dimensions: `A`, `C`, `R`. Tool schemas публикуют фиксированные enum для action, lane, state, priority, review dimensions и verdict. Переход в `done` атомарно освобождает все текущие claims и сохраняет release events; последующий явный claim завершённой задачи остаётся разрешённым с warning. Scheduler только рекомендует. Multiple claims разрешены. Dependency, self-review, concurrent claim, stale candidate и unusual transition возвращаются structured warnings и сохраняют наблюдаемость вместо workflow lock. Ad-hoc terminal work не требует managed task.
 
 ## `run(agent_id, cmd, queue_id?)`
 

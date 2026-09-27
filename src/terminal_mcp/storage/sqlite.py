@@ -152,7 +152,7 @@ class SqliteRepository:
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
                     lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
                     priority INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
+                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done','archived')),
                     description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
                     resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
                     cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
@@ -215,12 +215,14 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=7")
+            await db.execute("PRAGMA user_version=8")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
 
     async def _migrate(self, db):
+        await self._migrate_work_items_archive_state(db)
+
         async def add_columns(table, definitions):
             columns = {
                 row[1] for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
@@ -303,6 +305,57 @@ class SqliteRepository:
             "CREATE INDEX IF NOT EXISTS ix_coord_messages_task "
             "ON coordination_messages(task_namespace,task_id,created_at)"
         )
+
+    async def _migrate_work_items_archive_state(self, db):
+        row = await (
+            await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'")
+        ).fetchone()
+        if row is None or "'archived'" in (row[0] or ""):
+            return False
+
+        # SQLite cannot widen a CHECK constraint in place. Rebuild only the task parent
+        # table with FK enforcement temporarily disabled; child tables keep referencing
+        # the stable work_items name and are verified before normal operation resumes.
+        await db.execute("PRAGMA foreign_keys=OFF")
+        try:
+            await db.executescript(
+                """
+                CREATE TABLE work_items_v8(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
+                    lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done','archived')),
+                    description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+                    resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
+                    cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT,
+                    revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(namespace, task_id)
+                );
+                INSERT INTO work_items_v8(
+                    namespace,task_id,title,lane,priority,state,description,next_action,
+                    resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,
+                    revision,created_at,updated_at
+                )
+                SELECT
+                    namespace,task_id,title,lane,priority,state,description,next_action,
+                    resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,
+                    revision,created_at,updated_at
+                FROM work_items;
+                DROP TABLE work_items;
+                ALTER TABLE work_items_v8 RENAME TO work_items;
+                CREATE INDEX IF NOT EXISTS ix_work_items_state
+                    ON work_items(namespace,state,priority DESC,updated_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_work_items_lane
+                    ON work_items(namespace,lane,state,priority DESC,updated_at DESC);
+                """
+            )
+        finally:
+            await db.execute("PRAGMA foreign_keys=ON")
+        violations = await (await db.execute("PRAGMA foreign_key_check")).fetchall()
+        if violations:
+            raise RuntimeError(f"schema v8 work_items migration broke foreign keys: {violations}")
+        return True
 
     async def _migrate_legacy_output(self, db):
         table = await (

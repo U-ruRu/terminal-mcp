@@ -60,14 +60,14 @@ def test_bearer_actions_and_openapi(tmp_path):
     with TestClient(app) as client:
         live = client.get("/health/live")
         assert live.status_code == 200
-        assert live.json()["version"] == "0.9.1"
+        assert live.json()["version"] == "0.9.2"
         assert client.get("/actions/health").status_code == 401
         headers = {"Authorization": "Bearer alpha"}
         agent_id = start_agent(client, headers)
         health = client.get("/actions/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["agent_name"] == "anonymous"
-        assert health.json()["version"] == "0.9.1"
+        assert health.json()["version"] == "0.9.2"
 
         run = client.post(
             "/actions/run", json={"agent_id": agent_id, "cmd": "printf ok"}, headers=headers
@@ -101,7 +101,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/health",
         }
         assert set(schema["paths"]) == expected_paths
-        assert schema["info"]["version"] == "0.9.1"
+        assert schema["info"]["version"] == "0.9.2"
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
         assert set(run_request["required"]) == {"agent_id", "cmd"}
@@ -114,8 +114,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         health_operation = schema["paths"]["/actions/health"]["get"]
         health_params = health_operation.get("parameters", [])
         assert any(
-            item["name"] == "agent_id" and item["required"] is False
-            for item in health_params
+            item["name"] == "agent_id" and item["required"] is False for item in health_params
         )
         start_request = schema["components"]["schemas"]["AgentStartRequest"]
         assert start_request["properties"]["task_summary"]["anyOf"][0]["maxLength"] == 120
@@ -144,6 +143,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "blocked",
             "deferred",
             "done",
+            "archived",
         ]
         task_request = schema["components"]["schemas"]["TaskRequest"]
         assert task_request["properties"]["action"]["enum"] == [
@@ -155,6 +155,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "review",
             "state",
             "done",
+            "archive",
         ]
         assert task_request["properties"]["priority"]["anyOf"][0]["enum"] == [
             "P0",
@@ -325,10 +326,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
 
         headers = {"Authorization": f"Bearer {tokens['access_token']}"}
         start_agent(client, headers)
-        assert (
-            client.get("/actions/health", headers=headers).status_code
-            == 200
-        )
+        assert client.get("/actions/health", headers=headers).status_code == 200
         refreshed = client.post(
             "/oauth/token",
             data={
@@ -348,10 +346,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
         )
         assert reused.status_code == 400
         asyncio.run(app.state.oauth_store.delete_client(client_id))
-        assert (
-            client.get("/actions/health", headers=headers).status_code
-            == 401
-        )
+        assert client.get("/actions/health", headers=headers).status_code == 401
 
 
 def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
