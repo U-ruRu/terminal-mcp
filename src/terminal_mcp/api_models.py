@@ -11,6 +11,22 @@ CommandStatus = Literal[
     "not_found",
 ]
 
+TaskAction = Literal[
+    "create",
+    "claim",
+    "release",
+    "update",
+    "checkpoint",
+    "review",
+    "state",
+    "done",
+]
+TaskLane = Literal["implementation", "review", "release", "integration", "general"]
+TaskState = Literal["ready", "blocked", "deferred", "done"]
+TaskPriority = Literal["P0", "P1", "P2", "P3"]
+ReviewDimension = Literal["A", "C", "R"]
+ReviewVerdict = Literal["NON_BLOCKING", "BLOCKING"]
+
 
 class SessionStatus(BaseModel):
     agent_name: str | None = None
@@ -134,6 +150,7 @@ class TerminalHealth(BaseModel):
 class HealthResponse(SessionStatus):
     ok: bool
     application: str
+    version: str
     storage: str
     auth_mode: str
     terminal: TerminalHealth
@@ -164,9 +181,9 @@ class WorkflowWarning(BaseModel):
 class ManagedTaskRef(BaseModel):
     namespace: str
     task_id: str
-    lane: str
-    priority: str
-    state: str
+    lane: TaskLane
+    priority: TaskPriority
+    state: TaskState
 
 
 class TaskClaimView(BaseModel):
@@ -178,9 +195,9 @@ class TaskCard(BaseModel):
     namespace: str
     task_id: str
     title: str
-    lane: str
-    priority: str
-    state: str
+    lane: TaskLane
+    priority: TaskPriority
+    state: TaskState
     next_action: str = ""
     checkpoint: str | dict[str, object] = Field(default_factory=dict)
     candidate_ref: str | None = None
@@ -188,7 +205,7 @@ class TaskCard(BaseModel):
     cooperative: bool = False
     active: bool = False
     claims: list[TaskClaimView] = Field(default_factory=list)
-    review_requirements: list[str] = Field(default_factory=list)
+    review_requirements: list[ReviewDimension] = Field(default_factory=list)
     description: str | None = None
     resource_context: dict[str, object] | None = None
     dependencies: list[dict[str, object]] | None = None

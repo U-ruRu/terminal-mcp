@@ -8,6 +8,7 @@ from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.tasks import TaskStore
+from terminal_mcp.version import __version__
 
 DEFAULT_READ_LINES = 500
 MAX_READ_LINES = 1000
@@ -525,6 +526,7 @@ class TerminalService:
                     "ok": terminal.get("ok", False) and internal_ok,
                     "agent_name": public_agent_name(agent_id),
                     "application": "terminal-mcp",
+                    "version": __version__,
                     "storage": "ok" if storage_ok else "error",
                     "auth_mode": auth_mode,
                     "terminal": terminal,
@@ -560,6 +562,7 @@ class TerminalService:
                 "ok": False,
                 "agent_name": public_agent_name(agent_id),
                 "application": "terminal-mcp",
+                "version": __version__,
                 "storage": "error",
                 "auth_mode": auth_mode,
                 "terminal": terminal,

@@ -169,6 +169,7 @@ class FakeService:
             "agent_name": "Kilo" if agent_id else "anonymous",
             "pending_messages": [],
             "application": "terminal-mcp",
+            "version": "0.9.1",
             "storage": "ok",
             "auth_mode": auth_mode,
             "terminal": {
@@ -236,6 +237,30 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert message["alert"]["default"] is False
     assert message["namespace"]["anyOf"][0]["maxLength"] == 120
     assert message["task_id"]["anyOf"][0]["maxLength"] == 120
+    tasks = tools["tasks"].parameters["properties"]
+    assert tasks["lane"]["anyOf"][0]["enum"] == [
+        "implementation",
+        "review",
+        "release",
+        "integration",
+        "general",
+    ]
+    assert tasks["state"]["anyOf"][0]["enum"] == ["ready", "blocked", "deferred", "done"]
+    task = tools["task"].parameters["properties"]
+    assert task["action"]["enum"] == [
+        "create",
+        "claim",
+        "release",
+        "update",
+        "checkpoint",
+        "review",
+        "state",
+        "done",
+    ]
+    assert task["priority"]["anyOf"][0]["enum"] == ["P0", "P1", "P2", "P3"]
+    assert task["review_requirements"]["anyOf"][0]["items"]["enum"] == ["A", "C", "R"]
+    assert task["dimensions"]["anyOf"][0]["items"]["enum"] == ["A", "C", "R"]
+    assert task["verdict"]["anyOf"][0]["enum"] == ["NON_BLOCKING", "BLOCKING"]
 
 
 @pytest.mark.asyncio
@@ -298,6 +323,7 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     health = await tools["health"].run({}, convert_result=True)
+    assert health.structuredContent["version"] == "0.9.1"
     assert health.structuredContent["ok"] is True
     assert health.structuredContent["agent_name"] == "anonymous"
     recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)

@@ -363,6 +363,7 @@ class TaskStore:
         event_type: str = "updated",
         event_agent_id: str | None = None,
         event_payload: Any = None,
+        release_claims_reason: str | None = None,
         now: str | None = None,
         **changes,
     ):
@@ -477,6 +478,35 @@ class TaskStore:
                             now,
                         ),
                     )
+                if release_claims_reason:
+                    claimants = await (
+                        await db.execute(
+                            "SELECT agent_id FROM work_claims "
+                            "WHERE namespace=? AND task_id=? AND released_at IS NULL ORDER BY id",
+                            (namespace, task_id),
+                        )
+                    ).fetchall()
+                    if claimants:
+                        await db.execute(
+                            "UPDATE work_claims SET released_at=? "
+                            "WHERE namespace=? AND task_id=? AND released_at IS NULL",
+                            (now, namespace, task_id),
+                        )
+                        await db.executemany(
+                            "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                            "VALUES(?,?,?,?,?,?)",
+                            [
+                                (
+                                    namespace,
+                                    task_id,
+                                    "claim_released",
+                                    row[0],
+                                    self._json({"reason": release_claims_reason}),
+                                    now,
+                                )
+                                for row in claimants
+                            ],
+                        )
                 await db.commit()
             except Exception:
                 await db.rollback()
