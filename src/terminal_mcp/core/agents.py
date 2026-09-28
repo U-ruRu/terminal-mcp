@@ -371,6 +371,31 @@ class AgentCoordinator:
             ),
         }
 
+    async def reconcile_sessions(self, now=None):
+        current = now or utc_now()
+        sessions = await self.store.active_sessions()
+        backfilled = 0
+        expired = 0
+        for session in sessions:
+            if not session.get("global_expires_at"):
+                expires_at = utc_text(
+                    parse_utc(session["registered_at"])
+                    + timedelta(seconds=self.max_session_seconds)
+                )
+                if await self.store.set_global_expires_at_if_missing(
+                    session["agent_id"], expires_at
+                ):
+                    backfilled += 1
+                session = await self.store.get_session(session["agent_id"])
+            reconciled = await self._enforce_session(session, current)
+            if reconciled is not None and reconciled["state"] != "active":
+                expired += 1
+        return {
+            "examined": len(sessions),
+            "backfilled": backfilled,
+            "expired": expired,
+        }
+
     async def _enforce_session(self, session, now=None):
         if session is None or session["state"] != "active":
             return session

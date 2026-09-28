@@ -180,6 +180,27 @@ class AgentStore:
             ).fetchone()
         return self._session(row) if row else None
 
+    async def active_sessions(self):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (
+                await db.execute(
+                    f"SELECT {_SESSION_COLUMNS} FROM agent_sessions "
+                    "WHERE state='active' ORDER BY registered_at"
+                )
+            ).fetchall()
+        return [self._session(row) for row in rows]
+
+    async def set_global_expires_at_if_missing(self, agent_id, expires_at):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            cur = await db.execute(
+                "UPDATE agent_sessions SET global_expires_at=? "
+                "WHERE agent_id=? AND state='active' "
+                "AND (global_expires_at IS NULL OR global_expires_at='')",
+                (expires_at, agent_id),
+            )
+            await db.commit()
+            return cur.rowcount == 1
+
     async def touch(self, agent_id, now):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             cur = await db.execute(

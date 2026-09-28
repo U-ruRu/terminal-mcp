@@ -123,6 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await metrics.start()
         events.emit("application_started", outcome="success")
         await repo.initialize()
+        await service.reconcile_agent_sessions()
         await oauth_store.initialize()
         await pairing_store.initialize()
         if fleet_replication:

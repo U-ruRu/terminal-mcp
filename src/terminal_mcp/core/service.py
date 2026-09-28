@@ -158,6 +158,11 @@ class TerminalService:
                 self._finish_fleet_origin_session
             )
 
+    async def reconcile_agent_sessions(self):
+        if not self.agent_coordinator:
+            return {"examined": 0, "backfilled": 0, "expired": 0}
+        return await self.agent_coordinator.reconcile_sessions()
+
     async def _operational_context(self, agent_id, tool):
         if not agent_id or not self.agent_coordinator:
             return {}
