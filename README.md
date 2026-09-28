@@ -1,6 +1,6 @@
 # terminal-mcp
 
-Application release: **0.10.0**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
+Application release: **0.10.1**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
 
 `terminal-mcp` предоставляет MCP и OpenAPI-интерфейсы для управления Linux-терминалом.
 
