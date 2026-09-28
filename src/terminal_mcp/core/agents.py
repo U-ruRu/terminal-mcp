@@ -373,6 +373,7 @@ class AgentCoordinator:
 
     async def reconcile_sessions(self, now=None):
         current = now or utc_now()
+        await self.store.repair_legacy_terminal_sessions()
         sessions = await self.store.active_sessions()
         backfilled = 0
         expired = 0

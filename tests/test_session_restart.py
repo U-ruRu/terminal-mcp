@@ -374,3 +374,77 @@ async def test_startup_idle_expiry_releases_persisted_task_claim(tmp_path):
     assert stored["end_reason"] == "idle_timeout"
     assert claims == []
     await terminal2.stop()
+
+
+@pytest.mark.asyncio
+async def test_upgrade_repairs_legacy_terminal_history_before_fleet_sync(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    store = AgentStore(repo.path)
+    started = "2026-09-19T01:10:59.207Z"
+    last_activity = "2026-09-19T01:11:46.534Z"
+    agent_id = "Legacy-01234567"
+    await store.create_session(
+        agent_id,
+        "legacy task",
+        "legacy intent",
+        ["repo:synthetic"],
+        ["legacy step"],
+        1,
+        last_activity,
+        registered_at=started,
+        global_expires_at="2026-09-19T01:35:59.207Z",
+    )
+    with sqlite3.connect(repo.path) as db:
+        db.execute(
+            "UPDATE agent_sessions SET state='finished',ended_at=NULL,end_reason=NULL "
+            "WHERE agent_id=?",
+            (agent_id,),
+        )
+        db.commit()
+
+    result = await service.agent_coordinator.reconcile_sessions()
+    repaired = await store.get_session(agent_id)
+
+    assert result == {"examined": 0, "backfilled": 0, "expired": 0}
+    assert repaired["state"] == "finished"
+    assert repaired["ended_at"] == last_activity
+    assert repaired["end_reason"] == "explicit"
+
+    await service.agent_coordinator.reconcile_sessions()
+    preserved = await store.get_session(agent_id)
+    assert preserved["ended_at"] == last_activity
+    assert preserved["end_reason"] == "explicit"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_upgrade_repairs_unknown_legacy_forced_reason_without_resurrection(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    store = AgentStore(repo.path)
+    stamp = "2026-09-19T02:00:00.000Z"
+    agent_id = "Legacy-89ABCDEF"
+    await store.create_session(
+        agent_id,
+        "legacy forced task",
+        "legacy forced intent",
+        ["repo:synthetic"],
+        ["legacy forced step"],
+        1,
+        stamp,
+        registered_at="2026-09-19T01:59:00.000Z",
+        global_expires_at="2026-09-19T02:24:00.000Z",
+    )
+    with sqlite3.connect(repo.path) as db:
+        db.execute(
+            "UPDATE agent_sessions SET state='forced',ended_at='',end_reason='' WHERE agent_id=?",
+            (agent_id,),
+        )
+        db.commit()
+
+    await service.agent_coordinator.reconcile_sessions()
+    repaired = await store.get_session(agent_id)
+
+    assert repaired["state"] == "forced"
+    assert repaired["ended_at"] == stamp
+    assert repaired["end_reason"] == "legacy_forced"
+    await terminal.stop()

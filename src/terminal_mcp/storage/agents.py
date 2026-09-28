@@ -190,6 +190,25 @@ class AgentStore:
             ).fetchall()
         return [self._session(row) for row in rows]
 
+    async def repair_legacy_terminal_sessions(self):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            cur = await db.execute(
+                "UPDATE agent_sessions SET "
+                "ended_at=CASE "
+                "WHEN ended_at IS NULL OR ended_at='' "
+                "THEN COALESCE(NULLIF(last_activity_at,''), registered_at) "
+                "ELSE ended_at END, "
+                "end_reason=CASE "
+                "WHEN end_reason IS NULL OR end_reason='' "
+                "THEN CASE state WHEN 'finished' THEN 'explicit' ELSE 'legacy_forced' END "
+                "ELSE end_reason END "
+                "WHERE state IN ('finished','forced') AND "
+                "((ended_at IS NULL OR ended_at='') OR "
+                "(end_reason IS NULL OR end_reason=''))"
+            )
+            await db.commit()
+            return cur.rowcount
+
     async def set_global_expires_at_if_missing(self, agent_id, expires_at):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             cur = await db.execute(
