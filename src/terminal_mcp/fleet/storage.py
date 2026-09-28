@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 
 import aiosqlite
 
@@ -15,12 +14,18 @@ class FleetIdentityStore:
 
     @staticmethod
     def _record_json(record: AgentIdentityRecord) -> str:
-        return json.dumps(asdict(record), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        return json.dumps(
+            record.record_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
 
     @staticmethod
     def _envelope(row) -> SignedAgentIdentity:
+        payload = json.loads(row[0])
+        for key in ("work_scope", "details"):
+            if key in payload and isinstance(payload[key], list):
+                payload[key] = tuple(payload[key])
         return SignedAgentIdentity(
-            AgentIdentityRecord(**json.loads(row[0])),
+            AgentIdentityRecord(**payload),
             row[1],
         )
 
@@ -207,6 +212,84 @@ class FleetIdentityStore:
                     ),
                 )
             await db.commit()
+
+    async def enqueue_finish(
+        self,
+        origin_instance_id: str,
+        agent_id: str,
+        ended_at: str,
+        reason: str,
+        queued_at: str | None = None,
+    ) -> None:
+        stamp = queued_at or utc_text()
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            await db.execute(
+                "INSERT INTO fleet_finish_outbox("
+                "origin_instance_id,agent_id,ended_at,reason,queued_at,"
+                "attempt_count,last_attempt_at,last_error"
+                ") VALUES(?,?,?,?,?,0,NULL,NULL) "
+                "ON CONFLICT(origin_instance_id,agent_id) DO UPDATE SET "
+                "ended_at=excluded.ended_at,reason=excluded.reason,queued_at=excluded.queued_at,"
+                "attempt_count=0,last_attempt_at=NULL,last_error=NULL",
+                (origin_instance_id, agent_id, ended_at, reason, stamp),
+            )
+            await db.commit()
+
+    async def pending_finishes(self, limit: int = 100) -> list[dict]:
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT origin_instance_id,agent_id,ended_at,reason,queued_at,"
+                    "attempt_count,last_attempt_at,last_error FROM fleet_finish_outbox "
+                    "ORDER BY queued_at,origin_instance_id,agent_id LIMIT ?",
+                    (max(1, min(int(limit), 500)),),
+                )
+            ).fetchall()
+        return [
+            {
+                "origin_instance_id": row[0],
+                "agent_id": row[1],
+                "ended_at": row[2],
+                "reason": row[3],
+                "queued_at": row[4],
+                "attempt_count": int(row[5]),
+                "last_attempt_at": row[6],
+                "last_error": row[7],
+            }
+            for row in rows
+        ]
+
+    async def finish_delivery_result(
+        self,
+        origin_instance_id: str,
+        agent_id: str,
+        *,
+        error: str | None,
+        attempted_at: str | None = None,
+    ) -> None:
+        stamp = attempted_at or utc_text()
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            if error is None:
+                await db.execute(
+                    "DELETE FROM fleet_finish_outbox "
+                    "WHERE origin_instance_id=? AND agent_id=?",
+                    (origin_instance_id, agent_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE fleet_finish_outbox SET attempt_count=attempt_count+1,"
+                    "last_attempt_at=?,last_error=? "
+                    "WHERE origin_instance_id=? AND agent_id=?",
+                    (stamp, error[:500], origin_instance_id, agent_id),
+                )
+            await db.commit()
+
+    async def finish_outbox_count(self) -> int:
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            row = await (
+                await db.execute("SELECT COUNT(*) FROM fleet_finish_outbox")
+            ).fetchone()
+        return int(row[0])
 
     async def outbox_count(self, peer_instance_id: str | None = None) -> int:
         condition = ""

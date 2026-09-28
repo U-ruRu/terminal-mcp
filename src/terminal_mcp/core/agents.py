@@ -27,11 +27,21 @@ class AgentCoordinator:
     ALERT_BLOCKED_TOOLS = {"run", "read", "coordinate", "agents", "agent_start", "task"}
     SESSION_ALERT_SENDER = "system-session"
 
-    def __init__(self, store, metrics=None, policy: AgentPolicy | None = None, task_store=None):
+    def __init__(
+        self,
+        store,
+        metrics=None,
+        policy: AgentPolicy | None = None,
+        task_store=None,
+        foreign_session_resolver=None,
+        local_instance_id: str | None = None,
+    ):
         self.store = store
         self.metrics = metrics
         self.policy = policy or AgentPolicy()
         self.task_store = task_store
+        self.foreign_session_resolver = foreign_session_resolver
+        self.local_instance_id = local_instance_id
         # Mutable aliases preserve the existing testing/diagnostic surface.
         self.ttl_seconds = self.policy.idle_ttl_seconds
         self.task_context_ttl_seconds = self.policy.intent_ttl_seconds
@@ -64,6 +74,8 @@ class AgentCoordinator:
             and item.get("ended_at")
             and parse_utc(item["ended_at"]) >= parse_utc(recent_cutoff)
         )
+        proposals = await self.store.recent_proposals(recent_cutoff)
+        reserved.update(public_agent_name(item["agent_id"]) for item in proposals)
         return reserved
 
     @staticmethod
@@ -75,6 +87,119 @@ class AgentCoordinator:
         if not details:
             return "agent_start.details: required for registration"
         return None
+
+    def _foreign_unavailable(self, agent_id, detail=None):
+        return {
+            "ok": False,
+            "agent_name": public_agent_name(agent_id),
+            "foreign_identity_unavailable": True,
+            "retryable": True,
+            "error": "agent.identity: trusted fleet identity is temporarily unavailable",
+            "detail": detail
+            or (
+                "Retry after peer recovery or return to the authoritative Terminal MCP. "
+                "This server will not mint a new hard session for an unknown full agent_id."
+            ),
+        }
+
+    def _foreign_terminal(self, agent_id, resolution, *, reason=None):
+        return {
+            "ok": False,
+            "agent_name": public_agent_name(agent_id),
+            "return_to_chat": True,
+            "session_status": resolution.get("state") or "forced",
+            "session_started_at": resolution.get("session_started_at"),
+            "session_end_reason": reason
+            or resolution.get("end_reason")
+            or "max_session_duration",
+            "error": "agent session has ended; return to chat before starting new work",
+        }
+
+    async def _resolve_foreign(self, agent_id):
+        if self.foreign_session_resolver is None:
+            return None
+        try:
+            return await self.foreign_session_resolver(agent_id)
+        except Exception:
+            return None
+
+    async def _attach_foreign(self, agent_id, current=None):
+        resolution = await self._resolve_foreign(agent_id)
+        if resolution is None:
+            return None, self._foreign_unavailable(agent_id)
+        source = resolution.get("source_instance_id")
+        if not source or source == self.local_instance_id:
+            return None, self._foreign_unavailable(
+                agent_id, "Fleet identity source is not foreign."
+            )
+        now_dt = utc_now()
+        expires_at = resolution.get("expires_at")
+        if not expires_at:
+            return None, self._foreign_unavailable(agent_id, "Fleet identity has no hard expiry.")
+        if resolution.get("state") != "active":
+            return None, self._foreign_terminal(agent_id, resolution)
+        if now_dt >= parse_utc(expires_at):
+            return None, self._foreign_terminal(
+                agent_id, resolution, reason="max_session_duration"
+            )
+        task_summary = resolution.get("task_summary")
+        intent = resolution.get("intent")
+        details = list(resolution.get("details") or [])
+        work_scope = list(resolution.get("work_scope") or [])
+        current_step = int(resolution.get("current_step") or 1)
+        if not task_summary or not intent or not details:
+            return None, self._foreign_unavailable(
+                agent_id, "Fleet identity does not contain a signed shared-session plan."
+            )
+        current_step = min(max(current_step, 1), len(details))
+        now = utc_text(now_dt)
+        if current is not None:
+            can_reactivate = (
+                current.get("source_instance_id") == source
+                and current.get("state") == "forced"
+                and current.get("end_reason") == "idle_timeout"
+            )
+            if not can_reactivate:
+                return None, self.expired_result(agent_id, current)
+            changed = await self.store.reactivate_foreign_session(
+                agent_id,
+                task_summary,
+                intent,
+                work_scope,
+                details,
+                current_step,
+                now,
+                registered_at=resolution["session_started_at"],
+                source_instance_id=source,
+                global_expires_at=expires_at,
+            )
+            if not changed:
+                return None, self._foreign_unavailable(
+                    agent_id, "Local foreign-session attachment changed concurrently."
+                )
+        else:
+            try:
+                await self.store.create_session(
+                    agent_id,
+                    task_summary,
+                    intent,
+                    work_scope,
+                    details,
+                    current_step,
+                    now,
+                    registered_at=resolution["session_started_at"],
+                    source_instance_id=source,
+                    global_expires_at=expires_at,
+                )
+            except IntegrityError:
+                raced = await self.store.get_session(agent_id)
+                if raced is None or raced["state"] != "active":
+                    return None, self._foreign_unavailable(
+                        agent_id,
+                        "Local foreign-session attachment raced with another lifecycle change.",
+                    )
+        self._inc("terminal_mcp_agent_foreign_attachments_total")
+        return await self.store.get_session(agent_id), None
 
     async def start(
         self,
@@ -93,7 +218,17 @@ class AgentCoordinator:
             if current is not None:
                 current = await self._enforce_session(current)
                 if current["state"] != "active":
-                    return self.expired_result(agent_id, current)
+                    if (
+                        current.get("source_instance_id")
+                        and current.get("source_instance_id") != self.local_instance_id
+                        and current.get("end_reason") == "idle_timeout"
+                    ):
+                        attached, error = await self._attach_foreign(agent_id, current)
+                        if error:
+                            return error
+                        current = attached
+                    else:
+                        return self.expired_result(agent_id, current)
 
                 gate = await self.gate(agent_id, "agent_start", surface_messages=True)
                 if gate.get("blocked"):
@@ -136,6 +271,19 @@ class AgentCoordinator:
                         "agent_start.agent_id: expected a NATO name with 40-bit private suffix"
                     ),
                 }
+
+            proposal_cutoff = utc_text(
+                utc_now() - timedelta(seconds=self.policy.public_name_reservation_seconds)
+            )
+            proposal = await self.store.proposal(agent_id, proposal_cutoff)
+            if proposal is None:
+                attached, error = await self._attach_foreign(agent_id)
+                if error:
+                    return error
+                return await self.overview(
+                    agent_id=agent_id, touch=False, reveal_self_id=True
+                )
+
             missing = self._missing_registration_field(task_summary, intent, details)
             if missing:
                 return {
@@ -144,8 +292,8 @@ class AgentCoordinator:
                     "agent_name": public_agent_name(agent_id),
                     "error": missing,
                     "detail": (
-                        "Provide task_summary, intent and details to admit this full agent_id "
-                        "on this Terminal MCP."
+                        "Provide task_summary, intent and details to confirm this locally "
+                        "proposed full agent_id."
                     ),
                 }
 
@@ -158,17 +306,16 @@ class AgentCoordinator:
                     return await self.overview(
                         agent_id=agent_id, touch=False, reveal_self_id=False
                     )
-
+                proposal = await self.store.proposal(agent_id, proposal_cutoff)
+                if proposal is None:
+                    return self._foreign_unavailable(
+                        agent_id, "Local admission proposal expired before confirmation."
+                    )
                 now_dt = utc_now()
-                reserved_names = await self._reserved_public_names(now_dt)
-                if public_agent_name(agent_id) in reserved_names:
-                    return {
-                        "ok": False,
-                        "admission_required": True,
-                        "agent_name": public_agent_name(agent_id),
-                        "error": "agent_start.agent_id: public agent name is temporarily reserved",
-                    }
                 now = utc_text(now_dt)
+                expires_at = utc_text(
+                    now_dt + timedelta(seconds=self.max_session_seconds)
+                )
                 try:
                     await self.store.create_session(
                         agent_id,
@@ -178,7 +325,10 @@ class AgentCoordinator:
                         details,
                         1,
                         now,
+                        source_instance_id=self.local_instance_id,
+                        global_expires_at=expires_at,
                     )
+                    await self.store.consume_proposal(agent_id)
                 except IntegrityError:
                     existing = await self.store.get_session(agent_id)
                     if existing is None or existing["state"] != "active":
@@ -207,6 +357,7 @@ class AgentCoordinator:
             else:
                 raise RuntimeError("unable to allocate unique agent id")
 
+        await self.store.create_proposal(proposed, utc_text(now_dt))
         return {
             "ok": False,
             "admission_required": True,
@@ -256,8 +407,24 @@ class AgentCoordinator:
     async def validate(self, agent_id, tool, *, touch=True):
         session = await self.store.get_session(agent_id)
         session = await self._enforce_session(session)
-        if not session or session["state"] != "active":
-            return self.expired_result(agent_id, session)
+        if not session:
+            if is_agent_id(agent_id):
+                session, error = await self._attach_foreign(agent_id)
+                if error:
+                    return error
+            else:
+                return self.expired_result(agent_id, session)
+        elif session["state"] != "active":
+            if (
+                session.get("source_instance_id")
+                and session.get("source_instance_id") != self.local_instance_id
+                and session.get("end_reason") == "idle_timeout"
+            ):
+                session, error = await self._attach_foreign(agent_id, session)
+                if error:
+                    return error
+            else:
+                return self.expired_result(agent_id, session)
         if touch:
             stamp = utc_text()
             await self.store.touch(agent_id, stamp)
@@ -301,7 +468,11 @@ class AgentCoordinator:
         now = utc_now()
         registered = parse_utc(session["registered_at"])
         age = max(0, int((now - registered).total_seconds()))
-        remaining = max(0, self.max_session_seconds - age)
+        global_expires_at = session.get("global_expires_at")
+        if global_expires_at:
+            remaining = max(0, int((parse_utc(global_expires_at) - now).total_seconds()))
+        else:
+            remaining = max(0, self.max_session_seconds - age)
         latest_task = await self.store.latest_task_at(agent_id)
         task_age = (
             max(0, int((now - parse_utc(latest_task)).total_seconds())) if latest_task else None

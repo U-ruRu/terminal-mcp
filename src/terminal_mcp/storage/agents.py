@@ -8,7 +8,8 @@ import aiosqlite
 
 _SESSION_COLUMNS = (
     "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
-    "details,current_step,ended_at,end_reason,preferred_queue_id"
+    "details,current_step,ended_at,end_reason,preferred_queue_id,source_instance_id,"
+    "global_expires_at"
 )
 
 
@@ -17,19 +18,32 @@ class AgentStore:
         self.path = path
 
     async def create_session(
-        self, agent_id, task_summary, intent, work_scope, details, current_step, now
+        self,
+        agent_id,
+        task_summary,
+        intent,
+        work_scope,
+        details,
+        current_step,
+        now,
+        *,
+        registered_at=None,
+        source_instance_id=None,
+        global_expires_at=None,
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+        started = registered_at or now
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO agent_sessions("
                 "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
-                "details,current_step,ended_at,end_reason,preferred_queue_id) "
-                "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL)",
+                "details,current_step,ended_at,end_reason,preferred_queue_id,source_instance_id,"
+                "global_expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)",
                 (
                     agent_id,
-                    now,
+                    started,
                     now,
                     task_summary,
                     intent,
@@ -37,6 +51,8 @@ class AgentStore:
                     "active",
                     plan,
                     current_step,
+                    source_instance_id,
+                    global_expires_at,
                 ),
             )
             await db.execute(
@@ -56,6 +72,94 @@ class AgentStore:
                 "UPDATE agent_sessions SET last_activity_at=?,task_summary=?,intent=?,"
                 "work_scope=?,details=?,current_step=? WHERE agent_id=? AND state='active'",
                 (now, task_summary, intent, scope, plan, current_step, agent_id),
+            )
+            if cur.rowcount:
+                await db.execute(
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
+                    "VALUES(?,?,?,?,?)",
+                    (agent_id, now, intent, scope, current_step),
+                )
+            await db.commit()
+            return cur.rowcount == 1
+
+    async def create_proposal(self, agent_id, now):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            await db.execute(
+                "INSERT INTO agent_admission_proposals(agent_id,created_at) VALUES(?,?) "
+                "ON CONFLICT(agent_id) DO UPDATE SET created_at=excluded.created_at",
+                (agent_id, now),
+            )
+            await db.commit()
+
+    async def proposal(self, agent_id, cutoff=None):
+        condition = "agent_id=?"
+        params = [agent_id]
+        if cutoff is not None:
+            condition += " AND created_at>=?"
+            params.append(cutoff)
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            row = await (
+                await db.execute(
+                    f"SELECT agent_id,created_at FROM agent_admission_proposals WHERE {condition}",
+                    params,
+                )
+            ).fetchone()
+        return {"agent_id": row[0], "created_at": row[1]} if row else None
+
+    async def recent_proposals(self, cutoff):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT agent_id,created_at FROM agent_admission_proposals "
+                    "WHERE created_at>=? ORDER BY created_at DESC",
+                    (cutoff,),
+                )
+            ).fetchall()
+        return [{"agent_id": row[0], "created_at": row[1]} for row in rows]
+
+    async def consume_proposal(self, agent_id):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            cur = await db.execute(
+                "DELETE FROM agent_admission_proposals WHERE agent_id=?",
+                (agent_id,),
+            )
+            await db.commit()
+            return cur.rowcount == 1
+
+    async def reactivate_foreign_session(
+        self,
+        agent_id,
+        task_summary,
+        intent,
+        work_scope,
+        details,
+        current_step,
+        now,
+        *,
+        registered_at,
+        source_instance_id,
+        global_expires_at,
+    ):
+        scope = json.dumps(work_scope or [], separators=(",", ":"))
+        plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            cur = await db.execute(
+                "UPDATE agent_sessions SET registered_at=?,last_activity_at=?,task_summary=?,"
+                "intent=?,work_scope=?,state='active',details=?,current_step=?,ended_at=NULL,"
+                "end_reason=NULL,source_instance_id=?,global_expires_at=? "
+                "WHERE agent_id=? AND state='forced' AND end_reason='idle_timeout'",
+                (
+                    registered_at,
+                    now,
+                    task_summary,
+                    intent,
+                    scope,
+                    plan,
+                    current_step,
+                    source_instance_id,
+                    global_expires_at,
+                    agent_id,
+                ),
             )
             if cur.rowcount:
                 await db.execute(
@@ -710,4 +814,6 @@ class AgentStore:
             "ended_at": row[9],
             "end_reason": row[10],
             "preferred_queue_id": row[11],
+            "source_instance_id": row[12],
+            "global_expires_at": row[13],
         }

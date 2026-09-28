@@ -29,6 +29,12 @@ class AgentIdentityRecord:
     revision: int
     ended_at: str | None = None
     end_reason: str | None = None
+    payload_version: int = 1
+    task_summary: str = ""
+    intent: str = ""
+    work_scope: tuple[str, ...] = ()
+    details: tuple[str, ...] = ()
+    current_step: int = 1
 
     def __post_init__(self):
         if not self.source_instance_id.strip():
@@ -39,6 +45,8 @@ class AgentIdentityRecord:
             raise ValueError("state must be active, finished or forced")
         if self.revision < 1:
             raise ValueError("revision must be positive")
+        if self.payload_version not in {1, 2}:
+            raise ValueError("payload_version must be 1 or 2")
         if self.state == "active" and self.ended_at is not None:
             raise ValueError("active identity must not have ended_at")
         if self.state == "active" and self.end_reason is not None:
@@ -54,13 +62,36 @@ class AgentIdentityRecord:
             raise ValueError("expires_at must be later than session_started_at")
         if self.ended_at is not None:
             parse_utc(self.ended_at)
+        if self.payload_version >= 2:
+            if not self.task_summary:
+                raise ValueError("v2 identity requires task_summary")
+            if not self.intent:
+                raise ValueError("v2 identity requires intent")
+            if not self.details:
+                raise ValueError("v2 identity requires details")
+            if self.current_step < 1 or self.current_step > len(self.details):
+                raise ValueError("v2 identity current_step is outside details")
 
     @property
     def public_name(self) -> str:
         return public_agent_name(self.agent_id)
 
+    def record_dict(self) -> dict:
+        payload = asdict(self)
+        if self.payload_version == 1:
+            for key in (
+                "payload_version",
+                "task_summary",
+                "intent",
+                "work_scope",
+                "details",
+                "current_step",
+            ):
+                payload.pop(key, None)
+        return payload
+
     def canonical_bytes(self) -> bytes:
-        payload = {**asdict(self), "public_name": self.public_name}
+        payload = {**self.record_dict(), "public_name": self.public_name}
         return json.dumps(
             payload,
             ensure_ascii=False,
@@ -75,7 +106,7 @@ class SignedAgentIdentity:
     signature: str
 
     def as_dict(self) -> dict:
-        return {"record": asdict(self.record), "signature": self.signature}
+        return {"record": self.record.record_dict(), "signature": self.signature}
 
     @classmethod
     def from_dict(cls, payload: dict) -> SignedAgentIdentity:
@@ -85,7 +116,11 @@ class SignedAgentIdentity:
         signature = payload.get("signature")
         if not isinstance(record, dict) or not isinstance(signature, str) or not signature:
             raise ValueError("signed identity requires record and signature")
-        return cls(AgentIdentityRecord(**record), signature)
+        normalized = dict(record)
+        for key in ("work_scope", "details"):
+            if key in normalized and isinstance(normalized[key], list):
+                normalized[key] = tuple(normalized[key])
+        return cls(AgentIdentityRecord(**normalized), signature)
 
 
 def sign_identity_record(record: AgentIdentityRecord, private_key: str) -> str:

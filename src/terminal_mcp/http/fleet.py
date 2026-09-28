@@ -31,6 +31,29 @@ def build_fleet_router(replication) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "status": status}
 
+    @router.post("/internal/fleet/session-finish", include_in_schema=False)
+    async def finish_session(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        agent_id = payload.get("agent_id")
+        ended_at = payload.get("ended_at")
+        reason = payload.get("reason")
+        if not all(isinstance(value, str) and value for value in (agent_id, ended_at, reason)):
+            raise HTTPException(status_code=400, detail="finish payload is incomplete")
+        try:
+            changed = await replication.receive_finish(
+                agent_id,
+                ended_at,
+                reason,
+                authenticated_peer_id=peer.instance_id,
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "changed": changed}
+
     @router.get("/internal/fleet/identities", include_in_schema=False)
     async def read_identities(
         x_terminal_mcp_peer: str = Header(default=""),

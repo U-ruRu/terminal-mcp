@@ -725,24 +725,21 @@ async def test_two_step_admission_does_not_persist_until_confirmed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unknown_full_identity_can_be_admitted_and_active_identity_resumes(tmp_path):
+async def test_unknown_full_identity_fails_closed_without_trusted_fleet_record(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     agent_id = "Victor-01234567"
 
-    admitted = await service.agent_start(
+    rejected = await service.agent_start(
         agent_id=agent_id,
         task_summary="Synthetic resume",
         intent="Reuse cross-server identity",
         details=["Reuse cross-server identity"],
     )
-    assert admitted["ok"] is True
-    assert admitted["self"]["agent_id"] == agent_id
 
-    resumed = await service.agent_start(agent_id=agent_id)
-    assert resumed["ok"] is True
-    assert resumed["self"]["task_summary"] == "Synthetic resume"
-    assert resumed["self"]["intent"] == "Reuse cross-server identity"
-    assert "session_remaining_seconds" in resumed
+    assert rejected["ok"] is False
+    assert rejected["foreign_identity_unavailable"] is True
+    assert rejected["retryable"] is True
+    assert await AgentStore(repo.path).get_session(agent_id) is None
     await terminal.stop()
 
 
