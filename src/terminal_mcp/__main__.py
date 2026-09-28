@@ -84,12 +84,12 @@ def main(argv: list[str] | None = None):
             _parser().error("--ttl must be a positive number of seconds")
         url = asyncio.run(_issue_pairing(parsed.ttl))
         print(url)
-        return url
+        return 0
     if parsed.command == "devices":
         if parsed.device_command == "list":
             devices = asyncio.run(_list_devices())
             print(json.dumps(devices, separators=(",", ":"), ensure_ascii=False))
-            return devices
+            return 0
         if parsed.device_command == "revoke":
             revoked = asyncio.run(_revoke_device(parsed.device_id))
             if revoked:
@@ -102,4 +102,4 @@ def main(argv: list[str] | None = None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

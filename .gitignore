@@ -1,9 +1,9 @@
 .venv/
-.env
-data/
-__pycache__/
 .pytest_cache/
 .ruff_cache/
+.coverage
+*.egg-info/
+__pycache__/
 *.pyc
 .serena/
 
@@ -13,3 +13,8 @@ __pycache__/
 .local-ops/
 operator-evidence/
 runtime-evidence/
+
+# Console frontend
+apps/console/node_modules/
+apps/console/dist/
+apps/console/*.tsbuildinfo

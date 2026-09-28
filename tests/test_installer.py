@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 
@@ -67,3 +68,27 @@ def test_installer_persists_console_origin_allowlist():
         in script
     )
     assert 'ensure_env TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS' in script
+
+
+
+def test_runtime_dependency_matches_required_mcp_api():
+    config = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    )
+    dependencies = config["project"]["dependencies"]
+
+    assert "mcp>=1.30,<2" in dependencies
+
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    assert TransportSecuritySettings is not None
+
+
+def test_installer_checks_runtime_imports_before_activation():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    import_check = "from mcp.server.transport_security import TransportSecuritySettings"
+    assert import_check in script
+    assert "import terminal_mcp.app" in script
+    assert "Staged release runtime import check failed" in script
+    assert script.index(import_check) < script.index("activate(){")

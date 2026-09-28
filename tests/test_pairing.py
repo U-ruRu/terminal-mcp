@@ -1,6 +1,10 @@
 import asyncio
 import hashlib
+import json
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -74,10 +78,12 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "opaque-pairing-secret")
 
-    url = cli.main(["pair", "--ttl", "42"])
+    result = cli.main(["pair", "--ttl", "42"])
     captured = capsys.readouterr()
 
-    assert captured.out.strip() == url
+    assert result == 0
+    url = captured.out.strip()
+    assert captured.err == ""
     parsed = urlsplit(url)
     assert parsed.scheme == "https"
     assert parsed.netloc == "terminal.example"
@@ -91,6 +97,66 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
             "SELECT secret_hash, expires_at-created_at FROM console_pairings"
         ).fetchone()
     assert row == (hashlib.sha256(parsed.fragment.encode()).hexdigest(), 42)
+
+
+def _entrypoint_env(tmp_path):
+    db_path = tmp_path / "terminal.sqlite3"
+    env_path = tmp_path / "terminal-mcp.env"
+    env_path.write_text(
+        chr(10).join(
+            [
+                f'TERMINAL_MCP_DATABASE_PATH="{db_path}"',
+                'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"',
+            ]
+        )
+        + chr(10)
+    )
+    env = os.environ.copy()
+    env["TERMINAL_MCP_ENV_FILE_PATH"] = str(env_path)
+    env.pop("TERMINAL_MCP_DATABASE_PATH", None)
+    env.pop("TERMINAL_MCP_PUBLIC_BASE_URL", None)
+    source = str(Path(__file__).resolve().parents[1] / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
+    return env
+
+
+def _run_console_script(args, env):
+    command = (
+        "import json,sys; "
+        "from terminal_mcp.__main__ import main; "
+        "sys.exit(main(json.loads(sys.argv[1])))"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", command, json.dumps(args)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_console_script_pair_exits_zero_and_emits_url_once(tmp_path):
+    result = _run_console_script(["pair", "--ttl", "42"], _entrypoint_env(tmp_path))
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    lines = result.stdout.splitlines()
+    assert len(lines) == 1
+    parsed = urlsplit(lines[0])
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "terminal.example"
+    assert parsed.path == "/base/connect"
+    assert parsed.query == ""
+    assert parsed.fragment
+
+
+def test_console_script_devices_list_exits_zero_and_uses_stdout(tmp_path):
+    result = _run_console_script(["devices", "list"], _entrypoint_env(tmp_path))
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == []
 
 
 def test_pair_cli_rejects_non_positive_ttl():
@@ -177,8 +243,9 @@ def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, caps
     )
     assert exchange is not None
 
-    listed = cli.main(["devices", "list"])
+    assert cli.main(["devices", "list"]) == 0
     output = capsys.readouterr().out
+    listed = json.loads(output)
     assert listed[0]["device_id"] == exchange.device_id
     assert listed[0]["label"] == "Phone"
     assert "public-key-never-listed" not in output
@@ -189,8 +256,8 @@ def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, caps
     revoked_output = capsys.readouterr().out
     assert revoked_output.strip() == f"revoked {exchange.device_id}"
 
-    listed_after = cli.main(["devices", "list"])
-    capsys.readouterr()
+    assert cli.main(["devices", "list"]) == 0
+    listed_after = json.loads(capsys.readouterr().out)
     assert listed_after[0]["revoked_at"] is not None
 
     assert cli.main(["devices", "revoke", exchange.device_id]) == 1

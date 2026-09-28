@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import secrets
 from datetime import UTC, datetime
@@ -200,6 +201,21 @@ def public_agent_name(agent_id: str | None) -> str:
     ):
         return name
     return agent_id
+
+
+def public_session_ref(
+    agent_id: str | None,
+    source_instance_id: str | None,
+    session_started_at: str | None,
+) -> str:
+    """Stable privacy-safe correlation key for one fleet Agent Session."""
+    internal_id = (agent_id or "anonymous").strip() or "anonymous"
+    source = (source_instance_id or "local").strip() or "local"
+    started = (session_started_at or "").strip()
+    digest = hashlib.sha256(
+        f"{source}\n{started}\n{internal_id}".encode()
+    ).hexdigest()[:20]
+    return f"session-{digest}"
 
 
 def normalize_preview(command: str, limit: int = 100) -> str:

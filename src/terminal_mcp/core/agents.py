@@ -14,6 +14,7 @@ from terminal_mcp.core.orchestration import (
     live_task_claims,
     parse_utc,
     public_agent_name,
+    public_session_ref,
     relative_time,
     session_expiry_reason,
     short_time,
@@ -1195,6 +1196,7 @@ class AgentCoordinator:
         agent_id=None,
         *,
         target=None,
+        target_session_ref=None,
         show_details=False,
         show_intents=False,
         show_commands=False,
@@ -1234,6 +1236,18 @@ class AgentCoordinator:
         sessions = normalized
         if target:
             sessions = [s for s in sessions if public_agent_name(s["agent_id"]) == target]
+        if target_session_ref:
+            sessions = [
+                s
+                for s in sessions
+                if public_session_ref(
+                    s["agent_id"],
+                    s.get("source_instance_id"),
+                    s.get("registered_at"),
+                )
+                == target_session_ref
+            ]
+        if target or target_session_ref:
             sessions = sessions[:1]
 
         records = []
@@ -1250,8 +1264,26 @@ class AgentCoordinator:
             session_age_seconds = max(
                 0, int((now - parse_utc(session["registered_at"])).total_seconds())
             )
+            source_instance_id = session.get("source_instance_id") or self.local_instance_id
+            global_expires_at = session.get("global_expires_at")
+            remaining = (
+                max(0, int((parse_utc(global_expires_at) - now).total_seconds()))
+                if global_expires_at
+                else max(0, self.max_session_seconds - session_age_seconds)
+            )
             record = {
                 "name": public_agent_name(session["agent_id"]),
+                "session_ref": public_session_ref(
+                    session["agent_id"], source_instance_id, session["registered_at"]
+                ),
+                "origin_instance_id": source_instance_id,
+                "session_started_at": session["registered_at"],
+                "session_remaining_seconds": remaining,
+                "attachment": bool(
+                    source_instance_id
+                    and self.local_instance_id
+                    and source_instance_id != self.local_instance_id
+                ),
                 "status": await self._session_status(session, task_age=task_age),
                 "last_activity": relative_time(session["last_activity_at"], now),
                 "last_activity_at": session["last_activity_at"],

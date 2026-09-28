@@ -774,6 +774,7 @@ class TerminalService:
             detail = await self.agent_coordinator.overview(
                 agent_id=None,
                 target=name,
+                target_session_ref=session.get("session_ref"),
                 show_details=False,
                 show_intents=True,
                 show_commands=False,
@@ -784,6 +785,7 @@ class TerminalService:
             communications.append(
                 {
                     "name": name,
+                    "session_ref": session.get("session_ref"),
                     "messages_awaiting_read": selected.get("messages_awaiting_read", 0),
                     "messages_awaiting_reply": selected.get("messages_awaiting_reply", 0),
                     "alerts_pending": selected.get("alerts_pending", 0),

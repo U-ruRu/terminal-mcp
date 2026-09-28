@@ -161,6 +161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings,
             auth,
             pairing_store,
+            service,
             service.event_store,
             ws_ticket_store,
         )
@@ -199,7 +200,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return schema
 
     app.openapi = custom_openapi
-    app.add_middleware(AuthMiddleware, settings=settings, auth_service=auth)
+    app.add_middleware(
+        AuthMiddleware, settings=settings, auth_service=auth, pairing_store=pairing_store
+    )
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TraceMiddleware)
     app.add_middleware(BrowserSecurityMiddleware, settings=settings)

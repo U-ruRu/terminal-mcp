@@ -115,6 +115,13 @@ stage(){
     rm -rf "$STAGED_RELEASE"
     return 1
   fi
+  if ! "$STAGED_RELEASE/bin/python" -c \
+    'from mcp.server.transport_security import TransportSecuritySettings; import terminal_mcp.app' \
+    >&2; then
+    echo "Staged release runtime import check failed" >&2
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
 }
 backup(){
   [ -f "$DATA/terminal-mcp.sqlite3" ] || return 0

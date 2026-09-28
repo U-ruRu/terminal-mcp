@@ -9,7 +9,22 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
+
+from terminal_mcp.core.orchestration import public_agent_name, public_session_ref
+
+
+class ConsoleTaskDetailRequest(BaseModel):
+    namespace: str = Field(min_length=1, max_length=120)
+    task_id: str = Field(min_length=1, max_length=120)
+
+
+class ConsoleActivityRequest(BaseModel):
+    since: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=200)
+    event_types: list[str] = Field(default_factory=list, max_length=50)
+    entity_types: list[str] = Field(default_factory=list, max_length=20)
 
 
 @dataclass(frozen=True)
@@ -86,7 +101,112 @@ async def _oauth_device(request: Request, auth, pairing_store):
     return client_id, device["device_id"]
 
 
-def build_console_events_router(settings, auth, pairing_store, event_store, ticket_store):
+async def _project_activity_event(service, event: dict) -> dict:
+    projected = {
+        "seq": event["seq"],
+        "event_type": event["event_type"],
+        "entity_type": event["entity_type"],
+        "entity_id": event["entity_id"],
+        "payload": event.get("payload") or {},
+        "created_at": event["created_at"],
+    }
+    actor_id = event.get("actor_id")
+    if actor_id:
+        projected["actor_name"] = public_agent_name(actor_id)
+    if event["entity_type"] == "agent" and service.agent_store:
+        session = await service.agent_store.get_session(event["entity_id"])
+        if session is not None:
+            source = session.get("source_instance_id")
+            session_ref = public_session_ref(
+                session["agent_id"], source, session.get("registered_at")
+            )
+            projected["entity_id"] = session_ref
+            projected["payload"] = {
+                **projected["payload"],
+                "agent_name": public_agent_name(session["agent_id"]),
+                "session_ref": session_ref,
+                "origin_instance_id": source,
+            }
+            if event["event_type"] == "agent.started" and source and service.fleet_replication:
+                if source != service.fleet_replication.config.instance_id:
+                    projected["event_type"] = "agent.attached"
+            if event["event_type"] == "agent.ended":
+                reason = projected["payload"].get("reason")
+                if reason == "idle_timeout" and source and service.fleet_replication:
+                    if source != service.fleet_replication.config.instance_id:
+                        projected["event_type"] = "agent.detached"
+                elif reason == "max_session_duration":
+                    projected["event_type"] = "agent.expired"
+    if event["entity_type"] == "message" and service.agent_store:
+        message = await service.agent_store.message_record(event["entity_id"])
+        if message is not None:
+            receipts = await service.agent_store.message_receipts(event["entity_id"])
+            projected["message"] = {
+                "message_hash": message["message_hash"],
+                "sender_name": public_agent_name(message["sender_agent_id"]),
+                "target": message["target_name"] or "broadcast",
+                "text": message["text"],
+                "require_reply": bool(message["require_reply"]),
+                "alert": bool(message["alert"]),
+                "task_namespace": message["task_namespace"],
+                "task_id": message["task_id"],
+                "recipients": [
+                    {
+                        "name": public_agent_name(item["agent_id"]),
+                        "seen": bool(item["seen"]),
+                        "read": bool(item["read"]),
+                        "replied": bool(item["replied"]),
+                    }
+                    for item in receipts
+                ],
+            }
+    return projected
+
+
+async def _activity_page(service, event_store, body: ConsoleActivityRequest) -> dict:
+    event_types = {item.strip() for item in body.event_types if item.strip()}
+    entity_types = {item.strip() for item in body.entity_types if item.strip()}
+    cursor = body.since
+    events = []
+    first_page = None
+    high_water = body.since
+    scanned = 0
+    max_scan = 5000
+    while len(events) < body.limit and scanned < max_scan:
+        scan_limit = min(1000, max(100, body.limit * 4), max_scan - scanned)
+        page = await event_store.read(since=cursor, limit=scan_limit)
+        if first_page is None:
+            first_page = page
+        high_water = page["high_water_seq"]
+        if not page["events"]:
+            break
+        for event in page["events"]:
+            cursor = event["seq"]
+            scanned += 1
+            if event_types and event["event_type"] not in event_types:
+                continue
+            if entity_types and event["entity_type"] not in entity_types:
+                continue
+            events.append(await _project_activity_event(service, event))
+            if len(events) >= body.limit:
+                break
+        if len(events) >= body.limit or cursor >= high_water:
+            break
+    first_page = first_page or await event_store.read(since=body.since, limit=1)
+    return {
+        "ok": True,
+        "events": events,
+        "since": body.since,
+        "next_cursor": cursor,
+        "oldest_seq": first_page["oldest_seq"],
+        "high_water_seq": high_water,
+        "gap": first_page["gap"],
+        "gap_from_seq": first_page["gap_from_seq"],
+        "gap_to_seq": first_page["gap_to_seq"],
+    }
+
+
+def build_console_events_router(settings, auth, pairing_store, service, event_store, ticket_store):
     router = APIRouter()
     expected_origin = _origin(settings.public_base_url)
 
@@ -112,6 +232,50 @@ def build_console_events_router(settings, auth, pairing_store, event_store, tick
             {"ticket": ticket, "expires_in": expires_in},
             headers={"Cache-Control": "no-store"},
         )
+
+    @router.post("/console/task-detail", include_in_schema=False)
+    async def task_detail(request: Request, body: ConsoleTaskDetailRequest):
+        try:
+            await _oauth_device(request, auth, pairing_store)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": "unauthorized", "detail": str(exc)},
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
+        result = await service.tasks(
+            namespace=body.namespace,
+            task_id=body.task_id,
+            show_details=True,
+            show_done=True,
+            show_archived=True,
+            limit=1,
+            cursor=0,
+        )
+        task = result.get("task") if result.get("ok") else None
+        if task is None:
+            return JSONResponse(
+                {"error": "task_not_found"},
+                status_code=404,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            {"ok": True, "task": task},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @router.post("/console/activity", include_in_schema=False)
+    async def activity(request: Request, body: ConsoleActivityRequest):
+        try:
+            await _oauth_device(request, auth, pairing_store)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": "unauthorized", "detail": str(exc)},
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
+        result = await _activity_page(service, event_store, body)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @router.websocket("/console/events")
     async def console_events(websocket: WebSocket):

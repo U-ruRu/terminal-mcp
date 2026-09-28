@@ -5,11 +5,12 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
+from terminal_mcp.auth.service import AuthService
 from terminal_mcp.config import Settings
 
 
-def settings(tmp_path):
-    return Settings(
+def settings(tmp_path, **updates):
+    base = Settings(
         database_path=tmp_path / "db.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
@@ -26,6 +27,7 @@ def settings(tmp_path):
         mcp_auth_mode="oauth",
         actions_auth_mode="oauth",
     )
+    return base.model_copy(update=updates)
 
 
 def pairing_payload(secret):
@@ -108,6 +110,72 @@ def test_pairing_exchange_registers_device_and_returns_usable_credentials(tmp_pa
         assert "/pairing/exchange" not in schema["paths"]
         assert "/pairing/create" not in schema["paths"]
         assert "/connect" not in schema["paths"]
+
+
+
+def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
+    app = create_app(
+        settings(
+            tmp_path,
+            actions_auth_mode="bearer",
+            bearer_tokens="legacy-static-token",
+        )
+    )
+    with TestClient(app) as client:
+        static_headers = {"Authorization": "Bearer legacy-static-token"}
+        assert client.get("/actions/health", headers=static_headers).status_code == 200
+        assert client.get("/actions/console/snapshot", headers=static_headers).status_code == 200
+
+        secret = asyncio.run(app.state.pairing_store.create())
+        paired = client.post("/pairing/exchange", json=pairing_payload(secret))
+        assert paired.status_code == 200
+        body = paired.json()
+        paired_headers = {"Authorization": f"Bearer {body['access_token']}"}
+
+        assert client.get("/actions/console/snapshot", headers=paired_headers).status_code == 200
+
+        paired_non_console = client.get("/actions/health", headers=paired_headers)
+        assert paired_non_console.status_code == 401
+        assert paired_non_console.json() == {
+            "error": "unauthorized",
+            "detail": "invalid_token",
+        }
+
+        ordinary_client_id, _ = asyncio.run(
+            app.state.oauth_store.register_client(
+                ["https://client.example/callback"], "Ordinary OAuth client", "none"
+            )
+        )
+        ordinary_auth = AuthService(
+            app.state.settings, app.state.oauth_store, app.state.credentials
+        )
+        ordinary_token = ordinary_auth.issue_access(ordinary_client_id, "terminal:read")
+        ordinary_headers = {"Authorization": f"Bearer {ordinary_token}"}
+
+        ordinary_snapshot = client.get("/actions/console/snapshot", headers=ordinary_headers)
+        assert ordinary_snapshot.status_code == 401
+        assert ordinary_snapshot.json() == {
+            "error": "unauthorized",
+            "detail": "invalid_token",
+        }
+        ordinary_non_console = client.get("/actions/health", headers=ordinary_headers)
+        assert ordinary_non_console.status_code == 401
+        assert ordinary_non_console.json() == {
+            "error": "unauthorized",
+            "detail": "invalid_token",
+        }
+
+        bogus = client.get(
+            "/actions/console/snapshot",
+            headers={"Authorization": "Bearer definitely-not-valid"},
+        )
+        assert bogus.status_code == 401
+        assert bogus.json() == {"error": "unauthorized", "detail": "invalid_token"}
+
+        assert asyncio.run(app.state.pairing_store.revoke_device(body["device_id"])) is True
+        revoked = client.get("/actions/console/snapshot", headers=paired_headers)
+        assert revoked.status_code == 401
+        assert revoked.json() == {"error": "unauthorized", "detail": "invalid_token"}
 
 
 def test_pairing_exchange_rejects_replay_expiry_and_malformed_without_secret_leak(tmp_path):

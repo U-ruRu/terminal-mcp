@@ -14,6 +14,7 @@ from terminal_mcp.core.orchestration import (
     generate_suffix,
     normalize_preview,
     public_agent_name,
+    public_session_ref,
     scopes_overlap,
     session_expiry_reason,
     utc_now,
@@ -61,6 +62,18 @@ async def wait_finished(service, agent_id, cmd_hash, attempts=200):
         await asyncio.sleep(0.01)
     return result
 
+
+
+def test_public_session_ref_uses_full_identity_without_exposing_suffix():
+    started = "2026-09-28T10:00:00Z"
+    first = public_session_ref("Alpha-00000000", "server-a", started)
+    second = public_session_ref("Alpha-00000001", "server-a", started)
+
+    assert first.startswith("session-")
+    assert second.startswith("session-")
+    assert first != second
+    assert "00000000" not in first
+    assert "00000001" not in second
 
 def test_call_sign_and_preview_helpers():
     suffix_only = generate_suffix()

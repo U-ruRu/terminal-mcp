@@ -12,10 +12,11 @@ PUBLIC_PREFIXES = (
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, settings, auth_service):
+    def __init__(self, app, settings, auth_service, pairing_store):
         super().__init__(app)
         self.s = settings
         self.auth = auth_service
+        self.pairing_store = pairing_store
 
     async def dispatch(self, request, call_next):
         path = request.url.path
@@ -36,7 +37,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             if mode == "bearer":
                 if not self.auth.bearer_valid(token):
-                    raise PermissionError("invalid_token")
+                    if path != "/actions/console/snapshot":
+                        raise PermissionError("invalid_token")
+                    try:
+                        claims = await self.auth.verify_access(
+                            token, self._scopes(path, request.method)
+                        )
+                        client_id = str(claims.get("sub", ""))
+                        device = await self.pairing_store.active_device_for_client(client_id)
+                        if not client_id or device is None:
+                            raise PermissionError("invalid_token")
+                        request.state.oauth_claims = claims
+                    except Exception as exc:
+                        raise PermissionError("invalid_token") from exc
             elif mode == "oauth":
                 request.state.oauth_claims = await self.auth.verify_access(
                     token, self._scopes(path, request.method)
