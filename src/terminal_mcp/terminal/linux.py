@@ -203,20 +203,71 @@ class LinuxTerminalAdapter:
             await add_raw(pending)
         await flush()
 
+    async def _wait_root_exit(self, process, timeout_seconds=None):
+        if process.returncode is not None:
+            return process.returncode
+
+        loop = asyncio.get_running_loop()
+        exited = asyncio.Event()
+        handle = None
+
+        def check_returncode():
+            nonlocal handle
+            if process.returncode is not None:
+                handle = None
+                exited.set()
+                return
+            handle = loop.call_later(0.01, check_returncode)
+
+        check_returncode()
+        try:
+            if timeout_seconds is None:
+                await exited.wait()
+            else:
+                await asyncio.wait_for(exited.wait(), max(0.0, timeout_seconds))
+            return process.returncode
+        finally:
+            if handle is not None:
+                handle.cancel()
+
     async def _terminate(self, process, grace_seconds=1.0):
         if process.returncode is not None:
             return True
         os.killpg(process.pid, signal.SIGTERM)
         try:
-            await asyncio.wait_for(process.wait(), max(0.0, grace_seconds))
+            await self._wait_root_exit(process, grace_seconds)
             return True
         except TimeoutError:
             os.killpg(process.pid, signal.SIGKILL)
             try:
-                await asyncio.wait_for(process.wait(), 1.0)
+                await self._wait_root_exit(process, 1.0)
                 return True
             except TimeoutError:
                 return False
+
+    @staticmethod
+    def _close_output_reader(reader):
+        transport = getattr(reader, "_transport", None)
+        if transport is not None:
+            transport.close()
+
+    async def _drain_output(self, command, pipe_task, reader=None):
+        if pipe_task is None:
+            return
+        if pipe_task.done():
+            await pipe_task
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(pipe_task),
+                timeout=max(0.05, float(self.grace)),
+            )
+        except TimeoutError:
+            await self.repo.mark_output_truncated(command.cmd_hash)
+            pipe_task.cancel()
+            if reader is not None:
+                self._close_output_reader(reader)
+            await asyncio.gather(pipe_task, return_exceptions=True)
 
     async def _execute(self, command, *, method, timeout_seconds=None):
         started = time.monotonic()
@@ -245,18 +296,13 @@ class LinuxTerminalAdapter:
             await process.stdin.drain()
             process.stdin.close()
             pipe_task = asyncio.create_task(self._pipe_output(command, process.stdout))
-            wait_task = asyncio.create_task(process.wait())
-            execution = asyncio.gather(pipe_task, wait_task)
             try:
-                if timeout_seconds is None:
-                    await execution
-                else:
-                    await asyncio.wait_for(asyncio.shield(execution), timeout_seconds)
+                await self._wait_root_exit(process, timeout_seconds)
             except TimeoutError:
                 error = f"{method}.timeout: command exceeded {round(timeout_seconds * 1000)} ms"
                 self.cancel_requested.add(command.cmd_hash)
                 await self._terminate(process, grace_seconds=0.5)
-                await execution
+            await self._drain_output(command, pipe_task, process.stdout)
 
             command.exit_code = process.returncode
             if command.cmd_hash in self.cancel_requested:
@@ -267,8 +313,8 @@ class LinuxTerminalAdapter:
             if process and process.returncode is None:
                 self.cancel_requested.add(command.cmd_hash)
                 await self._terminate(process, grace_seconds=0.5)
-                if pipe_task and not pipe_task.done():
-                    await asyncio.gather(pipe_task, return_exceptions=True)
+                if pipe_task:
+                    await self._drain_output(command, pipe_task, process.stdout)
                 command.exit_code = process.returncode
             final_status = "cancelled"
             error = f"{method}.cancelled: upstream disconnected"
@@ -283,6 +329,9 @@ class LinuxTerminalAdapter:
             if pipe_task and not pipe_task.done():
                 pipe_task.cancel()
         finally:
+            if pipe_task is not None and not pipe_task.done():
+                pipe_task.cancel()
+                await asyncio.gather(pipe_task, return_exceptions=True)
             self.processes.pop(command.cmd_hash, None)
             self.process_queues.pop(command.cmd_hash, None)
             if final_status is not None:

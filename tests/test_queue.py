@@ -59,7 +59,9 @@ async def test_cancel_removes_queued_command_before_marking_cancelled(tmp_path):
     busy = await service.run("sleep 0.5", task_scope="none")
     queued = await service.run("printf 'must-not-run\\n'", task_scope="none")
     result = await service.cancel(queued["cmd_hash"])
-    assert result == {"ok": True, "cmd_hash": queued["cmd_hash"], "error": None}
+    assert result["ok"] is True
+    assert result["cmd_hash"] == queued["cmd_hash"]
+    assert result["error"] is None
     assert all(item.cmd_hash != queued["cmd_hash"] for item in terminal.queue)
 
     read = await service.read(queued["cmd_hash"])
@@ -240,3 +242,139 @@ async def test_stop_kills_process_that_ignores_sigterm(tmp_path):
 
     await asyncio.wait_for(terminal.stop(), 1.0)
     assert process.returncode is not None
+
+
+async def register_queue_agent(service, label):
+    result = await service.agent_start(
+        task_summary=f"{label} queue test",
+        intent="exercise durable queue lifecycle",
+        details=["exercise durable queue lifecycle"],
+        work_scope=[],
+    )
+    assert result["ok"] is True
+    return result["self"]["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_queued_command_survives_explicit_agent_finish(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    owner = await register_queue_agent(service, "owner")
+    busy = await service.run("sleep 0.2", queue_id=1, task_scope="none")
+    await wait_status(service, busy["cmd_hash"], "running")
+    durable = await service.run(
+        "printf 'survived-finish\\n' > survived-finish.txt",
+        agent_id=owner, queue_id=1, task_scope="none",
+    )
+    finished = await service.agent_finish(owner)
+    assert finished["finished"] is True
+    completed = await wait_status(service, durable["cmd_hash"], "completed")
+    assert completed["status"] == "completed"
+    assert (tmp_path / "survived-finish.txt").read_text() == "survived-finish\n"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_running_command_survives_explicit_agent_finish(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    owner = await register_queue_agent(service, "running-owner")
+    durable = await service.run(
+        "sleep 0.15; printf 'running-survived\\n' > running-survived.txt",
+        agent_id=owner, queue_id=1, task_scope="none",
+    )
+    await wait_status(service, durable["cmd_hash"], "running")
+    finished = await service.agent_finish(owner)
+    assert finished["finished"] is True
+    completed = await wait_status(service, durable["cmd_hash"], "completed")
+    assert completed["status"] == "completed"
+    assert (tmp_path / "running-survived.txt").read_text() == "running-survived\n"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_queued_command_survives_forced_agent_expiry(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    owner = await register_queue_agent(service, "expired-owner")
+    busy = await service.run("sleep 0.2", queue_id=1, task_scope="none")
+    await wait_status(service, busy["cmd_hash"], "running")
+    durable = await service.run(
+        "printf 'survived-expiry\\n' > survived-expiry.txt",
+        agent_id=owner, queue_id=1, task_scope="none",
+    )
+    await service.agent_coordinator.store.end(
+        owner, "forced", "max_session_duration", "2099-01-01T00:00:00.000Z"
+    )
+    completed = await wait_status(service, durable["cmd_hash"], "completed")
+    assert completed["status"] == "completed"
+    assert (tmp_path / "survived-expiry.txt").read_text() == "survived-expiry\n"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_restart_executes_persisted_command_from_finished_agent(tmp_path):
+    repo, terminal, service = await create_runtime(tmp_path)
+    owner = await register_queue_agent(service, "restart-owner")
+    finished = await service.agent_finish(owner)
+    assert finished["finished"] is True
+    durable = await repo.create(
+        "printf 'restart-survived\\n' > restart-survived.txt",
+        agent_id=owner, command_type="run", command_preview="durable after finish", queue_id=1,
+    )
+    await terminal.start()
+    completed = await wait_status(service, durable.cmd_hash, "completed")
+    assert completed["status"] == "completed"
+    assert (tmp_path / "restart-survived.txt").read_text() == "restart-survived\n"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_wedge_when_output_pipe_never_reaches_eof(tmp_path, monkeypatch):
+    _, terminal, service = await create_runtime(tmp_path)
+    never = asyncio.Event()
+    async def stuck_pipe(_command, _reader):
+        await never.wait()
+    monkeypatch.setattr(terminal, "_pipe_output", stuck_pipe)
+    first = await service.run("true", queue_id=1, task_scope="none")
+    second = await service.run("true", queue_id=1, task_scope="none")
+    assert (await wait_status(service, first["cmd_hash"], "completed"))["status"] == "completed"
+    assert (await wait_status(service, second["cmd_hash"], "completed"))["status"] == "completed"
+    assert (await terminal.health())["queues"][0]["queued"] == 0
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_inherited_output_fd_after_root_exit_does_not_hold_fifo(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    first = await service.run(
+        (
+            "python3 -c \"import os,time; p=os.fork(); "
+            "time.sleep(1) if p == 0 else None; os._exit(0)\""
+        ),
+        queue_id=1, task_scope="none",
+    )
+    second = await service.run(
+        "printf 'after-inherited-fd\\n' > after-inherited-fd.txt",
+        queue_id=1, task_scope="none",
+    )
+    completed = await asyncio.wait_for(
+        wait_status(service, second["cmd_hash"], "completed"), timeout=0.8
+    )
+    assert completed["status"] == "completed"
+    assert (await service.read(first["cmd_hash"]))["output_truncated"] is True
+    assert (tmp_path / "after-inherited-fd.txt").read_text() == "after-inherited-fd\n"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_silent_live_root_process_is_not_treated_as_wedged(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    command = await service.run(
+        "sleep 0.25; printf 'still-alive\\n' > still-alive.txt",
+        queue_id=1, task_scope="none",
+    )
+    await wait_status(service, command["cmd_hash"], "running")
+    await asyncio.sleep(0.12)
+    assert (await service.read(command["cmd_hash"]))["status"] == "running"
+    completed = await wait_status(service, command["cmd_hash"], "completed")
+    assert completed["status"] == "completed"
+    assert (tmp_path / "still-alive.txt").read_text() == "still-alive\n"
+    await terminal.stop()
