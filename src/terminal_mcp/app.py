@@ -16,6 +16,7 @@ from terminal_mcp.core.service import TerminalService
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
 from terminal_mcp.http.console import build_console_router
+from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
@@ -43,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     oauth_store = OAuthStore(settings.database_path)
     pairing_store = PairingStore(settings.database_path)
+    ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     credentials = CredentialManager(settings)
     runtime = RuntimeConfigProvider(settings.runtime_config_path)
     metrics = Metrics(runtime, settings.metrics_host, settings.metrics_port)
@@ -119,6 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.service = service
     app.state.oauth_store = oauth_store
     app.state.pairing_store = pairing_store
+    app.state.ws_ticket_store = ws_ticket_store
     app.state.credentials = credentials
     app.state.runtime_config = runtime
     app.state.metrics = metrics
@@ -126,6 +129,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.event_store = service.event_store
     app.include_router(build_public_router())
     app.include_router(build_pairing_router(settings, auth, pairing_store))
+    app.include_router(
+        build_console_events_router(
+            settings,
+            auth,
+            pairing_store,
+            service.event_store,
+            ws_ticket_store,
+        )
+    )
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
     app.include_router(build_console_router(service, settings))

@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     oauth_access_ttl_sec: int = 900
     oauth_refresh_ttl_sec: int = 2592000
     oauth_code_ttl_sec: int = 300
+    console_ws_ticket_ttl_sec: int = 30
+    console_ws_heartbeat_sec: float = 15.0
+    console_ws_auth_check_sec: float = 5.0
+    console_ws_poll_sec: float = 0.25
+    console_ws_batch_size: int = 100
     max_read_lines: int = 5000
     cancel_grace_sec: float = 2.0
     runtime_config_path: Path = Path("/etc/terminal-mcp/runtime.env")

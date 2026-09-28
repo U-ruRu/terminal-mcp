@@ -255,6 +255,29 @@ class PairingStore:
             }
             for row in rows
         ]
+    async def active_device_for_client(self, client_id: str) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT device_id,client_id,label FROM console_devices "
+                    "WHERE client_id=? AND revoked_at IS NULL",
+                    (client_id,),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return {"device_id": row[0], "client_id": row[1], "label": row[2]}
+
+    async def device_active(self, device_id: str, client_id: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT 1 FROM console_devices "
+                    "WHERE device_id=? AND client_id=? AND revoked_at IS NULL",
+                    (device_id, client_id),
+                )
+            ).fetchone()
+        return row is not None
 
     async def revoke_device(self, device_id: str, *, now: int | None = None) -> bool:
         revoked_at = int(time.time()) if now is None else int(now)
