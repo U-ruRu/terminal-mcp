@@ -237,6 +237,25 @@ class PairingStore:
             "",
         )
 
+    async def list_devices(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT device_id,label,created_at,last_used_at,revoked_at "
+                    "FROM console_devices ORDER BY created_at DESC,device_id"
+                )
+            ).fetchall()
+        return [
+            {
+                "device_id": row[0],
+                "label": row[1],
+                "created_at": row[2],
+                "last_used_at": row[3],
+                "revoked_at": row[4],
+            }
+            for row in rows
+        ]
+
     async def revoke_device(self, device_id: str, *, now: int | None = None) -> bool:
         revoked_at = int(time.time()) if now is None else int(now)
         async with aiosqlite.connect(self.path) as db:

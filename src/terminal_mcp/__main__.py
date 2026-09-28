@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -25,12 +26,26 @@ def _pairing_url(public_base_url: str, secret: str) -> str:
     return f"{public_base_url.rstrip('/')}/connect#{secret}"
 
 
-async def _issue_pairing(ttl_seconds: int) -> str:
+async def _pairing_store() -> PairingStore:
     settings = _local_settings()
     store = PairingStore(settings.database_path)
     await store.initialize()
+    return store
+
+
+async def _issue_pairing(ttl_seconds: int) -> str:
+    settings = _local_settings()
+    store = await _pairing_store()
     secret = await store.create(ttl_seconds)
     return _pairing_url(settings.public_base_url, secret)
+
+
+async def _list_devices() -> list[dict]:
+    return await (await _pairing_store()).list_devices()
+
+
+async def _revoke_device(device_id: str) -> bool:
+    return await (await _pairing_store()).revoke_device(device_id)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -44,6 +59,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"pairing lifetime in seconds (default: {PAIRING_DEFAULT_TTL_SEC})",
     )
+    devices = subcommands.add_parser("devices", help="manage paired Console devices")
+    device_commands = devices.add_subparsers(dest="device_command", required=True)
+    device_commands.add_parser("list", help="list paired devices")
+    revoke = device_commands.add_parser("revoke", help="revoke one paired device")
+    revoke.add_argument("device_id", help="device id shown by 'terminal-mcp devices list'")
     return parser
 
 
@@ -65,6 +85,19 @@ def main(argv: list[str] | None = None):
         url = asyncio.run(_issue_pairing(parsed.ttl))
         print(url)
         return url
+    if parsed.command == "devices":
+        if parsed.device_command == "list":
+            devices = asyncio.run(_list_devices())
+            print(json.dumps(devices, separators=(",", ":"), ensure_ascii=False))
+            return devices
+        if parsed.device_command == "revoke":
+            revoked = asyncio.run(_revoke_device(parsed.device_id))
+            if revoked:
+                print(f"revoked {parsed.device_id}")
+                return 0
+            print(f"device not found or already revoked: {parsed.device_id}", file=sys.stderr)
+            return 1
+        raise AssertionError(f"unhandled device command: {parsed.device_command}")
     raise AssertionError(f"unhandled command: {parsed.command}")
 
 
