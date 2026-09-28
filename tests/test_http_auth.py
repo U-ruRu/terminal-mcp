@@ -69,6 +69,73 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert health.json()["agent_name"] == "anonymous"
         assert health.json()["version"] == "0.10.0"
 
+        empty_context = client.post("/actions/context", json={"action": "list"}, headers=headers)
+        assert empty_context.status_code == 200
+        assert empty_context.json() == {"ok": True, "primary": [], "additional": []}
+        primary_context = client.post(
+            "/actions/context",
+            json={
+                "action": "create",
+                "summary": "Git workflow",
+                "content": "Use the local Git wrapper.",
+                "primary": True,
+            },
+            headers=headers,
+        )
+        assert primary_context.status_code == 200
+        primary_id = primary_context.json()["entry"]["id"]
+        additional_context = client.post(
+            "/actions/context",
+            json={
+                "action": "create",
+                "summary": "Docs",
+                "content": "Read local docs.",
+                "primary": False,
+            },
+            headers=headers,
+        )
+        additional_id = additional_context.json()["entry"]["id"]
+        compact_context = client.post(
+            "/actions/context", json={"action": "list"}, headers=headers
+        ).json()
+        assert compact_context["primary"] == [
+            {"id": primary_id, "summary": "Git workflow"}
+        ]
+        assert compact_context["additional"] == [
+            {"id": additional_id, "summary": "Docs"}
+        ]
+        detailed_context = client.post(
+            "/actions/context",
+            json={"action": "list", "show_details": True},
+            headers=headers,
+        ).json()
+        assert detailed_context["primary"][0]["content"] == "Use the local Git wrapper."
+        assert set(detailed_context["primary"][0]) == {"id", "summary", "content"}
+        invalid_list = client.post(
+            "/actions/context",
+            json={"action": "list", "summary": "invalid"},
+            headers=headers,
+        )
+        assert invalid_list.status_code == 422
+        invalid_delete = client.post(
+            "/actions/context",
+            json={"action": "delete", "id": primary_id, "summary": "invalid"},
+            headers=headers,
+        )
+        assert invalid_delete.status_code == 422
+        updated_context = client.post(
+            "/actions/context",
+            json={"action": "update", "id": additional_id, "primary": True},
+            headers=headers,
+        ).json()
+        assert updated_context["entry"]["primary"] is True
+        deleted_context = client.post(
+            "/actions/context",
+            json={"action": "delete", "id": primary_id},
+            headers=headers,
+        ).json()
+        assert deleted_context == {"ok": True, "deleted_id": primary_id}
+
         run = client.post(
             "/actions/run",
             json={"agent_id": agent_id, "cmd": "printf ok", "task_scope": "none"},
@@ -94,6 +161,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/message",
             "/actions/agents",
             "/actions/agent/finish",
+            "/actions/context",
             "/actions/tasks",
             "/actions/task",
             "/actions/run",
@@ -132,6 +200,17 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert message_request["properties"]["message_hash"]["anyOf"][0]["maxLength"] == 8
         assert message_request["properties"]["namespace"]["anyOf"][0]["maxLength"] == 120
         assert message_request["properties"]["task_id"]["anyOf"][0]["maxLength"] == 120
+        assert "explicit destination" in message_request["properties"]["alert"]["description"]
+        context_request = schema["components"]["schemas"]["ContextRequest"]
+        assert context_request["required"] == ["action"]
+        assert set(context_request["properties"]["action"]["enum"]) == {
+            "list",
+            "create",
+            "update",
+            "delete",
+        }
+        assert context_request["properties"]["summary"]["anyOf"][0]["maxLength"] == 100
+        assert context_request["properties"]["id"]["anyOf"][0]["minimum"] == 1
         tasks_request = schema["components"]["schemas"]["TasksRequest"]
         assert tasks_request["properties"]["lane"]["anyOf"][0]["enum"] == [
             "implementation",
@@ -171,6 +250,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert "tags" in task_request["properties"]
         assert "force" in task_request["properties"]
         assert "force_reason" in task_request["properties"]
+        assert "claim or terminal completion" in task_request["properties"]["force"]["description"]
         isolation_hint = task_request["properties"]["isolation_hint"]["anyOf"][0]
         assert isolation_hint["minLength"] == 1
         assert isolation_hint["maxLength"] == 160
@@ -194,12 +274,16 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert "tags" in schema["components"]["schemas"]["TasksRequest"]["properties"]
         assert "task_scope" in schema["components"]["schemas"]["RunRequest"]["properties"]
         task_request_props = schema["components"]["schemas"]["TaskRequest"]["properties"]
+        assert "current live owner" in task_request_props["state"]["description"]
         assert "concurrent participation" in task_request_props["cooperative"]["description"]
         assert "durable handoff history" in task_request_props["release_reason"]["description"]
 
         task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
         assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
         assert "isolation_hint" in task_card
+        assert "blocking_dependencies" in task_card
+        assert "open dependencies is blocked" in task_card["operational_status"]["description"]
+        assert "ordinary claimability" in task_card["blocking_dependencies"]["description"]
         for field in (
             "archived_at",
             "archive_note",
@@ -253,6 +337,21 @@ def test_bearer_actions_and_openapi(tmp_path):
             headers=headers,
         )
         assert created_task.status_code == 200 and created_task.json()["ok"] is True
+        implicit_broadcast = client.post(
+            "/actions/message",
+            json={"agent_id": agent_id, "text": "ordinary broadcast"},
+            headers=headers,
+        )
+        assert implicit_broadcast.status_code == 200
+
+        omitted_alert = client.post(
+            "/actions/message",
+            json={"agent_id": agent_id, "text": "unsafe", "alert": True},
+            headers=headers,
+        )
+        assert omitted_alert.status_code == 422
+        assert "message.alert: ALERT requires an explicit destination" in omitted_alert.text
+
         task_message = client.post(
             "/actions/message",
             json={
@@ -489,6 +588,7 @@ def test_agent_facing_oauth_uses_one_read_scope():
         "/actions/recovery",
         "/actions/cancel",
         "/actions/task",
+        "/actions/context",
         "/actions/agent/start",
         "/actions/read",
         "/mcp",

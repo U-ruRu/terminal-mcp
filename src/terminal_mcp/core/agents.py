@@ -18,6 +18,7 @@ from terminal_mcp.core.orchestration import (
     short_time,
     utc_now,
     utc_text,
+    validate_message_routing,
 )
 
 
@@ -694,13 +695,16 @@ class AgentCoordinator:
                 response["message_grace_remaining_seconds"] = grace_remaining
             return response
 
+        routing_error = validate_message_routing(
+            target=target, namespace=namespace, task_id=task_id, alert=alert
+        )
+        if routing_error:
+            return {
+                "ok": False,
+                "agent_name": public_agent_name(agent_id),
+                "error": routing_error,
+            }
         if target and target.casefold() == "broadcast":
-            if namespace is not None:
-                return {
-                    "ok": False,
-                    "agent_name": public_agent_name(agent_id),
-                    "error": "message.target: broadcast cannot be combined with a task target",
-                }
             target = None
 
         if not text:
@@ -708,18 +712,6 @@ class AgentCoordinator:
                 "ok": False,
                 "agent_name": public_agent_name(agent_id),
                 "error": "message.text: text is required when sending",
-            }
-        if (namespace is None) != (task_id is None):
-            return {
-                "ok": False,
-                "agent_name": public_agent_name(agent_id),
-                "error": "message.task: namespace and task_id must be provided together",
-            }
-        if target is not None and namespace is not None:
-            return {
-                "ok": False,
-                "agent_name": public_agent_name(agent_id),
-                "error": "message.target: choose either an agent target or a task target",
             }
         if target and public_agent_name(target) != target:
             return {

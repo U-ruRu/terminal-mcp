@@ -149,6 +149,21 @@ def generate_agent_id() -> str:
     return f"{secrets.choice(NATO_WORDS)}-{generate_suffix()}"
 
 
+def validate_message_routing(*, target=None, namespace=None, task_id=None, alert=False):
+    if (namespace is None) != (task_id is None):
+        return "message.task: namespace and task_id must be provided together"
+    if target is not None and namespace is not None:
+        if target.casefold() == "broadcast":
+            return "message.target: broadcast cannot be combined with a task target"
+        return "message.target: choose either an agent target or a task target"
+    if alert and target is None and namespace is None:
+        return (
+            "message.alert: ALERT requires an explicit destination: public agent target, "
+            "target='broadcast', or namespace+task_id"
+        )
+    return None
+
+
 def public_agent_name(agent_id: str | None) -> str:
     if not agent_id:
         return "anonymous"

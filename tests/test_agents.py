@@ -450,6 +450,40 @@ async def test_agent_plan_coordinate_and_agent_start_update(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agent_start_projects_full_primary_context_only(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    first = await service.context(
+        "create", summary="Git workflow", content="Use the local Git wrapper.", primary=True
+    )
+    additional = await service.context(
+        "create", summary="Docs", content="Read local docs.", primary=False
+    )
+    third = await service.context(
+        "create", summary="Deploy", content="Use the documented deployment flow.", primary=True
+    )
+
+    started = await register(service, "Context projection", "Verify primary context")
+    assert started["primary_context"] == [first["entry"], third["entry"]]
+    assert all("content" in item for item in started["primary_context"])
+    assert additional["entry"]["id"] not in {item["id"] for item in started["primary_context"]}
+
+    await service.context("update", context_id=additional["entry"]["id"], primary=True)
+    await service.context("delete", context_id=first["entry"]["id"])
+    updated = await service.agent_start(
+        agent_id=started["self"]["agent_id"], intent="Re-check primary context"
+    )
+    assert [item["id"] for item in updated["primary_context"]] == [
+        additional["entry"]["id"],
+        third["entry"]["id"],
+    ]
+    assert updated["primary_context"][0]["content"] == "Read local docs."
+
+    listed = await service.context("list")
+    assert all("content" not in item for item in listed["primary"] + listed["additional"])
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
 async def test_coordinate_show_details_exposes_other_agent_plan(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     first = await register(

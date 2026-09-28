@@ -208,6 +208,14 @@ async def test_result_review_ready_timestamps_and_reopen(tmp_path):
         assert task["state_changed_at"] == task["created_at"]
         assert task["ready_since"] == task["created_at"]
         original_ready_since = task["ready_since"]
+        claimed = await service.task(
+            agent,
+            action="claim",
+            namespace="ns",
+            task_id="REV-10",
+            claim_intent="review workflow transitions",
+        )
+        assert claimed["ok"] is True
 
         checkpointed = await service.task(
             agent,
@@ -227,7 +235,12 @@ async def test_result_review_ready_timestamps_and_reopen(tmp_path):
         assert updated["task"]["ready_since"] == original_ready_since
 
         blocked = await service.task(
-            agent, action="state", namespace="ns", task_id="REV-10", state="blocked"
+            agent,
+            action="state",
+            namespace="ns",
+            task_id="REV-10",
+            state="blocked",
+            blocker_reason="review needs another inspection pass",
         )
         assert blocked["task"]["ready_since"] is None
         assert blocked["task"]["state_changed_at"] != task["state_changed_at"]
@@ -526,6 +539,45 @@ async def test_broadcast_alias_and_post_finish_message_grace(tmp_path):
         explicit = await service.message(sender, text="explicit", target="broadcast")
         assert set(implicit["delivered_to"]) == set(explicit["delivered_to"])
 
+        unsafe_alert = await service.message(sender, text="unsafe alert", alert=True)
+        assert unsafe_alert["ok"] is False
+        assert unsafe_alert["error"].startswith(
+            "message.alert: ALERT requires an explicit destination"
+        )
+
+        created = await service.task(
+            recipient,
+            action="create",
+            isolation_hint="none",
+            namespace="messages",
+            task_id="ALERT-TARGET",
+            title="Task alert target",
+        )
+        assert created["ok"] is True
+        claimed = await service.task(
+            recipient,
+            action="claim",
+            namespace="messages",
+            task_id="ALERT-TARGET",
+            claim_intent="receive task alert",
+        )
+        assert claimed["ok"] is True
+        task_alert = await service.message(
+            sender,
+            text="task alert",
+            namespace="messages",
+            task_id="ALERT-TARGET",
+            alert=True,
+        )
+        assert task_alert["ok"] is True
+        assert task_alert["delivered_to"] == [recipient_name]
+
+        explicit_alert = await service.message(
+            sender, text="explicit broadcast alert", target="broadcast", alert=True
+        )
+        assert explicit_alert["ok"] is True
+        assert set(explicit_alert["delivered_to"]) == set(explicit["delivered_to"])
+
         ack_message = await service.message(sender, text="ack me", target=recipient_name)
         reply_message = await service.message(sender, text="reply me", target=recipient_name)
         alert_message = await service.message(
@@ -668,7 +720,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(
@@ -735,6 +787,8 @@ def test_mcp_schema_has_unified_task_contract():
     assert "task_scope" in run
     assert "task_scope" in tools["run"].parameters["required"]
     assert "broadcast" in tools["message"].description
+    assert "explicit" in tools["message"].description.lower()
+    assert "alert=true requires" in tools["message"].description.lower()
     assert "broadcast" in str(message["target"])
     assert "force" in tools["task"].description.lower()
     assert "dependenc" in tools["task"].description.lower()
@@ -861,5 +915,282 @@ async def test_archived_dependency_stays_blocking_and_done_create_requires_resul
         assert dependency["state"] == "ready"
         assert dependency["archived"] is True
         assert dependency["satisfied"] is False
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent = await register(service, "dependency completion")
+
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="OPEN",
+            title="open prerequisite",
+        )
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="DIRECT",
+            title="direct completion",
+            dependencies=[{"namespace": "deps", "task_id": "OPEN"}],
+        )
+
+        unclaimed_direct = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="DIRECT",
+            result={"summary": "must claim before completion"},
+        )
+        assert unclaimed_direct["ok"] is False
+        assert unclaimed_direct["code"] == "owner_required"
+        direct_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="deps",
+            task_id="DIRECT",
+            claim_intent="exercise completion dependency gate",
+            force=True,
+            force_reason="Need an owner to verify terminal dependency enforcement",
+        )
+        assert direct_claim["ok"] is True
+        direct = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="DIRECT",
+            result={"summary": "must remain blocked"},
+        )
+        assert direct["ok"] is False
+        assert direct["code"] == "dependency_open"
+        assert direct["blocking_dependencies"][0]["task_id"] == "OPEN"
+        assert direct["task"]["state"] == "ready"
+
+        via_state = await service.task(
+            agent,
+            action="state",
+            namespace="deps",
+            task_id="DIRECT",
+            state="done",
+            result={"summary": "state path must also remain blocked"},
+        )
+        assert via_state["ok"] is False
+        assert via_state["code"] == "dependency_open"
+        assert via_state["blocking_dependencies"][0]["task_id"] == "OPEN"
+
+        via_update = await service.task(
+            agent,
+            action="update",
+            namespace="deps",
+            task_id="DIRECT",
+            state="done",
+            result={"summary": "update path must also remain blocked"},
+        )
+        assert via_update["ok"] is False
+        assert via_update["code"] == "dependency_open"
+
+        missing_reason = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="DIRECT",
+            result={"summary": "force requires reason"},
+            force=True,
+        )
+        assert missing_reason["ok"] is False
+        assert missing_reason["code"] == "dependency_open"
+        assert "force_reason" in missing_reason["error"]
+
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="CLAIMED",
+            title="forced claimed completion",
+            dependencies=[{"namespace": "deps", "task_id": "OPEN"}],
+        )
+        forced_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="deps",
+            task_id="CLAIMED",
+            claim_intent="claim does not authorize completion bypass",
+            force=True,
+            force_reason="Need to prepare work before dependency finishes",
+        )
+        assert forced_claim["ok"] is True
+
+        claimed_done = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="CLAIMED",
+            result={"summary": "still blocked at completion"},
+        )
+        assert claimed_done["ok"] is False
+        assert claimed_done["code"] == "dependency_open"
+        assert claimed_done["task"]["state"] == "ready"
+
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="MISSING",
+            title="missing prerequisite",
+            dependencies=[{"namespace": "deps", "task_id": "DOES-NOT-EXIST"}],
+        )
+        missing_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="deps",
+            task_id="MISSING",
+            claim_intent="exercise missing dependency completion",
+            force=True,
+            force_reason="Need an owner to verify missing-dependency completion gate",
+        )
+        assert missing_claim["ok"] is True
+        missing = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="MISSING",
+            result={"summary": "missing dependency blocks completion"},
+        )
+        assert missing["ok"] is False
+        assert missing["code"] == "dependency_open"
+        assert missing["blocking_dependencies"][0]["state"] == "missing"
+
+        create_done = await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="CREATE-DONE",
+            title="create already done",
+            state="done",
+            result={"summary": "must not bypass dependency gate"},
+            dependencies=[{"namespace": "deps", "task_id": "OPEN"}],
+        )
+        assert create_done["ok"] is False
+        assert create_done["code"] == "dependency_open"
+        assert create_done["blocking_dependencies"][0]["task_id"] == "OPEN"
+        assert (await service.tasks(namespace="deps", task_id="CREATE-DONE"))["ok"] is False
+
+        forced_create = await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="CREATE-DONE-FORCED",
+            title="forced create already done",
+            state="done",
+            result={"summary": "forced creation"},
+            dependencies=[{"namespace": "deps", "task_id": "OPEN"}],
+            force=True,
+            force_reason="External completion must be represented immediately",
+        )
+        assert forced_create["ok"] is True
+        assert {item["code"] for item in forced_create["warnings"]} == {
+            "dependency_open",
+            "dependency_forced",
+        }
+        forced_create_detail = await service.tasks(
+            namespace="deps",
+            task_id="CREATE-DONE-FORCED",
+            show_details=True,
+            show_done=True,
+        )
+        create_overrides = [
+            event
+            for event in forced_create_detail["task"]["events"]
+            if event["event_type"] == "dependency_override"
+        ]
+        assert create_overrides
+        assert create_overrides[0]["payload"]["operation"] == "done"
+        assert create_overrides[0]["payload"]["force_reason"] == (
+            "External completion must be represented immediately"
+        )
+
+        forced_done = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="DIRECT",
+            result={"summary": "explicit emergency completion"},
+            force=True,
+            force_reason="Dependency is externally satisfied and completion must be recorded now",
+        )
+        assert forced_done["ok"] is True
+        assert {item["code"] for item in forced_done["warnings"]} == {
+            "dependency_open",
+            "dependency_forced",
+        }
+        detail = await service.tasks(
+            namespace="deps", task_id="DIRECT", show_details=True, show_done=True
+        )
+        overrides = [
+            event
+            for event in detail["task"]["events"]
+            if event["event_type"] == "dependency_override"
+        ]
+        assert overrides
+        assert overrides[0]["payload"]["force_reason"] == (
+            "Dependency is externally satisfied and completion must be recorded now"
+        )
+        assert overrides[0]["payload"]["blocking_dependencies"][0]["task_id"] == "OPEN"
+        assert overrides[0]["payload"]["operation"] == "done"
+
+        open_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="deps",
+            task_id="OPEN",
+            claim_intent="complete prerequisite as owner",
+        )
+        assert open_claim["ok"] is True
+        satisfied_dep = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="OPEN",
+            result={"summary": "dependency completed"},
+        )
+        assert satisfied_dep["ok"] is True
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="deps",
+            task_id="SATISFIED",
+            title="satisfied prerequisite",
+            dependencies=[{"namespace": "deps", "task_id": "OPEN"}],
+        )
+        satisfied_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="deps",
+            task_id="SATISFIED",
+            claim_intent="complete after dependency satisfied",
+        )
+        assert satisfied_claim["ok"] is True
+        satisfied = await service.task(
+            agent,
+            action="done",
+            namespace="deps",
+            task_id="SATISFIED",
+            result={"summary": "normal completion"},
+        )
+        assert satisfied["ok"] is True
+        assert satisfied["task"]["state"] == "done"
     finally:
         await terminal.stop()

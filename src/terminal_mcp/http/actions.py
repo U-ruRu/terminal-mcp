@@ -8,6 +8,8 @@ from terminal_mcp.api_models import (
     AgentFinishResponse,
     AgentOverviewResponse,
     CancelResponse,
+    ContextAction,
+    ContextResponse,
     CoordinateResponse,
     HealthResponse,
     MessageResponse,
@@ -22,8 +24,12 @@ from terminal_mcp.api_models import (
     TasksResponse,
     TaskState,
 )
-from terminal_mcp.core.orchestration import public_agent_name
-from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.core.orchestration import public_agent_name, validate_message_routing
+from terminal_mcp.core.service import (
+    DEFAULT_READ_LINES,
+    MAX_READ_LINES,
+    validate_context_request,
+)
 from terminal_mcp.telemetry import observed
 
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
@@ -80,11 +86,11 @@ class MessageRequest(AgentRequest):
         default=None,
         min_length=1,
         max_length=64,
-        description="Public agent name, or 'broadcast' to send to all other active agents.",
+        description="Public agent name, or 'broadcast' to send to all other active agents. ALERT requires an explicit destination.",
     )
     message_hash: str | None = Field(default=None, min_length=8, max_length=8)
     require_reply: bool = False
-    alert: bool = False
+    alert: bool = Field(default=False, description="ALERT requires an explicit destination: target, target='broadcast', or namespace+task_id.")
     namespace: str | None = Field(default=None, min_length=1, max_length=120)
     task_id: str | None = Field(default=None, min_length=1, max_length=120)
 
@@ -101,10 +107,14 @@ class MessageRequest(AgentRequest):
                 raise ValueError("acknowledgement/reply inherits target and message policy")
         elif self.text is None:
             raise ValueError("sending requires text")
-        if (self.namespace is None) != (self.task_id is None):
-            raise ValueError("namespace and task_id must be provided together")
-        if self.target is not None and self.namespace is not None:
-            raise ValueError("choose either target or namespace+task_id")
+        routing_error = validate_message_routing(
+            target=self.target,
+            namespace=self.namespace,
+            task_id=self.task_id,
+            alert=self.alert,
+        )
+        if routing_error:
+            raise ValueError(routing_error)
         return self
 
 
@@ -115,6 +125,29 @@ class AgentsRequest(OptionalAgentRequest):
     show_commands: bool = False
     command_hash: str | None = Field(default=None, min_length=8, max_length=8)
     since_minutes: int | None = Field(default=None, ge=1, le=10080)
+
+
+class ContextRequest(StrictRequest):
+    action: ContextAction
+    id: int | None = Field(default=None, ge=1)
+    summary: str | None = Field(default=None, min_length=1, max_length=100)
+    content: str | None = Field(default=None, min_length=1)
+    primary: bool | None = None
+    show_details: bool = False
+
+    @model_validator(mode="after")
+    def validate_context(self):
+        error = validate_context_request(
+            self.action,
+            context_id=self.id,
+            summary=self.summary,
+            content=self.content,
+            primary=self.primary,
+            show_details=self.show_details,
+        )
+        if error:
+            raise ValueError(error)
+        return self
 
 
 class TasksRequest(StrictRequest):
@@ -138,7 +171,12 @@ class TaskRequest(AgentRequest):
     title: str | None = Field(default=None, max_length=200)
     lane: TaskLane | None = None
     priority: TaskPriority | None = None
-    state: TaskState | None = None
+    state: TaskState | None = Field(
+        default=None,
+        description=(
+            "Workflow state change for an existing task; requires the caller to be its current live owner."
+        ),
+    )
     description: str | None = Field(default=None, max_length=8000)
     next_action: str | None = Field(default=None, max_length=2000)
     isolation_hint: str | None = Field(
@@ -162,7 +200,7 @@ class TaskRequest(AgentRequest):
     dependencies: list[dict[str, str]] | None = Field(default=None, max_length=100)
     force: bool = Field(
         default=False,
-        description="Conscious dependency override only when the claim is genuinely necessary.",
+        description="Conscious dependency override for claim or terminal completion when genuinely necessary.",
     )
     force_reason: str | None = Field(
         default=None,
@@ -315,6 +353,27 @@ def build_actions_router(service, auth_mode="none"):
     )
     async def agent_finish(body: AgentRequest):
         return await observed(service, "rest", "agent_finish", service.agent_finish(body.agent_id))
+
+    @router.post(
+        "/context",
+        operation_id="manageInstanceContext",
+        response_model=ContextResponse,
+        response_model_exclude_none=True,
+    )
+    async def context(body: ContextRequest):
+        return await observed(
+            service,
+            "rest",
+            "context",
+            service.context(
+                body.action,
+                context_id=body.id,
+                summary=body.summary,
+                content=body.content,
+                primary=body.primary,
+                show_details=body.show_details,
+            ),
+        )
 
     @router.post(
         "/tasks",

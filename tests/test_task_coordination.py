@@ -320,6 +320,14 @@ async def test_review_lane_is_ordinary_task_and_requires_result_to_finish(tmp_pa
         )
         assert missing["ok"] is False
         assert "result" in missing["error"]
+        claimed = await service.task(
+            owner,
+            action="claim",
+            namespace="project",
+            task_id="CANDIDATE-1",
+            claim_intent="review candidate to completion",
+        )
+        assert claimed["ok"] is True
 
         result = {
             "verdict": "accepted",
@@ -455,6 +463,14 @@ async def test_task_events_preserve_checkpoint_and_result_history(tmp_path):
             lane="review",
             candidate_ref="sha1",
         )
+        claimed = await service.task(
+            owner,
+            action="claim",
+            namespace="project",
+            task_id="HISTORY-1",
+            claim_intent="preserve owner-authored review history",
+        )
+        assert claimed["ok"] is True
         await service.task(
             owner,
             action="checkpoint",

@@ -75,7 +75,7 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(commands)").fetchall()}
         assert {"started_at", "finished_at"} <= columns
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
         status, error, started_at, finished_at = db.execute(
             "SELECT status,error,started_at,finished_at FROM commands WHERE hash='deadbeef'"
         ).fetchone()
@@ -324,4 +324,38 @@ async def test_initialize_migrates_coordination_schema_v2_to_v3(tmp_path):
     } <= tables
     assert session == ("[]", 1, "forced")
     assert event_step == 1
-    assert version == 10
+    assert version == 11
+
+
+@pytest.mark.asyncio
+async def test_context_service_enforces_shared_action_contract(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    try:
+        created = await service.context(
+            "create", summary="Git workflow", content="Use the local wrapper.", primary=True
+        )
+        context_id = created["entry"]["id"]
+
+        compact = await service.context("list")
+        assert compact["primary"] == [{"id": context_id, "summary": "Git workflow"}]
+        detailed = await service.context("list", show_details=True)
+        assert set(detailed["primary"][0]) == {"id", "summary", "content"}
+
+        invalid = [
+            await service.context("list", summary="ignored"),
+            await service.context(
+                "create",
+                context_id=999,
+                summary="Extra id",
+                content="content",
+                primary=False,
+            ),
+            await service.context("create", summary="missing", content="content", primary=None),
+            await service.context("update", context_id=context_id),
+            await service.context("delete", context_id=context_id, summary="ignored"),
+            await service.context("delete", context_id=context_id, show_details=True),
+        ]
+        assert all(item["ok"] is False for item in invalid)
+        assert await service.context("list") == compact
+    finally:
+        await terminal.stop()

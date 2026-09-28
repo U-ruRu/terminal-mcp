@@ -26,6 +26,14 @@ class FakeService:
                 "details": details or ["Inspect schema", "Patch schema"],
                 "current_step": 1,
             },
+            "primary_context": [
+                {
+                    "id": 1,
+                    "summary": "Git workflow",
+                    "content": "Use the local Git wrapper.",
+                    "primary": True,
+                }
+            ],
             "active": [],
             "overlaps": None,
             "additional_active_agents": 0,
@@ -96,6 +104,37 @@ class FakeService:
             "additional_active_agents": 0,
             "pending_messages": [],
         }
+
+    async def context(
+        self,
+        action,
+        *,
+        context_id=None,
+        summary=None,
+        content=None,
+        primary=None,
+        show_details=False,
+    ):
+        if action == "list":
+            first = {"id": 1, "summary": "Git workflow"}
+            second = {"id": 2, "summary": "Docs"}
+            if show_details:
+                first["content"] = "Use the local Git wrapper."
+                second["content"] = "Read local docs."
+            return {"ok": True, "primary": [first], "additional": [second]}
+        if action in {"create", "update"}:
+            return {
+                "ok": True,
+                "entry": {
+                    "id": context_id or 3,
+                    "summary": summary or "Git workflow",
+                    "content": content or "Use the local Git wrapper.",
+                    "primary": primary if primary is not None else True,
+                },
+            }
+        if action == "delete":
+            return {"ok": True, "deleted_id": context_id}
+        return {"ok": False, "error": "unsupported"}
 
     async def agent_finish(self, agent_id):
         return {
@@ -200,6 +239,7 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
         "message",
         "agents",
         "agent_finish",
+        "context",
         "tasks",
         "task",
         "run",
@@ -237,6 +277,11 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert message["alert"]["default"] is False
     assert message["namespace"]["anyOf"][0]["maxLength"] == 120
     assert message["task_id"]["anyOf"][0]["maxLength"] == 120
+    context = tools["context"].parameters["properties"]
+    assert tools["context"].parameters["required"] == ["action"]
+    assert set(context["action"]["enum"]) == {"list", "create", "update", "delete"}
+    assert context["summary"]["anyOf"][0]["maxLength"] == 100
+    assert context["id"]["anyOf"][0]["minimum"] == 1
     tasks = tools["tasks"].parameters["properties"]
     assert tasks["lane"]["anyOf"][0]["enum"] == [
         "implementation",
@@ -292,6 +337,7 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     assert "task_scope" in tools["run"].parameters["required"]
     assert "required on every command" in tools["run"].description
     assert "concurrent participation" in tools["task"].description
+    assert "unclaimed task must be claimed first" in tools["task"].description
     assert "durable handoff history" in tools["task"].description
     assert "explicit isolation_hint" in tools["task"].description
     assert "ACK REQUIRED" in tools["message"].description
@@ -299,6 +345,9 @@ def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
     task_card = tools["tasks"].output_schema["$defs"]["TaskCard"]["properties"]
     assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
     assert "isolation_hint" in task_card
+    assert "blocking_dependencies" in task_card
+    assert "open dependencies is blocked" in task_card["operational_status"]["description"]
+    assert "ordinary claimability" in task_card["blocking_dependencies"]["description"]
     for field in (
         "archived_at",
         "archive_note",
@@ -356,6 +405,9 @@ async def test_mcp_start_run_and_recovery_structured_results():
     )
     assert isinstance(started, CallToolResult)
     assert started.structuredContent["self"]["agent_id"] == "Kilo-7K2M"
+    assert (
+        started.structuredContent["primary_context"][0]["content"] == "Use the local Git wrapper."
+    )
 
     task_update = await tools["coordinate"].run(
         {"agent_id": "Kilo-7K2M", "step": 2, "intent": "Inspect the next test"},
@@ -383,6 +435,29 @@ async def test_mcp_start_run_and_recovery_structured_results():
     assert task_sent.structuredContent["namespace"] == "project"
     assert task_sent.structuredContent["task_id"] == "REV-1"
     assert task_sent.structuredContent["delivered_to"] == []
+
+    compact_context = await tools["context"].run({"action": "list"}, convert_result=True)
+    assert compact_context.structuredContent["primary"] == [
+        {"id": 1, "summary": "Git workflow"}
+    ]
+    assert set(compact_context.structuredContent["primary"][0]) == {"id", "summary"}
+    detailed_context = await tools["context"].run(
+        {"action": "list", "show_details": True}, convert_result=True
+    )
+    assert (
+        detailed_context.structuredContent["primary"][0]["content"] == "Use the local Git wrapper."
+    )
+    created_context = await tools["context"].run(
+        {
+            "action": "create",
+            "summary": "Services",
+            "content": "Use systemctl.",
+            "primary": False,
+        },
+        convert_result=True,
+    )
+    assert created_context.structuredContent["entry"]["id"] == 3
+    assert created_context.structuredContent["entry"]["primary"] is False
 
     run = await tools["run"].run(
         {"agent_id": "Kilo-7K2M", "cmd": "printf ok", "task_scope": "none"}, convert_result=True

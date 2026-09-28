@@ -7,6 +7,7 @@ from terminal_mcp.core.agents import AgentCoordinator
 from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.agents import AgentStore
+from terminal_mcp.storage.context import ContextStore
 from terminal_mcp.storage.tasks import TaskStore
 from terminal_mcp.version import __version__
 
@@ -20,6 +21,42 @@ RECOVERY_TIMEOUT_SECONDS = 20
 HEALTH_TIMEOUT_SECONDS = 3
 RECOVERY_OUTPUT_LINES = 500
 ANONYMOUS_AGENT_ID = "anonymous"
+
+
+def validate_context_request(
+    action,
+    *,
+    context_id=None,
+    summary=None,
+    content=None,
+    primary=None,
+    show_details=False,
+):
+    if action == "list":
+        if any(value is not None for value in (context_id, summary, content, primary)):
+            return "context.list: list accepts only show_details"
+        return None
+    if show_details:
+        return f"context.{action}: show_details is only valid for list"
+    if action == "create":
+        if context_id is not None:
+            return "context.create: create does not accept id"
+        if summary is None or content is None or primary is None:
+            return "context.create: create requires summary, content and primary"
+        return None
+    if action == "update":
+        if context_id is None:
+            return "context.update: update requires id"
+        if all(value is None for value in (summary, content, primary)):
+            return "context.update: update requires at least one of summary, content or primary"
+        return None
+    if action == "delete":
+        if context_id is None:
+            return "context.delete: delete requires id"
+        if any(value is not None for value in (summary, content, primary)):
+            return "context.delete: delete accepts only id"
+        return None
+    return "context.action: action must be one of list, create, update, delete"
 
 
 def _budget(seconds):
@@ -80,6 +117,7 @@ class TerminalService:
         self.metrics = metrics
         self.agent_policy = agent_policy or AgentPolicy()
         self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
+        self.context_store = ContextStore(repo.path) if hasattr(repo, "path") else None
         self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
         self.agent_coordinator = (
             AgentCoordinator(
@@ -650,6 +688,10 @@ class TerminalService:
         scope_agent_id = self_payload.get("agent_id") or agent_id
         if scope_agent_id:
             _, result["task_scope_options"] = await self._task_scope_state(scope_agent_id)
+        if result.get("ok") and self.context_store:
+            result["primary_context"] = [
+                entry for entry in await self.context_store.list() if entry["primary"]
+            ]
         return result
 
     async def coordinate(self, agent_id, step=None, intent=None, show_details=False):
@@ -719,6 +761,65 @@ class TerminalService:
         if agent_id:
             _, result["task_scope_options"] = await self._task_scope_state(agent_id)
         return result
+
+    async def context(
+        self,
+        action,
+        *,
+        context_id=None,
+        summary=None,
+        content=None,
+        primary=None,
+        show_details=False,
+    ):
+        if not self.context_store:
+            return {"ok": False, "error": "instance context unavailable"}
+        validation_error = validate_context_request(
+            action,
+            context_id=context_id,
+            summary=summary,
+            content=content,
+            primary=primary,
+            show_details=show_details,
+        )
+        if validation_error:
+            return {"ok": False, "error": validation_error}
+        try:
+            if action == "list":
+                entries = await self.context_store.list()
+
+                def compact(entry):
+                    item = {"id": entry["id"], "summary": entry["summary"]}
+                    if show_details:
+                        item["content"] = entry["content"]
+                    return item
+
+                return {
+                    "ok": True,
+                    "primary": [compact(item) for item in entries if item["primary"]],
+                    "additional": [compact(item) for item in entries if not item["primary"]],
+                }
+            if action == "create":
+                entry = await self.context_store.create(summary, content, primary)
+                return {"ok": True, "entry": entry}
+            if action == "update":
+                fields = {}
+                if summary is not None:
+                    fields["summary"] = summary
+                if content is not None:
+                    fields["content"] = content
+                if primary is not None:
+                    fields["primary"] = primary
+                entry = await self.context_store.update(context_id, **fields)
+                if entry is None:
+                    return {"ok": False, "error": f"context id {context_id} not found"}
+                return {"ok": True, "entry": entry}
+            deleted = await self.context_store.delete(context_id)
+            if not deleted:
+                return {"ok": False, "error": f"context id {context_id} not found"}
+            return {"ok": True, "deleted_id": int(context_id)}
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": f"context.{action}: {exc}"}
 
     async def tasks(
         self,

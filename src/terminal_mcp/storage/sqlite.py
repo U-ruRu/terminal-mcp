@@ -151,6 +151,12 @@ class SqliteRepository:
                     replied_at TEXT, reply_message_hash TEXT,
                     PRIMARY KEY(message_hash, recipient_agent_id)
                 );
+                CREATE TABLE IF NOT EXISTS instance_context(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    summary TEXT NOT NULL CHECK(length(summary) <= 100),
+                    content TEXT NOT NULL,
+                    is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1))
+                );
                 CREATE TABLE IF NOT EXISTS work_items(
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
                     lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
@@ -233,7 +239,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=10")
+            await db.execute("PRAGMA user_version=11")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")

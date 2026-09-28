@@ -192,6 +192,7 @@ class TaskStore:
         dependencies=None,
         event_agent_id: str | None = None,
         event_payload: Any = None,
+        dependency_override: Any = None,
         now: str | None = None,
     ):
         if not namespace or not task_id or not title:
@@ -252,6 +253,19 @@ class TaskStore:
                         now,
                     ),
                 )
+                if dependency_override:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "dependency_override",
+                            event_agent_id,
+                            self._json(dependency_override),
+                            now,
+                        ),
+                    )
                 await db.commit()
             except Exception:
                 await db.rollback()

@@ -1,7 +1,7 @@
 ---
 name: terminal-operations
 description: Управляет и диагностирует Linux-сервер через подключённый терминальный инструмент. Используй для проверки здоровья и ресурсов, чтения журналов и документации, работы с репозиториями, изменения конфигурации, деплоя, перезапуска сервисов, отмены зависших команд и аварийного доступа вне numbered execution queues.
-compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, agent_finish, tasks, task, health, run, read, cancel и recovery.
+compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, agent_finish, context, tasks, task, health, run, read, cancel и recovery.
 metadata:
   author: U-ruRu
   version: "1.5.1"
@@ -58,6 +58,8 @@ metadata:
 
 Новая рабочая сессия начинается с `agent_start` с коротким `intent` и обязательным `details`-планом. Полный `agent_id` является credential текущей регистрации; public name используется для наблюдения и адресации сообщений.
 
+Сразу прочитай `primary_context` из успешного `agent_start`: это обязательный instance-local контекст именно этого Terminal MCP. Дополнительные локальные записи просматривай через `context(action="list")`; полный content запрашивай `show_details=true`.
+
 1. Перед этапом вызывай `coordinate(agent_id, step, intent)`. Intent lease по умолчанию 180 секунд.
 2. Просматривай session timing и `session_warning` в каждом agent-bound ответе. Абсолютный lifetime по умолчанию 25 минут и активностью не продлевается; warning начинается на 20-й минуте.
 3. На warning дойди до безопасной точки и подготовь промежуточный отчёт. По умолчанию на 23-й минуте появляется blocking session `ALERT`, который после reply может повториться через 60 секунд, если сессия продолжается.
@@ -70,7 +72,7 @@ metadata:
 10. `agents()` используй как anonymous observer. По умолчанию он возвращает compact fleet state; `target`, `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` раскрывают нужный контекст по запросу.
 11. Managed work веди через `tasks()` и `task(...)`: namespace обязателен, fixed lanes едины для всех сценариев, review — обычная `lane=review` task. При create всегда указывай `isolation_hint` до 160 символов; используй `none`, если изоляция не требуется, и следуй тексту hint как инструкции создателя. Terminal MCP сам hint не интерпретирует. Первичный claim делай с непустым `claim_intent`. Самый ранний live claim — owner, остальные cooperative claims — participants; workflow-changing mutations выполняет owner.
 12. `done` используй только когда цель task и acceptance criteria реально достигнуты, всегда с meaningful `result`. При найденном препятствии переводи claimed task в `blocked` с `blocker_reason`. Освобождая active claim, оставляй `release_reason`; подробные findings сохраняй через `action=comment` + `comment_text`. Description описывает текущую работу, comments/history — её хронологию.
-13. Open или missing dependency блокирует claim. Self-dependency и dependency cycle недопустимы. Emergency `force=true` + содержательный `force_reason` используй как сознательное исключение только dependency gate; force не обходит ownership. Archived done dependency остаётся satisfied, archived unfinished — blocking.
+13. Open или missing dependency блокирует claim и переход в `done`. Self-dependency и dependency cycle недопустимы. Emergency `force=true` + содержательный `force_reason` используй как сознательное исключение только dependency gate для claim или terminal completion; force не обходит ownership. Archived done dependency остаётся satisfied, archived unfinished — blocking.
 14. Relations создавай через `action=relate` с `relation_kind`, `related_namespace`, `related_task_id`; review использует `relation_kind=review_of`. Review success — `done(result=...)`, blocking findings — comments + `blocked(blocker_reason=...)`. Linked feedback остаётся в history reviewed task.
 15. Archive — lifecycle/visibility, а не workflow state. Архивируй с непустым `archive_note`; archive сохраняет state/history и освобождает claims. `tasks()` recommendation/pressure учитывает только claimable active READY work и показывает raw claimable/missing-dependency/oldest-ready observability; tags и `tag_counts` используй для discovery/filtering. Для ad-hoc server work managed task не требуется.
 16. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. После normal finish прежний exact `agent_id` ещё 300 секунд пригоден только для ACK/reply уже delivered message hash; это не продолжение Agent Session. Уже запущенные terminal commands продолжают жить в своих queues.

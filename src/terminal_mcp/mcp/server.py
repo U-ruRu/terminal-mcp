@@ -11,6 +11,8 @@ from terminal_mcp.api_models import (
     AgentFinishResponse,
     AgentOverviewResponse,
     CancelResponse,
+    ContextAction,
+    ContextResponse,
     CoordinateResponse,
     HealthResponse,
     MessageResponse,
@@ -140,7 +142,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports direct target, broadcast by omitting target or target=broadcast, or managed-task target via namespace+task_id, plus require_reply and alert. alert=true canonically implies require_reply=true. SEEN only means surfaced; ACK REQUIRED clears only after explicit message(agent_id,message_hash). message_hash alone acknowledges a received message or inspects receipts for the sender, including inactive recipients; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
+        description="Send, acknowledge, inspect, or reply to coordination messages. Sending supports direct target, ordinary-message broadcast by omitting target, explicit broadcast via target=broadcast, or managed-task target via namespace+task_id. alert=true requires an explicit agent, task, or target=broadcast destination and canonically implies require_reply=true. SEEN only means surfaced; ACK REQUIRED clears only after explicit message(agent_id,message_hash). message_hash alone acknowledges a received message or inspects receipts for the sender, including inactive recipients; message_hash + text replies to the original sender. ALERT blocks normal work until replied.",
     )
     async def message(
         agent_id: str,
@@ -213,6 +215,48 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
 
     @mcp.tool(
         structured_output=True,
+        annotations=_SAFE_OPERATION,
+        description=(
+            "Manage instance-local operational context. Actions: list, create, update, delete. "
+            "list returns primary/additional summaries by default; show_details=true includes content. "
+            "create requires summary, content and primary; update/delete use the stable integer id."
+        ),
+    )
+    async def context(
+        action: ContextAction,
+        id: Annotated[int | None, Field(ge=1)] = None,
+        summary: Annotated[str | None, Field(min_length=1, max_length=100)] = None,
+        content: Annotated[str | None, Field(min_length=1)] = None,
+        primary: bool | None = None,
+        show_details: bool = False,
+    ) -> Annotated[CallToolResult, ContextResponse]:
+        data = ContextResponse.model_validate(
+            await observed(
+                service,
+                "mcp",
+                "context",
+                service.context(
+                    action,
+                    context_id=id,
+                    summary=summary,
+                    content=content,
+                    primary=primary,
+                    show_details=show_details,
+                ),
+            )
+        )
+        if data.ok and action == "list":
+            text = f"primary={len(data.primary or [])} additional={len(data.additional or [])}"
+        elif data.ok and data.entry:
+            text = f"context {data.entry.id}: {data.entry.summary}"
+        elif data.ok and data.deleted_id is not None:
+            text = f"context {data.deleted_id} deleted"
+        else:
+            text = f"Context failed: {data.error}"
+        return _structured_result(data, text)
+
+    @mcp.tool(
+        structured_output=True,
         annotations=_SAFE_READ_ONLY,
         description=(
             "Inspect managed tasks with optional namespace/lane/state/operational_status/tags filters. Responses "
@@ -273,7 +317,8 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             "Mutate one unified managed task. create requires an explicit isolation_hint (use 'none' when no isolation is required); the hint is stored/exposed without interpretation. claim requires claim_intent. cooperative controls "
             "concurrent participation, not task visibility. The first live claimant is owner; later "
             "cooperative claimants are participants that may comment and edit safe metadata, while "
-            "workflow changes require owner. blocked requires blocker_reason for a claimed task; "
+            "workflow changes require a current live owner; an unclaimed task must be claimed first. "
+            "blocked requires blocker_reason for a claimed task; "
             "release requires release_reason as durable handoff history; done requires result. "
             "comment is append-only history. "
             "relate/unrelate manage generic task relations; review work uses lane=review plus "

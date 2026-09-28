@@ -11,6 +11,8 @@ CommandStatus = Literal[
     "not_found",
 ]
 
+ContextAction = Literal["list", "create", "update", "delete"]
+
 TaskAction = Literal[
     "create",
     "claim",
@@ -208,12 +210,38 @@ class ManagedTaskRef(BaseModel):
     lane: TaskLane
     priority: TaskPriority
     state: TaskState
-    operational_status: TaskOperationalStatus
+    operational_status: TaskOperationalStatus = Field(
+        description=(
+            "Derived runtime status; unclaimed ready work with open dependencies is blocked."
+        )
+    )
     isolation_hint: str
     claimed_at: str
     claim_age_seconds: int
     claim_intent: str
     role: Literal["owner", "participant"]
+
+
+class ContextListEntry(BaseModel):
+    id: int
+    summary: str
+    content: str | None = None
+
+
+class ContextEntry(BaseModel):
+    id: int
+    summary: str
+    content: str
+    primary: bool
+
+
+class ContextResponse(BaseModel):
+    ok: bool
+    primary: list[ContextListEntry] | None = None
+    additional: list[ContextListEntry] | None = None
+    entry: ContextEntry | None = None
+    deleted_id: int | None = None
+    error: str | None = None
 
 
 class TaskClaimView(BaseModel):
@@ -231,7 +259,11 @@ class TaskCard(BaseModel):
     lane: TaskLane
     priority: TaskPriority
     state: TaskState
-    operational_status: TaskOperationalStatus
+    operational_status: TaskOperationalStatus = Field(
+        description=(
+            "Derived runtime status; unclaimed ready work with open dependencies is blocked."
+        )
+    )
     isolation_hint: str
     next_action: str = ""
     checkpoint: str | dict[str, object] = Field(default_factory=dict)
@@ -248,6 +280,12 @@ class TaskCard(BaseModel):
     claims: list[TaskClaimView] = Field(default_factory=list)
     owner: TaskClaimView | None = None
     participants: list[TaskClaimView] = Field(default_factory=list)
+    blocking_dependencies: list[dict[str, object]] = Field(
+        default_factory=list,
+        description=(
+            "Unsatisfied or missing dependencies that currently block ordinary claimability."
+        ),
+    )
     review_requirements: list[ReviewDimension] = Field(default_factory=list)
     description: str | None = None
     resource_context: dict[str, object] | None = None
@@ -382,6 +420,7 @@ class CommandDetail(BaseModel):
 class AgentOverviewResponse(SessionStatus):
     ok: bool
     self: AgentSelf | None = None
+    primary_context: list[ContextEntry] | None = None
     active: list[ActiveAgent] = Field(default_factory=list)
     sessions: list[AgentSessionRecord] = Field(default_factory=list)
     intent_journal: list[IntentJournalEntry] | None = None

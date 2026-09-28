@@ -2,7 +2,7 @@
 
 ## Интерфейс
 
-Terminal MCP 0.10.0 предоставляет двенадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Terminal MCP 0.10.0 предоставляет тринадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `context`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
 
 ## Agent Session
 
@@ -15,6 +15,10 @@ Agent-bound operational success по умолчанию возвращает т�
 ## `agent_start(...)`
 
 Новая регистрация требует `task_summary`, `intent` и `details`. Она единственный раз возвращает полный credential-like `agent_id`. `work_scope` остаётся optional cooperative metadata. Вызов с существующим полным `agent_id` обновляет план текущей живой сессии.
+
+## `context(action, id?, summary?, content?, primary?, show_details=false)`
+
+Instance-local durable Context конкретного deployment. Запись состоит только из stable integer `id`, `summary` (до 100 символов), `content`, `primary`. Actions: `list`, `create`, `update`, `delete`; delete физический. `list` без details возвращает две группы `primary` и `additional` только с `id + summary`; `show_details=true` добавляет полный content. `create` требует summary/content/primary; `update` — id и хотя бы одно изменяемое поле; `delete` — id. Каждый успешный `agent_start` включает все текущие primary entries полностью в `primary_context`; additional туда не попадают. Health Context не возвращает.
 
 ## `coordinate(agent_id, step?, intent?, show_details=false)`
 
@@ -63,15 +67,15 @@ Sender inspection через `message(sender_id, message_hash)` возвраща
 
 ## `tasks(namespace?, task_id?, lane?, state?, tags?, show_details=false, show_done=false, show_archived=false, limit=50, cursor?)`
 
-Read-only backlog observer. `tags` uses AND semantics; `tag_counts` exposes vocabulary. Default response returns active backlog, `claimable_count`, weighted pressure and recommended task; priority sorts first, equal priority uses oldest `ready_since`. Summary includes `oldest_claimable_ready_since` / age and `missing_dependency_count`. Detailed lookup exposes dependencies, relations, claims, comments/history, archive lifecycle metadata and legacy reviews. `show_archived=true` selects archived lifecycle records; archive is not a workflow state.
+Read-only backlog observer. `tags` uses AND semantics; `tag_counts` exposes vocabulary. Default response returns active backlog, `claimable_count`, weighted pressure and recommended task; priority sorts first, equal priority uses oldest `ready_since`. Persisted `state=ready` with open/missing dependencies is projected as `operational_status=blocked`, includes `blocking_dependencies`, and is excluded from ordinary claimability; a live forced claim remains `in_progress`. Summary includes `oldest_claimable_ready_since` / age and `missing_dependency_count`. Detailed lookup exposes dependencies, relations, claims, comments/history, archive lifecycle metadata and legacy reviews. `show_archived=true` selects archived lifecycle records; archive is not a workflow state.
 
 ## `task(agent_id, action, namespace, ...)`
 
 Workflow states are `ready|blocked|deferred|done`. `done` means goal reached and requires meaningful `result`. Claimed blocked requires `blocker_reason`; release live claim requires `release_reason`, который сохраняется как durable handoff history entry. `action=comment` with `comment_text` appends durable history distinct from mutable description.
 
-Create requires explicit `isolation_hint` (max 160); use `none` when no isolation is required. The value is persisted and projected into task cards and live claimant task context without Git/worktree inference, recommendations or blocking behavior. It is creator-supplied at create time. Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. `cooperative` управляет concurrent participation, а не visibility. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
+Create requires explicit `isolation_hint` (max 160); use `none` when no isolation is required. The value is persisted and projected into task cards and live claimant task context without Git/worktree inference, recommendations or blocking behavior. It is creator-supplied at create time. Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. `cooperative` управляет concurrent participation, а не visibility. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations require a current live owner; unclaimed task must be claimed first. They include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
 
-Dependencies are a validated directed graph: self edge and cycle reject before persistence. Missing target is allowed, represented as `missing` and remains blocking. Completion satisfies prerequisite independently of archive visibility: archived done satisfied; archived unfinished blocking. `force=true` + `force_reason` is durable conscious override only for dependency claim gate.
+Dependencies are a validated directed graph: self edge and cycle reject before persistence. Missing target is allowed, represented as `missing` and remains blocking. Completion satisfies prerequisite independently of archive visibility: archived done satisfied; archived unfinished blocking. `force=true` + `force_reason` is a durable conscious override only for the dependency gate on claim or terminal completion.
 
 Generic relation mutations are `action=relate` / `unrelate` with `relation_kind`, `related_namespace`, `related_task_id`. Relation view entries expose direction/kind/namespace/task_id/created_at. Review uses relation kind `review_of`; success is ordinary done(result), blocking findings are comment + blocked. Reviewed task receives linked `review_feedback` event with review reference, `outcome=done|blocked`, candidate_ref and result or findings/blocker_reason.
 

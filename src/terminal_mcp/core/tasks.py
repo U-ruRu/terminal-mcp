@@ -106,6 +106,113 @@ class TaskCoordinator:
     async def _open_dependencies(self, namespace, task_id):
         return [dep for dep in await self._dependencies(namespace, task_id) if not dep["satisfied"]]
 
+    async def _dependency_views_from_input(self, namespace, task_id, dependencies):
+        result = []
+        for item in dependencies or []:
+            dep_namespace = item.get("namespace") or namespace
+            dep_task_id = item["task_id"]
+            if dep_namespace == namespace and dep_task_id == task_id:
+                continue
+            dep = await self.store.get_task(dep_namespace, dep_task_id)
+            result.append(
+                {
+                    "namespace": dep_namespace,
+                    "task_id": dep_task_id,
+                    "state": dep["state"] if dep else "missing",
+                    "archived": bool(dep and dep.get("archived_at")),
+                    "satisfied": bool(dep and dep["state"] == "done"),
+                }
+            )
+        return result
+
+    async def _dependency_gate(
+        self,
+        namespace,
+        task_id,
+        *,
+        operation,
+        force=False,
+        force_reason=None,
+        warnings=None,
+        blocking_dependencies=None,
+        task_exists=True,
+    ):
+        warnings = list(warnings or [])
+        open_deps = (
+            list(blocking_dependencies)
+            if blocking_dependencies is not None
+            else await self._open_dependencies(namespace, task_id)
+        )
+        if not open_deps:
+            return warnings, None, None
+
+        dependency_warning = _warning(
+            "dependency_open",
+            "Task has unfinished dependencies.",
+            task_id=task_id,
+            dependencies=open_deps,
+        )
+        blocked_warnings = [*warnings, dependency_warning]
+        if not force:
+            error = (
+                f"task.{operation}: dependency_open; use force=true with force_reason "
+                "if genuinely necessary"
+            )
+            result = (
+                await self._result(
+                    namespace,
+                    task_id,
+                    blocked_warnings,
+                    ok=False,
+                    error=error,
+                )
+                if task_exists
+                else {"ok": False, "warnings": blocked_warnings, "error": error}
+            )
+            result["code"] = "dependency_open"
+            result["blocking_dependencies"] = open_deps
+            return warnings, None, result
+
+        normalized_reason = (force_reason or "").strip()
+        if not normalized_reason:
+            error = f"task.{operation}.force_reason: required when forcing open dependencies"
+            result = (
+                await self._result(
+                    namespace,
+                    task_id,
+                    blocked_warnings,
+                    ok=False,
+                    error=error,
+                )
+                if task_exists
+                else {"ok": False, "warnings": blocked_warnings, "error": error}
+            )
+            result["code"] = "dependency_open"
+            result["blocking_dependencies"] = open_deps
+            return warnings, None, result
+
+        warnings.extend(
+            [
+                dependency_warning,
+                _warning(
+                    "dependency_forced",
+                    f"Open dependencies were explicitly overridden for this {operation}.",
+                    task_id=task_id,
+                    dependencies=open_deps,
+                    force_reason=normalized_reason,
+                ),
+            ]
+        )
+        return (
+            warnings,
+            {
+                "blocking_dependencies": open_deps,
+                "force_reason": normalized_reason,
+                "operation": operation,
+            },
+            None,
+        )
+
     @staticmethod
     def _normalize_tags(tags):
         if tags is None:
@@ -172,10 +279,12 @@ class TaskCoordinator:
         return result
 
     @staticmethod
-    def _operational_status(task, claims):
+    def _operational_status(task, claims, blocking_dependencies=None):
         if task["state"] != "ready":
             return task["state"]
-        return "in_progress" if claims else "ready"
+        if claims:
+            return "in_progress"
+        return "blocked" if blocking_dependencies else "ready"
 
     def _claim_view(self, item, role):
         age = max(0, int((utc_now() - parse_utc(item["claimed_at"])).total_seconds()))
@@ -195,13 +304,18 @@ class TaskCoordinator:
             self._claim_view(item, "owner" if index == 0 else "participant")
             for index, item in enumerate(claims)
         ]
+        dependencies = await self._dependencies(namespace, task_id)
+        blocking_dependencies = [dep for dep in dependencies if not dep["satisfied"]]
         result["claims"] = views
         result["owner"] = views[0] if views else None
         result["participants"] = views[1:]
         result["active"] = bool(claims)
-        result["operational_status"] = self._operational_status(result, claims)
+        result["blocking_dependencies"] = blocking_dependencies
+        result["operational_status"] = self._operational_status(
+            result, claims, blocking_dependencies
+        )
         if details:
-            result["dependencies"] = await self._dependencies(namespace, task_id)
+            result["dependencies"] = dependencies
             result["relations"] = await self.store.relations(namespace, task_id)
             reviews = await self.store.reviews(namespace, task_id)
             for review in reviews:
@@ -358,9 +472,8 @@ class TaskCoordinator:
         oldest_claimable_ready_since = None
         missing_dependency_count = 0
         for item in compact:
-            deps = await self._dependencies(item["namespace"], item["task_id"])
-            missing_dependency_count += sum(dep["state"] == "missing" for dep in deps)
-            blocking = [dep for dep in deps if not dep["satisfied"]]
+            blocking = item["blocking_dependencies"]
+            missing_dependency_count += sum(dep["state"] == "missing" for dep in blocking)
             eligible, _, _ = await self._claimability(
                 item, claims=item["claims"], dependencies=blocking
             )
@@ -474,6 +587,27 @@ class TaskCoordinator:
         )
         if isolation_error:
             return {"ok": False, "error": isolation_error, "warnings": []}
+
+        warnings = []
+        dependency_override = None
+        if state == "done":
+            proposed_dependencies = await self._dependency_views_from_input(
+                namespace, task_id, kwargs.get("dependencies")
+            )
+            blocking_dependencies = [dep for dep in proposed_dependencies if not dep["satisfied"]]
+            warnings, dependency_override, dependency_failure = await self._dependency_gate(
+                namespace,
+                task_id,
+                operation="done",
+                force=bool(kwargs.get("force")),
+                force_reason=kwargs.get("force_reason"),
+                warnings=warnings,
+                blocking_dependencies=blocking_dependencies,
+                task_exists=False,
+            )
+            if dependency_failure:
+                return dependency_failure
+
         now = utc_text()
         try:
             await self.store.create_task_mutation(
@@ -501,12 +635,13 @@ class TaskCoordinator:
                     "state": state,
                     "isolation_hint": isolation_hint,
                 },
+                dependency_override=dependency_override,
                 now=now,
             )
         except Exception as exc:
             return {"ok": False, "error": f"task.create: {exc}", "warnings": []}
         self._inc("terminal_mcp_tasks_created_total")
-        return await self._result(namespace, task_id, [])
+        return await self._result(namespace, task_id, warnings)
 
     async def _action_claim(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)
@@ -559,58 +694,16 @@ class TaskCoordinator:
                     task_id=task_id,
                 )
             )
-        open_deps = await self._open_dependencies(namespace, task_id)
-        dependency_override = None
-        if open_deps:
-            dependency_warning = _warning(
-                "dependency_open",
-                "Task has unfinished dependencies.",
-                task_id=task_id,
-                dependencies=open_deps,
-            )
-            force = bool(kwargs.get("force"))
-            force_reason = (kwargs.get("force_reason") or "").strip()
-            if not force:
-                result = await self._result(
-                    namespace,
-                    task_id,
-                    [*warnings, dependency_warning],
-                    ok=False,
-                    error=(
-                        "task.claim: dependency_open; use force=true with force_reason "
-                        "if genuinely necessary"
-                    ),
-                )
-                result["code"] = "dependency_open"
-                result["blocking_dependencies"] = open_deps
-                return result
-            if not force_reason:
-                result = await self._result(
-                    namespace,
-                    task_id,
-                    [*warnings, dependency_warning],
-                    ok=False,
-                    error="task.claim.force_reason: required when forcing open dependencies",
-                )
-                result["code"] = "dependency_open"
-                result["blocking_dependencies"] = open_deps
-                return result
-            warnings.extend(
-                [
-                    dependency_warning,
-                    _warning(
-                        "dependency_forced",
-                        "Open dependencies were explicitly overridden for this claim.",
-                        task_id=task_id,
-                        dependencies=open_deps,
-                        force_reason=force_reason,
-                    ),
-                ]
-            )
-            dependency_override = {
-                "blocking_dependencies": open_deps,
-                "force_reason": force_reason,
-            }
+        warnings, dependency_override, dependency_failure = await self._dependency_gate(
+            namespace,
+            task_id,
+            operation="claim",
+            force=bool(kwargs.get("force")),
+            force_reason=kwargs.get("force_reason"),
+            warnings=warnings,
+        )
+        if dependency_failure:
+            return dependency_failure
         now = utc_text()
         try:
             await self.store.claim(
@@ -856,8 +949,10 @@ class TaskCoordinator:
         claims = await self._live_claims(namespace, task_id)
         owner = claims[0]["agent_id"] if claims else None
         unsafe_fields = set(fields) - SAFE_PARTICIPANT_FIELDS
+        if fields.get("state") == current.get("state"):
+            unsafe_fields.discard("state")
         workflow_change = bool(unsafe_fields or kwargs.get("dependencies") is not None)
-        if owner is not None and owner != agent_id and workflow_change:
+        if workflow_change and owner != agent_id:
             return {
                 "ok": False,
                 "code": "owner_required",
@@ -872,6 +967,20 @@ class TaskCoordinator:
                 ),
                 "warnings": [],
             }
+
+        dependency_override = None
+        if target_state == "done" and current["state"] != "done":
+            warnings, dependency_override, dependency_failure = await self._dependency_gate(
+                namespace,
+                task_id,
+                operation="done",
+                force=bool(kwargs.get("force")),
+                force_reason=kwargs.get("force_reason"),
+                warnings=warnings,
+            )
+            if dependency_failure:
+                return dependency_failure
+
         blocker_reason = None
         if target_state == "blocked" and current["state"] != "blocked" and claims:
             blocker_reason, blocker_error = self._clean_reason(
@@ -908,14 +1017,26 @@ class TaskCoordinator:
         if blocker_reason is not None:
             event_extra["blocker_reason"] = blocker_reason
         additional_events = []
+        if dependency_override is not None:
+            additional_events.append(
+                {
+                    "namespace": namespace,
+                    "task_id": task_id,
+                    "event_type": "dependency_override",
+                    "agent_id": agent_id,
+                    "payload": dependency_override,
+                }
+            )
         if target_state in {"done", "blocked"}:
-            additional_events = await self._review_feedback_events(
-                current,
-                agent_id=agent_id,
-                outcome=target_state,
-                result=kwargs.get("result"),
-                blocker_reason=blocker_reason,
-                now=utc_text(),
+            additional_events.extend(
+                await self._review_feedback_events(
+                    current,
+                    agent_id=agent_id,
+                    outcome=target_state,
+                    result=kwargs.get("result"),
+                    blocker_reason=blocker_reason,
+                    now=utc_text(),
+                )
             )
         return await self._update(
             agent_id,

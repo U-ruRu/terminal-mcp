@@ -601,6 +601,10 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
                 task_id=task_id,
                 title=task_id,
             )
+        claimed_a = await service.task(
+            agent, action="claim", namespace="wf", task_id="A", claim_intent="edit dependency graph"
+        )
+        assert claimed_a["ok"] is True
         a_depends_b = await service.task(
             agent,
             action="update",
@@ -609,6 +613,17 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
             dependencies=[{"namespace": "wf", "task_id": "B"}],
         )
         assert a_depends_b["ok"] is True
+        await service.task(
+            agent,
+            action="release",
+            namespace="wf",
+            task_id="A",
+            release_reason="dependency edge recorded",
+        )
+        claimed_b = await service.task(
+            agent, action="claim", namespace="wf", task_id="B", claim_intent="test cycle rejection"
+        )
+        assert claimed_b["ok"] is True
         cycle = await service.task(
             agent,
             action="update",
@@ -618,6 +633,13 @@ async def test_dependency_integrity_cycles_missing_and_claimability_observabilit
         )
         assert cycle["ok"] is False
         assert "cycle" in cycle["error"].lower()
+        await service.task(
+            agent,
+            action="release",
+            namespace="wf",
+            task_id="B",
+            release_reason="cycle rejection verified",
+        )
         assert (await detail(service, "wf", "B"))["dependencies"] == []
 
         missing = await service.task(
@@ -957,7 +979,7 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {
             "archived_at",
@@ -1002,5 +1024,272 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
         assert by_id["DONE-ARCH"]["state"] == "done"
         active = await service.tasks(namespace="wf")
         assert active["tasks"] == []
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+
+
+@pytest.mark.asyncio
+async def test_dependency_blockers_project_operational_status_and_claimability(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent = await register(service, "dependency status")
+
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="DEP",
+            title="open dependency",
+            priority="P3",
+        )
+        open_task = await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="OPEN",
+            title="blocked by open dependency",
+            priority="P0",
+            dependencies=[{"namespace": "status-deps", "task_id": "DEP"}],
+        )
+        assert open_task["task"]["state"] == "ready"
+        assert open_task["task"]["operational_status"] == "blocked"
+        assert open_task["task"]["blocking_dependencies"][0]["task_id"] == "DEP"
+
+        missing_task = await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="MISSING",
+            title="blocked by missing dependency",
+            priority="P0",
+            dependencies=[{"namespace": "status-deps", "task_id": "FUTURE"}],
+        )
+        assert missing_task["task"]["state"] == "ready"
+        assert missing_task["task"]["operational_status"] == "blocked"
+        assert missing_task["task"]["blocking_dependencies"][0]["state"] == "missing"
+
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="READY",
+            title="claimable candidate",
+            priority="P1",
+        )
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="DONE-DEP",
+            title="completed prerequisite",
+            state="done",
+            result={"summary": "complete"},
+        )
+        satisfied = await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="SAT",
+            title="satisfied dependency",
+            priority="P2",
+            dependencies=[{"namespace": "status-deps", "task_id": "DONE-DEP"}],
+        )
+        assert satisfied["task"]["operational_status"] == "ready"
+        assert satisfied["task"]["blocking_dependencies"] == []
+
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="status-deps",
+            task_id="FORCED",
+            title="forced active work",
+            priority="P0",
+            dependencies=[{"namespace": "status-deps", "task_id": "DEP"}],
+        )
+        forced = await service.task(
+            agent,
+            action="claim",
+            namespace="status-deps",
+            task_id="FORCED",
+            claim_intent="work before prerequisite closes",
+            force=True,
+            force_reason="Parallel preparation is explicitly required",
+        )
+        assert forced["ok"] is True
+        assert forced["task"]["operational_status"] == "in_progress"
+        assert forced["task"]["blocking_dependencies"][0]["task_id"] == "DEP"
+
+        listing = await service.tasks(namespace="status-deps")
+        cards = {item["task_id"]: item for item in listing["tasks"]}
+        assert cards["OPEN"]["operational_status"] == "blocked"
+        assert cards["MISSING"]["operational_status"] == "blocked"
+        assert cards["READY"]["operational_status"] == "ready"
+        assert cards["SAT"]["operational_status"] == "ready"
+        assert cards["FORCED"]["operational_status"] == "in_progress"
+        assert listing["summary"]["by_operational_status"] == {
+            "blocked": 2,
+            "ready": 3,
+            "in_progress": 1,
+        }
+        assert listing["summary"]["missing_dependency_count"] == 1
+        assert listing["summary"]["claimable_count"] == 3
+        assert listing["summary"]["pressure"] == {"general": 7}
+        assert listing["recommended"]["task_id"] == "READY"
+        assert listing["recommended"]["operational_status"] == "ready"
+
+        blocked = await service.tasks(namespace="status-deps", operational_status="blocked")
+        assert {item["task_id"] for item in blocked["tasks"]} == {"OPEN", "MISSING"}
+        assert blocked["summary"]["claimable_count"] == 0
+        assert blocked["summary"]["pressure"] == {}
+
+        ready = await service.tasks(namespace="status-deps", operational_status="ready")
+        assert {item["task_id"] for item in ready["tasks"]} == {"DEP", "READY", "SAT"}
+        assert ready["summary"]["claimable_count"] == 3
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_terminal_transitions_require_live_owner(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    try:
+        actor = await register(service, "terminal transition actor")
+        peer = await register(service, "terminal transition peer")
+        await service.task(
+            actor,
+            action="create",
+            isolation_hint="none",
+            namespace="wf",
+            task_id="OWNER-GATE",
+            title="owner gate",
+        )
+        unclaimed_state = await service.task(
+            actor, action="state", namespace="wf", task_id="OWNER-GATE", state="deferred"
+        )
+        assert unclaimed_state["ok"] is False
+        assert unclaimed_state["code"] == "owner_required"
+        unclaimed_done = await service.task(
+            actor,
+            action="done",
+            namespace="wf",
+            task_id="OWNER-GATE",
+            result={"summary": "must claim first"},
+        )
+        assert unclaimed_done["ok"] is False
+        assert unclaimed_done["code"] == "owner_required"
+        safe_metadata = await service.task(
+            peer,
+            action="update",
+            namespace="wf",
+            task_id="OWNER-GATE",
+            description="Safe metadata remains editable without ownership.",
+        )
+        assert safe_metadata["ok"] is True
+        claimed = await service.task(
+            actor,
+            action="claim",
+            namespace="wf",
+            task_id="OWNER-GATE",
+            claim_intent="own terminal transitions",
+        )
+        assert claimed["ok"] is True
+        owned_state = await service.task(
+            actor, action="state", namespace="wf", task_id="OWNER-GATE", state="deferred"
+        )
+        assert owned_state["ok"] is True
+        owned_done = await service.task(
+            actor,
+            action="done",
+            namespace="wf",
+            task_id="OWNER-GATE",
+            result={"summary": "owner completed task"},
+        )
+        assert owned_done["ok"] is True
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_expired_owner_and_force_cannot_bypass_owner_gate(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    try:
+        owner = await register(service, "expiring workflow owner")
+        peer = await register(service, "active workflow peer")
+        await service.task(
+            owner,
+            action="create",
+            isolation_hint="none",
+            namespace="wf",
+            task_id="EXPIRING-OWNER",
+            title="expiring owner",
+        )
+        await service.task(
+            owner,
+            action="claim",
+            namespace="wf",
+            task_id="EXPIRING-OWNER",
+            claim_intent="own until expiry",
+        )
+        with sqlite3.connect(repo.path) as db:
+            db.execute(
+                "UPDATE agent_sessions SET last_activity_at=? WHERE agent_id=?",
+                (utc_text(utc_now() - timedelta(seconds=301)), owner),
+            )
+            db.commit()
+        after_expiry = await service.task(
+            peer, action="state", namespace="wf", task_id="EXPIRING-OWNER", state="deferred"
+        )
+        assert after_expiry["ok"] is False
+        assert after_expiry["code"] == "owner_required"
+        await service.task(
+            peer,
+            action="create",
+            isolation_hint="none",
+            namespace="wf",
+            task_id="FORCE-NO-OWNER-DEP",
+            title="open dependency",
+        )
+        await service.task(
+            peer,
+            action="create",
+            isolation_hint="none",
+            namespace="wf",
+            task_id="FORCE-NO-OWNER",
+            title="force cannot own",
+            dependencies=[{"namespace": "wf", "task_id": "FORCE-NO-OWNER-DEP"}],
+        )
+        forced = await service.task(
+            peer,
+            action="done",
+            namespace="wf",
+            task_id="FORCE-NO-OWNER",
+            result={"summary": "force must not bypass ownership"},
+            force=True,
+            force_reason="dependency override only",
+        )
+        assert forced["ok"] is False
+        assert forced["code"] == "owner_required"
+        reclaimed = await service.task(
+            peer,
+            action="claim",
+            namespace="wf",
+            task_id="EXPIRING-OWNER",
+            claim_intent="take ownership after expiry",
+        )
+        assert reclaimed["ok"] is True
+        resumed = await service.task(
+            peer, action="state", namespace="wf", task_id="EXPIRING-OWNER", state="deferred"
+        )
+        assert resumed["ok"] is True
     finally:
         await terminal.stop()
