@@ -15,6 +15,7 @@ from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
+from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
@@ -127,6 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
+    app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))
 

@@ -685,6 +685,120 @@ class TerminalService:
                 **context,
             }
 
+    async def console_snapshot(
+        self,
+        auth_mode,
+        *,
+        public_base_url,
+        history_minutes=60,
+    ):
+        if not self.event_store or not self.agent_coordinator or not self.task_coordinator:
+            return {
+                "ok": False,
+                "high_water_seq": 0,
+                "consistency": {
+                    "mode": "cursor_first_at_least_once",
+                    "high_water_seq": 0,
+                    "replay_from_seq": 0,
+                    "duplicate_events_possible": True,
+                },
+                "instance": {},
+                "agents": {},
+                "tasks": {},
+                "contexts": {},
+                "communications": [],
+                "error": "console snapshot unavailable",
+            }
+
+        # Cursor-first is deliberate: anything committed after this point is replayable.
+        # Snapshot reads may observe newer state, so clients must apply replay idempotently.
+        high_water_seq = await self.event_store.high_water_seq()
+
+        health = await self.health(auth_mode)
+        agents = await self.agent_coordinator.overview(
+            agent_id=None,
+            show_details=True,
+            show_intents=False,
+            show_commands=False,
+            since_minutes=history_minutes,
+            touch=False,
+        )
+        contexts = await self.context("list", show_details=True)
+
+        task_page = await self.tasks(
+            show_done=True,
+            show_archived=True,
+            show_details=False,
+            limit=200,
+            cursor=0,
+        )
+        task_items = list(task_page.get("tasks") or [])
+        next_cursor = task_page.get("next_cursor")
+        while next_cursor is not None:
+            page = await self.tasks(
+                show_done=True,
+                show_archived=True,
+                show_details=False,
+                limit=200,
+                cursor=next_cursor,
+            )
+            task_items.extend(page.get("tasks") or [])
+            next_cursor = page.get("next_cursor")
+        tasks = {
+            "summary": task_page.get("summary") or {},
+            "tag_counts": task_page.get("tag_counts") or {},
+            "recommended": task_page.get("recommended"),
+            "tasks": task_items,
+        }
+
+        communications = []
+        for session in agents.get("sessions") or []:
+            name = session["name"]
+            detail = await self.agent_coordinator.overview(
+                agent_id=None,
+                target=name,
+                show_details=False,
+                show_intents=True,
+                show_commands=False,
+                since_minutes=history_minutes,
+                touch=False,
+            )
+            selected = (detail.get("sessions") or [{}])[0]
+            communications.append(
+                {
+                    "name": name,
+                    "messages_awaiting_read": selected.get("messages_awaiting_read", 0),
+                    "messages_awaiting_reply": selected.get("messages_awaiting_reply", 0),
+                    "alerts_pending": selected.get("alerts_pending", 0),
+                    "message_journal": selected.get("message_journal") or [],
+                    "intent_journal": detail.get("intent_journal") or [],
+                }
+            )
+
+        instance = {
+            "application": "terminal-mcp",
+            "version": __version__,
+            "public_base_url": public_base_url,
+            "health": health,
+        }
+        consistency = {
+            "mode": "cursor_first_at_least_once",
+            "high_water_seq": high_water_seq,
+            "replay_from_seq": high_water_seq,
+            "duplicate_events_possible": True,
+        }
+        return {
+            "ok": True,
+            "high_water_seq": high_water_seq,
+            "consistency": consistency,
+            "instance": instance,
+            "agents": agents,
+            "tasks": tasks,
+            "contexts": contexts,
+            "communications": communications,
+            "error": None,
+        }
+
     async def agent_start(
         self,
         task_summary=None,

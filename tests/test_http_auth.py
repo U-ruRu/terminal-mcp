@@ -169,6 +169,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/recovery",
             "/actions/cancel",
             "/actions/health",
+            "/actions/console/snapshot",
         }
         assert set(schema["paths"]) == expected_paths
         assert schema["info"]["version"] == "0.10.1"
