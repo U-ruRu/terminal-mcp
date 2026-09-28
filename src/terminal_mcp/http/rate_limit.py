@@ -17,6 +17,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/oauth/token": (20, 60),
             "/oauth/register": (10, 60),
             "/oauth/authorize": (20, 60),
+            "/pairing/exchange": (10, 60),
         }
         if path in limits:
             limit, window = limits[path]

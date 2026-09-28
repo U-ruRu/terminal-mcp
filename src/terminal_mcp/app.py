@@ -6,6 +6,7 @@ from starlette.routing import Mount
 
 from terminal_mcp.auth.credentials import CredentialManager
 from terminal_mcp.auth.middleware import AuthMiddleware
+from terminal_mcp.auth.pairing import PairingStore
 from terminal_mcp.auth.routes import build_oauth_router
 from terminal_mcp.auth.service import AuthService
 from terminal_mcp.auth.storage import OAuthStore
@@ -14,6 +15,7 @@ from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
+from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.server import build_mcp
@@ -39,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output_prune_rows=settings.output_retention_prune_rows,
     )
     oauth_store = OAuthStore(settings.database_path)
+    pairing_store = PairingStore(settings.database_path)
     credentials = CredentialManager(settings)
     runtime = RuntimeConfigProvider(settings.runtime_config_path)
     metrics = Metrics(runtime, settings.metrics_host, settings.metrics_port)
@@ -98,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events.emit("application_started", outcome="success")
         await repo.initialize()
         await oauth_store.initialize()
+        await pairing_store.initialize()
         await terminal.start()
         try:
             async with mcp.session_manager.run():
@@ -113,11 +117,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store
+    app.state.pairing_store = pairing_store
     app.state.credentials = credentials
     app.state.runtime_config = runtime
     app.state.metrics = metrics
     app.state.events = events
     app.include_router(build_public_router())
+    app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
