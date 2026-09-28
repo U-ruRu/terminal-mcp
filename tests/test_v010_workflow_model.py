@@ -6,6 +6,7 @@ import pytest
 from terminal_mcp.core.orchestration import public_agent_name, utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.tasks import TaskStore
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
 
@@ -827,6 +828,256 @@ async def test_comments_and_relations_are_append_only_durable_history(tmp_path):
         )
     finally:
         await reopened_terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_review_completion_rejects_candidate_mismatch_and_keeps_release_blocked(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "stale implementer")
+        reviewer = await register(service, "stale reviewer")
+        releaser = await register(service, "stale releaser")
+        assert (
+            await service.task(
+                implementer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="STALE-IMPL",
+                title="stale parent",
+                candidate_ref="candidate-1",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="STALE-REVIEW",
+                title="stale review",
+                lane="review",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="relate",
+                namespace="wf",
+                task_id="STALE-REVIEW",
+                relation_kind="review_of",
+                related_namespace="wf",
+                related_task_id="STALE-IMPL",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="claim",
+                namespace="wf",
+                task_id="STALE-REVIEW",
+                claim_intent="reviewing candidate-1",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                releaser,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="STALE-RELEASE",
+                title="release waits for review",
+                lane="release",
+                dependencies=[{"namespace": "wf", "task_id": "STALE-REVIEW"}],
+            )
+        )["ok"] is True
+
+        # Simulate a legacy/concurrent stale review state that bypassed WF-001's domain freeze.
+        await TaskStore(repo.path).update_task("wf", "STALE-IMPL", candidate_ref="candidate-2")
+
+        blocked = await service.task(
+            reviewer,
+            action="state",
+            namespace="wf",
+            task_id="STALE-REVIEW",
+            state="blocked",
+            blocker_reason="Candidate changed while this review was in flight.",
+        )
+        assert blocked["ok"] is True
+        parent = await detail(service, "wf", "STALE-IMPL")
+        blocked_feedback = event_with(parent, "review_feedback", outcome="blocked")
+        assert blocked_feedback is not None
+        assert blocked_feedback["payload"]["candidate_ref"] == "candidate-1"
+
+        assert (
+            await service.task(
+                reviewer,
+                action="state",
+                namespace="wf",
+                task_id="STALE-REVIEW",
+                state="ready",
+            )
+        )["ok"] is True
+        rejected = await service.task(
+            reviewer,
+            action="done",
+            namespace="wf",
+            task_id="STALE-REVIEW",
+            result={"verdict": "approved"},
+        )
+        assert rejected["ok"] is False
+        assert rejected["code"] == "candidate_mismatch"
+
+        review = await detail(service, "wf", "STALE-REVIEW")
+        assert review["state"] == "ready"
+        parent = await detail(service, "wf", "STALE-IMPL")
+        assert event_with(parent, "review_feedback", outcome="done") is None
+        release = await detail(service, "wf", "STALE-RELEASE")
+        assert release["operational_status"] == "blocked"
+        assert release["blocking_dependencies"][0]["task_id"] == "STALE-REVIEW"
+        assert release["blocking_dependencies"][0]["state"] == "ready"
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_review_completion_rejects_missing_candidate_on_either_side(tmp_path):
+    for missing_side in ("review", "parent"):
+        repo, terminal, service = await runtime(tmp_path / missing_side)
+        try:
+            implementer = await register(service, f"missing {missing_side} implementer")
+            reviewer = await register(service, f"missing {missing_side} reviewer")
+            assert (
+                await service.task(
+                    implementer,
+                    action="create",
+                    isolation_hint="none",
+                    namespace="wf",
+                    task_id="MISSING-IMPL",
+                    title="missing candidate parent",
+                    candidate_ref="candidate-1",
+                )
+            )["ok"] is True
+            assert (
+                await service.task(
+                    reviewer,
+                    action="create",
+                    isolation_hint="none",
+                    namespace="wf",
+                    task_id="MISSING-REVIEW",
+                    title="missing candidate review",
+                    lane="review",
+                )
+            )["ok"] is True
+            assert (
+                await service.task(
+                    reviewer,
+                    action="relate",
+                    namespace="wf",
+                    task_id="MISSING-REVIEW",
+                    relation_kind="review_of",
+                    related_namespace="wf",
+                    related_task_id="MISSING-IMPL",
+                )
+            )["ok"] is True
+            assert (
+                await service.task(
+                    reviewer,
+                    action="claim",
+                    namespace="wf",
+                    task_id="MISSING-REVIEW",
+                    claim_intent="checking missing candidate gate",
+                )
+            )["ok"] is True
+
+            if missing_side == "review":
+                await TaskStore(repo.path).update_task("wf", "MISSING-REVIEW", candidate_ref=None)
+            else:
+                await TaskStore(repo.path).update_task("wf", "MISSING-IMPL", candidate_ref=None)
+
+            rejected = await service.task(
+                reviewer,
+                action="done",
+                namespace="wf",
+                task_id="MISSING-REVIEW",
+                result={"verdict": "approved"},
+            )
+            assert rejected["ok"] is False
+            assert rejected["code"] == "candidate_mismatch"
+            review = await detail(service, "wf", "MISSING-REVIEW")
+            assert review["state"] == "ready"
+            parent = await detail(service, "wf", "MISSING-IMPL")
+            assert event_with(parent, "review_feedback", outcome="done") is None
+        finally:
+            await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_review_completion_checks_candidate_proposed_in_same_done_mutation(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "proposed candidate implementer")
+        reviewer = await register(service, "proposed candidate reviewer")
+        assert (
+            await service.task(
+                implementer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="PROPOSED-IMPL",
+                title="proposed candidate parent",
+                candidate_ref="candidate-1",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="PROPOSED-REVIEW",
+                title="proposed candidate review",
+                lane="review",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="relate",
+                namespace="wf",
+                task_id="PROPOSED-REVIEW",
+                relation_kind="review_of",
+                related_namespace="wf",
+                related_task_id="PROPOSED-IMPL",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="claim",
+                namespace="wf",
+                task_id="PROPOSED-REVIEW",
+                claim_intent="checking same-call candidate mutation",
+            )
+        )["ok"] is True
+
+        rejected = await service.task(
+            reviewer,
+            action="done",
+            namespace="wf",
+            task_id="PROPOSED-REVIEW",
+            candidate_ref="candidate-other",
+            result={"verdict": "approved"},
+        )
+        assert rejected["ok"] is False
+        assert rejected["code"] == "candidate_mismatch"
+        review = await detail(service, "wf", "PROPOSED-REVIEW")
+        assert review["state"] == "ready"
+        assert review["candidate_ref"] == "candidate-1"
+        parent = await detail(service, "wf", "PROPOSED-IMPL")
+        assert event_with(parent, "review_feedback", outcome="done") is None
+    finally:
+        await terminal.stop()
 
 
 @pytest.mark.asyncio

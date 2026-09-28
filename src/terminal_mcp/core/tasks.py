@@ -359,6 +359,35 @@ class TaskCoordinator:
             return None, f"task.{field}: maximum length is {max_length}"
         return text, None
 
+    async def _review_completion_candidate_error(self, current, proposed_candidate=None):
+        if current.get("lane") != "review":
+            return None
+        review_relations = [
+            relation
+            for relation in await self.store.relations(current["namespace"], current["task_id"])
+            if relation["direction"] == "outgoing" and relation["kind"] == "review_of"
+        ]
+        if not review_relations:
+            return None
+        review_candidate = (
+            proposed_candidate if proposed_candidate is not None else current.get("candidate_ref")
+        )
+        review_candidate = (review_candidate or "").strip()
+        if len(review_relations) != 1:
+            parent_candidate = None
+        else:
+            relation = review_relations[0]
+            parent = await self.store.get_task(relation["namespace"], relation["task_id"])
+            parent_candidate = ((parent or {}).get("candidate_ref") or "").strip()
+        if not review_candidate or not parent_candidate or review_candidate != parent_candidate:
+            return {
+                "ok": False,
+                "code": "candidate_mismatch",
+                "error": "task.done: review candidate_ref does not match review_of parent",
+                "warnings": [],
+            }
+        return None
+
     async def _review_feedback_events(
         self,
         current,
@@ -1001,6 +1030,12 @@ class TaskCoordinator:
 
         dependency_override = None
         if target_state == "done" and current["state"] != "done":
+            candidate_error = await self._review_completion_candidate_error(
+                current,
+                proposed_candidate=fields.get("candidate_ref"),
+            )
+            if candidate_error:
+                return candidate_error
             warnings, dependency_override, dependency_failure = await self._dependency_gate(
                 namespace,
                 task_id,
