@@ -1,0 +1,19 @@
+{
+  "instances": [
+    {
+      "instance_id": "server-a",
+      "label": "server-a",
+      "origin": "https://server-a.example.invalid"
+    },
+    {
+      "instance_id": "server-b",
+      "label": "server-b",
+      "origin": "https://server-b.example.invalid"
+    },
+    {
+      "instance_id": "server-c",
+      "label": "server-c",
+      "origin": "https://server-c.example.invalid"
+    }
+  ]
+}

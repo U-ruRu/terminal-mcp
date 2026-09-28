@@ -132,7 +132,7 @@ Agent-facing OAuth uses one scope: `terminal:read`. All published terminal and w
 `origin(TERMINAL_MCP_PUBLIC_BASE_URL)` is always allowed for browser Console requests. Additional static Console origins are configured as an exact comma-separated allowlist:
 
 ```env
-TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://console.example.com,https://ops.example.com"
+TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://console.example.invalid,https://ops.example.invalid"
 ```
 
 Only explicit `http`/`https` origins are accepted; wildcard, path, query and fragment values fail closed. CORS/Origin enforcement covers `/connect`, `/pairing/exchange`, `/oauth/token`, `/actions/*` and `/console/*`. Non-browser clients without an `Origin` header remain supported.
@@ -178,7 +178,7 @@ Durable SQLite содержит полные тексты команд, Agent Se
 ```bash
 sudo TERMINAL_MCP_ADMIN_USERNAME="operator" \
   TERMINAL_MCP_ADMIN_PASSWORD="change-me" \
-  TERMINAL_MCP_PUBLIC_BASE_URL="https://service.example" \
+  TERMINAL_MCP_PUBLIC_BASE_URL="https://server-a.example.invalid" \
   ./deploy/install.sh install
 ```
 
@@ -204,6 +204,16 @@ sudo ./deploy/install.sh update
 - Output cache: `/var/cache/terminal-mcp/output.sqlite3`.
 - Backup: `/var/backups/terminal-mcp`.
 
+## Repository privacy boundary
+
+Public examples and fixtures are environment-neutral. Use server-a/server-b/server-c,
+example.invalid origins and placeholder credentials in committed material. Real deployment
+identity and operational evidence stay outside Git. Commit metadata is part of this boundary. See docs/REPOSITORY_PRIVACY.md.
+
+Validate the public example boundary with:
+
+    python3 scripts/check_repository_privacy.py
+
 ## Разработка
 
 ```bash
@@ -217,6 +227,6 @@ python3 -m venv .venv
 
 Create a one-time local pairing URL with terminal-mcp pair, then exercise pair -> snapshot -> WebSocket end-to-end:
 
-    python scripts/console_transport_smoke.py --pair-url 'https://terminal.example/connect#ONE_TIME_SECRET'
+    python scripts/console_transport_smoke.py --pair-url 'https://server-a.example.invalid/connect#ONE_TIME_SECRET'
 
 The client exchanges the fragment secret, fetches /actions/console/snapshot, issues a short-lived single-use WebSocket ticket, and subscribes from snapshot high_water_seq. Pass --since 0 to exercise replay; if retention caused a journal gap, the client handles resync_required by fetching a fresh snapshot, issuing a new one-use ticket, and reconnecting. It never prints pairing, access, refresh, or WebSocket ticket secrets.

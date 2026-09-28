@@ -6,3 +6,10 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .serena/
+
+# Operator-local runtime configuration and acceptance evidence.
+.env.local
+.env.*.local
+.local-ops/
+operator-evidence/
+runtime-evidence/
