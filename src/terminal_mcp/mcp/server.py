@@ -521,7 +521,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Cancel a queued or running command. agent_id is optional; when supplied, response also surfaces pending_messages. Use read for final command status.",
+        description="Cancel a queued or running command. The response distinguishes queued pre-start cancellation from running cancellation and reports whether execution had started. agent_id is optional; when supplied, response also surfaces pending_messages. Use read for final command status and execution provenance.",
     )
     async def cancel(
         cmd_hash: str,
@@ -531,11 +531,12 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         raw.pop("agent_id", None)
         raw["agent_name"] = public_agent_name(agent_id)
         data = CancelResponse.model_validate(raw)
-        summary = (
-            f"Command {data.cmd_hash} was cancelled."
-            if data.ok
-            else f"Command {data.cmd_hash} was not cancelled: {data.error}"
-        )
+        if data.ok and data.cancelled_from == "queued":
+            summary = f"Command {data.cmd_hash} was cancelled before execution started."
+        elif data.ok and data.cancelled_from == "running":
+            summary = f"Command {data.cmd_hash} was cancelled after execution started."
+        else:
+            summary = f"Command {data.cmd_hash} was not cancelled: {data.error}"
         return _structured_result(data, summary)
 
     @mcp.tool(

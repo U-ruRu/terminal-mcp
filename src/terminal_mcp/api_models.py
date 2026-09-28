@@ -100,6 +100,10 @@ class ReadResponse(SessionStatus):
     status: CommandStatus | None = None
     exit_code: int | None = None
     queue_id: int | None = None
+    execution_started: bool | None = None
+    claimed_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
     queue_position: int | None = None
     output_truncated: bool | None = None
     output_retained: bool | None = None
@@ -137,6 +141,8 @@ class CancelResponse(SessionStatus):
     ok: bool
     cmd_hash: str
     error: str | None = None
+    cancelled_from: Literal["queued", "running"] | None = None
+    execution_started: bool | None = None
 
 
 class QueueHealth(BaseModel):

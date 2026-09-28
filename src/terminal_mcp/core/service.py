@@ -427,6 +427,10 @@ class TerminalService:
             "status": None,
             "exit_code": None,
             "queue_id": None,
+            "execution_started": None,
+            "claimed_at": None,
+            "started_at": None,
+            "finished_at": None,
             "queue_position": None,
             "output_truncated": None,
             "output_retained": None,
@@ -448,6 +452,12 @@ class TerminalService:
                     result["error"] = command.error
                     result["ok"] = command.error is None
                     result["queue_id"] = command.queue_id
+                    result["execution_started"] = bool(
+                        command.claimed_at is not None or command.started_at is not None
+                    )
+                    result["claimed_at"] = command.claimed_at
+                    result["started_at"] = command.started_at
+                    result["finished_at"] = command.finished_at
                     result["queue_position"] = await self.repo.queue_position(cmd_hash)
                     result.update(await self.repo.output_status(cmd_hash))
                     stage = "count_lines"
@@ -580,17 +590,44 @@ class TerminalService:
         context = await self._operational_context(agent_id, "cancel")
         if self.runtime:
             await self.runtime.before_tool_call()
-        stage = "lookup"
+        stage = "arbitrate"
+        execution_started = None
         try:
             async with asyncio.timeout(_budget(CANCEL_TIMEOUT_SECONDS)):
-                command = await self.repo.get(cmd_hash)
+                command, cancelled_before_start = await self.repo.cancel_if_queued(cmd_hash)
                 if command is None:
                     return {
                         "ok": False,
                         "cmd_hash": cmd_hash,
                         "error": "cancel.lookup: command not found",
+                        "cancelled_from": None,
+                        "execution_started": None,
                         **context,
                     }
+
+                execution_started = bool(
+                    command.claimed_at is not None or command.started_at is not None
+                )
+                if cancelled_before_start:
+                    return {
+                        "ok": True,
+                        "cmd_hash": cmd_hash,
+                        "error": None,
+                        "cancelled_from": "queued",
+                        "execution_started": False,
+                        **context,
+                    }
+
+                if command.status != "running":
+                    return {
+                        "ok": False,
+                        "cmd_hash": cmd_hash,
+                        "error": f"cancel.state: command is already {command.status}",
+                        "cancelled_from": None,
+                        "execution_started": execution_started,
+                        **context,
+                    }
+
                 stage = "stop"
                 ok, error = await self.terminal.cancel(
                     command, timeout_seconds=_budget(CANCEL_TIMEOUT_SECONDS)
@@ -599,6 +636,8 @@ class TerminalService:
                     "ok": ok,
                     "cmd_hash": cmd_hash,
                     "error": error,
+                    "cancelled_from": "running" if ok else None,
+                    "execution_started": True,
                     **context,
                 }
         except asyncio.CancelledError:
@@ -616,6 +655,8 @@ class TerminalService:
                 "ok": False,
                 "cmd_hash": cmd_hash,
                 "error": f"cancel.{stage}: timed out after 10000 ms",
+                "cancelled_from": None,
+                "execution_started": execution_started,
                 **context,
             }
         except Exception as exc:
@@ -623,6 +664,8 @@ class TerminalService:
                 "ok": False,
                 "cmd_hash": cmd_hash,
                 "error": _error("cancel", stage, exc),
+                "cancelled_from": None,
+                "execution_started": execution_started,
                 **context,
             }
 

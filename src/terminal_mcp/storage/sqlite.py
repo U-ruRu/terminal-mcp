@@ -838,16 +838,57 @@ class SqliteRepository:
             await db.commit()
         return cur.rowcount == 1
 
-    async def cancel_queued(self, cmd_hash):
+    async def cancel_if_queued(self, cmd_hash):
+        """Linearize queued cancellation against worker claim in one write transaction.
+
+        Returns (command, cancelled_before_start). A successful pre-start cancellation
+        leaves claimed_at/started_at unset. If claim already won, the observed running
+        command is returned unchanged so the caller can perform running cancellation.
+        """
         finished_at = utc_text()
-        async with self._connect("cancel_queued") as db:
+        async with self._connect("cancel_if_queued") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (
+                await db.execute(
+                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?",
+                    (cmd_hash,),
+                )
+            ).fetchone()
+            if row is None:
+                await db.commit()
+                return None, False
+            command = Command(*row)
+            if command.status != "queued":
+                await db.commit()
+                return command, False
+
             cur = await db.execute(
                 "UPDATE commands SET status='cancelled',error=NULL,finished_at=? "
                 "WHERE hash=? AND status='queued'",
                 (finished_at, cmd_hash),
             )
+            if cur.rowcount != 1:
+                await db.rollback()
+                row = await (
+                    await db.execute(
+                        f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?",
+                        (cmd_hash,),
+                    )
+                ).fetchone()
+                return (Command(*row) if row is not None else None), False
+
+            row = await (
+                await db.execute(
+                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?",
+                    (cmd_hash,),
+                )
+            ).fetchone()
             await db.commit()
-        return cur.rowcount == 1
+        return Command(*row), True
+
+    async def cancel_queued(self, cmd_hash):
+        _command, cancelled_before_start = await self.cancel_if_queued(cmd_hash)
+        return cancelled_before_start
 
     async def queue_position(self, cmd_hash):
         async with self._connect("queue_position") as db:
