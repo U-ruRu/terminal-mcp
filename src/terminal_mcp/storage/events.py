@@ -251,11 +251,20 @@ async def install_event_journal(db) -> None:
                 'task',
                 NEW.namespace || '/' || NEW.task_id,
                 NEW.agent_id,
-                CASE
-                    WHEN length(CAST(NEW.payload_json AS BLOB)) <= {MAX_EVENT_PAYLOAD_BYTES}
-                    THEN NEW.payload_json
-                    ELSE '{{"truncated":true}}'
-                END,
+                json_object(
+                    'state',json_extract(NEW.payload_json,'$.state'),
+                    'lane',json_extract(NEW.payload_json,'$.lane'),
+                    'priority',json_extract(NEW.payload_json,'$.priority'),
+                    'fields',json_extract(NEW.payload_json,'$.fields'),
+                    'candidate_ref',json_extract(NEW.payload_json,'$.candidate_ref'),
+                    'kind',json_extract(NEW.payload_json,'$.kind'),
+                    'namespace',json_extract(NEW.payload_json,'$.namespace'),
+                    'task_id',json_extract(NEW.payload_json,'$.task_id'),
+                    'verdict',json_extract(NEW.payload_json,'$.verdict'),
+                    'dimensions',json_extract(NEW.payload_json,'$.dimensions'),
+                    'command_hash',json_extract(NEW.payload_json,'$.command_hash'),
+                    'command_type',json_extract(NEW.payload_json,'$.command_type')
+                ),
                 NEW.created_at
             );
         END;

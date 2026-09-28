@@ -173,6 +173,75 @@ async def test_shared_mutation_boundaries_emit_compact_events(tmp_path):
     assert page["events"] == sorted(page["events"], key=lambda event: event["seq"])
 
 
+
+@pytest.mark.asyncio
+async def test_task_journal_payload_is_whitelisted(tmp_path):
+    repo = SqliteRepository(tmp_path / "terminal.sqlite3", tmp_path / "output.sqlite3")
+    await repo.initialize()
+    tasks = TaskStore(repo.path)
+    journal = EventJournalStore(repo.path)
+
+    await tasks.create_task_mutation(
+        "safe",
+        "TASK-1",
+        "Task",
+        event_agent_id="Quebec-TEST",
+        event_payload={"state": "ready"},
+        now="2026-01-01T00:00:00Z",
+    )
+    await tasks.add_event(
+        "safe",
+        "TASK-1",
+        "updated",
+        agent_id="Quebec-TEST",
+        payload={
+            "state": "blocked",
+            "lane": "implementation",
+            "priority": 3,
+            "fields": ["state", "checkpoint", "description"],
+            "candidate_ref": "candidate-abc",
+            "checkpoint": {"token": "checkpoint-secret"},
+            "result": {"token": "result-secret"},
+            "description": "description-secret",
+            "next_action": "next-action-secret",
+            "text": "comment-secret",
+            "evidence": {"token": "evidence-secret"},
+            "warnings": [{"code": "safe-code", "message": "warning-secret"}],
+        },
+        now="2026-01-01T00:00:01Z",
+    )
+
+    page = await journal.read(since=0, limit=100)
+    event = next(item for item in page["events"] if item["event_type"] == "task.updated")
+    assert event["payload"]["state"] == "blocked"
+    assert event["payload"]["lane"] == "implementation"
+    assert event["payload"]["priority"] == 3
+    assert event["payload"]["candidate_ref"] == "candidate-abc"
+    assert event["payload"]["fields"] == ["state", "checkpoint", "description"]
+
+    serialized = json.dumps(event["payload"], ensure_ascii=False)
+    for secret in (
+        "checkpoint-secret",
+        "result-secret",
+        "description-secret",
+        "next-action-secret",
+        "comment-secret",
+        "evidence-secret",
+        "warning-secret",
+    ):
+        assert secret not in serialized
+    for forbidden_key in (
+        "checkpoint",
+        "result",
+        "description",
+        "next_action",
+        "text",
+        "evidence",
+        "warnings",
+    ):
+        assert forbidden_key not in event["payload"]
+
+
 class _HealthTerminal:
     queue_workers = 1
 
