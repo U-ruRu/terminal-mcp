@@ -11,7 +11,11 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
-from terminal_mcp.storage.tasks import TaskClaimConflict, TaskRevisionConflict
+from terminal_mcp.storage.tasks import (
+    TaskClaimConflict,
+    TaskRelationConflict,
+    TaskRevisionConflict,
+)
 
 LANES = ("implementation", "review", "release", "integration", "general")
 STATES = ("ready", "blocked", "deferred", "done")
@@ -823,6 +827,13 @@ class TaskCoordinator:
                 relation_kind=kind,
                 agent_id=agent_id,
             )
+        except TaskRelationConflict as exc:
+            return {
+                "ok": False,
+                "code": exc.code,
+                "error": f"task.relate: {exc}",
+                "warnings": [],
+            }
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.relate: {exc}", "warnings": []}
         return await self._result(namespace, task_id, [])

@@ -33,6 +33,12 @@ class TaskRevisionConflict(RuntimeError):
         )
 
 
+class TaskRelationConflict(RuntimeError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
 class TaskStore:
     def __init__(self, path):
         self.path = path
@@ -1050,17 +1056,66 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
-                for ns, tid in ((namespace, task_id), (related_namespace, related_task_id)):
-                    if (
-                        await (
-                            await db.execute(
-                                "SELECT 1 FROM work_items WHERE namespace=? AND task_id=?",
-                                (ns, tid),
-                            )
-                        ).fetchone()
-                        is None
+                source = await (
+                    await db.execute(
+                        "SELECT lane,candidate_ref FROM work_items WHERE namespace=? AND task_id=?",
+                        (namespace, task_id),
+                    )
+                ).fetchone()
+                if source is None:
+                    raise KeyError(f"unknown task: {namespace}/{task_id}")
+                target = await (
+                    await db.execute(
+                        "SELECT candidate_ref FROM work_items WHERE namespace=? AND task_id=?",
+                        (related_namespace, related_task_id),
+                    )
+                ).fetchone()
+                if target is None:
+                    raise KeyError(f"unknown task: {related_namespace}/{related_task_id}")
+
+                bound_candidate = None
+                candidate_changed = False
+                if relation_kind == "review_of":
+                    if source[0] != "review":
+                        raise TaskRelationConflict(
+                            "review_task_required",
+                            "review_of source task must use lane=review",
+                        )
+                    parent_candidate = (target[0] or "").strip()
+                    if not parent_candidate:
+                        raise TaskRelationConflict(
+                            "missing_parent_candidate",
+                            "review_of parent task has no candidate_ref",
+                        )
+                    existing = await (
+                        await db.execute(
+                            "SELECT related_namespace,related_task_id FROM work_relations "
+                            "WHERE namespace=? AND task_id=? AND relation_kind='review_of'",
+                            (namespace, task_id),
+                        )
+                    ).fetchall()
+                    if any(
+                        row[0] != related_namespace or row[1] != related_task_id for row in existing
                     ):
-                        raise KeyError(f"unknown task: {ns}/{tid}")
+                        raise TaskRelationConflict(
+                            "ambiguous_review_parent",
+                            "review task already has a different review_of parent",
+                        )
+                    review_candidate = (source[1] or "").strip()
+                    if review_candidate and review_candidate != parent_candidate:
+                        raise TaskRelationConflict(
+                            "candidate_conflict",
+                            "review task candidate_ref conflicts with parent candidate_ref",
+                        )
+                    bound_candidate = parent_candidate
+                    if not review_candidate:
+                        await db.execute(
+                            "UPDATE work_items SET candidate_ref=?,revision=revision+1,updated_at=? "
+                            "WHERE namespace=? AND task_id=?",
+                            (parent_candidate, now, namespace, task_id),
+                        )
+                        candidate_changed = True
+
                 cur = await db.execute(
                     "INSERT OR IGNORE INTO work_relations(namespace,task_id,related_namespace,related_task_id,relation_kind,created_at,created_by) VALUES(?,?,?,?,?,?,?)",
                     (
@@ -1073,7 +1128,32 @@ class TaskStore:
                         agent_id,
                     ),
                 )
+                if candidate_changed:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "candidate_bound",
+                            agent_id,
+                            self._json(
+                                {
+                                    "candidate_ref": bound_candidate,
+                                    "parent_namespace": related_namespace,
+                                    "parent_task_id": related_task_id,
+                                }
+                            ),
+                            now,
+                        ),
+                    )
                 if cur.rowcount:
+                    payload = {
+                        "kind": relation_kind,
+                        "namespace": related_namespace,
+                        "task_id": related_task_id,
+                    }
+                    if bound_candidate is not None:
+                        payload["candidate_ref"] = bound_candidate
                     await db.execute(
                         "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
                         (
@@ -1081,13 +1161,7 @@ class TaskStore:
                             task_id,
                             "relation_added",
                             agent_id,
-                            self._json(
-                                {
-                                    "kind": relation_kind,
-                                    "namespace": related_namespace,
-                                    "task_id": related_task_id,
-                                }
-                            ),
+                            self._json(payload),
                             now,
                         ),
                     )

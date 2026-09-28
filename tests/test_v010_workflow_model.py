@@ -375,6 +375,217 @@ async def test_candidate_ref_is_owner_mutable_before_review_then_frozen(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_review_of_atomically_binds_parent_candidate(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "bind implementer")
+        reviewer = await register(service, "bind reviewer")
+        assert (
+            await service.task(
+                implementer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="BIND-IMPL",
+                title="bind parent",
+                candidate_ref="candidate-bind",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="BIND-REVIEW",
+                title="bind review",
+                lane="review",
+            )
+        )["ok"] is True
+
+        linked = await service.task(
+            reviewer,
+            action="relate",
+            namespace="wf",
+            task_id="BIND-REVIEW",
+            relation_kind="review_of",
+            related_namespace="wf",
+            related_task_id="BIND-IMPL",
+        )
+        assert linked["ok"] is True
+        review = await detail(service, "wf", "BIND-REVIEW")
+        assert review["candidate_ref"] == "candidate-bind"
+        bound = event_with(review, "candidate_bound", candidate_ref="candidate-bind")
+        assert bound is not None
+        assert bound["payload"]["parent_namespace"] == "wf"
+        assert bound["payload"]["parent_task_id"] == "BIND-IMPL"
+        relation = event_with(review, "relation_added", candidate_ref="candidate-bind")
+        assert relation is not None
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_review_of_rejects_missing_parent_candidate_without_partial_state(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "missing candidate implementer")
+        reviewer = await register(service, "missing candidate reviewer")
+        assert (
+            await service.task(
+                implementer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="NO-CANDIDATE",
+                title="parent without candidate",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="NO-CANDIDATE-REVIEW",
+                title="review without candidate",
+                lane="review",
+            )
+        )["ok"] is True
+
+        rejected = await service.task(
+            reviewer,
+            action="relate",
+            namespace="wf",
+            task_id="NO-CANDIDATE-REVIEW",
+            relation_kind="review_of",
+            related_namespace="wf",
+            related_task_id="NO-CANDIDATE",
+        )
+        assert rejected["ok"] is False
+        assert rejected["code"] == "missing_parent_candidate"
+        review = await detail(service, "wf", "NO-CANDIDATE-REVIEW")
+        assert review["candidate_ref"] is None
+        assert not any(relation["kind"] == "review_of" for relation in review["relations"])
+        assert event_with(review, "candidate_bound") is None
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_review_of_rejects_conflicting_preset_candidate_without_partial_state(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "conflict implementer")
+        reviewer = await register(service, "conflict reviewer")
+        assert (
+            await service.task(
+                implementer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="CONFLICT-IMPL",
+                title="conflict parent",
+                candidate_ref="candidate-parent",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="CONFLICT-REVIEW",
+                title="conflict review",
+                lane="review",
+                candidate_ref="candidate-other",
+            )
+        )["ok"] is True
+
+        rejected = await service.task(
+            reviewer,
+            action="relate",
+            namespace="wf",
+            task_id="CONFLICT-REVIEW",
+            relation_kind="review_of",
+            related_namespace="wf",
+            related_task_id="CONFLICT-IMPL",
+        )
+        assert rejected["ok"] is False
+        assert rejected["code"] == "candidate_conflict"
+        review = await detail(service, "wf", "CONFLICT-REVIEW")
+        assert review["candidate_ref"] == "candidate-other"
+        assert not any(relation["kind"] == "review_of" for relation in review["relations"])
+        assert event_with(review, "candidate_bound") is None
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_review_of_rejects_second_parent_without_partial_state(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "ambiguous implementer")
+        reviewer = await register(service, "ambiguous reviewer")
+        for task_id in ("PARENT-A", "PARENT-B"):
+            assert (
+                await service.task(
+                    implementer,
+                    action="create",
+                    isolation_hint="none",
+                    namespace="wf",
+                    task_id=task_id,
+                    title=task_id,
+                    candidate_ref="candidate-shared",
+                )
+            )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="AMBIGUOUS-REVIEW",
+                title="ambiguous review",
+                lane="review",
+            )
+        )["ok"] is True
+
+        first = await service.task(
+            reviewer,
+            action="relate",
+            namespace="wf",
+            task_id="AMBIGUOUS-REVIEW",
+            relation_kind="review_of",
+            related_namespace="wf",
+            related_task_id="PARENT-A",
+        )
+        assert first["ok"] is True
+        second = await service.task(
+            reviewer,
+            action="relate",
+            namespace="wf",
+            task_id="AMBIGUOUS-REVIEW",
+            relation_kind="review_of",
+            related_namespace="wf",
+            related_task_id="PARENT-B",
+        )
+        assert second["ok"] is False
+        assert second["code"] == "ambiguous_review_parent"
+
+        review = await detail(service, "wf", "AMBIGUOUS-REVIEW")
+        assert review["candidate_ref"] == "candidate-shared"
+        parents = [
+            relation["task_id"]
+            for relation in review["relations"]
+            if relation["direction"] == "outgoing" and relation["kind"] == "review_of"
+        ]
+        assert parents == ["PARENT-A"]
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
 async def test_candidate_ref_is_frozen_after_done(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
