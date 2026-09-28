@@ -183,6 +183,93 @@ async def test_flush_is_best_effort_and_retries_partitioned_peer(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_three_peer_partition_rejoin_preserves_one_global_session_clock(
+    tmp_path, monkeypatch
+):
+    private_a, _ = keypair()
+    _, public_b = keypair()
+    _, public_c = keypair()
+    peer_b = FleetPeer(
+        "server-b",
+        "https://server-b.example.invalid",
+        public_b,
+        "placeholder-peer-token-b",
+    )
+    peer_c = FleetPeer(
+        "server-c",
+        "https://server-c.example.invalid",
+        public_c,
+        "placeholder-peer-token-c",
+    )
+    delivered: dict[str, list[dict]] = {"server-b": [], "server-c": []}
+    partition_c = True
+
+    def handler(request: httpx.Request):
+        nonlocal partition_c
+        peer_id = request.url.host.split(".")[0]
+        assert request.method == "POST"
+        assert request.headers["x-terminal-mcp-peer"] == "server-a"
+        if peer_id == "server-c" and partition_c:
+            return httpx.Response(503, json={"ok": False})
+        delivered[peer_id].append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "status": "applied"})
+
+    repo = SqliteRepository(tmp_path / "three-peer.sqlite3")
+    await repo.initialize()
+    agents = AgentStore(repo.path)
+    identities = FleetIdentityStore(repo.path)
+    replication = FleetReplicationService(
+        FleetConfig("server-a", private_a, (peer_b, peer_c), 1.0, 1.0),
+        identities,
+        agents,
+        max_session_seconds=1500,
+        client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=1.0,
+        ),
+    )
+    monkeypatch.setattr(replication, "kick", lambda: None)
+
+    started = "2026-01-01T00:00:00.000Z"
+    await agents.create_session(
+        "Alpha-01234567",
+        "synthetic task",
+        "synthetic intent",
+        [],
+        ["synthetic step"],
+        1,
+        started,
+    )
+    envelope = await replication.sync_local_session("Alpha-01234567")
+    assert envelope is not None
+    assert envelope.record.session_started_at == started
+    assert envelope.record.expires_at == "2026-01-01T00:25:00.000Z"
+
+    await replication.flush_once()
+    assert len(delivered["server-b"]) == 1
+    assert delivered["server-c"] == []
+    assert await identities.outbox_count("server-b") == 0
+    assert await identities.outbox_count("server-c") == 1
+
+    partition_c = False
+    await replication.flush_once()
+    assert len(delivered["server-b"]) == 1
+    assert len(delivered["server-c"]) == 1
+    assert await identities.outbox_count("server-c") == 0
+
+    delivered_b = SignedAgentIdentity.from_dict(delivered["server-b"][0])
+    delivered_c = SignedAgentIdentity.from_dict(delivered["server-c"][0])
+    assert delivered_b.record.agent_id == delivered_c.record.agent_id == "Alpha-01234567"
+    assert delivered_b.record.revision == delivered_c.record.revision == 1
+    assert delivered_b.record.session_started_at == delivered_c.record.session_started_at == started
+    assert (
+        delivered_b.record.expires_at
+        == delivered_c.record.expires_at
+        == "2026-01-01T00:25:00.000Z"
+    )
+
+
+@pytest.mark.asyncio
 async def test_pull_catches_up_signed_peer_identity_after_partition(tmp_path):
     private_b, public_b = keypair()
     peer_identity = record("server-b", "Delta-89ABCDEF", private_b)
