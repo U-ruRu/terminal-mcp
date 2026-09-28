@@ -13,11 +13,15 @@ from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.service import TerminalService
+from terminal_mcp.fleet.config import build_fleet_config
+from terminal_mcp.fleet.replication import FleetReplicationService
+from terminal_mcp.fleet.storage import FleetIdentityStore
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
 from terminal_mcp.http.browser_security import BrowserSecurityMiddleware
 from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
+from terminal_mcp.http.fleet import build_fleet_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
@@ -25,6 +29,7 @@ from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.metrics import Metrics
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
+from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 from terminal_mcp.trace import TraceMiddleware
@@ -84,6 +89,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         post_finish_message_grace_seconds=settings.agent_post_finish_message_grace_sec,
         max_active_agents=settings.max_active_agents,
     )
+    fleet_config = build_fleet_config(settings)
+    fleet_replication = (
+        FleetReplicationService(
+            fleet_config,
+            FleetIdentityStore(settings.database_path),
+            AgentStore(settings.database_path),
+            max_session_seconds=settings.agent_max_session_sec,
+            events=events,
+        )
+        if fleet_config
+        else None
+    )
     service = TerminalService(
         repo,
         terminal,
@@ -94,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events,
         metrics,
         agent_policy,
+        fleet_replication,
     )
     auth = AuthService(settings, oauth_store, credentials)
     mcp = build_mcp(service, settings.public_base_url, settings.mode_for("mcp"))
@@ -107,12 +125,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await repo.initialize()
         await oauth_store.initialize()
         await pairing_store.initialize()
+        if fleet_replication:
+            await fleet_replication.start()
         await terminal.start()
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
             await terminal.stop()
+            if fleet_replication:
+                await fleet_replication.stop()
             events.emit("application_stopped", outcome="success")
             await metrics.stop()
             await runtime.stop()
@@ -129,7 +151,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.metrics = metrics
     app.state.events = events
     app.state.event_store = service.event_store
+    app.state.fleet_replication = fleet_replication
     app.include_router(build_public_router())
+    if fleet_replication:
+        app.include_router(build_fleet_router(fleet_replication))
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(
         build_console_events_router(

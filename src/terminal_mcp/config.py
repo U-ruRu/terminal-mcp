@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     message_reminder_calls: int = 5
     agent_post_finish_message_grace_sec: int = 300
     max_active_agents: int = 8
+    fleet_instance_id: str = ""
+    fleet_signing_private_key: str = ""
+    fleet_peers_json: str = "[]"
+    fleet_replication_interval_sec: float = 5.0
+    fleet_request_timeout_sec: float = 3.0
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
 

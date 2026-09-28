@@ -109,6 +109,7 @@ class TerminalService:
         events=None,
         metrics=None,
         agent_policy: AgentPolicy | None = None,
+        fleet_replication=None,
     ):
         self.repo = repo
         self.terminal = terminal
@@ -119,6 +120,7 @@ class TerminalService:
         self.events = events
         self.metrics = metrics
         self.agent_policy = agent_policy or AgentPolicy()
+        self.fleet_replication = fleet_replication
         self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
         self.context_store = ContextStore(repo.path) if hasattr(repo, "path") else None
         self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
@@ -826,6 +828,8 @@ class TerminalService:
             result["primary_context"] = [
                 entry for entry in await self.context_store.list() if entry["primary"]
             ]
+        if result.get("ok") and scope_agent_id and self.fleet_replication:
+            self.fleet_replication.schedule_local_sync(scope_agent_id)
         return result
 
     async def coordinate(self, agent_id, step=None, intent=None, show_details=False):
@@ -1007,6 +1011,8 @@ class TerminalService:
         result = await self.agent_coordinator.finish(agent_id)
         if self.task_coordinator and result.get("finished"):
             await self.task_coordinator.release_agent_claims(agent_id, reason="agent_finish")
+        if result.get("finished") and self.fleet_replication:
+            self.fleet_replication.schedule_local_sync(agent_id)
         result.update(_compact_context(pending))
         if any(pending_communication.values()):
             result["pending_communication"] = pending_communication

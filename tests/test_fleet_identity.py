@@ -53,11 +53,14 @@ def test_signed_identity_record_binds_identity_and_original_hard_clock():
     assert current.public_name == "Alpha"
     assert verify_identity_record(current, signature, public) is True
     assert verify_identity_record(replace(current, revision=2), signature, public) is False
-    assert verify_identity_record(
-        replace(current, expires_at="2026-01-01T00:30:00.000Z"),
-        signature,
-        public,
-    ) is False
+    assert (
+        verify_identity_record(
+            replace(current, expires_at="2026-01-01T00:30:00.000Z"),
+            signature,
+            public,
+        )
+        is False
+    )
 
 
 def test_terminal_state_and_end_reason_are_signed():
@@ -93,3 +96,14 @@ def test_active_and_terminal_end_state_invariants():
         record(ended_at="2026-01-01T00:10:00.000Z")
     with pytest.raises(ValueError, match="requires ended_at"):
         record(state="forced")
+
+
+def test_identity_time_and_end_reason_invariants():
+    with pytest.raises(ValueError, match="expires_at"):
+        record(expires_at="2025-12-31T23:59:59.000Z")
+    with pytest.raises(ValueError):
+        record(session_started_at="not-a-time")
+    with pytest.raises(ValueError, match="end_reason"):
+        record(end_reason="unexpected")
+    with pytest.raises(ValueError, match="end_reason"):
+        record(state="finished", ended_at="2026-01-01T00:10:00.000Z", end_reason=None)

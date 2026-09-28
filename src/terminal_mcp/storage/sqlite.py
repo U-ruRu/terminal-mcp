@@ -230,6 +230,32 @@ class SqliteRepository:
                     ON work_reviews(namespace,task_id,candidate_ref,dimension);
                 CREATE INDEX IF NOT EXISTS ix_work_events_task
                     ON work_events(namespace,task_id,id DESC);
+                CREATE TABLE IF NOT EXISTS fleet_agent_identities(
+                    source_instance_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision > 0),
+                    record_json TEXT NOT NULL,
+                    signature TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    PRIMARY KEY(source_instance_id,agent_id)
+                );
+                CREATE TABLE IF NOT EXISTS fleet_peer_outbox(
+                    peer_instance_id TEXT NOT NULL,
+                    source_instance_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision > 0),
+                    record_json TEXT NOT NULL,
+                    signature TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    last_error TEXT,
+                    PRIMARY KEY(peer_instance_id,source_instance_id,agent_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_fleet_identities_agent
+                    ON fleet_agent_identities(agent_id,received_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_fleet_outbox_peer
+                    ON fleet_peer_outbox(peer_instance_id,queued_at);
                 """
             )
             await self._migrate(db)
@@ -241,7 +267,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=11")
+            await db.execute("PRAGMA user_version=12")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")

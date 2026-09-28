@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from terminal_mcp.core.orchestration import public_agent_name
+from terminal_mcp.core.orchestration import parse_utc, public_agent_name
 
 
 def _decode(value: str) -> bytes:
@@ -41,8 +41,19 @@ class AgentIdentityRecord:
             raise ValueError("revision must be positive")
         if self.state == "active" and self.ended_at is not None:
             raise ValueError("active identity must not have ended_at")
+        if self.state == "active" and self.end_reason is not None:
+            raise ValueError("active identity must not have end_reason")
         if self.state != "active" and self.ended_at is None:
             raise ValueError("terminal identity requires ended_at")
+        if self.state != "active" and not self.end_reason:
+            raise ValueError("terminal identity requires end_reason")
+        started = parse_utc(self.session_started_at)
+        expires = parse_utc(self.expires_at)
+        parse_utc(self.updated_at)
+        if expires <= started:
+            raise ValueError("expires_at must be later than session_started_at")
+        if self.ended_at is not None:
+            parse_utc(self.ended_at)
 
     @property
     def public_name(self) -> str:
@@ -56,6 +67,25 @@ class AgentIdentityRecord:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
+
+
+@dataclass(frozen=True, slots=True)
+class SignedAgentIdentity:
+    record: AgentIdentityRecord
+    signature: str
+
+    def as_dict(self) -> dict:
+        return {"record": asdict(self.record), "signature": self.signature}
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> SignedAgentIdentity:
+        if not isinstance(payload, dict):
+            raise ValueError("signed identity payload must be an object")
+        record = payload.get("record")
+        signature = payload.get("signature")
+        if not isinstance(record, dict) or not isinstance(signature, str) or not signature:
+            raise ValueError("signed identity requires record and signature")
+        return cls(AgentIdentityRecord(**record), signature)
 
 
 def sign_identity_record(record: AgentIdentityRecord, private_key: str) -> str:
