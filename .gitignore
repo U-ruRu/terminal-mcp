@@ -6,3 +6,8 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .serena/
+
+# Console frontend
+apps/console/node_modules/
+apps/console/dist/
+apps/console/*.tsbuildinfo

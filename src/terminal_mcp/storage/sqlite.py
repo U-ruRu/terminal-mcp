@@ -11,6 +11,7 @@ import aiosqlite
 
 from terminal_mcp.core.models import Command
 from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.storage.events import install_event_journal
 from terminal_mcp.storage.output import (
     DEFAULT_COMMAND_MAX_BYTES,
     DEFAULT_LINE_MAX_BYTES,
@@ -232,6 +233,7 @@ class SqliteRepository:
                 """
             )
             await self._migrate(db)
+            await install_event_journal(db)
             legacy_output_migrated = await self._migrate_legacy_output(db)
             recovered_at = utc_text()
             await db.execute(

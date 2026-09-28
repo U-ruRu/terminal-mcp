@@ -11,7 +11,11 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
-from terminal_mcp.storage.tasks import TaskClaimConflict, TaskRevisionConflict
+from terminal_mcp.storage.tasks import (
+    TaskClaimConflict,
+    TaskRelationConflict,
+    TaskRevisionConflict,
+)
 
 LANES = ("implementation", "review", "release", "integration", "general")
 STATES = ("ready", "blocked", "deferred", "done")
@@ -35,7 +39,7 @@ PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 VALUE_PRIORITY = {value: key for key, value in PRIORITY_VALUE.items()}
 PRESSURE_WEIGHT = {"P0": 8, "P1": 4, "P2": 2, "P3": 1}
 SAFE_PARTICIPANT_FIELDS = frozenset(
-    {"title", "lane", "priority", "description", "next_action", "resource", "candidate_ref", "tags"}
+    {"title", "description", "next_action", "tags"}
 )
 
 
@@ -354,6 +358,35 @@ class TaskCoordinator:
         if len(text) > max_length:
             return None, f"task.{field}: maximum length is {max_length}"
         return text, None
+
+    async def _review_completion_candidate_error(self, current, proposed_candidate=None):
+        if current.get("lane") != "review":
+            return None
+        review_relations = [
+            relation
+            for relation in await self.store.relations(current["namespace"], current["task_id"])
+            if relation["direction"] == "outgoing" and relation["kind"] == "review_of"
+        ]
+        if not review_relations:
+            return None
+        review_candidate = (
+            proposed_candidate if proposed_candidate is not None else current.get("candidate_ref")
+        )
+        review_candidate = (review_candidate or "").strip()
+        if len(review_relations) != 1:
+            parent_candidate = None
+        else:
+            relation = review_relations[0]
+            parent = await self.store.get_task(relation["namespace"], relation["task_id"])
+            parent_candidate = ((parent or {}).get("candidate_ref") or "").strip()
+        if not review_candidate or not parent_candidate or review_candidate != parent_candidate:
+            return {
+                "ok": False,
+                "code": "candidate_mismatch",
+                "error": "task.done: review candidate_ref does not match review_of parent",
+                "warnings": [],
+            }
+        return None
 
     async def _review_feedback_events(
         self,
@@ -823,6 +856,13 @@ class TaskCoordinator:
                 relation_kind=kind,
                 agent_id=agent_id,
             )
+        except TaskRelationConflict as exc:
+            return {
+                "ok": False,
+                "code": exc.code,
+                "error": f"task.relate: {exc}",
+                "warnings": [],
+            }
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.relate: {exc}", "warnings": []}
         return await self._result(namespace, task_id, [])
@@ -946,6 +986,26 @@ class TaskCoordinator:
             return {"ok": False, "error": error, "warnings": []}
         warnings = []
         target_state = kwargs.get("state")
+        if "candidate_ref" in fields:
+            if current["state"] == "done":
+                return {
+                    "ok": False,
+                    "code": "candidate_ref_frozen",
+                    "error": "task.update: candidate_ref is immutable after task completion",
+                    "warnings": [],
+                }
+            review_relations = [
+                relation
+                for relation in await self.store.relations(namespace, task_id)
+                if relation["direction"] == "incoming" and relation["kind"] == "review_of"
+            ]
+            if review_relations:
+                return {
+                    "ok": False,
+                    "code": "candidate_ref_frozen",
+                    "error": "task.update: candidate_ref is frozen while review_of relation exists",
+                    "warnings": [],
+                }
         claims = await self._live_claims(namespace, task_id)
         owner = claims[0]["agent_id"] if claims else None
         unsafe_fields = set(fields) - SAFE_PARTICIPANT_FIELDS
@@ -970,6 +1030,12 @@ class TaskCoordinator:
 
         dependency_override = None
         if target_state == "done" and current["state"] != "done":
+            candidate_error = await self._review_completion_candidate_error(
+                current,
+                proposed_candidate=fields.get("candidate_ref"),
+            )
+            if candidate_error:
+                return candidate_error
             warnings, dependency_override, dependency_failure = await self._dependency_gate(
                 namespace,
                 task_id,

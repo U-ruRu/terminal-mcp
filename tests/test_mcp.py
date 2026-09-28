@@ -208,7 +208,7 @@ class FakeService:
             "agent_name": "Kilo" if agent_id else "anonymous",
             "pending_messages": [],
             "application": "terminal-mcp",
-            "version": "0.10.0",
+            "version": "0.10.1",
             "storage": "ok",
             "auth_mode": auth_mode,
             "terminal": {
@@ -478,7 +478,7 @@ async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     health = await tools["health"].run({}, convert_result=True)
-    assert health.structuredContent["version"] == "0.10.0"
+    assert health.structuredContent["version"] == "0.10.1"
     assert health.structuredContent["ok"] is True
     assert health.structuredContent["agent_name"] == "anonymous"
     recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)

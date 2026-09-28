@@ -475,3 +475,22 @@ class AgentFinishResponse(SessionStatus):
         description="Outstanding communication summary retained when agent_finish is allowed.",
     )
     error: str | None = None
+
+
+class ConsoleSnapshotConsistency(BaseModel):
+    mode: Literal["cursor_first_at_least_once"] = "cursor_first_at_least_once"
+    high_water_seq: int = Field(ge=0)
+    replay_from_seq: int = Field(ge=0)
+    duplicate_events_possible: bool = True
+
+
+class ConsoleSnapshotResponse(BaseModel):
+    ok: bool
+    high_water_seq: int = Field(ge=0)
+    consistency: ConsoleSnapshotConsistency
+    instance: dict[str, object]
+    agents: dict[str, object]
+    tasks: dict[str, object]
+    contexts: dict[str, object]
+    communications: list[dict[str, object]] = Field(default_factory=list)
+    error: str | None = None

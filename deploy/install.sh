@@ -8,6 +8,7 @@ DATA=${TERMINAL_MCP_DATA_DIR:-/var/lib/terminal-mcp}
 CACHE=${TERMINAL_MCP_CACHE_DIR:-/var/cache/terminal-mcp}
 BACKUPS=${TERMINAL_MCP_BACKUP_DIR:-/var/backups/terminal-mcp}
 UNIT_FILE=${TERMINAL_MCP_UNIT_FILE:-/etc/systemd/system/terminal-mcp.service}
+CLI_LINK=${TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp}
 SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
 HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
 HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
@@ -19,7 +20,8 @@ write_env(){
   cat >"$ENV_FILE" <<ENV
 TERMINAL_MCP_HOST="127.0.0.1"
 TERMINAL_MCP_PORT="8080"
-TERMINAL_MCP_PUBLIC_BASE_URL="${TERMINAL_MCP_PUBLIC_BASE_URL:-https://terminal.example.com}"
+TERMINAL_MCP_PUBLIC_BASE_URL="${TERMINAL_MCP_PUBLIC_BASE_URL:-https://server-a.example.invalid}"
+TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"
 TERMINAL_MCP_ENV_FILE_PATH="$ENV_FILE"
 TERMINAL_MCP_DATABASE_PATH="$DATA/terminal-mcp.sqlite3"
 TERMINAL_MCP_OUTPUT_CACHE_PATH="$CACHE/output.sqlite3"
@@ -61,6 +63,7 @@ ENV
 ensure_env_defaults(){
   [ -f "$ENV_FILE" ] || return 0
   ensure_env(){ key=$1; value=$2; grep -q "^${key}=" "$ENV_FILE" || printf '%s="%s"\n' "$key" "$value" >>"$ENV_FILE"; }
+  ensure_env TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS "${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"
   ensure_env TERMINAL_MCP_OUTPUT_CACHE_PATH "$CACHE/output.sqlite3"
   ensure_env TERMINAL_MCP_OUTPUT_LINE_MAX_BYTES "${TERMINAL_MCP_OUTPUT_LINE_MAX_BYTES:-4194304}"
   ensure_env TERMINAL_MCP_OUTPUT_COMMAND_MAX_BYTES "${TERMINAL_MCP_OUTPUT_COMMAND_MAX_BYTES:-8388608}"
@@ -112,6 +115,11 @@ stage(){
     rm -rf "$STAGED_RELEASE"
     return 1
   fi
+  if ! "$STAGED_RELEASE/bin/python" -c     'from mcp.server.transport_security import TransportSecuritySettings; import terminal_mcp.app'     >&2; then
+    echo "Staged release runtime import check failed" >&2
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
 }
 backup(){
   [ -f "$DATA/terminal-mcp.sqlite3" ] || return 0
@@ -122,11 +130,18 @@ src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); src.backup(d
 PY
   chmod 600 "$BACKUPS/terminal-mcp-$stamp.sqlite3"
 }
+install_cli_link(){
+  mkdir -p "$(dirname "$CLI_LINK")"
+  ln -sfn "$ROOT/current/bin/terminal-mcp" "$CLI_LINK"
+}
 activate(){
   new=$1; old=$(readlink -f "$ROOT/current" 2>/dev/null || true)
   ln -sfn "$new" "$ROOT/current"; $SYSTEMCTL daemon-reload; $SYSTEMCTL restart terminal-mcp
   for _ in $(seq 1 "$HEALTH_TIMEOUT_SEC"); do
-    curl -fsS "$HEALTH_URL" >/dev/null && return 0
+    if curl -fsS "$HEALTH_URL" >/dev/null; then
+      install_cli_link
+      return 0
+    fi
     sleep 1
   done
   [ -n "$old" ] && ln -sfn "$old" "$ROOT/current"

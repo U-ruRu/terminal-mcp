@@ -1,6 +1,6 @@
 # terminal-mcp
 
-Application release: **0.10.0**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
+Application release: **0.10.1**. Live health responses publish the runtime application version, so operational checks do not need to infer it from historical context.
 
 `terminal-mcp` предоставляет MCP и OpenAPI-интерфейсы для управления Linux-терминалом.
 
@@ -127,6 +127,18 @@ Endpoints:
 
 Agent-facing OAuth uses one scope: `terminal:read`. All published terminal and workflow operations intentionally use the same consent tier; command execution does not request a separate execute permission.
 
+### Browser Console transport
+
+`origin(TERMINAL_MCP_PUBLIC_BASE_URL)` is always allowed for browser Console requests. Additional static Console origins are configured as an exact comma-separated allowlist:
+
+```env
+TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://console.example.invalid,https://ops.example.invalid"
+```
+
+Only explicit `http`/`https` origins are accepted; wildcard, path, query and fragment values fail closed. CORS/Origin enforcement covers `/connect`, `/pairing/exchange`, `/oauth/token`, `/actions/*` and `/console/*`. Non-browser clients without an `Origin` header remain supported.
+
+The local `terminal-mcp pair` command is the only pairing-issuance surface. It places the one-time secret in the `/connect#...` URL fragment; `/connect` rejects query material and browser bootstrap/token responses are `no-store` with no-referrer and framing/content hardening.
+
 ## Admin UI
 
 Admin UI: `/admin`.
@@ -200,3 +212,11 @@ python3 -m venv .venv
 .venv/bin/ruff check src tests
 .venv/bin/pytest -q
 ```
+
+### Console transport smoke client
+
+Create a one-time local pairing URL with terminal-mcp pair, then exercise pair -> snapshot -> WebSocket end-to-end:
+
+    python scripts/console_transport_smoke.py --pair-url 'https://terminal.example/connect#ONE_TIME_SECRET'
+
+The client exchanges the fragment secret, fetches /actions/console/snapshot, issues a short-lived single-use WebSocket ticket, and subscribes from snapshot high_water_seq. Pass --since 0 to exercise replay; if retention caused a journal gap, the client handles resync_required by fetching a fresh snapshot, issuing a new one-use ticket, and reconnecting. It never prints pairing, access, refresh, or WebSocket ticket secrets.
