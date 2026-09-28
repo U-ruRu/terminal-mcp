@@ -212,3 +212,11 @@ python3 -m venv .venv
 .venv/bin/ruff check src tests
 .venv/bin/pytest -q
 ```
+
+### Console transport smoke client
+
+Create a one-time local pairing URL with terminal-mcp pair, then exercise pair -> snapshot -> WebSocket end-to-end:
+
+    python scripts/console_transport_smoke.py --pair-url 'https://terminal.example/connect#ONE_TIME_SECRET'
+
+The client exchanges the fragment secret, fetches /actions/console/snapshot, issues a short-lived single-use WebSocket ticket, and subscribes from snapshot high_water_seq. Pass --since 0 to exercise replay; if retention caused a journal gap, the client handles resync_required by fetching a fresh snapshot, issuing a new one-use ticket, and reconnecting. It never prints pairing, access, refresh, or WebSocket ticket secrets.
