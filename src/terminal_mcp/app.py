@@ -122,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.runtime_config = runtime
     app.state.metrics = metrics
     app.state.events = events
+    app.state.event_store = service.event_store
     app.include_router(build_public_router())
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(build_oauth_router(settings, auth, oauth_store))

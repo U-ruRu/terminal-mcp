@@ -8,6 +8,7 @@ from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.context import ContextStore
+from terminal_mcp.storage.events import EventJournalStore
 from terminal_mcp.storage.tasks import TaskStore
 from terminal_mcp.version import __version__
 
@@ -119,6 +120,8 @@ class TerminalService:
         self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
         self.context_store = ContextStore(repo.path) if hasattr(repo, "path") else None
         self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
+        self.event_store = EventJournalStore(repo.path) if hasattr(repo, "path") else None
+        self._last_health_signature = None
         self.agent_coordinator = (
             AgentCoordinator(
                 self.agent_store, metrics, self.agent_policy, task_store=self.task_store
@@ -632,6 +635,21 @@ class TerminalService:
                 }
                 if self.task_coordinator:
                     result["workflow"] = await self.task_coordinator.health()
+                if self.event_store:
+                    signature = {
+                        "ok": bool(result["ok"]),
+                        "storage": result["storage"],
+                        "terminal_ok": bool(terminal.get("ok", False)),
+                        "worker_health": terminal.get("worker_health") or {},
+                    }
+                    if signature != self._last_health_signature:
+                        await self.event_store.append(
+                            "health.changed",
+                            "health",
+                            "terminal-mcp",
+                            payload=signature,
+                        )
+                        self._last_health_signature = signature
                 if self.health_command:
                     custom = await self.terminal.capture(
                         self.health_command,
