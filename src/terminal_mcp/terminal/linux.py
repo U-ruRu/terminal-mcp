@@ -32,6 +32,7 @@ class LinuxTerminalAdapter:
         }
         self.workers = {}
         self.cancel_requested = set()
+        self.execution_done = {}
         self.stopping = False
         self.queue = ()  # compatibility surface; SQLite is the queue source of truth.
 
@@ -284,6 +285,8 @@ class LinuxTerminalAdapter:
         pipe_task = None
         error = None
         final_status = None
+        execution_done = asyncio.Event()
+        self.execution_done[command.cmd_hash] = execution_done
         try:
             process = await self._spawn()
             self.processes[command.cmd_hash] = process
@@ -342,6 +345,8 @@ class LinuxTerminalAdapter:
             self.cancel_requested.discard(command.cmd_hash)
             if command.queue_id in self.queue_events:
                 self.queue_events[command.queue_id].set()
+            self.execution_done.pop(command.cmd_hash, None)
+            execution_done.set()
         return round((time.monotonic() - started) * 1000)
 
     async def recovery(self, command, timeout_seconds=20):
@@ -439,12 +444,12 @@ class LinuxTerminalAdapter:
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 term_wait = min(5.0, max(0.0, timeout_seconds - 0.5))
-                await asyncio.wait_for(process.wait(), term_wait)
+                await self._wait_root_exit(process, term_wait)
             except TimeoutError:
                 os.killpg(process.pid, signal.SIGKILL)
                 try:
                     kill_wait = min(3.0, max(0.0, deadline - time.monotonic()))
-                    await asyncio.wait_for(process.wait(), kill_wait)
+                    await self._wait_root_exit(process, kill_wait)
                 except TimeoutError:
                     self.cancel_requested.discard(command.cmd_hash)
                     return False, (
@@ -453,7 +458,18 @@ class LinuxTerminalAdapter:
                     )
 
         await self.repo.finish_running(command.cmd_hash, "cancelled", process.returncode, None)
+        execution_done = self.execution_done.get(command.cmd_hash)
+        if execution_done is not None:
+            try:
+                await asyncio.wait_for(
+                    execution_done.wait(),
+                    max(0.0, deadline - time.monotonic()),
+                )
+            except TimeoutError:
+                return False, "cancel.wait_cleanup: worker cleanup did not finish before deadline"
         current = await self.repo.get(command.cmd_hash)
+        if command.cmd_hash in self.processes:
+            return False, "cancel.wait_cleanup: worker cleanup did not finish before deadline"
         return (current is not None and current.status == "cancelled"), None
 
     async def least_loaded_queue(self):
