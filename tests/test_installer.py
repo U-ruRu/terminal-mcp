@@ -49,3 +49,11 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     assert result.returncode != 0
     assert not (root / "current").exists()
     assert list((root / "releases").iterdir()) == []
+
+
+def test_installer_exposes_stable_cli_link():
+    script = (Path(__file__).resolve().parents[1] / 'deploy' / 'install.sh').read_text()
+
+    assert 'TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp' in script
+    assert 'ln -sfn "$ROOT/current/bin/terminal-mcp" "$CLI_LINK"' in script
+    assert 'install_cli_link' in script

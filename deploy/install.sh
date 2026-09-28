@@ -8,6 +8,7 @@ DATA=${TERMINAL_MCP_DATA_DIR:-/var/lib/terminal-mcp}
 CACHE=${TERMINAL_MCP_CACHE_DIR:-/var/cache/terminal-mcp}
 BACKUPS=${TERMINAL_MCP_BACKUP_DIR:-/var/backups/terminal-mcp}
 UNIT_FILE=${TERMINAL_MCP_UNIT_FILE:-/etc/systemd/system/terminal-mcp.service}
+CLI_LINK=${TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp}
 SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
 HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
 HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
@@ -122,11 +123,18 @@ src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); src.backup(d
 PY
   chmod 600 "$BACKUPS/terminal-mcp-$stamp.sqlite3"
 }
+install_cli_link(){
+  mkdir -p "$(dirname "$CLI_LINK")"
+  ln -sfn "$ROOT/current/bin/terminal-mcp" "$CLI_LINK"
+}
 activate(){
   new=$1; old=$(readlink -f "$ROOT/current" 2>/dev/null || true)
   ln -sfn "$new" "$ROOT/current"; $SYSTEMCTL daemon-reload; $SYSTEMCTL restart terminal-mcp
   for _ in $(seq 1 "$HEALTH_TIMEOUT_SEC"); do
-    curl -fsS "$HEALTH_URL" >/dev/null && return 0
+    if curl -fsS "$HEALTH_URL" >/dev/null; then
+      install_cli_link
+      return 0
+    fi
     sleep 1
   done
   [ -n "$old" ] && ln -sfn "$old" "$ROOT/current"
