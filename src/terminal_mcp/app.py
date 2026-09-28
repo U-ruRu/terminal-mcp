@@ -15,6 +15,7 @@ from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
+from terminal_mcp.http.browser_security import BrowserSecurityMiddleware
 from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
 from terminal_mcp.http.pairing import build_pairing_router
@@ -32,6 +33,7 @@ from terminal_mcp.version import __version__
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    settings.browser_allowed_origins()
     repo = SqliteRepository(
         settings.database_path,
         settings.output_cache_path,
@@ -175,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(AuthMiddleware, settings=settings, auth_service=auth)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TraceMiddleware)
+    app.add_middleware(BrowserSecurityMiddleware, settings=settings)
     return app
 
 

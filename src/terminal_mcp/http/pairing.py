@@ -3,7 +3,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 CONNECT_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Terminal MCP Console pairing</title></head>
+<html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<title>Terminal MCP Console pairing</title></head>
 <body><h1>Terminal MCP Console pairing</h1>
 <p>This one-time link must be opened by a Terminal MCP Console client.</p>
 <p>The pairing secret stays in the URL fragment and is never sent by this page.</p>
@@ -20,7 +21,9 @@ def build_pairing_router(settings, auth, pairing_store):
     router = APIRouter()
 
     @router.get("/connect", response_class=HTMLResponse, include_in_schema=False)
-    async def connect():
+    async def connect(request: Request):
+        if request.url.query:
+            return JSONResponse({"error": "invalid_connect_url"}, status_code=400)
         return HTMLResponse(CONNECT_PAGE)
 
     @router.post("/pairing/exchange", include_in_schema=False)

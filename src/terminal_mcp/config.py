@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8080
     public_base_url: str = "http://127.0.0.1:8080"
+    console_allowed_origins: str = ""
     env_file_path: Path = Path("/etc/terminal-mcp/terminal-mcp.env")
     database_path: Path = Path("./data/terminal-mcp.sqlite3")
     output_cache_path: Path = Path("./data/output.sqlite3")
@@ -77,6 +79,18 @@ class Settings(BaseSettings):
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode
         return explicit or self.auth_mode
+
+    def browser_allowed_origins(self) -> tuple[str, ...]:
+        from terminal_mcp.http.browser_security import canonical_origin
+
+        public = urlsplit(self.public_base_url)
+        public_origin = canonical_origin(f"{public.scheme}://{public.netloc}")
+        configured = [
+            canonical_origin(value)
+            for value in self.console_allowed_origins.split(",")
+            if value.strip()
+        ]
+        return tuple(dict.fromkeys([public_origin, *configured]))
 
     @staticmethod
     def parse_json_list(value: str) -> list[dict]:

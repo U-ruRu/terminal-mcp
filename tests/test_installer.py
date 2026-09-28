@@ -57,3 +57,13 @@ def test_installer_exposes_stable_cli_link():
     assert 'TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp' in script
     assert 'ln -sfn "$ROOT/current/bin/terminal-mcp" "$CLI_LINK"' in script
     assert 'install_cli_link' in script
+
+
+def test_installer_persists_console_origin_allowlist():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    assert (
+        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"'
+        in script
+    )
+    assert 'ensure_env TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS' in script
