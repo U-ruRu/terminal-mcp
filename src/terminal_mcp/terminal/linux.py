@@ -33,6 +33,8 @@ class LinuxTerminalAdapter:
         self.workers = {}
         self.cancel_requested = set()
         self.execution_done = {}
+        self.output_readers = {}
+        self.output_transports = {}
         self.stopping = False
         self.queue = ()  # compatibility surface; SQLite is the queue source of truth.
 
@@ -60,6 +62,10 @@ class LinuxTerminalAdapter:
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
         self.workers.clear()
+        for transport in self.output_transports.values():
+            transport.close()
+        self.output_transports.clear()
+        self.output_readers.clear()
 
     def _valid_queue(self, queue_id):
         return isinstance(queue_id, int) and 1 <= queue_id <= self.queue_workers
@@ -116,17 +122,50 @@ class LinuxTerminalAdapter:
 
         return drop_privileges
 
-    async def _spawn(self):
-        return await asyncio.create_subprocess_exec(
-            self.shell,
-            "-s",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=self.cwd,
-            start_new_session=True,
-            preexec_fn=self._drop_privileges(),
-        )
+    async def _spawn(self, *, capture=False):
+        if capture:
+            return await asyncio.create_subprocess_exec(
+                self.shell,
+                "-s",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=self.cwd,
+                start_new_session=True,
+                preexec_fn=self._drop_privileges(),
+            )
+
+        read_fd, write_fd = os.pipe()
+        read_pipe = os.fdopen(read_fd, "rb", buffering=0)
+        write_pipe = os.fdopen(write_fd, "wb", buffering=0)
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        transport = None
+        try:
+            transport, _ = await loop.connect_read_pipe(lambda: protocol, read_pipe)
+            process = await asyncio.create_subprocess_exec(
+                self.shell,
+                "-s",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=write_pipe,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=self.cwd,
+                start_new_session=True,
+                preexec_fn=self._drop_privileges(),
+            )
+        except BaseException:
+            if transport is not None:
+                transport.close()
+            else:
+                read_pipe.close()
+            raise
+        finally:
+            write_pipe.close()
+
+        self.output_readers[process.pid] = reader
+        self.output_transports[process.pid] = transport
+        return process
 
     async def _pipe_output(self, command, reader):
         pending = b""
@@ -246,13 +285,15 @@ class LinuxTerminalAdapter:
             except TimeoutError:
                 return False
 
-    @staticmethod
-    def _close_output_reader(reader):
-        transport = getattr(reader, "_transport", None)
+    def _release_output_stream(self, process):
+        if process is None:
+            return
+        transport = self.output_transports.pop(process.pid, None)
+        self.output_readers.pop(process.pid, None)
         if transport is not None:
             transport.close()
 
-    async def _drain_output(self, command, pipe_task, reader=None):
+    async def _drain_output(self, command, pipe_task, output_transport=None):
         if pipe_task is None:
             return
         if pipe_task.done():
@@ -261,13 +302,16 @@ class LinuxTerminalAdapter:
         try:
             await asyncio.wait_for(
                 asyncio.shield(pipe_task),
-                timeout=max(0.05, float(self.grace)),
+                # Give already-produced output enough time to reach durable storage even
+                # when tests/config use a very small process grace. Inherited descriptors
+                # are still bounded; production grace values above this floor are unchanged.
+                timeout=max(0.5, float(self.grace)),
             )
         except TimeoutError:
             await self.repo.mark_output_truncated(command.cmd_hash)
             pipe_task.cancel()
-            if reader is not None:
-                self._close_output_reader(reader)
+            if output_transport is not None:
+                output_transport.close()
             await asyncio.gather(pipe_task, return_exceptions=True)
 
     async def _execute(self, command, *, method, timeout_seconds=None):
@@ -283,12 +327,16 @@ class LinuxTerminalAdapter:
 
         process = None
         pipe_task = None
+        output_reader = None
+        output_transport = None
         error = None
         final_status = None
         execution_done = asyncio.Event()
         self.execution_done[command.cmd_hash] = execution_done
         try:
             process = await self._spawn()
+            output_reader = self.output_readers.get(process.pid)
+            output_transport = self.output_transports.get(process.pid)
             self.processes[command.cmd_hash] = process
             self.process_queues[command.cmd_hash] = command.queue_id
             command.pid = process.pid
@@ -298,14 +346,14 @@ class LinuxTerminalAdapter:
             process.stdin.write(command.cmd.encode())
             await process.stdin.drain()
             process.stdin.close()
-            pipe_task = asyncio.create_task(self._pipe_output(command, process.stdout))
+            pipe_task = asyncio.create_task(self._pipe_output(command, output_reader))
             try:
                 await self._wait_root_exit(process, timeout_seconds)
             except TimeoutError:
                 error = f"{method}.timeout: command exceeded {round(timeout_seconds * 1000)} ms"
                 self.cancel_requested.add(command.cmd_hash)
                 await self._terminate(process, grace_seconds=0.5)
-            await self._drain_output(command, pipe_task, process.stdout)
+            await self._drain_output(command, pipe_task, output_transport)
 
             command.exit_code = process.returncode
             if command.cmd_hash in self.cancel_requested:
@@ -317,7 +365,7 @@ class LinuxTerminalAdapter:
                 self.cancel_requested.add(command.cmd_hash)
                 await self._terminate(process, grace_seconds=0.5)
                 if pipe_task:
-                    await self._drain_output(command, pipe_task, process.stdout)
+                    await self._drain_output(command, pipe_task, output_transport)
                 command.exit_code = process.returncode
             final_status = "cancelled"
             error = f"{method}.cancelled: upstream disconnected"
@@ -337,6 +385,7 @@ class LinuxTerminalAdapter:
                 await asyncio.gather(pipe_task, return_exceptions=True)
             self.processes.pop(command.cmd_hash, None)
             self.process_queues.pop(command.cmd_hash, None)
+            self._release_output_stream(process)
             if final_status is not None:
                 await self.repo.finish_running(
                     command.cmd_hash, final_status, command.exit_code, error
@@ -360,7 +409,7 @@ class LinuxTerminalAdapter:
         self, command, timeout_ms=5000, max_output_lines=1000, timeout_error="capture timed out"
     ):
         started = time.monotonic()
-        process = await self._spawn()
+        process = await self._spawn(capture=True)
         self.capture_processes.add(process)
         communication = asyncio.create_task(process.communicate(command.encode()))
         error = None

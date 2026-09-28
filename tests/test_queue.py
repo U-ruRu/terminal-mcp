@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 import time
 
 import pytest
@@ -379,6 +381,42 @@ async def test_inherited_output_fd_after_root_exit_does_not_hold_fifo(tmp_path):
     assert (await service.read(first["cmd_hash"]))["output_truncated"] is True
     assert (tmp_path / "after-inherited-fd.txt").read_text() == "after-inherited-fd\n"
     await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_repeated_inherited_output_fds_do_not_leak_parent_descriptors(tmp_path):
+    _, terminal, service = await create_runtime(tmp_path)
+    baseline_fds = len(os.listdir("/proc/self/fd"))
+    descendant_pids = []
+    try:
+        for index in range(12):
+            pid_file = tmp_path / f"descendant-{index}.pid"
+            command = await service.run(
+                (
+                    'python3 -c "import os,time; p=os.fork(); '
+                    f"open({str(pid_file)!r},'w').write(str(p)) if p != 0 else None; "
+                    'time.sleep(30) if p == 0 else None; os._exit(0)"'
+                ),
+                queue_id=1,
+                task_scope="none",
+            )
+            completed = await wait_status(service, command["cmd_hash"], "completed")
+            assert completed["status"] == "completed"
+            assert (await service.read(command["cmd_hash"]))["output_truncated"] is True
+            descendant_pids.append(int(pid_file.read_text()))
+            await asyncio.sleep(0)
+
+        after_fds = len(os.listdir("/proc/self/fd"))
+        assert after_fds <= baseline_fds + 2
+        assert terminal.output_readers == {}
+        assert terminal.output_transports == {}
+    finally:
+        for pid in descendant_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await terminal.stop()
 
 
 @pytest.mark.asyncio
