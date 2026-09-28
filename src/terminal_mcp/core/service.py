@@ -128,7 +128,16 @@ class TerminalService:
         self._last_health_signature = None
         self.agent_coordinator = (
             AgentCoordinator(
-                self.agent_store, metrics, self.agent_policy, task_store=self.task_store
+                self.agent_store,
+                metrics,
+                self.agent_policy,
+                task_store=self.task_store,
+                foreign_session_resolver=(
+                    fleet_replication.resolve_session if fleet_replication else None
+                ),
+                local_instance_id=(
+                    fleet_replication.config.instance_id if fleet_replication else None
+                ),
             )
             if self.agent_store
             else None
@@ -144,6 +153,10 @@ class TerminalService:
             if self.task_store
             else None
         )
+        if self.fleet_replication:
+            self.fleet_replication.bind_origin_finish_handler(
+                self._finish_fleet_origin_session
+            )
 
     async def _operational_context(self, agent_id, tool):
         if not agent_id or not self.agent_coordinator:
@@ -839,6 +852,8 @@ class TerminalService:
             agent_id, step=step, intent=intent, show_details=show_details
         )
         _, result["task_scope_options"] = await self._task_scope_state(agent_id)
+        if result.get("ok") and self.fleet_replication:
+            self.fleet_replication.schedule_local_sync(agent_id)
         return result
 
     async def message(
@@ -1003,6 +1018,30 @@ class TerminalService:
         result.update(_compact_context(gate["context"]))
         return result
 
+    async def _finish_fleet_origin_session(self, agent_id, ended_at, reason):
+        if not self.agent_store:
+            return False
+        session = await self.agent_store.get_session(agent_id)
+        if session is None:
+            return False
+        if self.fleet_replication:
+            source = session.get("source_instance_id")
+            if source and source != self.fleet_replication.config.instance_id:
+                return False
+        if session["state"] == "active":
+            changed = await self.agent_store.end(
+                agent_id,
+                "finished",
+                reason,
+                ended_at,
+            )
+            if changed and self.task_coordinator:
+                await self.task_coordinator.release_agent_claims(
+                    agent_id, reason="fleet_agent_finish"
+                )
+            return bool(changed)
+        return session["state"] in {"finished", "forced"}
+
     async def agent_finish(self, agent_id):
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
@@ -1012,7 +1051,9 @@ class TerminalService:
         if self.task_coordinator and result.get("finished"):
             await self.task_coordinator.release_agent_claims(agent_id, reason="agent_finish")
         if result.get("finished") and self.fleet_replication:
-            self.fleet_replication.schedule_local_sync(agent_id)
+            queued_foreign = await self.fleet_replication.queue_finish(agent_id)
+            if not queued_foreign:
+                self.fleet_replication.schedule_local_sync(agent_id)
         result.update(_compact_context(pending))
         if any(pending_communication.values()):
             result["pending_communication"] = pending_communication

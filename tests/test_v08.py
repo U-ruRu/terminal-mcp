@@ -169,10 +169,15 @@ async def test_absolute_session_warning_and_forced_expiry(tmp_path):
     repo, terminal, service = await runtime(tmp_path, policy=policy)
     try:
         agent_id = (await register(service))["self"]["agent_id"]
+        warning_started = utc_now() - timedelta(seconds=1325)
         with sqlite3.connect(repo.path) as db:
             db.execute(
-                "UPDATE agent_sessions SET registered_at=? WHERE agent_id=?",
-                (utc_text(utc_now() - timedelta(seconds=1325)), agent_id),
+                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
+                (
+                    utc_text(warning_started),
+                    utc_text(warning_started + timedelta(seconds=1500)),
+                    agent_id,
+                ),
             )
             db.commit()
         health = await service.health("none", agent_id=agent_id)
@@ -180,10 +185,15 @@ async def test_absolute_session_warning_and_forced_expiry(tmp_path):
         assert "safe checkpoint" in health["session_warning"]
         assert "long build or test run" in health["session_warning"]
 
+        expired_started = utc_now() - timedelta(seconds=1501)
         with sqlite3.connect(repo.path) as db:
             db.execute(
-                "UPDATE agent_sessions SET registered_at=? WHERE agent_id=?",
-                (utc_text(utc_now() - timedelta(seconds=1501)), agent_id),
+                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
+                (
+                    utc_text(expired_started),
+                    utc_text(expired_started + timedelta(seconds=1500)),
+                    agent_id,
+                ),
             )
             db.commit()
         expired = await service.run("printf too-late", agent_id=agent_id, task_scope="none")
@@ -338,7 +348,7 @@ def test_v07_database_migrates_to_v08_without_reset(tmp_path):
         assert {"delivered_at", "first_seen_at", "seen_count", "replied_at"} <= recipient_columns
         old_command = db.execute("SELECT cmd FROM commands WHERE hash='deadbeef'").fetchone()[0]
         assert old_command == "printf old"
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
 
 
 @pytest.mark.asyncio

@@ -61,9 +61,10 @@ def session_expiry_reason(
     age = (current - parse_utc(session["registered_at"])).total_seconds()
     idle = (current - parse_utc(session["last_activity_at"])).total_seconds()
     global_expires_at = session.get("global_expires_at")
-    if global_expires_at and current >= parse_utc(global_expires_at):
-        return "max_session_duration"
-    if age >= max_session_seconds:
+    if global_expires_at:
+        if current >= parse_utc(global_expires_at):
+            return "max_session_duration"
+    elif age >= max_session_seconds:
         return "max_session_duration"
     if idle >= idle_ttl_seconds:
         return "idle_timeout"

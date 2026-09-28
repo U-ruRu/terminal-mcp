@@ -139,7 +139,7 @@ async def test_v4_lines_migrate_and_duplicate_index_is_removed(tmp_path):
         assert "lines" not in tables
         assert "ix_lines_hash_seq" not in indexes
         assert "idx_lines_hash_seq" not in indexes
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
     with sqlite3.connect(output) as db:
         indexes = {
             row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
@@ -175,20 +175,30 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
             agent_id=proposed["proposed_agent_id"], **plan
         )
         agent_id = started["self"]["agent_id"]
+        aged_start = utc_now() - timedelta(seconds=61)
         with sqlite3.connect(repo.path) as db:
             db.execute(
-                "UPDATE agent_sessions SET registered_at=? WHERE agent_id=?",
-                (utc_text(utc_now() - timedelta(seconds=61)), agent_id),
+                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
+                (
+                    utc_text(aged_start),
+                    utc_text(aged_start + timedelta(seconds=100)),
+                    agent_id,
+                ),
             )
             db.commit()
         warned = await service.health("none", agent_id=agent_id)
         assert warned["session_warning"]
         assert warned.get("alert_pending", False) is False
 
+        aged_start = utc_now() - timedelta(seconds=81)
         with sqlite3.connect(repo.path) as db:
             db.execute(
-                "UPDATE agent_sessions SET registered_at=? WHERE agent_id=?",
-                (utc_text(utc_now() - timedelta(seconds=81)), agent_id),
+                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
+                (
+                    utc_text(aged_start),
+                    utc_text(aged_start + timedelta(seconds=100)),
+                    agent_id,
+                ),
             )
             db.commit()
         blocked = await service.run("printf blocked", agent_id=agent_id, task_scope="none")
@@ -226,10 +236,15 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
         assert len(system_alerts) == 2
         assert system_alerts[0]["message_hash"] != first_hash
 
+        aged_start = utc_now() - timedelta(seconds=101)
         with sqlite3.connect(repo.path) as db:
             db.execute(
-                "UPDATE agent_sessions SET registered_at=? WHERE agent_id=?",
-                (utc_text(utc_now() - timedelta(seconds=101)), agent_id),
+                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
+                (
+                    utc_text(aged_start),
+                    utc_text(aged_start + timedelta(seconds=100)),
+                    agent_id,
+                ),
             )
             db.commit()
         expired = await service.health("none", agent_id=agent_id)

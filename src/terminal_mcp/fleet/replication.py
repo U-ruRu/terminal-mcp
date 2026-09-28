@@ -37,6 +37,7 @@ class FleetReplicationService:
         self._origin_finish_handler = None
         self._task: asyncio.Task | None = None
         self._kick_task: asyncio.Task | None = None
+        self._sync_tasks: set[asyncio.Task] = set()
         self._stopped = asyncio.Event()
 
     def _default_client(self):
@@ -231,8 +232,12 @@ class FleetReplicationService:
             if not self._valid_foreign_envelope(envelope, agent_id):
                 continue
             status = await self.receive(envelope)
-            if status in {"applied", "duplicate", "stale"}:
+            if status in {"applied", "duplicate"}:
                 return envelope
+            if status == "stale":
+                current = await self.store.get(envelope.record.source_instance_id, agent_id)
+                if current is not None and self._valid_foreign_envelope(current, agent_id):
+                    return current
         return None
 
     async def resolve_session(self, agent_id: str) -> dict | None:
@@ -354,7 +359,9 @@ class FleetReplicationService:
             except Exception as exc:
                 self._emit("fleet_identity_sync", outcome="error", error=exc.__class__.__name__)
 
-        asyncio.create_task(run())
+        task = asyncio.create_task(run())
+        self._sync_tasks.add(task)
+        task.add_done_callback(self._sync_tasks.discard)
 
     def kick(self) -> None:
         if self._task is None:
@@ -479,10 +486,16 @@ class FleetReplicationService:
 
     async def stop(self) -> None:
         self._stopped.set()
-        for task in (self._task, self._kick_task):
-            if task is not None and not task.done():
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        tasks = [
+            task
+            for task in (self._task, self._kick_task, *self._sync_tasks)
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._sync_tasks.clear()
         self._task = None
         self._kick_task = None

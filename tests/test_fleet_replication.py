@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import json
 from datetime import timedelta
 
 import httpx
@@ -287,6 +289,17 @@ async def test_terminal_service_schedules_replication_after_admission_and_finish
     class ReplicationSpy:
         def __init__(self):
             self.agent_ids = []
+            self.config = type("Config", (), {"instance_id": "server-a"})()
+            self.origin_finish_handler = None
+
+        async def resolve_session(self, agent_id):
+            return None
+
+        def bind_origin_finish_handler(self, handler):
+            self.origin_finish_handler = handler
+
+        async def queue_finish(self, agent_id):
+            return False
 
         def schedule_local_sync(self, agent_id):
             self.agent_ids.append(agent_id)
@@ -318,3 +331,422 @@ async def test_terminal_service_schedules_replication_after_admission_and_finish
     finished = await service.agent_finish(agent_id)
     assert finished["finished"] is True
     assert replication.agent_ids == [agent_id, agent_id]
+
+
+def v2_record(
+    source,
+    agent_id,
+    private,
+    *,
+    started,
+    expires,
+    revision=1,
+    state="active",
+    ended_at=None,
+    end_reason=None,
+    task_summary="synthetic shared task",
+    intent="continue shared work",
+    work_scope=("repo:synthetic",),
+    details=("inspect peer state", "finish safely"),
+    current_step=1,
+):
+    current = AgentIdentityRecord(
+        source_instance_id=source,
+        agent_id=agent_id,
+        state=state,
+        session_started_at=started,
+        expires_at=expires,
+        updated_at=ended_at or started,
+        revision=revision,
+        ended_at=ended_at,
+        end_reason=end_reason,
+        payload_version=2,
+        task_summary=task_summary,
+        intent=intent,
+        work_scope=tuple(work_scope),
+        details=tuple(details),
+        current_step=current_step,
+    )
+    return SignedAgentIdentity(current, sign_identity_record(current, private))
+
+
+async def fleet_service(tmp_path, instance_id, private, peers, *, transport=None):
+    from terminal_mcp.core.service import TerminalService
+    from terminal_mcp.terminal.linux import LinuxTerminalAdapter
+
+    repo = SqliteRepository(tmp_path / f"{instance_id}.sqlite3")
+    await repo.initialize()
+    agents = AgentStore(repo.path)
+    identities = FleetIdentityStore(repo.path)
+    config = FleetConfig(instance_id, private, tuple(peers), 1.0, 1.0)
+
+    def client_factory():
+        return httpx.AsyncClient(
+            transport=transport,
+            timeout=1.0,
+        )
+
+    replication = FleetReplicationService(
+        config,
+        identities,
+        agents,
+        max_session_seconds=1500,
+        client_factory=client_factory if transport is not None else None,
+    )
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    service = TerminalService(repo, terminal, 5000, fleet_replication=replication)
+    return repo, agents, identities, replication, terminal, service
+
+
+@pytest.mark.asyncio
+async def test_concurrent_lookup_never_returns_stale_active_after_newer_terminal_revision(
+    tmp_path,
+):
+    private_a, public_a = keypair()
+    private_b, public_b = keypair()
+    private_c, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    peer_b = FleetPeer(
+        "server-b",
+        "https://server-b.example.invalid",
+        public_b,
+        "placeholder-peer-token-b",
+    )
+    started = utc_text()
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    ended = utc_text(parse_utc(started) + timedelta(minutes=5))
+    agent_id = "Race-01234567"
+    active_v1 = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=1,
+        state="active",
+    )
+    finished_v2 = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=2,
+        state="finished",
+        ended_at=ended,
+        end_reason="explicit",
+    )
+
+    newer_applied = asyncio.Event()
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "server-a.example.invalid":
+            return httpx.Response(
+                200,
+                json={"ok": True, "identities": [finished_v2.as_dict()]},
+            )
+        if request.url.host == "server-b.example.invalid":
+            await newer_applied.wait()
+            return httpx.Response(
+                200,
+                json={"ok": True, "identities": [active_v1.as_dict()]},
+            )
+        return httpx.Response(404)
+
+    repo = SqliteRepository(tmp_path / "race.sqlite3")
+    await repo.initialize()
+    agents = AgentStore(repo.path)
+    identities = FleetIdentityStore(repo.path)
+    config = FleetConfig(
+        "server-c",
+        private_c,
+        (peer_a, peer_b),
+        1.0,
+        1.0,
+    )
+    replication = FleetReplicationService(
+        config,
+        identities,
+        agents,
+        max_session_seconds=1500,
+        client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=1.0,
+        ),
+    )
+    original_receive = replication.receive
+    hold_newer = asyncio.Event()
+
+    async def controlled_receive(envelope, authenticated_peer_id=None):
+        status = await original_receive(
+            envelope,
+            authenticated_peer_id=authenticated_peer_id,
+        )
+        if envelope.record.revision == 2:
+            newer_applied.set()
+            await hold_newer.wait()
+        return status
+
+    replication.receive = controlled_receive
+
+    resolution = await replication.resolve_session(agent_id)
+
+    assert resolution is not None
+    assert resolution["state"] == "finished"
+    assert resolution["ended_at"] == ended
+    stored = await identities.get("server-a", agent_id)
+    assert stored is not None
+    assert stored.record.revision == 2
+    assert stored.record.state == "finished"
+    await replication.stop()
+
+
+@pytest.mark.asyncio
+async def test_service_attaches_signed_foreign_session_with_original_plan_and_clock(tmp_path):
+    private_a, public_a = keypair()
+    private_b, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    repo, agents, identities, replication, terminal, service = await fleet_service(
+        tmp_path, "server-b", private_b, [peer_a]
+    )
+    started = utc_text()
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    agent_id = "Alpha-01234567"
+    envelope = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        task_summary="origin task",
+        intent="origin intent",
+        work_scope=("repo:shared",),
+        details=("origin step one", "origin step two"),
+        current_step=2,
+    )
+    assert await replication.receive(envelope) == "applied"
+
+    attached = await service.agent_start(agent_id=agent_id)
+
+    assert attached["ok"] is True
+    assert attached["self"]["task_summary"] == "origin task"
+    assert attached["self"]["intent"] == "origin intent"
+    assert attached["self"]["work_scope"] == ["repo:shared"]
+    assert attached["self"]["current_step"] == 2
+    session = await agents.get_session(agent_id)
+    assert session["registered_at"] == started
+    assert session["global_expires_at"] == expires
+    assert session["source_instance_id"] == "server-a"
+    assert await identities.get("server-b", agent_id) is None
+    assert await identities.get("server-a", agent_id) == envelope
+    await replication.stop()
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_unknown_foreign_identity_partition_fails_closed_without_local_session(tmp_path):
+    private_a, public_a = keypair()
+    private_b, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+
+    def unavailable(_request):
+        return httpx.Response(503, json={"ok": False})
+
+    repo, agents, _, _, terminal, service = await fleet_service(
+        tmp_path,
+        "server-b",
+        private_b,
+        [peer_a],
+        transport=httpx.MockTransport(unavailable),
+    )
+    agent_id = "Bravo-89ABCDEF"
+
+    result = await service.agent_start(
+        agent_id=agent_id,
+        task_summary="must not remint",
+        intent="preserve clock",
+        details=["preserve clock"],
+    )
+
+    assert result["ok"] is False
+    assert result["foreign_identity_unavailable"] is True
+    assert result["retryable"] is True
+    assert await agents.get_session(agent_id) is None
+    await service.fleet_replication.stop()
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_idle_foreign_attachment_reattaches_without_resetting_hard_clock(tmp_path):
+    private_a, public_a = keypair()
+    private_b, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    _, agents, _, replication, terminal, service = await fleet_service(
+        tmp_path, "server-b", private_b, [peer_a]
+    )
+    started = utc_text()
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    agent_id = "Charlie-01234567"
+    envelope = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+    )
+    await replication.receive(envelope)
+    assert (await service.agent_start(agent_id=agent_id))["ok"] is True
+    before = await agents.get_session(agent_id)
+
+    assert await agents.expire(agent_id, reason="idle_timeout") is True
+    resumed = await service.agent_start(agent_id=agent_id)
+    after = await agents.get_session(agent_id)
+
+    assert resumed["ok"] is True
+    assert after["state"] == "active"
+    assert after["registered_at"] == before["registered_at"] == started
+    assert after["global_expires_at"] == before["global_expires_at"] == expires
+    assert after["source_instance_id"] == "server-a"
+    await replication.stop()
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_expired_foreign_identity_returns_to_chat_without_attachment(tmp_path):
+    private_a, public_a = keypair()
+    private_b, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    _, agents, _, replication, terminal, service = await fleet_service(
+        tmp_path, "server-b", private_b, [peer_a]
+    )
+    started = utc_text(parse_utc(utc_text()) - timedelta(minutes=30))
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    agent_id = "Delta-89ABCDEF"
+    await replication.receive(
+        v2_record("server-a", agent_id, private_a, started=started, expires=expires)
+    )
+
+    result = await service.agent_start(agent_id=agent_id)
+
+    assert result["ok"] is False
+    assert result["return_to_chat"] is True
+    assert result["session_end_reason"] == "max_session_duration"
+    assert await agents.get_session(agent_id) is None
+    await replication.stop()
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_foreign_finish_retries_partition_then_origin_finishes_authoritative_session(
+    tmp_path,
+):
+    private_a, public_a = keypair()
+    private_b, public_b = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    peer_b = FleetPeer(
+        "server-b",
+        "https://server-b.example.invalid",
+        public_b,
+        "placeholder-peer-token-b",
+    )
+    started = utc_text()
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    agent_id = "Echo-01234567"
+
+    _, agents_a, identities_a, replication_a, terminal_a, service_a = await fleet_service(
+        tmp_path / "origin", "server-a", private_a, [peer_b]
+    )
+    await agents_a.create_session(
+        agent_id,
+        "origin task",
+        "origin intent",
+        ["repo:shared"],
+        ["origin step"],
+        1,
+        started,
+        source_instance_id="server-a",
+        global_expires_at=expires,
+    )
+    await replication_a.sync_local_session(agent_id)
+    origin_envelope = await identities_a.get("server-a", agent_id)
+    assert origin_envelope is not None
+
+    attempts = 0
+
+    async def handler(request: httpx.Request):
+        nonlocal attempts
+        if request.url.path == "/internal/fleet/session-finish":
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(503, json={"ok": False})
+            body = json.loads(request.content)
+            changed = await replication_a.receive_finish(
+                body["agent_id"],
+                body["ended_at"],
+                body["reason"],
+                authenticated_peer_id="server-b",
+            )
+            return httpx.Response(200, json={"ok": True, "changed": changed})
+        return httpx.Response(404)
+
+    _, agents_b, identities_b, replication_b, terminal_b, service_b = await fleet_service(
+        tmp_path / "attached",
+        "server-b",
+        private_b,
+        [peer_a],
+        transport=httpx.MockTransport(handler),
+    )
+    assert await replication_b.receive(origin_envelope) == "applied"
+    assert (await service_b.agent_start(agent_id=agent_id))["ok"] is True
+
+    finished = await service_b.agent_finish(agent_id)
+    assert finished["finished"] is True
+    assert (await agents_b.get_session(agent_id))["state"] == "finished"
+    assert await identities_b.finish_outbox_count() == 1
+
+    await replication_b.flush_finishes_once()
+    assert await identities_b.finish_outbox_count() == 1
+    await replication_b.flush_finishes_once()
+    assert await identities_b.finish_outbox_count() == 0
+    assert attempts == 2
+
+    origin_session = await agents_a.get_session(agent_id)
+    assert origin_session["state"] == "finished"
+    terminal_envelope = await identities_a.get("server-a", agent_id)
+    assert terminal_envelope.record.state == "finished"
+    assert terminal_envelope.record.session_started_at == started
+    assert terminal_envelope.record.expires_at == expires
+    await replication_b.stop()
+    await replication_a.stop()
+    await terminal_b.stop()
+    await terminal_a.stop()

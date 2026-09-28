@@ -356,8 +356,8 @@ class AgentCoordinator:
                 break
             else:
                 raise RuntimeError("unable to allocate unique agent id")
+            await self.store.create_proposal(proposed, utc_text(now_dt))
 
-        await self.store.create_proposal(proposed, utc_text(now_dt))
         return {
             "ok": False,
             "admission_required": True,

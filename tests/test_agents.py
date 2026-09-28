@@ -15,6 +15,7 @@ from terminal_mcp.core.orchestration import (
     normalize_preview,
     public_agent_name,
     scopes_overlap,
+    session_expiry_reason,
     utc_now,
     utc_text,
 )
@@ -71,6 +72,35 @@ def test_call_sign_and_preview_helpers():
     assert re.fullmatch(r"[A-Za-z-]+-[0-9A-HJKMNP-TV-Z]{8}", agent_id)
     assert normalize_preview("  printf   hello\n world  ") == "printf hello world"
     assert len(normalize_preview("x" * 150)) == 100
+
+
+def test_global_expiry_is_authoritative_when_local_max_differs():
+    now = utc_now()
+    session = {
+        "state": "active",
+        "registered_at": utc_text(now - timedelta(seconds=1200)),
+        "last_activity_at": utc_text(now - timedelta(seconds=1)),
+        "global_expires_at": utc_text(now + timedelta(seconds=300)),
+    }
+
+    assert (
+        session_expiry_reason(
+            session,
+            now=now,
+            idle_ttl_seconds=300,
+            max_session_seconds=600,
+        )
+        is None
+    )
+    assert (
+        session_expiry_reason(
+            session,
+            now=now + timedelta(seconds=301),
+            idle_ttl_seconds=1000,
+            max_session_seconds=600,
+        )
+        == "max_session_duration"
+    )
 
 
 def test_hierarchical_scope_matching():
@@ -692,6 +722,47 @@ async def test_pending_message_is_in_all_agent_bound_coordination_responses(tmp_
     finished = await service.agent_finish(receiver_id)
     assert any(message_hash in line for line in finished["pending_messages"])
     await terminal.stop()
+
+@pytest.mark.asyncio
+async def test_concurrent_admission_proposals_reserve_distinct_public_names(
+    tmp_path, monkeypatch
+):
+    repo, terminal, service = await runtime(tmp_path)
+    store = AgentStore(repo.path)
+    ids = iter(["Alpha-11111111", "Alpha-22222222", "Bravo-33333333"])
+    monkeypatch.setattr(agents_module, "generate_agent_id", lambda: next(ids))
+    original_create = store.create_proposal
+
+    async def delayed_create(agent_id, now):
+        await asyncio.sleep(0.02)
+        await original_create(agent_id, now)
+
+    service.agent_coordinator.store.create_proposal = delayed_create
+    plan = {
+        "task_summary": "Concurrent admission",
+        "intent": "Reserve identity",
+        "details": ["Reserve identity"],
+        "work_scope": ["repo:synthetic"],
+    }
+
+    first, second = await asyncio.gather(
+        service.agent_start(**plan),
+        service.agent_start(**plan),
+    )
+
+    assert first["admission_required"] is True
+    assert second["admission_required"] is True
+    assert first["agent_name"] != second["agent_name"]
+    assert {first["agent_name"], second["agent_name"]} == {"Alpha", "Bravo"}
+    proposals = await store.recent_proposals(
+        utc_text(utc_now() - timedelta(seconds=60))
+    )
+    assert {public_agent_name(item["agent_id"]) for item in proposals} >= {
+        "Alpha",
+        "Bravo",
+    }
+    await terminal.stop()
+
 
 @pytest.mark.asyncio
 async def test_two_step_admission_does_not_persist_until_confirmed(tmp_path):
