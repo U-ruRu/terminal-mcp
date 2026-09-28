@@ -35,7 +35,7 @@ PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 VALUE_PRIORITY = {value: key for key, value in PRIORITY_VALUE.items()}
 PRESSURE_WEIGHT = {"P0": 8, "P1": 4, "P2": 2, "P3": 1}
 SAFE_PARTICIPANT_FIELDS = frozenset(
-    {"title", "lane", "priority", "description", "next_action", "resource", "candidate_ref", "tags"}
+    {"title", "description", "next_action", "tags"}
 )
 
 
@@ -946,6 +946,26 @@ class TaskCoordinator:
             return {"ok": False, "error": error, "warnings": []}
         warnings = []
         target_state = kwargs.get("state")
+        if "candidate_ref" in fields:
+            if current["state"] == "done":
+                return {
+                    "ok": False,
+                    "code": "candidate_ref_frozen",
+                    "error": "task.update: candidate_ref is immutable after task completion",
+                    "warnings": [],
+                }
+            review_relations = [
+                relation
+                for relation in await self.store.relations(namespace, task_id)
+                if relation["direction"] == "incoming" and relation["kind"] == "review_of"
+            ]
+            if review_relations:
+                return {
+                    "ok": False,
+                    "code": "candidate_ref_frozen",
+                    "error": "task.update: candidate_ref is frozen while review_of relation exists",
+                    "warnings": [],
+                }
         claims = await self._live_claims(namespace, task_id)
         owner = claims[0]["agent_id"] if claims else None
         unsafe_fields = set(fields) - SAFE_PARTICIPANT_FIELDS

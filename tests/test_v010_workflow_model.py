@@ -220,6 +220,212 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
 
 
 @pytest.mark.asyncio
+async def test_participant_cannot_mutate_owner_only_identity_fields(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        owner = await register(service, "identity owner")
+        peer = await register(service, "identity participant")
+        created = await service.task(
+            owner,
+            action="create",
+            isolation_hint="none",
+            namespace="wf",
+            task_id="IDENTITY",
+            title="identity gates",
+            cooperative=True,
+            lane="implementation",
+            priority="P2",
+            resource_context={"scope": "original"},
+            candidate_ref="candidate-1",
+        )
+        assert created["ok"] is True
+        assert (
+            await service.task(
+                owner,
+                action="claim",
+                namespace="wf",
+                task_id="IDENTITY",
+                claim_intent="owning identity fields",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                peer,
+                action="claim",
+                namespace="wf",
+                task_id="IDENTITY",
+                claim_intent="editing safe metadata only",
+            )
+        )["ok"] is True
+
+        denied = await service.task(
+            peer,
+            action="update",
+            namespace="wf",
+            task_id="IDENTITY",
+            lane="review",
+            priority="P0",
+            resource_context={"scope": "participant"},
+            candidate_ref="candidate-peer",
+        )
+        assert denied["ok"] is False
+        assert denied["code"] == "owner_required"
+
+        task = await detail(service, "wf", "IDENTITY")
+        assert task["lane"] == "implementation"
+        assert task["priority"] == "P2"
+        assert task["resource_context"] == {"scope": "original"}
+        assert task["candidate_ref"] == "candidate-1"
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_candidate_ref_is_owner_mutable_before_review_then_frozen(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        implementer = await register(service, "candidate owner")
+        reviewer = await register(service, "candidate reviewer")
+        assert (
+            await service.task(
+                implementer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="IMPL-FREEZE",
+                title="implementation candidate",
+                candidate_ref="candidate-1",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                implementer,
+                action="claim",
+                namespace="wf",
+                task_id="IMPL-FREEZE",
+                claim_intent="preparing candidate",
+            )
+        )["ok"] is True
+
+        mutable = await service.task(
+            implementer,
+            action="update",
+            namespace="wf",
+            task_id="IMPL-FREEZE",
+            candidate_ref="candidate-2",
+        )
+        assert mutable["ok"] is True
+        assert mutable["task"]["candidate_ref"] == "candidate-2"
+        mutable_detail = await detail(service, "wf", "IMPL-FREEZE")
+        assert event_with(mutable_detail, "updated", candidate_ref="candidate-2") is not None
+
+        assert (
+            await service.task(
+                reviewer,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="REVIEW-FREEZE",
+                title="review candidate",
+                lane="review",
+                candidate_ref="candidate-2",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                reviewer,
+                action="claim",
+                namespace="wf",
+                task_id="REVIEW-FREEZE",
+                claim_intent="reviewing candidate-2",
+            )
+        )["ok"] is True
+        linked = await service.task(
+            reviewer,
+            action="relate",
+            namespace="wf",
+            task_id="REVIEW-FREEZE",
+            relation_kind="review_of",
+            related_namespace="wf",
+            related_task_id="IMPL-FREEZE",
+        )
+        assert linked["ok"] is True
+
+        frozen = await service.task(
+            implementer,
+            action="update",
+            namespace="wf",
+            task_id="IMPL-FREEZE",
+            candidate_ref="candidate-3",
+        )
+        assert frozen["ok"] is False
+        assert frozen["code"] == "candidate_ref_frozen"
+
+        task = await detail(service, "wf", "IMPL-FREEZE")
+        assert task["candidate_ref"] == "candidate-2"
+        assert event_with(task, "updated", candidate_ref="candidate-3") is None
+        assert any(
+            relation["direction"] == "incoming"
+            and relation["kind"] == "review_of"
+            and relation["task_id"] == "REVIEW-FREEZE"
+            for relation in task["relations"]
+        )
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_candidate_ref_is_frozen_after_done(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        owner = await register(service, "completed candidate owner")
+        assert (
+            await service.task(
+                owner,
+                action="create",
+                isolation_hint="none",
+                namespace="wf",
+                task_id="DONE-CANDIDATE",
+                title="completed candidate",
+                candidate_ref="candidate-final",
+            )
+        )["ok"] is True
+        assert (
+            await service.task(
+                owner,
+                action="claim",
+                namespace="wf",
+                task_id="DONE-CANDIDATE",
+                claim_intent="finishing candidate",
+            )
+        )["ok"] is True
+        completed = await service.task(
+            owner,
+            action="done",
+            namespace="wf",
+            task_id="DONE-CANDIDATE",
+            result={"candidate": "candidate-final"},
+        )
+        assert completed["ok"] is True
+
+        frozen = await service.task(
+            owner,
+            action="update",
+            namespace="wf",
+            task_id="DONE-CANDIDATE",
+            candidate_ref="candidate-after-done",
+        )
+        assert frozen["ok"] is False
+        assert frozen["code"] == "candidate_ref_frozen"
+
+        task = await detail(service, "wf", "DONE-CANDIDATE")
+        assert task["candidate_ref"] == "candidate-final"
+        assert event_with(task, "updated", candidate_ref="candidate-after-done") is None
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
 async def test_claimed_blocked_and_done_require_context_and_leave_history(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
@@ -486,13 +692,6 @@ async def test_review_relation_propagates_blocking_and_success_feedback(tmp_path
         )
         assert feedback["created_at"]
 
-        await service.task(
-            implementer,
-            action="update",
-            namespace="wf",
-            task_id="IMPL",
-            candidate_ref="candidate-2",
-        )
         ready = await service.task(
             reviewer,
             action="state",
@@ -501,20 +700,12 @@ async def test_review_relation_propagates_blocking_and_success_feedback(tmp_path
             state="ready",
         )
         assert ready["ok"] is True
-        updated_candidate = await service.task(
-            reviewer,
-            action="update",
-            namespace="wf",
-            task_id="REVIEW",
-            candidate_ref="candidate-2",
-        )
-        assert updated_candidate["ok"] is True
         done = await service.task(
             reviewer,
             action="done",
             namespace="wf",
             task_id="REVIEW",
-            result={"verdict": "approved", "candidate": "candidate-2"},
+            result={"verdict": "approved", "candidate": "candidate-1"},
         )
         assert done["ok"] is True
         assert done["task"]["lane"] == "review"
@@ -522,10 +713,10 @@ async def test_review_relation_propagates_blocking_and_success_feedback(tmp_path
         impl = await detail(service, "wf", "IMPL")
         feedback = event_with(impl, "review_feedback", outcome="done")
         assert feedback is not None
-        assert feedback["payload"]["candidate_ref"] == "candidate-2"
+        assert feedback["payload"]["candidate_ref"] == "candidate-1"
         assert feedback["payload"]["result"] == {
             "verdict": "approved",
-            "candidate": "candidate-2",
+            "candidate": "candidate-1",
         }
     finally:
         await terminal.stop()
