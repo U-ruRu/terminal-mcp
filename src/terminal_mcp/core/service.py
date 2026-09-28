@@ -75,6 +75,8 @@ def _compact_context(context):
     truthy = (
         "session_expired",
         "registration_required",
+        "admission_required",
+        "return_to_chat",
         "task_context_expired",
         "coordination_message_pending",
         "unread_message_pending",

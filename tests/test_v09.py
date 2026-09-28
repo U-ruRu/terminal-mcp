@@ -164,11 +164,15 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
     terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
     service = TerminalService(repo, terminal, 5000, agent_policy=policy)
     try:
+        plan = {
+            "task_summary": "Session policy",
+            "intent": "Validate timers",
+            "details": ["Validate"],
+            "work_scope": ["test"],
+        }
+        proposed = await service.agent_start(**plan)
         started = await service.agent_start(
-            task_summary="Session policy",
-            intent="Validate timers",
-            details=["Validate"],
-            work_scope=["test"],
+            agent_id=proposed["proposed_agent_id"], **plan
         )
         agent_id = started["self"]["agent_id"]
         with sqlite3.connect(repo.path) as db:
@@ -250,11 +254,15 @@ async def test_session_alert_can_be_disabled(tmp_path):
     terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
     service = TerminalService(repo, terminal, 5000, agent_policy=policy)
     try:
+        plan = {
+            "task_summary": "No alert",
+            "intent": "Validate disabled timer",
+            "details": ["Validate"],
+            "work_scope": ["test"],
+        }
+        proposed = await service.agent_start(**plan)
         started = await service.agent_start(
-            task_summary="No alert",
-            intent="Validate disabled timer",
-            details=["Validate"],
-            work_scope=["test"],
+            agent_id=proposed["proposed_agent_id"], **plan
         )
         agent_id = started["self"]["agent_id"]
         with sqlite3.connect(repo.path) as db:

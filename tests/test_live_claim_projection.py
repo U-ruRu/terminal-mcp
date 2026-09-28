@@ -19,12 +19,14 @@ async def runtime(tmp_path):
 
 
 async def register(service, summary):
-    started = await service.agent_start(
-        task_summary=summary,
-        intent=summary,
-        details=[summary],
-        work_scope=[f"test:{summary}"],
-    )
+    plan = {
+        "task_summary": summary,
+        "intent": summary,
+        "details": [summary],
+        "work_scope": [f"test:{summary}"],
+    }
+    proposed = await service.agent_start(**plan)
+    started = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
     return started["self"]["agent_id"]
 
 
@@ -100,11 +102,15 @@ async def test_expired_owner_stops_projecting_before_persisted_claim_cleanup(tmp
 async def test_task_context_timer_has_canonical_name_and_compatibility_alias(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
+        plan = {
+            "task_summary": "timer",
+            "intent": "timer",
+            "details": ["timer"],
+            "work_scope": ["test:timer"],
+        }
+        proposed = await service.agent_start(**plan)
         started = await service.agent_start(
-            task_summary="timer",
-            intent="timer",
-            details=["timer"],
-            work_scope=["test:timer"],
+            agent_id=proposed["proposed_agent_id"], **plan
         )
         agent = started["self"]["agent_id"]
         assert started["self"]["task_context_ttl_seconds"] == 180

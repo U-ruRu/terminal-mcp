@@ -59,12 +59,7 @@ class AgentStartRequest(StrictRequest):
     def validate_start(self):
         if self.agent_id is None:
             if self.task_summary is None or self.intent is None or self.details is None:
-                raise ValueError("new registration requires task_summary, intent and details")
-        elif all(
-            value is None
-            for value in (self.task_summary, self.intent, self.details, self.work_scope)
-        ):
-            raise ValueError("agent_start update requires at least one field to change")
+                raise ValueError("new admission requires task_summary, intent and details")
         return self
 
 

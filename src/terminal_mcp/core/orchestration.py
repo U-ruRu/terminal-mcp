@@ -141,12 +141,30 @@ def relative_time(value: str | None, now: datetime | None = None) -> str:
         return f"yesterday {parse_utc(value).strftime('%H:%M')}"
     return f"{days}d ago"
 
+AGENT_SUFFIX_CHARS = 8
+LEGACY_AGENT_SUFFIX_CHARS = 4
+
+
 def generate_suffix() -> str:
-    return "".join(secrets.choice(CROCKFORD) for _ in range(4))
+    """Return a compact 40-bit Crockford-Base32 capability suffix."""
+    return "".join(secrets.choice(CROCKFORD) for _ in range(AGENT_SUFFIX_CHARS))
 
 
 def generate_agent_id() -> str:
     return f"{secrets.choice(NATO_WORDS)}-{generate_suffix()}"
+
+
+def is_agent_id(value: str, *, allow_legacy: bool = False) -> bool:
+    name, separator, suffix = value.rpartition("-")
+    lengths = {AGENT_SUFFIX_CHARS}
+    if allow_legacy:
+        lengths.add(LEGACY_AGENT_SUFFIX_CHARS)
+    return (
+        bool(separator)
+        and name in NATO_WORDS
+        and len(suffix) in lengths
+        and all(ch in CROCKFORD for ch in suffix)
+    )
 
 
 def validate_message_routing(*, target=None, namespace=None, task_id=None, alert=False):
@@ -170,7 +188,12 @@ def public_agent_name(agent_id: str | None) -> str:
     if agent_id == "anonymous":
         return agent_id
     name, separator, suffix = agent_id.rpartition("-")
-    if separator and len(suffix) == 4 and all(ch in CROCKFORD for ch in suffix):
+    if (
+        separator
+        and name in NATO_WORDS
+        and len(suffix) in {AGENT_SUFFIX_CHARS, LEGACY_AGENT_SUFFIX_CHARS}
+        and all(ch in CROCKFORD for ch in suffix)
+    ):
         return name
     return agent_id
 

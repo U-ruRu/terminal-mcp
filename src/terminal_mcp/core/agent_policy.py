@@ -23,6 +23,7 @@ class AgentPolicy:
     message_reminder_seconds: int = 180
     message_reminder_calls: int = 5
     post_finish_message_grace_seconds: int = 300
+    public_name_reservation_seconds: int = 180
     max_active_agents: int = 8
 
     def __post_init__(self):
@@ -36,6 +37,7 @@ class AgentPolicy:
             "message_reminder_seconds": self.message_reminder_seconds,
             "message_reminder_calls": self.message_reminder_calls,
             "post_finish_message_grace_seconds": self.post_finish_message_grace_seconds,
+            "public_name_reservation_seconds": self.public_name_reservation_seconds,
             "max_active_agents": self.max_active_agents,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
@@ -71,5 +73,6 @@ class AgentPolicy:
             "message_reminder_seconds": self.message_reminder_seconds,
             "message_reminder_calls": self.message_reminder_calls,
             "post_finish_message_grace_seconds": self.post_finish_message_grace_seconds,
+            "public_name_reservation_seconds": self.public_name_reservation_seconds,
             "max_active_agents": self.max_active_agents,
         }

@@ -33,10 +33,20 @@ async def runtime(tmp_path):
 
 
 async def register(service, summary, intent, work_scope=None, details=None):
-    return await service.agent_start(
+    plan = details or [intent]
+    proposed = await service.agent_start(
         task_summary=summary,
         intent=intent,
-        details=details or [intent],
+        details=plan,
+        work_scope=work_scope,
+    )
+    assert proposed["admission_required"] is True
+    assert proposed["ok"] is False
+    return await service.agent_start(
+        agent_id=proposed["proposed_agent_id"],
+        task_summary=summary,
+        intent=intent,
+        details=plan,
         work_scope=work_scope,
     )
 
@@ -53,12 +63,12 @@ async def wait_finished(service, agent_id, cmd_hash, attempts=200):
 
 def test_call_sign_and_preview_helpers():
     suffix_only = generate_suffix()
-    assert len(suffix_only) == 4 and all(ch in CROCKFORD for ch in suffix_only)
+    assert len(suffix_only) == 8 and all(ch in CROCKFORD for ch in suffix_only)
     agent_id = generate_agent_id()
     word, suffix = agent_id.rsplit("-", 1)
     assert word in NATO_WORDS
-    assert len(suffix) == 4 and all(ch in CROCKFORD for ch in suffix)
-    assert re.fullmatch(r"[A-Za-z-]+-[0-9A-HJKMNP-TV-Z]{4}", agent_id)
+    assert len(suffix) == 8 and all(ch in CROCKFORD for ch in suffix)
+    assert re.fullmatch(r"[A-Za-z-]+-[0-9A-HJKMNP-TV-Z]{8}", agent_id)
     assert normalize_preview("  printf   hello\n world  ") == "printf hello world"
     assert len(normalize_preview("x" * 150)) == 100
 
@@ -82,19 +92,19 @@ async def test_session_uniqueness_collision_retry_and_task_history(tmp_path, mon
     with pytest.raises(sqlite3.IntegrityError):
         await store.create_session("Alpha-1111", "two", "second", ["repo:mcp"], ["second"], 1, now)
 
-    ids = iter(["Alpha-9999", "Bravo-2222"])
+    ids = iter(["Alpha-99999999", "Bravo-22222222"])
     monkeypatch.setattr(agents_module, "generate_agent_id", lambda: next(ids))
     created = await register(service, "Implement registry", "Inspect schema", ["repo:storage"])
-    assert created["self"]["agent_id"] == "Bravo-2222"
-    updated = await service.coordinate("Bravo-2222", step=1, intent="Edit schema")
+    assert created["self"]["agent_id"] == "Bravo-22222222"
+    updated = await service.coordinate("Bravo-22222222", step=1, intent="Edit schema")
     assert updated["agent_name"] == "Bravo"
     assert updated["intent"] == "Edit schema"
     assert updated["step"] == 1
-    overview = await service.agents("Bravo-2222")
+    overview = await service.agents("Bravo-22222222")
     assert overview["self"]["work_scope"] == ["repo:storage"]
     with sqlite3.connect(repo.path) as db:
         count = db.execute(
-            "SELECT COUNT(*) FROM agent_task_events WHERE agent_id='Bravo-2222'"
+            "SELECT COUNT(*) FROM agent_task_events WHERE agent_id='Bravo-22222222'"
         ).fetchone()[0]
     assert count == 2
     await terminal.stop()
@@ -370,18 +380,40 @@ async def test_agent_actions_refresh_session_not_task_lease(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_public_name_is_reusable_after_finished_session(tmp_path, monkeypatch):
+async def test_public_name_is_reserved_for_180_seconds_after_finished_session(
+    tmp_path, monkeypatch
+):
     repo, terminal, service = await runtime(tmp_path)
-    ids = iter(["India-1111", "India-2222", "Juliett-3333"])
+    ids = iter(["India-11111111", "India-22222222", "Juliett-33333333", "India-44444444"])
     monkeypatch.setattr(agents_module, "generate_agent_id", lambda: next(ids))
 
     first = await register(service, "First", "Work", ["repo:first"])
-    assert first["self"]["agent_id"] == "India-1111"
-    assert (await service.agent_finish("India-1111"))["finished"] is True
+    assert first["self"]["agent_id"] == "India-11111111"
+    assert (await service.agent_finish("India-11111111"))["finished"] is True
 
-    second = await register(service, "Second", "Work", ["repo:second"])
-    assert second["self"]["agent_id"] == "India-2222"
-    assert second["self"]["name"] == "India"
+    proposed = await service.agent_start(
+        task_summary="Second",
+        intent="Work",
+        details=["Work"],
+        work_scope=["repo:second"],
+    )
+    assert proposed["proposed_agent_id"] == "Juliett-33333333"
+
+    old = utc_text(utc_now() - timedelta(seconds=181))
+    with sqlite3.connect(repo.path) as db:
+        db.execute(
+            "UPDATE agent_sessions SET ended_at=? WHERE agent_id=?",
+            (old, "India-11111111"),
+        )
+        db.commit()
+
+    reusable = await service.agent_start(
+        task_summary="Third",
+        intent="Work",
+        details=["Work"],
+        work_scope=["repo:third"],
+    )
+    assert reusable["proposed_agent_id"] == "India-44444444"
     await terminal.stop()
 
 
@@ -403,8 +435,13 @@ async def test_agent_plan_coordinate_and_agent_start_update(tmp_path):
     )
     agent_id = started["self"]["agent_id"]
     no_op = await service.agent_start(agent_id=agent_id)
-    assert no_op["ok"] is False
-    assert "at least one field" in no_op["error"]
+    assert no_op["ok"] is True
+    assert no_op["self"]["task_summary"] == "Plan test"
+    assert no_op["self"]["details"] == [
+        "Inspect current state",
+        "Patch implementation",
+        "Run tests",
+    ]
     assert started["self"]["work_scope"] == []
     assert started["self"]["details"] == [
         "Inspect current state",
@@ -654,4 +691,93 @@ async def test_pending_message_is_in_all_agent_bound_coordination_responses(tmp_
 
     finished = await service.agent_finish(receiver_id)
     assert any(message_hash in line for line in finished["pending_messages"])
+    await terminal.stop()
+
+@pytest.mark.asyncio
+async def test_two_step_admission_does_not_persist_until_confirmed(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    store = AgentStore(repo.path)
+
+    proposal = await service.agent_start(
+        task_summary="Synthetic task",
+        intent="Inspect synthetic fixture",
+        details=["Inspect synthetic fixture", "Run deterministic tests"],
+        work_scope=["repo:synthetic"],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["admission_required"] is True
+    assert proposal["proposed_agent_id"].startswith(proposal["agent_name"] + "-")
+    assert len(proposal["proposed_agent_id"].rsplit("-", 1)[1]) == 8
+    assert await store.get_session(proposal["proposed_agent_id"]) is None
+
+    confirmed = await service.agent_start(
+        agent_id=proposal["proposed_agent_id"],
+        task_summary="Synthetic task",
+        intent="Inspect synthetic fixture",
+        details=["Inspect synthetic fixture", "Run deterministic tests"],
+        work_scope=["repo:synthetic"],
+    )
+    assert confirmed["ok"] is True
+    assert confirmed["self"]["agent_id"] == proposal["proposed_agent_id"]
+    assert (await store.get_session(proposal["proposed_agent_id"]))["state"] == "active"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_unknown_full_identity_can_be_admitted_and_active_identity_resumes(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    agent_id = "Victor-01234567"
+
+    admitted = await service.agent_start(
+        agent_id=agent_id,
+        task_summary="Synthetic resume",
+        intent="Reuse cross-server identity",
+        details=["Reuse cross-server identity"],
+    )
+    assert admitted["ok"] is True
+    assert admitted["self"]["agent_id"] == agent_id
+
+    resumed = await service.agent_start(agent_id=agent_id)
+    assert resumed["ok"] is True
+    assert resumed["self"]["task_summary"] == "Synthetic resume"
+    assert resumed["self"]["intent"] == "Reuse cross-server identity"
+    assert "session_remaining_seconds" in resumed
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_ended_identity_returns_to_chat_and_cannot_be_recreated(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    started = await register(service, "Synthetic finish", "Finish safely")
+    agent_id = started["self"]["agent_id"]
+
+    assert (await service.agent_finish(agent_id))["finished"] is True
+    ended = await service.agent_start(
+        agent_id=agent_id,
+        task_summary="Must not restart",
+        intent="Must return to chat",
+        details=["Must return to chat"],
+    )
+
+    assert ended["ok"] is False
+    assert ended["return_to_chat"] is True
+    assert ended["session_status"] == "finished"
+    assert (await AgentStore(repo.path).get_session(agent_id))["state"] == "finished"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_unknown_identity_requires_40_bit_suffix(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+
+    rejected = await service.agent_start(
+        agent_id="Alpha-1234",
+        task_summary="Legacy external id",
+        intent="Should not admit",
+        details=["Should not admit"],
+    )
+    assert rejected["ok"] is False
+    assert rejected["admission_required"] is True
+    assert "40-bit" in rejected["error"]
     await terminal.stop()

@@ -50,7 +50,11 @@ def _structured_result(data, summary: str) -> CallToolResult:
 
 
 def _overview_summary(data: AgentOverviewResponse) -> str:
+    if data.admission_required:
+        return "Agent admission required. Reuse an existing full agent_id or confirm proposed_agent_id."
     if data.registration_required:
+        if data.return_to_chat:
+            return "Agent session ended. Return to chat before starting new work."
         return "Agent session expired. Call agent_start."
     identity = (data.self.agent_id or data.self.name) if data.self else data.agent_name or "unknown"
     return f"{identity} | active={len(data.active)} | overlaps={len(data.overlaps or [])}"
@@ -88,7 +92,7 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
     @mcp.tool(
         structured_output=True,
         annotations=_SAFE_OPERATION,
-        description="Register an agent with a concrete step plan. details is required for new registration; work_scope is optional. Pass an existing full agent_id to revise that session plan without allocating a new identity.",
+        description="Two-step agent admission. First call without agent_id proposes a private full id and does not start a session. Reuse an existing full agent_id from another Terminal MCP or call again with proposed_agent_id plus the plan to confirm. Calling with an active agent_id and no plan is an idempotent resume; plan fields update that active session.",
     )
     async def agent_start(
         task_summary: Annotated[str | None, Field(min_length=1, max_length=120)] = None,

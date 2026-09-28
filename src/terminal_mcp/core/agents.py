@@ -10,6 +10,7 @@ from terminal_mcp.core.orchestration import (
     NATO_WORDS,
     find_scope_overlaps,
     generate_agent_id,
+    is_agent_id,
     live_task_claims,
     parse_utc,
     public_agent_name,
@@ -47,6 +48,34 @@ class AgentCoordinator:
     def task_lease_seconds(self, value):
         self.task_context_ttl_seconds = value
 
+    async def _reserved_public_names(self, now_dt):
+        active_cutoff = utc_text(now_dt - timedelta(seconds=self.ttl_seconds))
+        active = await self.store.active(active_cutoff, len(NATO_WORDS))
+        reserved = {public_agent_name(item["agent_id"]) for item in active}
+
+        recent_cutoff = utc_text(
+            now_dt - timedelta(seconds=self.policy.public_name_reservation_seconds)
+        )
+        recent = await self.store.history_sessions(recent_cutoff, len(NATO_WORDS) * 4)
+        reserved.update(
+            public_agent_name(item["agent_id"])
+            for item in recent
+            if item["state"] != "active"
+            and item.get("ended_at")
+            and parse_utc(item["ended_at"]) >= parse_utc(recent_cutoff)
+        )
+        return reserved
+
+    @staticmethod
+    def _missing_registration_field(task_summary, intent, details):
+        if not task_summary:
+            return "agent_start.task_summary: required for registration"
+        if not intent:
+            return "agent_start.intent: required for registration"
+        if not details:
+            return "agent_start.details: required for registration"
+        return None
+
     async def start(
         self,
         task_summary=None,
@@ -55,62 +84,94 @@ class AgentCoordinator:
         details=None,
         agent_id=None,
     ):
+        plan_supplied = any(
+            value is not None for value in (task_summary, intent, details, work_scope)
+        )
+
         if agent_id:
-            gate = await self.gate(agent_id, "agent_start", surface_messages=True)
-            if gate.get("blocked"):
-                return gate["response"]
-            if all(value is None for value in (task_summary, intent, details, work_scope)):
-                return {
-                    "ok": False,
-                    "agent_name": public_agent_name(agent_id),
-                    "error": "agent_start.update: provide at least one field to change",
-                    **gate["context"],
-                }
             current = await self.store.get_session(agent_id)
-            if current is None:
-                return self.expired_result(agent_id)
-            resolved_details = current["details"] if details is None else details
-            if not resolved_details:
+            if current is not None:
+                current = await self._enforce_session(current)
+                if current["state"] != "active":
+                    return self.expired_result(agent_id, current)
+
+                gate = await self.gate(agent_id, "agent_start", surface_messages=True)
+                if gate.get("blocked"):
+                    return gate["response"]
+                if not plan_supplied:
+                    return await self.overview(
+                        agent_id=agent_id, touch=False, reveal_self_id=False
+                    )
+
+                resolved_details = current["details"] if details is None else details
+                if not resolved_details:
+                    return {
+                        "ok": False,
+                        "agent_name": public_agent_name(agent_id),
+                        "error": "agent_start.details: at least one plan step is required",
+                        **gate["context"],
+                    }
+                current_step = min(max(current["current_step"], 1), len(resolved_details))
+                now = utc_text()
+                await self.store.update_session(
+                    agent_id,
+                    task_summary if task_summary is not None else current["task_summary"],
+                    intent if intent is not None else current["intent"],
+                    current["work_scope"] if work_scope is None else work_scope,
+                    resolved_details,
+                    current_step,
+                    now,
+                )
+                self._inc("terminal_mcp_agent_plan_updates_total")
+                return await self.overview(
+                    agent_id=agent_id, touch=False, reveal_self_id=False
+                )
+
+            if not is_agent_id(agent_id):
                 return {
                     "ok": False,
+                    "admission_required": True,
                     "agent_name": public_agent_name(agent_id),
-                    "error": "agent_start.details: at least one plan step is required",
-                    **gate["context"],
+                    "error": (
+                        "agent_start.agent_id: expected a NATO name with 40-bit private suffix"
+                    ),
                 }
-            current_step = min(max(current["current_step"], 1), len(resolved_details))
-            now = utc_text()
-            await self.store.update_session(
-                agent_id,
-                task_summary if task_summary is not None else current["task_summary"],
-                intent if intent is not None else current["intent"],
-                current["work_scope"] if work_scope is None else work_scope,
-                resolved_details,
-                current_step,
-                now,
-            )
-            self._inc("terminal_mcp_agent_plan_updates_total")
-            return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=False)
+            missing = self._missing_registration_field(task_summary, intent, details)
+            if missing:
+                return {
+                    "ok": False,
+                    "admission_required": True,
+                    "agent_name": public_agent_name(agent_id),
+                    "error": missing,
+                    "detail": (
+                        "Provide task_summary, intent and details to admit this full agent_id "
+                        "on this Terminal MCP."
+                    ),
+                }
 
-        if not task_summary:
-            return {"ok": False, "error": "agent_start.task_summary: required for registration"}
-        if not intent:
-            return {"ok": False, "error": "agent_start.intent: required for registration"}
-        if not details:
-            return {"ok": False, "error": "agent_start.details: required for registration"}
+            async with self._start_lock:
+                raced = await self.store.get_session(agent_id)
+                if raced is not None:
+                    raced = await self._enforce_session(raced)
+                    if raced["state"] != "active":
+                        return self.expired_result(agent_id, raced)
+                    return await self.overview(
+                        agent_id=agent_id, touch=False, reveal_self_id=False
+                    )
 
-        async with self._start_lock:
-            now_dt = utc_now()
-            now = utc_text(now_dt)
-            cutoff = utc_text(now_dt - timedelta(seconds=self.ttl_seconds))
-            active = await self.store.active(cutoff, len(NATO_WORDS))
-            reserved_names = {public_agent_name(item["agent_id"]) for item in active}
-            for _ in range(64):
-                allocated = generate_agent_id()
-                if public_agent_name(allocated) in reserved_names:
-                    continue
+                now_dt = utc_now()
+                reserved_names = await self._reserved_public_names(now_dt)
+                if public_agent_name(agent_id) in reserved_names:
+                    return {
+                        "ok": False,
+                        "admission_required": True,
+                        "agent_name": public_agent_name(agent_id),
+                        "error": "agent_start.agent_id: public agent name is temporarily reserved",
+                    }
+                now = utc_text(now_dt)
                 try:
                     await self.store.create_session(
-                        allocated,
+                        agent_id,
                         task_summary,
                         intent,
                         work_scope or [],
@@ -118,14 +179,45 @@ class AgentCoordinator:
                         1,
                         now,
                     )
-                    agent_id = allocated
-                    break
                 except IntegrityError:
+                    existing = await self.store.get_session(agent_id)
+                    if existing is None or existing["state"] != "active":
+                        return self.expired_result(agent_id, existing)
+                    return await self.overview(
+                        agent_id=agent_id, touch=False, reveal_self_id=False
+                    )
+
+            self._inc("terminal_mcp_agent_sessions_total")
+            return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=True)
+
+        missing = self._missing_registration_field(task_summary, intent, details)
+        if missing:
+            return {"ok": False, "admission_required": True, "error": missing}
+
+        async with self._start_lock:
+            now_dt = utc_now()
+            reserved_names = await self._reserved_public_names(now_dt)
+            for _ in range(64):
+                proposed = generate_agent_id()
+                if public_agent_name(proposed) in reserved_names:
                     continue
+                if await self.store.get_session(proposed) is not None:
+                    continue
+                break
             else:
                 raise RuntimeError("unable to allocate unique agent id")
-        self._inc("terminal_mcp_agent_sessions_total")
-        return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=True)
+
+        return {
+            "ok": False,
+            "admission_required": True,
+            "agent_name": public_agent_name(proposed),
+            "proposed_agent_id": proposed,
+            "detail": (
+                "No work session was started. Reuse your existing full agent_id from another "
+                "Terminal MCP if you have one; otherwise call agent_start again with "
+                "agent_id=proposed_agent_id and the same plan to confirm this identity."
+            ),
+        }
 
     async def _enforce_session(self, session, now=None):
         if session is None or session["state"] != "active":
@@ -1119,6 +1211,8 @@ class AgentCoordinator:
         if session:
             result["session_status"] = "finished" if session["state"] == "finished" else "forced"
             result["session_started_at"] = session["registered_at"]
+            result["session_end_reason"] = session.get("end_reason")
+            result["return_to_chat"] = True
         return result
 
     def _inc(self, name, amount=1):

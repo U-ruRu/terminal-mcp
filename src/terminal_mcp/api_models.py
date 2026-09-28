@@ -38,6 +38,9 @@ class SessionStatus(BaseModel):
     agent_name: str | None = None
     session_expired: bool | None = None
     registration_required: bool | None = None
+    admission_required: bool | None = None
+    proposed_agent_id: str | None = None
+    return_to_chat: bool | None = None
     session_status: str | None = None
     session_started_at: str | None = None
     session_age_seconds: int | None = None

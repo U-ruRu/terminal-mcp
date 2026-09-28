@@ -85,14 +85,20 @@ def test_admin_credentials_runtime_and_privacy(tmp_path):
         }
         assert values["TERMINAL_MCP_HEALTH_COMMAND"] == "printf 'admin-health\n'"
         headers = {"Authorization": "Bearer api-token"}
+        plan = {
+            "task_summary": "Admin test",
+            "intent": "Check health",
+            "details": ["Check health"],
+            "work_scope": ["repo:tests"],
+        }
+        proposed = client.post(
+            "/actions/agent/start",
+            json=plan,
+            headers=headers,
+        ).json()
         started = client.post(
             "/actions/agent/start",
-            json={
-                "task_summary": "Admin test",
-                "intent": "Check health",
-                "details": ["Check health"],
-                "work_scope": ["repo:tests"],
-            },
+            json={"agent_id": proposed["proposed_agent_id"], **plan},
             headers=headers,
         ).json()
         agent_id = started["self"]["agent_id"]

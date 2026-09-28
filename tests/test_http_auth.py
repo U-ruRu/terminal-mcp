@@ -41,14 +41,24 @@ def settings(tmp_path, **overrides):
 
 
 def start_agent(client, headers):
+    plan = {
+        "task_summary": "HTTP test",
+        "intent": "Exercise actions",
+        "details": ["Exercise actions", "Verify actions"],
+        "work_scope": ["repo:tests"],
+    }
+    proposed = client.post(
+        "/actions/agent/start",
+        json=plan,
+        headers=headers,
+    )
+    assert proposed.status_code == 200
+    proposal = proposed.json()
+    assert proposal["admission_required"] is True
+
     response = client.post(
         "/actions/agent/start",
-        json={
-            "task_summary": "HTTP test",
-            "intent": "Exercise actions",
-            "details": ["Exercise actions", "Verify actions"],
-            "work_scope": ["repo:tests"],
-        },
+        json={"agent_id": proposal["proposed_agent_id"], **plan},
         headers=headers,
     )
     assert response.status_code == 200

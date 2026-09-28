@@ -19,14 +19,15 @@ async def runtime(tmp_path):
 
 
 async def register(service, summary):
-    return (
-        await service.agent_start(
-            task_summary=summary,
-            intent=summary,
-            details=[summary],
-            work_scope=[f"test:{summary}"],
-        )
-    )["self"]["agent_id"]
+    plan = {
+        "task_summary": summary,
+        "intent": summary,
+        "details": [summary],
+        "work_scope": [f"test:{summary}"],
+    }
+    proposed = await service.agent_start(**plan)
+    started = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
+    return started["self"]["agent_id"]
 
 
 async def detail(service, namespace, task_id):

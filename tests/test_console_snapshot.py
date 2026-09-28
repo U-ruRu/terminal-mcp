@@ -26,14 +26,21 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
         assert client.get("/actions/console/snapshot").status_code == 401
         headers = {"Authorization": "Bearer console-token"}
 
+        plan = {
+            "task_summary": "Snapshot agent",
+            "intent": "Exercise console snapshot",
+            "details": ["Create state", "Inspect snapshot"],
+            "work_scope": ["snapshot-test"],
+        }
+        proposed = client.post(
+            "/actions/agent/start",
+            json=plan,
+            headers=headers,
+        )
+        assert proposed.status_code == 200
         started = client.post(
             "/actions/agent/start",
-            json={
-                "task_summary": "Snapshot agent",
-                "intent": "Exercise console snapshot",
-                "details": ["Create state", "Inspect snapshot"],
-                "work_scope": ["snapshot-test"],
-            },
+            json={"agent_id": proposed.json()["proposed_agent_id"], **plan},
             headers=headers,
         )
         assert started.status_code == 200
