@@ -1,4 +1,4 @@
-import { Link, Navigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import type { FleetReadModel, FleetServerReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
@@ -38,6 +38,7 @@ export function ServerWorkspace({
 }) {
   const { t, number, dateTime } = useI18n()
   const { instanceId } = useParams()
+  const navigate = useNavigate()
   const server = model.servers.find((item) => item.instanceId === instanceId)
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
   if (!server) return <Navigate to="/" replace />
@@ -54,7 +55,10 @@ export function ServerWorkspace({
           <h2 id="server-title">{server.displayName}</h2>
           <p className="muted">{server.origin}</p>
         </div>
-        <span className={'status fleet-status-' + server.freshness}>{server.freshness}</span>
+        <div className="page-tools">
+          <label className="server-switcher"><span>{t('server.switch')}</span><select aria-label={t('aria.switchServer')} value={server.instanceId} onChange={(event) => navigate('/servers/' + encodeURIComponent(event.target.value))}>{model.servers.map((item) => <option key={item.instanceId} value={item.instanceId}>{item.displayName}</option>)}</select></label>
+          <span className={'status fleet-status-' + server.freshness}>{server.freshness}</span>
+        </div>
       </div>
 
       {server.connectivity !== 'live' ? (

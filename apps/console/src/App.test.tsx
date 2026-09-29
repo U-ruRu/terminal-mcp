@@ -122,3 +122,11 @@ test('applies persisted Spanish locale to explicit server chooser', () => {
   expect(screen.getByText(/la consola no elegirá uno por ti/i)).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Server C/ })).toHaveAttribute('href', '/servers/server-c/tasks')
 })
+
+
+test('switches server workspace without returning to fleet', async () => {
+  renderApp('/servers/server-b')
+  expect(screen.getByRole('heading', { name: 'Server B' })).toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Switch server' }), 'server-a')
+  expect(screen.getByRole('heading', { name: 'Server A' })).toBeInTheDocument()
+})

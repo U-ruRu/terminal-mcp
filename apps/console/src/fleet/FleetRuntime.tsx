@@ -23,7 +23,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
         new BrowserConnectionRegistry(),
         browserFleetActorFactory(),
       ),
-    [dependencies.manager, registry],
+    [dependencies.manager],
   )
 
   const [instances, setInstances] = useState<FleetInstanceView[]>(() => manager.syncProfiles())

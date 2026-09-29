@@ -79,6 +79,28 @@ function withContext(path: string, instanceId: string | undefined): string {
   return path + separator + 'server=' + encodeURIComponent(instanceId)
 }
 
+type ContextNavigation = {
+  to: string
+  labelKey: 'nav.backToFleet' | 'nav.backToServer' | 'nav.backToTasks'
+  ariaKey: 'nav.goBackToFleet' | 'nav.goBackToServer' | 'nav.goBackToTasks'
+  titleKey: 'title.server' | 'title.serverTasks' | 'title.taskDetail' | 'title.activity'
+}
+
+function contextNavigation(pathname: string, search: string): ContextNavigation | null {
+  const parts = pathname.split('/').filter(Boolean)
+  if (parts[0] === 'servers' && parts[1]) {
+    const serverPath = '/servers/' + encodeURIComponent(parts[1])
+    if (parts[2] === 'tasks' && parts.length >= 5) return { to: serverPath + '/tasks', labelKey: 'nav.backToTasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
+    if (parts[2] === 'tasks') return { to: serverPath, labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
+    return { to: '/', labelKey: 'nav.backToFleet', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
+  }
+  if (pathname === '/activity') {
+    const server = new URLSearchParams(search).get('server')
+    if (server) return { to: '/servers/' + encodeURIComponent(server), labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.activity' }
+  }
+  return null
+}
+
 export function AppShell({
   children,
   servers,
@@ -118,6 +140,7 @@ export function AppShell({
   }, [menuOpen])
 
   const current = activeKey(location.pathname)
+  const contextual = contextNavigation(location.pathname, location.search)
   const selectedId = selectedServer?.instanceId
 
   const destination = (item: NavigationItem) => {
@@ -204,7 +227,15 @@ export function AppShell({
           )}
         </nav>
 
-        <main className="content">{children}</main>
+        <main className="content">
+          {contextual ? (
+            <div className="mobile-context" aria-label={t('aria.currentLocation')}>
+              <Link className="mobile-back" aria-label={t(contextual.ariaKey)} to={contextual.to}>{t(contextual.labelKey)}</Link>
+              <span>{t(contextual.titleKey)}</span>
+            </div>
+          ) : null}
+          {children}
+        </main>
       </div>
     </div>
   )
