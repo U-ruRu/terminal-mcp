@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { App } from '../App'
 import { BrowserConnectionRegistry } from '../connections/registry'
+import { ConnectionRuntimeProvider } from '../connections/runtime'
 import { browserFleetActorFactory } from './actor'
 import { FleetConnectionManager } from './manager'
 import { FleetVisibilityController, type FleetVisibilitySource } from './policy'
@@ -14,6 +15,7 @@ export type FleetRuntimeDependencies = {
 }
 
 export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntimeDependencies }) {
+  const registry = useMemo(() => new BrowserConnectionRegistry(), [])
   const manager = useMemo(
     () =>
       dependencies.manager ??
@@ -21,7 +23,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
         new BrowserConnectionRegistry(),
         browserFleetActorFactory(),
       ),
-    [dependencies.manager],
+    [dependencies.manager, registry],
   )
 
   const [instances, setInstances] = useState<FleetInstanceView[]>(() => manager.syncProfiles())
@@ -44,12 +46,19 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
 
   const model = useMemo(() => buildFleetReadModel(instances), [instances])
 
+  const syncProfiles = useCallback(() => {
+    setInstances(manager.syncProfiles())
+    void manager.startAll()
+  }, [manager])
+
   return (
-    <App
+    <ConnectionRuntimeProvider registry={registry} onProfilesChanged={syncProfiles}>
+      <App
       model={model}
       instances={instances}
       loadActivity={(instanceId, options) => manager.activity(instanceId, options)}
       loadTask={(instanceId, namespace, taskId) => manager.task(instanceId, namespace, taskId)}
-    />
+      />
+    </ConnectionRuntimeProvider>
   )
 }

@@ -8,30 +8,41 @@
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
     "test": "vitest run",
     "lint": "eslint . --max-warnings=0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "android:sync": "npm run build && cap sync android",
+    "android:build:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
+    "android:build:release": "npm run android:sync && cd android && ./gradlew assembleRelease",
+    "android:manifest": "node scripts/android-release-manifest.mjs",
+    "android:verify:version": "node scripts/verify-android-version.mjs",
+    "android:verify:release": "bash scripts/verify-android-release.sh"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/status-bar": "^8.0.3",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
     "@eslint/js": "latest",
     "@testing-library/jest-dom": "latest",
     "@testing-library/react": "latest",
     "@testing-library/user-event": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
     "eslint": "latest",
     "eslint-plugin-react-hooks": "latest",
     "eslint-plugin-react-refresh": "latest",
     "globals": "latest",
     "jsdom": "latest",
+    "typescript": "latest",
     "typescript-eslint": "latest",
-    "vitest": "latest",
-    "@vitejs/plugin-react": "latest",
     "vite": "latest",
-    "typescript": "latest"
+    "vitest": "latest"
   },
   "engines": {
     "node": ">=20"

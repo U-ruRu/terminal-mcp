@@ -1,5 +1,5 @@
 import { generateDevicePublicKey } from '../auth/pairing'
-import { PairingTransport } from '../auth/transport'
+import { AuthTransportError, PairingTransport } from '../auth/transport'
 import type { StoredConnection } from '../auth/types'
 import {
   BrowserCredentialVault,
@@ -11,6 +11,7 @@ import type {
   ConnectionProfileMetadata,
   ConnectionRegistryDocument,
   PairedProfile,
+  ProfileRestoreResult,
 } from './types'
 
 const REGISTRY_STORAGE_KEY = 'terminal-mcp.console.connections.v1'
@@ -215,6 +216,67 @@ export class BrowserConnectionRegistry {
       throw error
     }
     return { ...profile, metadata: { ...profile.metadata } }
+  }
+
+  async restore(
+    instanceId: string,
+    transport = new PairingTransport(),
+  ): Promise<ProfileRestoreResult> {
+    const profile = this.get(instanceId)
+    if (!profile) return { status: 'missing' }
+
+    const credentialVault = BrowserCredentialVault.forReference(
+      profile.credentialRef,
+      this.storage,
+    )
+    const connection = credentialVault.load()
+    if (!connection) return { status: 'revoked', profile }
+
+    if (
+      canonicalOrigin(connection.origin) !== profile.origin ||
+      connection.deviceId !== profile.metadata.deviceId ||
+      connection.clientId !== profile.metadata.clientId
+    ) {
+      throw new ConnectionRegistryError('credential_profile_mismatch')
+    }
+
+    try {
+      const refreshed = await transport.refresh(
+        connection.origin,
+        connection.clientId,
+        connection.refreshToken,
+      )
+      const rotated: StoredConnection = {
+        ...connection,
+        scope: refreshed.scope,
+        refreshToken: refreshed.refresh_token,
+      }
+      credentialVault.save(rotated)
+      return {
+        status: 'connected',
+        profile,
+        accessToken: refreshed.access_token,
+        accessExpiresAt: this.now() + Math.max(0, refreshed.expires_in) * 1000,
+      }
+    } catch (error) {
+      const transportError =
+        error instanceof AuthTransportError
+          ? error
+          : new AuthTransportError(0, 'restore_failed')
+      if (transportError.revoked || transportError.expired) {
+        credentialVault.clear()
+        return {
+          status: transportError.revoked ? 'revoked' : 'expired',
+          profile,
+        }
+      }
+      return {
+        status: 'error',
+        profile,
+        retryable: transportError.retryable,
+        message: transportError.code,
+      }
+    }
   }
 
   async pairAndAdd(

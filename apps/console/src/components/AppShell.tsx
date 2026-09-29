@@ -6,7 +6,7 @@ import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 
 type NavigationItem = {
-  key: 'fleet' | 'servers' | 'agents' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
+  key: 'fleet' | 'servers' | 'connections' | 'agents' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
   labelKey: MessageKey
   globalPath: string
   serverPath?: (instanceId: string) => string
@@ -15,6 +15,7 @@ type NavigationItem = {
 const navigation: NavigationItem[] = [
   { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/' },
   { key: 'servers', labelKey: 'nav.servers', globalPath: '/servers' },
+  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections' },
   {
     key: 'agents',
     labelKey: 'nav.agents',
@@ -63,6 +64,7 @@ function activeKey(pathname: string): NavigationItem['key'] {
   if (pathname === '/servers') return 'servers'
   if (pathname === '/activity') return 'activity'
   if (pathname === '/settings') return 'settings'
+  if (pathname === '/connections') return 'connections'
   if (pathname === '/agents' || pathname.endsWith('/agents')) return 'agents'
   if (pathname === '/tasks' || pathname.includes('/tasks')) return 'tasks'
   if (pathname === '/context' || pathname.endsWith('/context')) return 'context'

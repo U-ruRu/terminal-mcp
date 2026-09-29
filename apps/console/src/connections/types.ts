@@ -25,3 +25,19 @@ export type PairedProfile = {
   accessToken: string
   accessExpiresAt: number
 }
+
+export type ProfileRestoreResult =
+  | {
+      status: 'connected'
+      profile: ConnectionProfile
+      accessToken: string
+      accessExpiresAt: number
+    }
+  | { status: 'missing' }
+  | { status: 'revoked' | 'expired'; profile: ConnectionProfile }
+  | {
+      status: 'error'
+      profile: ConnectionProfile
+      retryable: boolean
+      message: string
+    }
