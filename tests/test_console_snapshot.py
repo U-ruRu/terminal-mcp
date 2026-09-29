@@ -76,6 +76,35 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
         )
         assert task.status_code == 200
 
+        active_task = client.post(
+            "/actions/task",
+            json={
+                "agent_id": agent_id,
+                "action": "create",
+                "namespace": "snapshot",
+                "task_id": "ACTIVE",
+                "title": "Active task",
+                "lane": "implementation",
+                "priority": "P1",
+                "state": "ready",
+                "isolation_hint": "none",
+            },
+            headers=headers,
+        )
+        assert active_task.status_code == 200
+        claimed = client.post(
+            "/actions/task",
+            json={
+                "agent_id": agent_id,
+                "action": "claim",
+                "namespace": "snapshot",
+                "task_id": "ACTIVE",
+                "claim_intent": "Expose stable Console identity",
+            },
+            headers=headers,
+        )
+        assert claimed.status_code == 200
+
         snapshot = client.get("/actions/console/snapshot", headers=headers)
         assert snapshot.status_code == 200
         body = snapshot.json()
@@ -92,12 +121,21 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
         assert body["instance"]["public_base_url"] == "https://terminal.example"
         assert body["instance"]["health"]["ok"] is True
         agent_name = started.json()["self"]["name"]
-        assert any(item["name"] == agent_name for item in body["agents"]["sessions"])
+        agent_session = next(
+            item for item in body["agents"]["sessions"] if item["name"] == agent_name
+        )
+        assert agent_session["agent_id"] == agent_id
         assert any(
             item["namespace"] == "snapshot" and item["task_id"] == "DONE"
             for item in body["tasks"]["tasks"]
         )
         assert body["tasks"]["summary"]["by_state"]["done"] >= 1
+        active_projection = next(
+            item for item in body["tasks"]["tasks"]
+            if item["namespace"] == "snapshot" and item["task_id"] == "ACTIVE"
+        )
+        assert active_projection["owner"]["agent_id"] == agent_id
+        assert active_projection["owner"]["agent_name"] == agent_name
         assert body["contexts"]["primary"] == [
             {
                 "id": created.json()["entry"]["id"],
@@ -108,6 +146,7 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
         communication = next(
             item for item in body["communications"] if item["name"] == agent_name
         )
+        assert communication["agent_id"] == agent_id
         assert "intent_journal" in communication
         assert "message_journal" in communication
 

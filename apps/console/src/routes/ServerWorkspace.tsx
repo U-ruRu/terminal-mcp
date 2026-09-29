@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import type { FleetReadModel, FleetServerReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
+import { activityRoute, agentRoute, contextRoute, healthRoute, taskRoute, tasksRoute } from '../navigation/routes'
 
 function percent(value: number | undefined, unavailable: string) {
   return value === undefined ? unavailable : Math.round(value) + '%'
@@ -100,11 +101,13 @@ export function ServerWorkspace({
         {agents.length ? (
           <div className="task-list">
             {agents.map((agent) => {
-              const claimed = tasks.find((task) => task.active && task.owner?.agentName === agent.name)
+              const claimed = agent.agentId
+                ? tasks.find((task) => task.active && task.owner?.agentId === agent.agentId)
+                : undefined
               return (
-                <article className="card" key={agent.name}>
+                <article className="card" key={agent.agentId ?? `${agent.name}:${agent.lastActivityAt}`}>
                   <div className="section-heading">
-                    <strong>{agent.name}</strong>
+                    {agent.agentId ? <Link className="text-link" to={agentRoute(server.instanceId, agent.agentId)}>{agent.name}</Link> : <strong>{agent.name}</strong>}
                     <span className="chip">{t('server.step')} {number(agent.currentStep)}</span>
                   </div>
                   <p>{agent.intent || t('server.noIntent')}</p>
@@ -113,10 +116,7 @@ export function ServerWorkspace({
                     {' · '}{agent.lastActivity}
                   </p>
                   {claimed && (
-                    <Link className="text-link" to={
-                      '/servers/' + encodeURIComponent(server.instanceId) + '/tasks/' +
-                      encodeURIComponent(claimed.namespace) + '/' + encodeURIComponent(claimed.taskId)
-                    }>
+                    <Link className="text-link" to={taskRoute(server.instanceId, claimed.namespace, claimed.taskId)}>
                       {claimed.taskId} · {claimed.title}
                     </Link>
                   )}
@@ -134,8 +134,10 @@ export function ServerWorkspace({
 
       <div className="server-actions" aria-label={t('server.navigation')}>
         <Link className="nav-link" to="/">{t('nav.backToFleet')}</Link>
-        <Link className="nav-link" to={'/servers/' + server.instanceId + '/tasks'}>{t('nav.tasks')}</Link>
-        <Link className="nav-link" to={'/activity?server=' + encodeURIComponent(server.instanceId)}>{t('nav.activity')}</Link>
+        <Link className="nav-link" to={tasksRoute(server.instanceId)}>{t('nav.tasks')}</Link>
+        <Link className="nav-link" to={activityRoute(server.instanceId)}>{t('nav.activity')}</Link>
+        <Link className="nav-link" to={contextRoute(server.instanceId)}>{t('nav.context')}</Link>
+        <Link className="nav-link" to={healthRoute(server.instanceId)}>{t('nav.health')}</Link>
       </div>
     </section>
   )

@@ -140,6 +140,7 @@ function owner(value: unknown, path: string): TaskOwnerReadModel | undefined {
   if (value === undefined || value === null) return undefined
   const item = record(value, path)
   return {
+    agentId: optionalString(item.agent_id, `${path}.agent_id`),
     agentName: string(item.agent_name, `${path}.agent_name`),
     claimedAt: string(item.claimed_at, `${path}.claimed_at`),
     claimAgeSeconds: integer(item.claim_age_seconds, `${path}.claim_age_seconds`),
@@ -164,6 +165,7 @@ function agentIntentScope(value: unknown, path: string) {
 function agent(value: unknown, path: string): AgentReadModel {
   const item = record(value, path)
   return {
+    agentId: optionalString(item.agent_id, `${path}.agent_id`),
     name: string(item.name, `${path}.name`),
     status: string(item.status, `${path}.status`),
     intent: string(item.intent, `${path}.intent`),
@@ -258,6 +260,9 @@ function task(value: unknown, path: string): TaskReadModel {
     nextAction: string(item.next_action ?? '', `${path}.next_action`),
     candidateRef: optionalString(item.candidate_ref, `${path}.candidate_ref`),
     owner: owner(item.owner, `${path}.owner`),
+    participants: array(item.participants ?? [], `${path}.participants`).map((raw, index) =>
+      owner(raw, `${path}.participants[${index}]`),
+    ).filter((item): item is TaskOwnerReadModel => item !== undefined),
     checkpoint: item.checkpoint ?? {},
     result: item.result,
     details: Object.keys(details).length > 0 ? details : undefined,
@@ -303,6 +308,7 @@ function intent(value: unknown, path: string): IntentReadModel {
 function communication(value: unknown, path: string): CommunicationReadModel {
   const item = record(value, path)
   return {
+    agentId: optionalString(item.agent_id, `${path}.agent_id`),
     name: string(item.name, `${path}.name`),
     sessionRef: optionalString(item.session_ref, `${path}.session_ref`),
     messagesAwaitingRead: integer(item.messages_awaiting_read ?? 0, `${path}.messages_awaiting_read`),
@@ -428,6 +434,7 @@ function activityMessage(value: unknown, path: string): ActivityMessageReadModel
   const item = record(value, path)
   return {
     messageHash: string(item.message_hash, `${path}.message_hash`),
+    senderAgentId: optionalString(item.sender_agent_id, `${path}.sender_agent_id`),
     senderName: string(item.sender_name, `${path}.sender_name`),
     target: string(item.target, `${path}.target`),
     text: string(item.text, `${path}.text`),
@@ -438,6 +445,7 @@ function activityMessage(value: unknown, path: string): ActivityMessageReadModel
     recipients: array(item.recipients ?? [], `${path}.recipients`).map((raw, index) => {
       const recipient = record(raw, `${path}.recipients[${index}]`)
       return {
+        agentId: optionalString(recipient.agent_id, `${path}.recipients[${index}].agent_id`),
         name: string(recipient.name, `${path}.recipients[${index}].name`),
         seen: boolean(recipient.seen, `${path}.recipients[${index}].seen`),
         read: boolean(recipient.read, `${path}.recipients[${index}].read`),
@@ -454,6 +462,7 @@ function activityEvent(value: unknown, path: string): ActivityEventReadModel {
     eventType: string(item.event_type, `${path}.event_type`),
     entityType: string(item.entity_type, `${path}.entity_type`),
     entityId: string(item.entity_id, `${path}.entity_id`),
+    actorId: optionalString(item.actor_id, `${path}.actor_id`),
     actorName: optionalString(item.actor_name, `${path}.actor_name`),
     payload: record(item.payload ?? {}, `${path}.payload`),
     createdAt: string(item.created_at, `${path}.created_at`),

@@ -4,17 +4,13 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import type { TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
+import { activityRoute, agentRoute, serverRoute, taskRoute } from '../navigation/routes'
 
 export type ServerTaskLoader = (
   instanceId: string,
   namespace: string,
   taskId: string,
 ) => Promise<TaskReadModel>
-
-function taskHref(instanceId: string, task: TaskReadModel): string {
-  return '/servers/' + encodeURIComponent(instanceId) + '/tasks/' +
-    encodeURIComponent(task.namespace) + '/' + encodeURIComponent(task.taskId)
-}
 
 export function ServerTasks({
   instances,
@@ -87,7 +83,8 @@ export function ServerTasks({
           <div className="chip-row">
             <span className="chip">{detail.priority}</span>
             <span className="chip">{detail.lane}</span>
-            {detail.owner && <span className="chip">{t('common.owner')} {detail.owner.agentName}</span>}
+            {detail.owner?.agentId ? <Link className="text-link" to={agentRoute(instanceId, detail.owner.agentId)}>{t('common.owner')} {detail.owner.agentName}</Link> : detail.owner ? <span className="chip">{t('common.owner')} {detail.owner.agentName}</span> : null}
+            {(detail.participants ?? []).map((participant) => participant.agentId ? <Link className="text-link" key={participant.agentId} to={agentRoute(instanceId, participant.agentId)}>{t('common.agent')} {participant.agentName}</Link> : <span className="chip" key={`${participant.agentName}:${participant.claimedAt}`}>{t('common.agent')} {participant.agentName}</span>)}
             {detail.candidateRef && <span className="chip">{t('common.candidate')} {detail.candidateRef.slice(0, 12)}</span>}
           </div>
           {error && <p className="muted">{t('tasks.refreshFailed')} {error}. {t('tasks.cachedRemains')}</p>}
@@ -105,7 +102,7 @@ export function ServerTasks({
               <span className="chip">{task.operationalStatus}</span>
             </div>
             <p>{task.nextAction || t('tasks.noNextAction')}</p>
-            <Link className="text-link" to={taskHref(instanceId, task)}>{t('tasks.openDetail')}</Link>
+            <Link className="text-link" to={taskRoute(instanceId, task.namespace, task.taskId)}>{t('tasks.openDetail')}</Link>
           </article>
         ))}
         {tasks.length === 0 && (
@@ -114,8 +111,8 @@ export function ServerTasks({
       </div>
 
       <div className="server-actions">
-        <Link className="nav-link" to={'/servers/' + encodeURIComponent(instanceId)}>{t('nav.backToServer')}</Link>
-        <Link className="nav-link" to={'/activity?server=' + encodeURIComponent(instanceId)}>{t('nav.activity')}</Link>
+        <Link className="nav-link" to={serverRoute(instanceId)}>{t('nav.backToServer')}</Link>
+        <Link className="nav-link" to={activityRoute(instanceId)}>{t('nav.activity')}</Link>
       </div>
     </section>
   )

@@ -790,6 +790,7 @@ class TerminalService:
             show_commands=False,
             since_minutes=history_minutes,
             touch=False,
+            reveal_agent_ids=True,
         )
         contexts = await self.context("list", show_details=True)
 
@@ -799,6 +800,7 @@ class TerminalService:
             show_details=False,
             limit=200,
             cursor=0,
+            reveal_agent_ids=True,
         )
         task_items = list(task_page.get("tasks") or [])
         next_cursor = task_page.get("next_cursor")
@@ -809,6 +811,7 @@ class TerminalService:
                 show_details=False,
                 limit=200,
                 cursor=next_cursor,
+                reveal_agent_ids=True,
             )
             task_items.extend(page.get("tasks") or [])
             next_cursor = page.get("next_cursor")
@@ -822,9 +825,11 @@ class TerminalService:
         communications = []
         for session in agents.get("sessions") or []:
             name = session["name"]
+            stable_agent_id = session.get("agent_id")
             detail = await self.agent_coordinator.overview(
                 agent_id=None,
                 target=name,
+                target_agent_id=stable_agent_id,
                 target_session_ref=session.get("session_ref"),
                 show_details=False,
                 show_intents=True,
@@ -837,6 +842,7 @@ class TerminalService:
                 {
                     "name": name,
                     "session_ref": session.get("session_ref"),
+                    "agent_id": stable_agent_id,
                     "messages_awaiting_read": selected.get("messages_awaiting_read", 0),
                     "messages_awaiting_reply": selected.get("messages_awaiting_reply", 0),
                     "alerts_pending": selected.get("alerts_pending", 0),
@@ -1041,6 +1047,7 @@ class TerminalService:
         show_archived=False,
         limit=50,
         cursor=None,
+        reveal_agent_ids=False,
     ):
         if not self.task_coordinator:
             return {"ok": False, "error": "task coordination unavailable"}
@@ -1056,6 +1063,7 @@ class TerminalService:
             show_archived=show_archived,
             limit=limit,
             cursor=cursor,
+            reveal_agent_ids=reveal_agent_ids,
         )
 
     async def task(self, agent_id, **kwargs):

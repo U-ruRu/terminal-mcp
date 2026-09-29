@@ -112,6 +112,7 @@ async def _project_activity_event(service, event: dict) -> dict:
     }
     actor_id = event.get("actor_id")
     if actor_id:
+        projected["actor_id"] = actor_id
         projected["actor_name"] = public_agent_name(actor_id)
     if event["entity_type"] == "agent" and service.agent_store:
         session = await service.agent_store.get_session(event["entity_id"])
@@ -143,6 +144,7 @@ async def _project_activity_event(service, event: dict) -> dict:
             receipts = await service.agent_store.message_receipts(event["entity_id"])
             projected["message"] = {
                 "message_hash": message["message_hash"],
+                "sender_agent_id": message["sender_agent_id"],
                 "sender_name": public_agent_name(message["sender_agent_id"]),
                 "target": message["target_name"] or "broadcast",
                 "text": message["text"],
@@ -152,6 +154,7 @@ async def _project_activity_event(service, event: dict) -> dict:
                 "task_id": message["task_id"],
                 "recipients": [
                     {
+                        "agent_id": item["agent_id"],
                         "name": public_agent_name(item["agent_id"]),
                         "seen": bool(item["seen"]),
                         "read": bool(item["read"]),
@@ -251,6 +254,7 @@ def build_console_events_router(settings, auth, pairing_store, service, event_st
             show_archived=True,
             limit=1,
             cursor=0,
+            reveal_agent_ids=True,
         )
         task = result.get("task") if result.get("ok") else None
         if task is None:

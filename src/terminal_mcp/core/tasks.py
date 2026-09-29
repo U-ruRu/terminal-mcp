@@ -290,22 +290,29 @@ class TaskCoordinator:
             return "in_progress"
         return "blocked" if blocking_dependencies else "ready"
 
-    def _claim_view(self, item, role):
+    def _claim_view(self, item, role, *, reveal_agent_id=False):
         age = max(0, int((utc_now() - parse_utc(item["claimed_at"])).total_seconds()))
-        return {
+        result = {
             "agent_name": public_agent_name(item["agent_id"]),
             "claimed_at": item["claimed_at"],
             "claim_age_seconds": age,
             "claim_intent": item.get("claim_intent") or "",
             "role": role,
         }
+        if reveal_agent_id:
+            result["agent_id"] = item["agent_id"]
+        return result
 
-    async def _decorate(self, task, *, details=False):
+    async def _decorate(self, task, *, details=False, reveal_agent_ids=False):
         result = self._external_task(task)
         namespace, task_id = result["namespace"], result["task_id"]
         claims = await self._live_claims(namespace, task_id)
         views = [
-            self._claim_view(item, "owner" if index == 0 else "participant")
+            self._claim_view(
+                item,
+                "owner" if index == 0 else "participant",
+                reveal_agent_id=reveal_agent_ids,
+            )
             for index, item in enumerate(claims)
         ]
         dependencies = await self._dependencies(namespace, task_id)
@@ -441,6 +448,7 @@ class TaskCoordinator:
         show_archived=False,
         limit=50,
         cursor=None,
+        reveal_agent_ids=False,
     ):
         if lane is not None and lane not in LANES:
             return {"ok": False, "error": f"tasks.lane: expected one of {', '.join(LANES)}"}
@@ -463,7 +471,9 @@ class TaskCoordinator:
             task = await self.store.get_task(namespace, task_id)
             return {
                 "ok": task is not None,
-                "task": await self._decorate(task, details=show_details) if task else None,
+                "task": await self._decorate(
+                    task, details=show_details, reveal_agent_ids=reveal_agent_ids
+                ) if task else None,
                 "error": None if task else "task not found",
             }
 
@@ -489,7 +499,10 @@ class TaskCoordinator:
             offset=0,
         )
         tag_counts = Counter(tag for item in vocabulary_rows for tag in item.get("tags", []))
-        compact = [await self._decorate(item, details=False) for item in all_rows]
+        compact = [
+            await self._decorate(item, details=False, reveal_agent_ids=reveal_agent_ids)
+            for item in all_rows
+        ]
         if operational_status is not None:
             compact = [item for item in compact if item["operational_status"] == operational_status]
         lane_counts = Counter(
@@ -542,7 +555,11 @@ class TaskCoordinator:
             tasks = []
             for item in page:
                 stored = await self.store.get_task(item["namespace"], item["task_id"])
-                tasks.append(await self._decorate(stored, details=True))
+                tasks.append(
+                    await self._decorate(
+                        stored, details=True, reveal_agent_ids=reveal_agent_ids
+                    )
+                )
         else:
             tasks = page
         next_cursor = offset + len(page) if offset + len(page) < len(compact) else None

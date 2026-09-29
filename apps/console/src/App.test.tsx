@@ -46,6 +46,9 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
   expect(screen.getByText('https://server-c.example.invalid')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Back to fleet' })).toHaveAttribute('href', '/')
+  const serverNavigation = screen.getByLabelText('Server navigation')
+  expect(within(serverNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
+  expect(within(serverNavigation).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/servers/server-c/health')
 })
 
 test('direct route keeps stale cached server readable after reload', () => {

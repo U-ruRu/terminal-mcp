@@ -24,15 +24,25 @@ const task = {
   tags: ['M1'],
   active: true,
   owner: {
-    agent_name: 'Charlie',
+    agent_id: 'Charlie-ABCD',
+  agent_name: 'Charlie',
     claimed_at: '2026-09-28T09:00:00Z',
     claim_age_seconds: 10,
     claim_intent: 'Implement typed client',
     role: 'owner',
   },
+  participants: [{
+    agent_id: 'Mike-EFGH',
+    agent_name: 'Mike',
+    claimed_at: '2026-09-28T09:00:01Z',
+    claim_age_seconds: 9,
+    claim_intent: 'Review typed client',
+    role: 'participant',
+  }],
 }
 
 const session = {
+  agent_id: 'Charlie-ABCD',
   name: 'Charlie',
   status: 'active',
   last_activity: '1s ago',
@@ -95,6 +105,7 @@ const snapshot = {
   contexts,
   communications: [
     {
+      agent_id: 'Charlie-ABCD',
       name: 'Charlie',
       messages_awaiting_read: 1,
       messages_awaiting_reply: 0,
@@ -146,16 +157,18 @@ test('snapshot adapts frozen M0 contract into stable read models', async () => {
       },
     },
   })
-  expect(model.agents[0]).toMatchObject({ name: 'Charlie', currentStep: 2 })
+  expect(model.agents[0]).toMatchObject({ agentId: 'Charlie-ABCD', name: 'Charlie', currentStep: 2 })
   expect(model.tasks[0]).toMatchObject({
     key: 'console/M1-003',
     operationalStatus: 'in_progress',
-    owner: { agentName: 'Charlie' },
+    owner: { agentId: 'Charlie-ABCD', agentName: 'Charlie' },
+    participants: [{ agentId: 'Mike-EFGH', agentName: 'Mike' }],
   })
   expect(model.contexts).toEqual([
     { id: 1, summary: 'Primary', content: 'Important', primary: true },
     { id: 2, summary: 'Extra', content: 'Optional', primary: false },
   ])
+  expect(model.communications[0].agentId).toBe('Charlie-ABCD')
   expect(model.communications[0].messageJournal[0].messageHash).toBe('deadbeef')
   expect(fetcher).toHaveBeenCalledWith(
     new URL('https://terminal.example/actions/console/snapshot'),
@@ -270,11 +283,13 @@ test('activity feed maps cursor, filters and authorized message projection', asy
         event_type: 'message.created',
         entity_type: 'message',
         entity_id: 'deadbeef',
+        actor_id: 'Alpha-ABCD',
         actor_name: 'Alpha',
         payload: { alert: true },
         created_at: '2026-09-28T11:00:00Z',
         message: {
           message_hash: 'deadbeef',
+          sender_agent_id: 'Alpha-ABCD',
           sender_name: 'Alpha',
           target: 'Bravo',
           text: 'Operational hello',
@@ -282,7 +297,7 @@ test('activity feed maps cursor, filters and authorized message projection', asy
           alert: true,
           task_namespace: 'console',
           task_id: 'M2-008',
-          recipients: [{ name: 'Bravo', seen: true, read: false, replied: false }],
+          recipients: [{ agent_id: 'Bravo-EFGH', name: 'Bravo', seen: true, read: false, replied: false }],
         },
       },
     ],
@@ -319,10 +334,12 @@ test('activity feed maps cursor, filters and authorized message projection', asy
     seq: 7,
     eventType: 'message.created',
     entityType: 'message',
+    actorId: 'Alpha-ABCD',
     actorName: 'Alpha',
     message: {
+      senderAgentId: 'Alpha-ABCD',
       text: 'Operational hello',
-      recipients: [{ name: 'Bravo', seen: true, read: false, replied: false }],
+      recipients: [{ agentId: 'Bravo-EFGH', name: 'Bravo', seen: true, read: false, replied: false }],
     },
   })
 })

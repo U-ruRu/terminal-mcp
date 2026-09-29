@@ -6,6 +6,7 @@ import type { FleetInstanceView } from './fleet/types'
 import { Activity, type ActivityLoader } from './routes/Activity'
 import { Connections } from './routes/Connections'
 import { Overview } from './routes/Overview'
+import { ServerAgents } from './routes/ServerAgents'
 import { ServerChooser } from './routes/ServerChooser'
 import { Settings } from './routes/Settings'
 import { ServerSection } from './routes/ServerSection'
@@ -32,7 +33,8 @@ export function App({ model, instances, loadActivity, loadTask }: AppProps) {
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
-        <Route path="/servers/:instanceId/agents" element={<ServerSection model={model} section="agents" />} />
+        <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
+        <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" />} />
         <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />

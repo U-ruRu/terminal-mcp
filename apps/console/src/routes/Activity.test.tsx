@@ -40,8 +40,8 @@ function activityLoader() {
     const since = (options as { since?: number }).since ?? 0
     if (instanceId === 'alpha') {
       return page(since, [
-        { seq: 1, eventType: 'task.updated', entityType: 'task', entityId: 'M2', actorName: 'Yankee', payload: {}, createdAt: '2026-09-28T11:00:01Z' },
-        { seq: 2, eventType: 'message.created', entityType: 'message', entityId: 'msg', actorName: 'Alpha', payload: {}, createdAt: '2026-09-28T11:00:02Z', message: { messageHash: 'msg', senderName: 'Alpha', target: 'Bravo', text: 'Ship it', requireReply: false, alert: false, taskNamespace: 'console', taskId: 'M2-009', recipients: [] } },
+        { seq: 1, eventType: 'task.updated', entityType: 'task', entityId: 'M2', actorId: 'Yankee-1111', actorName: 'Yankee', payload: {}, createdAt: '2026-09-28T11:00:01Z' },
+        { seq: 2, eventType: 'message.created', entityType: 'message', entityId: 'msg', actorId: 'Alpha-1111', actorName: 'Alpha', payload: {}, createdAt: '2026-09-28T11:00:02Z', message: { messageHash: 'msg', senderAgentId: 'Alpha-1111', senderName: 'Alpha', target: 'Bravo', text: 'Ship it', requireReply: false, alert: false, taskNamespace: 'console', taskId: 'M2-009', recipients: [] } },
       ], 2)
     }
     return page(since, [
@@ -59,6 +59,8 @@ test('switches servers, filters messages and renders direct task navigation', as
   )
   await screen.findByText('Ship it')
   expect(screen.getByRole('link', { name: 'Task M2-009' })).toHaveAttribute('href', '/servers/alpha/tasks/console/M2-009')
+  expect(screen.getAllByRole('link', { name: 'Server Alpha' })[0]).toHaveAttribute('href', '/servers/alpha')
+  expect(screen.getByRole('link', { name: 'Agent Alpha' })).toHaveAttribute('href', '/servers/alpha/agents/Alpha-1111')
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
   expect(screen.getByText('Ship it')).toBeInTheDocument()
   expect(screen.queryByText('task.updated · #1')).not.toBeInTheDocument()
@@ -79,4 +81,27 @@ test('does not silently choose a server when activity has no server context', as
   expect(load).not.toHaveBeenCalled()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
   await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ since: 0 })))
+})
+
+
+test('filters duplicate public names by exact agent session identity', async () => {
+  const load = vi.fn(async (_instanceId: string, options = {}) => {
+    const since = (options as { since?: number }).since ?? 0
+    return page(since, [
+      { seq: 11, eventType: 'agent.activity', entityType: 'agent', entityId: 'SameName-1111', actorId: 'SameName-1111', actorName: 'SameName', payload: { marker: 'first-session' }, createdAt: '2026-09-28T11:01:01Z' },
+      { seq: 12, eventType: 'agent.activity', entityType: 'agent', entityId: 'SameName-2222', actorId: 'SameName-2222', actorName: 'SameName', payload: { marker: 'second-session' }, createdAt: '2026-09-28T11:01:02Z' },
+    ], 12)
+  })
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/activity?server=alpha&agent=SameName-2222']}>
+        <Activity instances={[instance('alpha', 'Alpha', 12)]} loadActivity={load} />
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+  expect(await screen.findByText(/second-session/)).toBeInTheDocument()
+  expect(screen.queryByText(/first-session/)).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: /Agent SameName-2222/ }))
+  expect(await screen.findByText(/first-session/)).toBeInTheDocument()
+  expect(screen.getByText(/second-session/)).toBeInTheDocument()
 })

@@ -60,6 +60,7 @@ export type AgentIntentScopeReadModel = {
 }
 
 export type AgentReadModel = {
+  agentId?: string
   name: string
   status: string
   intent: string
@@ -86,6 +87,7 @@ export type AgentReadModel = {
 }
 
 export type TaskOwnerReadModel = {
+  agentId?: string
   agentName: string
   claimedAt: string
   claimAgeSeconds: number
@@ -108,6 +110,7 @@ export type TaskReadModel = {
   nextAction: string
   candidateRef?: string
   owner?: TaskOwnerReadModel
+  participants?: TaskOwnerReadModel[]
   checkpoint: unknown
   result?: unknown
   details?: JsonRecord
@@ -138,6 +141,7 @@ export type IntentReadModel = {
 }
 
 export type CommunicationReadModel = {
+  agentId?: string
   name: string
   sessionRef?: string
   messagesAwaitingRead: number
@@ -164,6 +168,7 @@ export type WebSocketTicketReadModel = {
 }
 
 export type ActivityRecipientReadModel = {
+  agentId?: string
   name: string
   seen: boolean
   read: boolean
@@ -172,6 +177,7 @@ export type ActivityRecipientReadModel = {
 
 export type ActivityMessageReadModel = {
   messageHash: string
+  senderAgentId?: string
   senderName: string
   target: string
   text: string
@@ -187,6 +193,7 @@ export type ActivityEventReadModel = {
   eventType: string
   entityType: string
   entityId: string
+  actorId?: string
   actorName?: string
   payload: JsonRecord
   createdAt: string

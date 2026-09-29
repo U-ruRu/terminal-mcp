@@ -179,7 +179,7 @@ def test_task_detail_requires_active_paired_device_and_preserves_bearer_actions(
 
 
 
-def test_activity_feed_redacts_private_agent_id_with_safe_session_ref(tmp_path):
+def test_activity_feed_exposes_stable_agent_id_to_paired_console(tmp_path):
     app = create_app(
         settings(
             tmp_path,
@@ -224,8 +224,8 @@ def test_activity_feed_redacts_private_agent_id_with_safe_session_ref(tmp_path):
         assert event["actor_name"] == public_name
         assert event["payload"]["agent_name"] == public_name
         assert event["payload"]["session_ref"] == event["entity_id"]
-        assert agent_id not in str(body)
-        assert agent_id.rsplit("-", 1)[1] not in str(body)
+        assert event["actor_id"] == agent_id
+        assert agent_id not in str(event["payload"])
 
 def test_activity_feed_projects_authorized_messages_and_requires_paired_device(tmp_path):
     app = create_app(
@@ -267,9 +267,11 @@ def test_activity_feed_projects_authorized_messages_and_requires_paired_device(t
         assert body["events"]
         assert all(item["entity_type"] == "message" for item in body["events"])
         created = next(item for item in body["events"] if item["event_type"] == "message.created")
+        assert created["actor_id"] == "Alpha-ABCD"
         assert created["actor_name"] == "Alpha"
         assert created["message"] == {
             "message_hash": "feedbeef",
+            "sender_agent_id": "Alpha-ABCD",
             "sender_name": "Alpha",
             "target": "Bravo",
             "text": "Operational hello",
@@ -278,7 +280,13 @@ def test_activity_feed_projects_authorized_messages_and_requires_paired_device(t
             "task_namespace": "console",
             "task_id": "M2-008",
             "recipients": [
-                {"name": "Bravo", "seen": False, "read": False, "replied": False}
+                {
+                    "agent_id": "Bravo-EFGH",
+                    "name": "Bravo",
+                    "seen": False,
+                    "read": False,
+                    "replied": False,
+                }
             ],
         }
         filtered = client.post(

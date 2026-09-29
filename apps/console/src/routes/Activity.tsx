@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import type { ActivityFeedReadModel } from '../api/models'
+import { agentRoute, serverRoute, taskRoute } from '../navigation/routes'
 import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from '../activity/timeline'
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
@@ -26,6 +27,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const [feeds, setFeeds] = useState<Record<string, { events: ActivityFeedReadModel['events']; cursor: number; highWater: number; gap: boolean; error?: string }>>({})
 
   const requested = searchParams.get('server') ?? ''
+  const requestedAgentId = searchParams.get('agent') ?? ''
   const selectedId = instances.some((item) => item.profile.instanceId === requested) ? requested : ''
   const selected = instances.find((item) => item.profile.instanceId === selectedId)
   const feed = feeds[selectedId] ?? { events: [], cursor: 0, highWater: 0, gap: false }
@@ -50,11 +52,28 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     return () => { cancelled = true }
   }, [selectedId, loadActivity, realtimeCursor, feed.cursor])
 
-  const visible = useMemo(() => filterActivityEvents(feed.events, category), [feed.events, category])
+  const visible = useMemo(() => {
+    const categorized = filterActivityEvents(feed.events, category)
+    if (!requestedAgentId) return categorized
+    return categorized.filter((event) =>
+      event.actorId === requestedAgentId || event.message?.senderAgentId === requestedAgentId,
+    )
+  }, [feed.events, category, requestedAgentId])
+  const requestedAgent = selected?.runtime.realtime?.snapshot?.agents.find(
+    (agent) => agent.agentId === requestedAgentId,
+  )
+
   const chooseServer = (instanceId: string) => {
     const next = new URLSearchParams(searchParams)
     if (instanceId) next.set('server', instanceId)
     else next.delete('server')
+    next.delete('agent')
+    setSearchParams(next, { replace: true })
+  }
+
+  const clearAgent = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('agent')
     setSearchParams(next, { replace: true })
   }
   const runtimeStatus = selected?.runtime.status === 'live' ? t('status.live')
@@ -87,6 +106,9 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           </select>
         </label>
         {selected && <span className={'status status-' + selected.runtime.status}>{runtimeStatus}</span>}
+        {selectedId && requestedAgentId && (
+          <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>
+        )}
       </div>
 
       {instances.length === 0 && <div className="panel"><p className="muted">{t('activity.noPairedServers')}</p></div>}
@@ -103,16 +125,17 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
             </div>
             {event.message ? <p>{event.message.text}</p> : <pre>{JSON.stringify(event.payload, null, 2)}</pre>}
             <div className="chip-row">
+              {selected && (
+                <Link className="text-link" to={serverRoute(selectedId)}>
+                  {t('common.server')} {selected.profile.displayName}
+                </Link>
+              )}
               {event.message?.taskNamespace && event.message.taskId && (
-                <Link className="text-link" to={'/servers/' + encodeURIComponent(selectedId) + '/tasks/' + encodeURIComponent(event.message.taskNamespace) + '/' + encodeURIComponent(event.message.taskId)}>
-                  {t('common.task')} {event.message.taskId}
-                </Link>
+                <Link className="text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>{t('common.task')} {event.message.taskId}</Link>
               )}
-              {event.actorName && (
-                <Link className="text-link" to={'/servers/' + encodeURIComponent(selectedId) + '?agent=' + encodeURIComponent(event.actorName)}>
-                  {t('common.agent')} {event.actorName}
-                </Link>
-              )}
+              {event.actorName && event.actorId ? (
+                <Link className="text-link" to={agentRoute(selectedId, event.actorId)}>{t('common.agent')} {event.actorName}</Link>
+              ) : event.actorName ? <span className="muted">{t('common.agent')} {event.actorName}</span> : null}
               <span className="muted">{dateTime(event.createdAt)}</span>
             </div>
           </article>

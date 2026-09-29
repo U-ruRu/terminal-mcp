@@ -1392,6 +1392,7 @@ class AgentCoordinator:
         agent_id=None,
         *,
         target=None,
+        target_agent_id=None,
         target_session_ref=None,
         show_details=False,
         show_intents=False,
@@ -1400,6 +1401,7 @@ class AgentCoordinator:
         since_minutes=None,
         touch=True,
         reveal_self_id=False,
+        reveal_agent_ids=False,
     ):
         caller_context = {}
         if agent_id and touch:
@@ -1434,6 +1436,9 @@ class AgentCoordinator:
             if current:
                 normalized.append(current)
         sessions = normalized
+        if target_agent_id:
+            sessions = [s for s in sessions if s["agent_id"] == target_agent_id]
+            sessions = sessions[:1]
         if target:
             sessions = [s for s in sessions if public_agent_name(s["agent_id"]) == target]
         if target_session_ref:
@@ -1447,8 +1452,9 @@ class AgentCoordinator:
                 )
                 == target_session_ref
             ]
-        if target or target_session_ref:
+        if target or target_agent_id or target_session_ref:
             sessions = sessions[:1]
+        targeted = bool(target or target_agent_id or target_session_ref)
 
         records = []
         for session in sessions:
@@ -1503,6 +1509,8 @@ class AgentCoordinator:
                 record["intent_scopes"] = intent_scopes
             if local_intent_status is not None:
                 record["local_intent_status"] = local_intent_status
+            if reveal_agent_ids:
+                record["agent_id"] = session["agent_id"]
             obligations = await self.store.message_obligations(session["agent_id"])
             activity = await self.store.latest_activity(session["agent_id"])
             record["last_activity_tool"] = activity["tool"] if activity else None
@@ -1516,12 +1524,12 @@ class AgentCoordinator:
                 record["messages_awaiting_reply"] = replies
             if alerts:
                 record["alerts_pending"] = alerts
-            if target:
+            if targeted:
                 message_journal = await self.store.message_journal(session["agent_id"], cutoff)
                 record["message_journal"] = [
                     self._message_obligation_record(item) for item in message_journal
                 ]
-            if show_commands or target:
+            if show_commands or targeted:
                 record["last_command"] = last_command
                 record["preferred_queue_id"] = session["preferred_queue_id"]
             if show_details:
@@ -1552,11 +1560,8 @@ class AgentCoordinator:
         )
 
         active_records = []
-        for record in records:
+        for record, session in zip(records, sessions, strict=True):
             if record["status"] in {"started", "active", "idle"}:
-                session = next(
-                    s for s in sessions if public_agent_name(s["agent_id"]) == record["name"]
-                )
                 idle = max(0, int((now - parse_utc(session["last_activity_at"])).total_seconds()))
                 if agent_id and session["agent_id"] == agent_id:
                     continue
@@ -1573,6 +1578,8 @@ class AgentCoordinator:
                     "intent_scopes": record.get("intent_scopes", []),
                     "local_intent_status": record.get("local_intent_status"),
                 }
+                if reveal_agent_ids:
+                    active_record["agent_id"] = session["agent_id"]
                 if show_details:
                     active_record["task_summary"] = session["task_summary"]
                     active_record["work_scope"] = session["work_scope"]
