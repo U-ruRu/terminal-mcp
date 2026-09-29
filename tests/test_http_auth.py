@@ -40,6 +40,10 @@ def settings(tmp_path, **overrides):
     return Settings(**data)
 
 
+def test_oauth_access_ttl_default_is_30_days():
+    assert Settings(_env_file=None).oauth_access_ttl_sec == 30 * 24 * 60 * 60
+
+
 def start_agent(client, headers):
     response = client.post(
         "/actions/agent/start",

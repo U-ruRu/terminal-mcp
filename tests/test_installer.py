@@ -49,3 +49,20 @@ def test_failed_stage_never_activates_incomplete_release(tmp_path):
     assert result.returncode != 0
     assert not (root / "current").exists()
     assert list((root / "releases").iterdir()) == []
+
+
+def test_oauth_access_ttl_defaults_to_30_days_everywhere():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "deploy" / "install.sh").read_text()
+    env_example = (root / ".env.example").read_text()
+
+    assert (
+        'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"'
+        in script
+    )
+    assert (
+        'ensure_env TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC '
+        '"${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"'
+        in script
+    )
+    assert 'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="2592000"' in env_example
