@@ -188,6 +188,12 @@ sudo TERMINAL_MCP_ADMIN_USERNAME="operator" \
 sudo ./deploy/install.sh doctor
 ```
 
+`doctor` проверяет локальный liveness и публичный fleet ingress. Публичный origin обязан
+проксировать `/internal/fleet/*` в Terminal MCP; unauthenticated probe
+`/internal/fleet/identities` должен доходить до приложения и отвечать `401`. `404` означает,
+что reverse proxy/path allowlist скрывает обязательный mesh route. Сам route остаётся
+защищённым fleet signing/auth и не должен обходить application auth.
+
 Обновление:
 
 ```bash

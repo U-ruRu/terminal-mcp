@@ -1,3 +1,5 @@
+# Public peer origins must forward /internal/fleet/* to Terminal MCP.
+# If this catch-all is replaced with a path allowlist, keep that route protected by the application fleet-signing check.
 server-a.example.invalid {
     encode zstd gzip
     reverse_proxy 127.0.0.1:8080
