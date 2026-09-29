@@ -12,6 +12,7 @@ CLI_LINK=${TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp}
 SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
 HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
 HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
+PUBLIC_INGRESS_TIMEOUT_SEC=${TERMINAL_MCP_PUBLIC_INGRESS_TIMEOUT_SEC:-10}
 SOURCE=$(cd "$(dirname "$0")/.." && pwd)
 [ "$(id -u)" -eq 0 ] || { echo 'Run as root'; exit 1; }
 write_env(){
@@ -80,6 +81,23 @@ ensure_env_defaults(){
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC:-60}"
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE "${TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE:-Ваша сессия закончилась. У пользователя для вас новая задача. Завершите сессию и немедленно вернитесь в чат к пользователю, чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу.}"
   chmod 600 "$ENV_FILE"
+}
+
+check_public_fleet_ingress(){
+  [ -f "$ENV_FILE" ] || { echo "Missing env file: $ENV_FILE" >&2; return 1; }
+  public_base_url=$(
+    sed -n 's/^TERMINAL_MCP_PUBLIC_BASE_URL="\(.*\)"$/\1/p' "$ENV_FILE" | tail -n 1
+  )
+  [ -n "$public_base_url" ] || { echo "TERMINAL_MCP_PUBLIC_BASE_URL is not configured" >&2; return 1; }
+  ingress_url="${public_base_url%/}/internal/fleet/identities"
+  ingress_status=$(
+    curl --max-time "$PUBLIC_INGRESS_TIMEOUT_SEC" -sS -o /dev/null -w '%{http_code}' "$ingress_url" || true
+  )
+  if [ "$ingress_status" != "401" ]; then
+    echo "Public fleet ingress check failed: $ingress_url returned ${ingress_status:-request_error}, expected 401" >&2
+    echo "Ensure the reverse proxy forwards /internal/fleet/* to Terminal MCP without bypassing fleet authentication." >&2
+    return 1
+  fi
 }
 
 write_unit(){ mkdir -p "$(dirname "$UNIT_FILE")"; cat >"$UNIT_FILE" <<UNIT
@@ -161,6 +179,6 @@ find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0
 case "$CMD" in
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
  update) ensure_env_defaults; backup; stage; activate "$STAGED_RELEASE" ;;
- doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL" ;;
+ doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress ;;
  *) echo 'Usage: install.sh {install|update|doctor}'; exit 1 ;;
 esac
