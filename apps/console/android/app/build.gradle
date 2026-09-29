@@ -19,7 +19,8 @@ if (releaseRequested && !releaseSigningReady) {
     throw new GradleException(
         'Release signing requires TERMINAL_MCP_ANDROID_KEYSTORE, ' +
         'TERMINAL_MCP_ANDROID_STORE_PASSWORD, TERMINAL_MCP_ANDROID_KEY_ALIAS and ' +
-        'TERMINAL_MCP_ANDROID_KEY_PASSWORD'
+        'TERMINAL_MCP_ANDROID_KEY_PASSWORD. Use npm run android:build:release so the ' +
+        'protected host signing environment is loaded automatically.'
     )
 }
 

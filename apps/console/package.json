@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "android:sync": "npm run build && cap sync android",
     "android:build:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
-    "android:build:release": "npm run android:sync && cd android && ./gradlew assembleRelease",
+    "android:build:release": "bash scripts/android-build-release.sh",
     "android:manifest": "node scripts/android-release-manifest.mjs",
     "android:verify:version": "node scripts/verify-android-version.mjs",
     "android:verify:release": "bash scripts/verify-android-release.sh"
