@@ -107,7 +107,7 @@ test('transient auth failure backs off with jitter and manual retry is immediate
     status: 'reconnecting',
     authStatus: 'error',
     reconnectAttempt: 1,
-    lastError: 'network_error',
+    lastError: 'Cannot reach the server. Check the server address and network connection. Diagnostic: network_error.',
   })
   expect(scheduler.queue.map((entry) => entry.delayMs)).toEqual([400])
 
