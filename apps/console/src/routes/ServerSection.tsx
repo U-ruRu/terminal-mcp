@@ -45,6 +45,9 @@ export function ServerSection({
               {t('section.connection')} {server.connectivity}
               {server.lastSeenAt ? ' · ' + t('section.lastActivity') + ' ' + dateTime(server.lastSeenAt) : ''}
             </p>
+            <p className="muted">{t('server.hostResources')}: {server.resources?.status ?? t('common.unavailable')}</p>
+            {server.staleReason ? <p className="muted">{server.staleReason}</p> : null}
+            {server.lastError ? <p className="connection-error" role="status">{server.lastError}</p> : null}
           </>
         ) : (
           <>

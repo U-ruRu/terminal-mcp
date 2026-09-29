@@ -157,16 +157,33 @@ test('pairs from a CLI pairing link, keeps the secret out of storage, and blocks
   expect(JSON.stringify([...storage.data.entries()])).not.toContain('one-time-secret')
   expect(JSON.stringify([...storage.data.entries()])).not.toContain('short-access')
 
-  await expect(
-    registry.pairAndAdd(
-      pairingLink('https://terminal.example', 'Payload Duplicate', 'another-secret-value-123456789'),
-      'Fleet browser',
-      undefined,
-      new PairingTransport(fetcher),
-      async () => 'another-public-key-material',
-    ),
-  ).rejects.toMatchObject({ code: 'duplicate_origin' })
-  expect(fetcher).toHaveBeenCalledTimes(1)
+  fetcher.mockResolvedValueOnce(new Response(
+    JSON.stringify({
+      device_id: 'dev-b',
+      client_id: 'client-b',
+      access_token: 'short-access-b',
+      token_type: 'Bearer',
+      expires_in: 90,
+      refresh_token: 'refresh-b',
+      scope: 'terminal:read',
+    }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  ))
+  const replaced = await registry.pairAndAdd(
+    pairingLink('https://terminal.example', 'Payload Duplicate', 'another-secret-value-123456789'),
+    'Fleet browser',
+    undefined,
+    new PairingTransport(fetcher),
+    async () => 'another-public-key-material',
+  )
+  expect(replaced.profile.instanceId).toBe(paired.profile.instanceId)
+  expect(registry.list()).toHaveLength(1)
+  expect(registry.credential(paired.profile.instanceId)).toMatchObject({
+    deviceId: 'dev-b',
+    clientId: 'client-b',
+    refreshToken: 'refresh-b',
+  })
+  expect(fetcher).toHaveBeenCalledTimes(2)
 })
 
 test('rename persists safe metadata and disconnect removes only the selected profile credentials', () => {

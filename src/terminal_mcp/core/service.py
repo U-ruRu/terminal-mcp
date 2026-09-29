@@ -6,6 +6,7 @@ from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.agents import AgentCoordinator
 from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.core.tasks import TaskCoordinator
+from terminal_mcp.host_resources import collect_host_resources
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.context import ContextStore
 from terminal_mcp.storage.events import EventJournalStore
@@ -856,6 +857,7 @@ class TerminalService:
             "version": __version__,
             "public_base_url": public_base_url,
             "health": health,
+            "resources": collect_host_resources(),
         }
         consistency = {
             "mode": "cursor_first_at_least_once",

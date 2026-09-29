@@ -94,22 +94,32 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       </div>
 
       <div className="filter-bar">
-        <label>{t('common.server')}
-          <select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}>
-            <option value="">{t('activity.chooseServer')}</option>
-            {instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}
-          </select>
-        </label>
-        <label>{t('common.category')}
-          <select aria-label={t('common.category')} value={category} onChange={(event) => setCategory(event.target.value as ActivityCategory)}>
-            {categories.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}
-          </select>
-        </label>
-        {selected && <span className={'status status-' + selected.runtime.status}>{runtimeStatus}</span>}
-        {selectedId && requestedAgentId && (
-          <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>
-        )}
+        <div className="filter-controls">
+          <label>{t('common.server')}
+            <select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}>
+              <option value="">{t('activity.chooseServer')}</option>
+              {instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}
+            </select>
+          </label>
+          <label>{t('common.category')}
+            <select aria-label={t('common.category')} value={category} onChange={(event) => setCategory(event.target.value as ActivityCategory)}>
+              {categories.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="filter-status">
+          {selected && <span className={'status status-' + selected.runtime.status}>{runtimeStatus}</span>}
+          {selectedId && requestedAgentId && (
+            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>
+          )}
+        </div>
       </div>
+      {selected ? (
+        <p className="muted activity-provenance">
+          {t('activity.serverJournal')} · {runtimeStatus}
+          {feed.events.length ? ' · ' + dateTime(feed.events[feed.events.length - 1].createdAt) : ''}
+        </p>
+      ) : null}
 
       {instances.length === 0 && <div className="panel"><p className="muted">{t('activity.noPairedServers')}</p></div>}
       {instances.length > 0 && !selectedId && <div className="panel"><p className="muted">{t('activity.chooseToView')}</p></div>}

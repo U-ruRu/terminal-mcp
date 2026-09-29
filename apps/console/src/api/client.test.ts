@@ -343,3 +343,19 @@ test('activity feed maps cursor, filters and authorized message projection', asy
     },
   })
 })
+
+test('snapshot remains readable when an older server omits host resources', async () => {
+  const legacy = structuredClone(snapshot)
+  delete (legacy.instance as Record<string, unknown>).resources
+  const client = new ConsoleClient('https://terminal.example', () => 'token', async () => jsonResponse(legacy))
+
+  const decoded = await client.snapshot()
+
+  expect(decoded.instance.resources).toEqual({
+    status: 'unavailable',
+    cpu: { status: 'unavailable' },
+    memory: { status: 'unavailable' },
+    filesystem: { status: 'unavailable' },
+    uptime: { status: 'unavailable' },
+  })
+})

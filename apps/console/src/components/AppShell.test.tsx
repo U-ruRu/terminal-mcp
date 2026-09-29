@@ -23,3 +23,11 @@ test('server-scoped activity exposes a direct return path', () => {
   const context = document.querySelector('.mobile-context') as HTMLElement
   expect(within(context).getByRole('link', { name: 'Go back to server' })).toHaveAttribute('href', '/servers/server-a')
 })
+
+test('renders both mobile drawer navigation and a separate bottom navigation surface', () => {
+  renderShell('/')
+  expect(document.querySelector('.menu-toggle')).toBeInTheDocument()
+  expect(document.querySelector('.global-navigation')).toBeInTheDocument()
+  expect(document.querySelector('.mobile-bottom-navigation')).toBeInTheDocument()
+  expect(document.querySelector('.mobile-bottom-navigation')).not.toBe(document.querySelector('.global-navigation'))
+})

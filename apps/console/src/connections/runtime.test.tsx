@@ -88,3 +88,28 @@ test('restores every stored profile into app runtime and removes only the select
 })
 
 afterEach(() => cleanup())
+
+test('can expose stored profiles without independently rotating refresh tokens', async () => {
+  const storage = new MemoryStorage()
+  const registry = new BrowserConnectionRegistry(storage, () => 10_000, () => 'alpha')
+  registry.add(connection('https://alpha.example', 'alpha'), 'Alpha')
+  const fetcher = vi.fn()
+
+  render(
+    <I18nProvider>
+      <ConnectionRuntimeProvider
+        registry={registry}
+        transport={new PairingTransport(fetcher)}
+        restoreOnMount={false}
+      >
+        <Connections />
+      </ConnectionRuntimeProvider>
+    </I18nProvider>,
+  )
+
+  expect(screen.getByText('Alpha')).toBeInTheDocument()
+  expect(screen.getByText('Stored')).toBeInTheDocument()
+  await Promise.resolve()
+  expect(fetcher).not.toHaveBeenCalled()
+  expect(registry.credential('alpha')?.refreshToken).toBe('refresh-alpha')
+})

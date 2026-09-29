@@ -276,7 +276,8 @@ export class BrowserConnectionRegistry {
   ): Promise<PairedProfile> {
     const { origin, name, secret } = parsePairingLink(pairingLink)
     const document = this.document()
-    this.assertOriginAvailable(document, origin)
+    const existing = document.profiles.find((profile) => profile.origin === origin)
+    const resolvedName = this.cleanDisplayName(displayName ?? name ?? existing?.displayName ?? defaultDisplayName(origin))
 
     const publicKey = await keyFactory()
     const exchanged = await transport.exchange(origin, secret, publicKey, deviceLabel)
@@ -290,9 +291,34 @@ export class BrowserConnectionRegistry {
       refreshToken: exchanged.refresh_token,
       pairedAt,
     }
-    const profile = this.add(connection, displayName ?? name)
+
+    let profile: ConnectionProfile
+    if (!existing) {
+      profile = this.add(connection, resolvedName)
+    } else {
+      const credentialVault = BrowserCredentialVault.forReference(existing.credentialRef, this.storage)
+      const previous = credentialVault.load()
+      profile = {
+        ...existing,
+        displayName: resolvedName,
+        metadata: safeMetadata(connection),
+        updatedAt: pairedAt,
+      }
+      credentialVault.save(connection)
+      try {
+        this.persist({
+          version: 1,
+          profiles: document.profiles.map((item) => item.instanceId === existing.instanceId ? profile : item),
+        })
+      } catch (error) {
+        if (previous) credentialVault.save(previous)
+        else credentialVault.clear()
+        throw error
+      }
+    }
+
     return {
-      profile,
+      profile: { ...profile, metadata: { ...profile.metadata } },
       accessToken: exchanged.access_token,
       accessExpiresAt: pairedAt + Math.max(0, exchanged.expires_in) * 1000,
     }

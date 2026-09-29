@@ -218,13 +218,21 @@ export function AppShell({
             </Link>
           ))}
 
-          {selectedServer ? (
-            <Link className="selected-server-link" to={'/servers/' + encodeURIComponent(selectedServer.instanceId)} onClick={() => setMenuOpen(false)}>
-              {t('nav.currentServer')}: {selectedServer.displayName}
-            </Link>
-          ) : (
-            <p className="navigation-hint">{t('nav.chooseServerHint')}</p>
-          )}
+          {menuOpen ? (
+            <div className="navigation-server-list" aria-label={t('nav.servers')}>
+              {servers.map((server) => (
+                <Link
+                  key={server.instanceId}
+                  className={'navigation-server-link' + (server.instanceId === selectedId ? ' active' : '')}
+                  to={'/servers/' + encodeURIComponent(server.instanceId)}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  {server.displayName}
+                </Link>
+              ))}
+            </div>
+          ) : null}
+          {menuOpen && servers.length === 0 ? <p className="navigation-hint">{t('nav.chooseServerHint')}</p> : null}
         </nav>
 
         <main className="content">
@@ -237,6 +245,19 @@ export function AppShell({
           {children}
         </main>
       </div>
+      <nav className="mobile-bottom-navigation" aria-label={t('aria.bottomNavigation')}>
+        {navigation.map((item) => (
+          <Link
+            key={item.key}
+            to={destination(item)}
+            aria-current={current === item.key ? 'page' : undefined}
+            aria-label={`${t(item.labelKey)} · ${t('aria.bottomNavigation')}`}
+            className={current === item.key ? 'nav-link active' : 'nav-link'}
+          >
+            {t(item.labelKey)}
+          </Link>
+        ))}
+      </nav>
     </div>
   )
 }

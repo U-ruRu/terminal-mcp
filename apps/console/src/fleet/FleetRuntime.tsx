@@ -53,7 +53,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
   }, [manager])
 
   return (
-    <ConnectionRuntimeProvider registry={registry} onProfilesChanged={syncProfiles}>
+    <ConnectionRuntimeProvider registry={registry} onProfilesChanged={syncProfiles} restoreOnMount={false}>
       <PairingHandoffController />
       <App
       model={model}

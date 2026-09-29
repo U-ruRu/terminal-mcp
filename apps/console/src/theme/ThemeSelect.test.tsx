@@ -26,3 +26,16 @@ test('lets the user select and persist Soft Light', async () => {
   expect(document.documentElement.dataset.theme).toBe('soft-light')
   expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('soft-light')
 })
+
+test('offers and persists Neutral Dark', async () => {
+  render(
+    <I18nProvider>
+      <ThemeProvider>
+        <ThemeSelect />
+      </ThemeProvider>
+    </I18nProvider>,
+  )
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'neutral-dark')
+  expect(document.documentElement.dataset.theme).toBe('neutral-dark')
+  expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('neutral-dark')
+})

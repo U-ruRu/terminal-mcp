@@ -3,11 +3,12 @@ import { Capacitor } from '@capacitor/core'
 export const THEME_STORAGE_KEY = 'terminal-mcp.console.theme'
 export const DEFAULT_THEME = 'oled-dark' as const
 
-export const THEMES = ['oled-dark', 'soft-light'] as const
+export const THEMES = ['oled-dark', 'neutral-dark', 'soft-light'] as const
 export type ThemeName = (typeof THEMES)[number]
 
 const metaColors: Record<ThemeName, string> = {
   'oled-dark': '#000000',
+  'neutral-dark': '#15191d',
   'soft-light': '#f4f2ee',
 }
 

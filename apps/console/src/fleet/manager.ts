@@ -11,6 +11,15 @@ import { DEFAULT_FLEET_MAX_CONCURRENT_STARTS } from './policy'
 
 type FleetListener = (instances: FleetInstanceView[]) => void
 
+function sameActorCredential(a: FleetInstanceView['profile'], b: FleetInstanceView['profile']): boolean {
+  return (
+    a.origin === b.origin &&
+    a.credentialRef === b.credentialRef &&
+    a.metadata.deviceId === b.metadata.deviceId &&
+    a.metadata.clientId === b.metadata.clientId
+  )
+}
+
 export class FleetConnectionManager {
   private readonly actors = new Map<string, FleetInstanceActor>()
   private readonly actorUnsubscribes = new Map<string, () => void>()
@@ -58,6 +67,14 @@ export class FleetConnectionManager {
     }
 
     for (const profile of profiles) {
+      const prior = this.profiles.get(profile.instanceId)
+      const existingActor = this.actors.get(profile.instanceId)
+      if (prior && existingActor && !sameActorCredential(prior, profile)) {
+        this.actorUnsubscribes.get(profile.instanceId)?.()
+        this.actorUnsubscribes.delete(profile.instanceId)
+        existingActor.stop()
+        this.actors.delete(profile.instanceId)
+      }
       this.profiles.set(profile.instanceId, profile)
       if (this.actors.has(profile.instanceId)) continue
       const actor = this.actorFactory(profile)

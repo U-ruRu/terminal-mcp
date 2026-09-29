@@ -58,12 +58,14 @@ export function ConnectionRuntimeProvider({
   transport: transportProp,
   deviceLabel = 'Terminal MCP Console',
   onProfilesChanged,
+  restoreOnMount = true,
 }: {
   children: ReactNode
   registry?: BrowserConnectionRegistry
   transport?: PairingTransport
   deviceLabel?: string
   onProfilesChanged?: () => void
+  restoreOnMount?: boolean
 }) {
   const [registry] = useState(() => registryProp ?? new BrowserConnectionRegistry())
   const [transport] = useState(() => transportProp ?? new PairingTransport())
@@ -97,13 +99,13 @@ export function ConnectionRuntimeProvider({
   )
 
   useEffect(() => {
-    if (restoreStarted.current) return
+    if (!restoreOnMount || restoreStarted.current) return
     restoreStarted.current = true
     const current = registry.list()
     void Promise.resolve().then(() =>
       Promise.all(current.map((profile) => restoreOne(profile.instanceId))),
     )
-  }, [registry, restoreOne])
+  }, [registry, restoreOnMount, restoreOne])
 
   const pair = useCallback(
     async (pairingLink: string, displayName?: string) => {

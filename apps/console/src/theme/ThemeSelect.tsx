@@ -4,9 +4,10 @@ import type { ThemeName } from './theme'
 
 const options: Array<{
   value: ThemeName
-  labelKey: 'theme.oledDark' | 'theme.softLight'
+  labelKey: 'theme.oledDark' | 'theme.neutralDark' | 'theme.softLight'
 }> = [
   { value: 'oled-dark', labelKey: 'theme.oledDark' },
+  { value: 'neutral-dark', labelKey: 'theme.neutralDark' },
   { value: 'soft-light', labelKey: 'theme.softLight' },
 ]
 

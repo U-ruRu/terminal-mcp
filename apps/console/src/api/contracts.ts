@@ -76,7 +76,18 @@ function optionalNumber(value: unknown, path: string): number | undefined {
   return number(value, path)
 }
 
+function unavailableResources(): HostResourcesReadModel {
+  return {
+    status: 'unavailable',
+    cpu: { status: 'unavailable' },
+    memory: { status: 'unavailable' },
+    filesystem: { status: 'unavailable' },
+    uptime: { status: 'unavailable' },
+  }
+}
+
 function resources(value: unknown, path: string): HostResourcesReadModel {
+  if (value === undefined || value === null) return unavailableResources()
   const root = record(value, path)
   const cpu = record(root.cpu, path + '.cpu')
   const memory = record(root.memory, path + '.memory')

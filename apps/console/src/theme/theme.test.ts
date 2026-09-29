@@ -21,6 +21,7 @@ describe('theme preference', () => {
   test('accepts only supported theme names and falls back safely', () => {
     expect(isThemeName('oled-dark')).toBe(true)
     expect(isThemeName('soft-light')).toBe(true)
+    expect(isThemeName('neutral-dark')).toBe(true)
     expect(isThemeName('dark')).toBe(false)
     localStorage.setItem(THEME_STORAGE_KEY, 'unknown')
     expect(readStoredTheme()).toBe(DEFAULT_THEME)

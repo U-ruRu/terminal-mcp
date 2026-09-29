@@ -304,3 +304,27 @@ test('removed profile is unsubscribed and cannot mutate fleet snapshots afterwar
   expect(snapshots).toHaveLength(afterRemoval)
   expect(snapshots.at(-1)).toEqual(['b'])
 })
+
+test('credential replacement recreates only the affected server actor', () => {
+  const initial = makeProfile('a')
+  const registry = new MutableRegistry([initial])
+  const created: FakeActor[] = []
+  const manager = new FleetConnectionManager(registry, (item) => {
+    const actor = new FakeActor(item.instanceId)
+    created.push(actor)
+    return actor
+  })
+
+  manager.syncProfiles()
+  registry.profiles = [{
+    ...initial,
+    metadata: { ...initial.metadata, deviceId: 'device-a-repaired', clientId: 'client-a-repaired' },
+    updatedAt: 2,
+  }]
+  manager.syncProfiles()
+
+  expect(created).toHaveLength(2)
+  expect(created[0].stopCalls).toBe(1)
+  expect(created[1].stopCalls).toBe(0)
+  expect(manager.getInstances()[0].profile.metadata.deviceId).toBe('device-a-repaired')
+})

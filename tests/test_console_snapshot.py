@@ -120,6 +120,13 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
         assert body["instance"]["application"] == "terminal-mcp"
         assert body["instance"]["public_base_url"] == "https://terminal.example"
         assert body["instance"]["health"]["ok"] is True
+        resources = body["instance"]["resources"]
+        assert resources["status"] in {"available", "partial", "unavailable"}
+        assert set(resources) == {"status", "cpu", "memory", "filesystem", "uptime"}
+        assert all(
+            resources[key]["status"] in {"available", "unavailable"}
+            for key in ("cpu", "memory", "filesystem", "uptime")
+        )
         agent_name = started.json()["self"]["name"]
         agent_session = next(
             item for item in body["agents"]["sessions"] if item["name"] == agent_name
