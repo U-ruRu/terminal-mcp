@@ -837,3 +837,70 @@ async def test_foreign_finish_retries_partition_then_origin_finishes_authoritati
     await replication_a.stop()
     await terminal_b.stop()
     await terminal_a.stop()
+
+@pytest.mark.asyncio
+async def test_finished_foreign_identity_overrides_stale_local_active_attachment(tmp_path):
+    private_a, public_a = keypair()
+    private_b, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    _, agents, _, replication, terminal, service = await fleet_service(
+        tmp_path, "server-b", private_b, [peer_a]
+    )
+    started = utc_text()
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    ended = utc_text(parse_utc(started) + timedelta(minutes=1))
+    agent_id = "Golf-01234567"
+
+    active = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=1,
+    )
+    assert await replication.receive(active) == "applied"
+    assert (await service.agent_start(agent_id=agent_id))["ok"] is True
+    assert (await agents.get_session(agent_id))["state"] == "active"
+
+    finished = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=2,
+        state="finished",
+        ended_at=ended,
+        end_reason="explicit",
+    )
+    assert await replication.receive(finished) == "applied"
+    # Replication storage is authoritative, but the materialized local shadow
+    # remains active until the next local tool/admission gate reconciles it.
+    assert (await agents.get_session(agent_id))["state"] == "active"
+
+    result = await service.agent_start(
+        agent_id=agent_id,
+        task_summary="must not resurrect",
+        intent="honor authoritative finish",
+        details=["return to chat"],
+    )
+
+    assert result["ok"] is False
+    assert result["return_to_chat"] is True
+    assert result["session_status"] == "finished"
+    assert result["session_end_reason"] == "explicit"
+    local = await agents.get_session(agent_id)
+    assert local["state"] == "finished"
+    assert local["ended_at"] == ended
+    assert local["end_reason"] == "explicit"
+    assert local["registered_at"] == started
+    assert local["global_expires_at"] == expires
+
+    await replication.stop()
+    await terminal.stop()

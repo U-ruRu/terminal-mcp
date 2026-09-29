@@ -124,6 +124,36 @@ class AgentCoordinator:
         except Exception:
             return None
 
+    async def _reconcile_foreign_terminal(self, agent_id, current):
+        if (
+            current is None
+            or current.get("state") != "active"
+            or not current.get("source_instance_id")
+            or current.get("source_instance_id") == self.local_instance_id
+        ):
+            return current, None
+
+        resolution = await self._resolve_foreign(agent_id)
+        if resolution is None:
+            # Keep a valid attached session usable during a peer partition.
+            # The local hard expiry remains authoritative while the origin is unavailable.
+            return current, None
+        if resolution.get("source_instance_id") != current.get("source_instance_id"):
+            return current, self._foreign_unavailable(
+                agent_id, "Fleet identity source changed for an attached session."
+            )
+        if resolution.get("state") == "active":
+            return current, None
+
+        state = "finished" if resolution.get("state") == "finished" else "forced"
+        reason = resolution.get("end_reason") or (
+            "explicit" if state == "finished" else "max_session_duration"
+        )
+        ended_at = resolution.get("ended_at") or utc_text()
+        await self.store.end(agent_id, state, reason, ended_at)
+        current = await self.store.get_session(agent_id)
+        return current, self._foreign_terminal(agent_id, resolution, reason=reason)
+
     async def _attach_foreign(self, agent_id, current=None):
         resolution = await self._resolve_foreign(agent_id)
         if resolution is None:
@@ -218,6 +248,11 @@ class AgentCoordinator:
             current = await self.store.get_session(agent_id)
             if current is not None:
                 current = await self._enforce_session(current)
+                current, foreign_terminal = await self._reconcile_foreign_terminal(
+                    agent_id, current
+                )
+                if foreign_terminal:
+                    return foreign_terminal
                 if current["state"] != "active":
                     if (
                         current.get("source_instance_id")
@@ -434,6 +469,9 @@ class AgentCoordinator:
     async def validate(self, agent_id, tool, *, touch=True):
         session = await self.store.get_session(agent_id)
         session = await self._enforce_session(session)
+        session, foreign_terminal = await self._reconcile_foreign_terminal(agent_id, session)
+        if foreign_terminal:
+            return foreign_terminal
         if not session:
             if is_agent_id(agent_id):
                 session, error = await self._attach_foreign(agent_id)
