@@ -436,6 +436,7 @@ def v2_record(
     work_scope=("repo:synthetic",),
     details=("inspect peer state", "finish safely"),
     current_step=1,
+    updated_at=None,
 ):
     current = AgentIdentityRecord(
         source_instance_id=source,
@@ -443,7 +444,7 @@ def v2_record(
         state=state,
         session_started_at=started,
         expires_at=expires,
-        updated_at=ended_at or started,
+        updated_at=updated_at or ended_at or started,
         revision=revision,
         ended_at=ended_at,
         end_reason=end_reason,
@@ -636,6 +637,119 @@ async def test_service_attaches_signed_foreign_session_with_original_plan_and_cl
     assert session["source_instance_id"] == "server-a"
     assert await identities.get("server-b", agent_id) is None
     assert await identities.get("server-a", agent_id) == envelope
+    await replication.stop()
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_newer_active_foreign_identity_refreshes_attached_plan_without_resetting_clock(
+    tmp_path,
+):
+    private_a, public_a = keypair()
+    private_b, _ = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    _, agents, _, replication, terminal, service = await fleet_service(
+        tmp_path, "server-b", private_b, [peer_a]
+    )
+    started = utc_text()
+    expires = utc_text(parse_utc(started) + timedelta(minutes=25))
+    agent_id = "Bravo-01234567"
+    initial = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=1,
+        task_summary="initial shared task",
+        intent="inspect initial state",
+        work_scope=("repo:shared",),
+        details=("initial step", "finish safely"),
+        current_step=1,
+    )
+    assert await replication.receive(initial) == "applied"
+    assert (await service.agent_start(agent_id=agent_id))["ok"] is True
+    before = await agents.get_session(agent_id)
+
+    updated_at = utc_text(parse_utc(started) + timedelta(seconds=30))
+    updated = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=2,
+        updated_at=updated_at,
+        task_summary="updated shared task",
+        intent="continue from authoritative update",
+        work_scope=("repo:shared", "tests"),
+        details=("inspect update", "run regression", "finish safely"),
+        current_step=2,
+    )
+    assert await replication.receive(updated) == "applied"
+
+    stale = await agents.get_session(agent_id)
+    assert stale["intent"] == "inspect initial state"
+    assert stale["current_step"] == 1
+
+    coordinated = await service.coordinate(agent_id)
+    assert coordinated["ok"] is True
+    assert coordinated["intent"] == "continue from authoritative update"
+    assert coordinated["step"] == 2
+    assert coordinated["detail"] == "run regression"
+
+    after = await agents.get_session(agent_id)
+    assert after["task_summary"] == "updated shared task"
+    assert after["intent"] == "continue from authoritative update"
+    assert after["work_scope"] == ["repo:shared", "tests"]
+    assert after["details"] == ["inspect update", "run regression", "finish safely"]
+    assert after["current_step"] == 2
+    assert after["registered_at"] == before["registered_at"] == started
+    assert after["global_expires_at"] == before["global_expires_at"] == expires
+    assert after["source_instance_id"] == before["source_instance_id"] == "server-a"
+    assert await agents.latest_task_at(agent_id) == updated_at
+
+    observed = await service.agents(agent_id=agent_id, target="Bravo", show_details=True)
+    assert observed["ok"] is True
+    assert observed["sessions"][0]["intent"] == "continue from authoritative update"
+    assert observed["sessions"][0]["current_step"] == 2
+    assert observed["sessions"][0]["task_summary"] == "updated shared task"
+
+    ended = utc_text(parse_utc(started) + timedelta(minutes=1))
+    finished = v2_record(
+        "server-a",
+        agent_id,
+        private_a,
+        started=started,
+        expires=expires,
+        revision=3,
+        state="finished",
+        ended_at=ended,
+        end_reason="explicit",
+        task_summary="updated shared task",
+        intent="continue from authoritative update",
+        work_scope=("repo:shared", "tests"),
+        details=("inspect update", "run regression", "finish safely"),
+        current_step=2,
+    )
+    assert await replication.receive(finished) == "applied"
+    terminal_result = await service.coordinate(agent_id)
+    assert terminal_result["ok"] is False
+    assert terminal_result["return_to_chat"] is True
+    assert terminal_result["session_status"] == "finished"
+
+    final = await agents.get_session(agent_id)
+    assert final["state"] == "finished"
+    assert final["registered_at"] == started
+    assert final["global_expires_at"] == expires
+    assert final["ended_at"] == ended
+    assert final["end_reason"] == "explicit"
+
     await replication.stop()
     await terminal.stop()
 
