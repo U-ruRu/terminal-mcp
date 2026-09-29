@@ -1,9 +1,14 @@
 import base64
 import hmac
+import logging
 from html import escape
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from terminal_mcp.auth.credentials import OAuthCredentialFileError
+
+logger = logging.getLogger(__name__)
 
 FORM = """<!doctype html><html><body><h1>terminal-mcp</h1><form method="post"><input type="hidden" name="client_id" value="{client_id}"><input type="hidden" name="redirect_uri" value="{redirect_uri}"><input type="hidden" name="scope" value="{scope}"><input type="hidden" name="state" value="{state}"><input type="hidden" name="code_challenge" value="{code_challenge}"><input type="hidden" name="code_challenge_method" value="S256"><label>Username <input name="username"></label><label>Password <input type="password" name="password"></label><button>Authorize</button></form></body></html>"""  # noqa: E501
 
@@ -118,7 +123,12 @@ def build_oauth_router(settings, auth, store):
             and code_challenge
             and requested.issubset(allowed)
         )
-        valid = valid and auth.oauth_user_valid(username, password)
+        if valid:
+            try:
+                valid = auth.oauth_user_valid(username, password)
+            except OAuthCredentialFileError as exc:
+                logger.error("OAuth authorization unavailable: %s", exc)
+                return HTMLResponse("authorization unavailable", 503)
         if not valid:
             return HTMLResponse("authorization denied", 403)
         code = await store.create_code(

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     oauth_audience: str = ""
     oauth_jwks_url: str = ""
     oauth_signing_secret: str = "change-me"
-    oauth_required_scopes: str = "terminal:read"
+    oauth_required_scopes: str = "terminal:read terminal:execute"
     oauth_admin_username: str = "admin"
     oauth_admin_password: str = "change-me"
     oauth_access_ttl_sec: int = 900

@@ -4,8 +4,10 @@ import hashlib
 import time
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
+import terminal_mcp.auth.credentials as credential_module
 from terminal_mcp.app import create_app
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.auth.storage import OAuthStore
@@ -39,6 +41,26 @@ def settings(tmp_path, **overrides):
     data.update(overrides)
     return Settings(**data)
 
+
+
+
+@pytest.fixture
+def file_oauth_credentials(monkeypatch):
+    values = {
+        credential_module.OAUTH_USERNAME_FILE: b"admin",
+        credential_module.OAUTH_PASSWORD_FILE: b"secret",
+    }
+
+    def configure(username: str = "admin", password: str = "secret"):
+        values[credential_module.OAUTH_USERNAME_FILE] = username.encode()
+        values[credential_module.OAUTH_PASSWORD_FILE] = password.encode()
+
+    def read(path, label):
+        del label
+        return values[path]
+
+    monkeypatch.setattr(credential_module, "_read_oauth_credential", read)
+    return configure
 
 def start_agent(client, headers):
     plan = {
@@ -437,11 +459,12 @@ def test_bearer_actions_and_openapi(tmp_path):
                     assert operation["x-openai-isConsequential"] is False
 
 
-def test_oauth_pkce_refresh_and_protected_action(tmp_path):
+def test_oauth_pkce_refresh_and_protected_action(tmp_path, file_oauth_credentials):
     app = create_app(settings(tmp_path, auth_mode="oauth"))
     with TestClient(app, follow_redirects=False) as client:
         meta = client.get("/.well-known/oauth-authorization-server").json()
         assert meta["code_challenge_methods_supported"] == ["S256"]
+        assert meta["scopes_supported"] == ["terminal:read", "terminal:execute"]
         resource = client.get("/.well-known/oauth-protected-resource/mcp").json()
         assert resource == client.get("/mcp/.well-known/oauth-protected-resource").json()
         assert resource["resource"] == "https://terminal.example/mcp"
@@ -464,7 +487,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
             "client_id": client_id,
             "redirect_uri": "https://chat.example/callback",
             "response_type": "code",
-            "scope": "terminal:read",
+            "scope": "terminal:read terminal:execute",
             "state": "abc",
             "code_challenge": pkce(verifier),
             "code_challenge_method": "S256",
@@ -527,12 +550,15 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path):
         assert client.get("/actions/health", headers=headers).status_code == 401
 
 
-def test_same_oauth_user_can_authorize_multiple_clients(tmp_path):
+def test_same_oauth_user_can_authorize_multiple_clients(tmp_path, file_oauth_credentials):
+    file_oauth_credentials("shared", "shared-secret")
     app = create_app(
         settings(
             tmp_path,
             auth_mode="oauth",
-            oauth_users_json='[{"username":"shared","password":"shared-secret"}]',
+            admin_username="stale-admin",
+            admin_password="stale-secret",
+            oauth_users_json='[{"username":"stale-user","password":"stale-secret"}]',
         )
     )
     with TestClient(app, follow_redirects=False) as client:

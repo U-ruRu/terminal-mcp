@@ -125,7 +125,7 @@ Endpoints:
 - `POST /oauth/authorize`
 - `POST /oauth/token`
 
-Agent-facing OAuth uses one scope: `terminal:read`. All published terminal and workflow operations intentionally use the same consent tier; command execution does not request a separate execute permission.
+Agent-facing OAuth advertises `terminal:read` and the ChatGPT compatibility scope `terminal:execute`. All published terminal and workflow operations intentionally remain in one consent tier and are authorized by `terminal:read`; `terminal:execute` does not grant a separate privilege.
 
 ### Browser Console transport
 

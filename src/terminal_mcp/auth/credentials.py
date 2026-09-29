@@ -1,7 +1,56 @@
+import errno
 import hmac
 import json
+import os
 import secrets
+import stat
 from datetime import UTC, datetime
+from pathlib import Path
+
+OAUTH_USERNAME_FILE = Path("/etc/terminal-mcp/credentials/oauth-username")
+OAUTH_PASSWORD_FILE = Path("/etc/terminal-mcp/credentials/oauth-password")
+
+
+class OAuthCredentialFileError(RuntimeError):
+    pass
+
+
+def _read_oauth_credential(path: Path, label: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = None
+    try:
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OAuthCredentialFileError(
+                f"{label} credential path must be a regular file: {path}"
+            )
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o077:
+            raise OAuthCredentialFileError(
+                f"{label} credential file must be root-owned and inaccessible "
+                f"to group/other: {path}"
+            )
+        with os.fdopen(fd, "rb", closefd=True) as stream:
+            fd = None
+            value = stream.read()
+    except FileNotFoundError as exc:
+        raise OAuthCredentialFileError(f"{label} credential file is required: {path}") from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise OAuthCredentialFileError(
+                f"{label} credential file must not be a symlink: {path}"
+            ) from exc
+        raise OAuthCredentialFileError(f"cannot read {label} credential file: {path}") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if value.endswith(b"\r\n"):
+        value = value[:-2]
+    elif value.endswith(b"\n"):
+        value = value[:-1]
+    if not value:
+        raise OAuthCredentialFileError(f"{label} credential file must not be empty: {path}")
+    return value
 
 
 class CredentialManager:
@@ -45,20 +94,10 @@ class CredentialManager:
         return any(hmac.compare_digest(token, value) for value in values if value)
 
     def oauth_user_valid(self, username: str, password: str) -> bool:
-        users = self.oauth_users()
-        if not users:
-            admin = hmac.compare_digest(
-                username, self.settings.admin_username
-            ) and hmac.compare_digest(password, self.settings.admin_password)
-            legacy = hmac.compare_digest(
-                username, self.settings.oauth_admin_username
-            ) and hmac.compare_digest(password, self.settings.oauth_admin_password)
-            return admin or legacy
-        return any(
-            self._active(item)
-            and hmac.compare_digest(username, item.get("username", ""))
-            and hmac.compare_digest(password, item.get("password", ""))
-            for item in users
+        expected_username = _read_oauth_credential(OAUTH_USERNAME_FILE, "OAuth username")
+        expected_password = _read_oauth_credential(OAUTH_PASSWORD_FILE, "OAuth password")
+        return hmac.compare_digest(username.encode(), expected_username) and hmac.compare_digest(
+            password.encode(), expected_password
         )
 
     def add_bearer(self, name: str, expires_at: str = "") -> dict:
