@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     oauth_required_scopes: str = "terminal:read"
     oauth_admin_username: str = "admin"
     oauth_admin_password: str = "change-me"
-    oauth_access_ttl_sec: int = 900
+    oauth_access_ttl_sec: int = 30 * 24 * 60 * 60
     oauth_refresh_ttl_sec: int = 2592000
     oauth_code_ttl_sec: int = 300
     max_read_lines: int = 5000
