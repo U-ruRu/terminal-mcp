@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { App } from '../App'
+import { PairingHandoffController } from '../connections/PairingHandoffController'
 import { BrowserConnectionRegistry } from '../connections/registry'
 import { ConnectionRuntimeProvider } from '../connections/runtime'
 import { browserFleetActorFactory } from './actor'
@@ -53,6 +54,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
 
   return (
     <ConnectionRuntimeProvider registry={registry} onProfilesChanged={syncProfiles}>
+      <PairingHandoffController />
       <App
       model={model}
       instances={instances}

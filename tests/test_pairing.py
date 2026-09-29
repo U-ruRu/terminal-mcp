@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -72,10 +73,12 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"\n'
+        'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "opaque-pairing-secret")
 
     result = cli.main(["pair", "--ttl", "42"])
@@ -86,17 +89,47 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     assert captured.err == ""
     parsed = urlsplit(url)
     assert parsed.scheme == "https"
-    assert parsed.netloc == "terminal.example"
-    assert parsed.path == "/base/connect"
+    assert parsed.netloc == "terminal-console.solvenger.app"
+    assert parsed.path == "/connect"
     assert parsed.query == ""
-    assert parsed.fragment == "opaque-pairing-secret"
-    assert parsed.fragment not in caplog.text
+    padded = parsed.fragment + "=" * ((4 - len(parsed.fragment) % 4) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    assert payload == {
+        "v": 1,
+        "server": "https://terminal.example",
+        "name": "terminal.example",
+        "secret": "opaque-pairing-secret",
+    }
+    assert "opaque-pairing-secret" not in caplog.text
 
     with sqlite3.connect(db_path) as db:
         row = db.execute(
             "SELECT secret_hash, expires_at-created_at FROM console_pairings"
         ).fetchone()
-    assert row == (hashlib.sha256(parsed.fragment.encode()).hexdigest(), 42)
+    assert row == (hashlib.sha256(payload["secret"].encode()).hexdigest(), 42)
+
+
+def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
+    db_path = tmp_path / "terminal.sqlite3"
+    env_path = tmp_path / "terminal-mcp.env"
+    env_path.write_text(
+        f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example"\n'
+        'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
+    )
+    monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
+    monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "explicit-name-secret-value")
+
+    assert cli.main(["pair", "--name", "Secondary Test"]) == 0
+    url = capsys.readouterr().out.strip()
+    fragment = urlsplit(url).fragment
+    padded = fragment + "=" * ((4 - len(fragment) % 4) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    assert payload["name"] == "Secondary Test"
+    assert payload["server"] == "https://terminal.example"
 
 
 def _entrypoint_env(tmp_path):
@@ -107,6 +140,7 @@ def _entrypoint_env(tmp_path):
             [
                 f'TERMINAL_MCP_DATABASE_PATH="{db_path}"',
                 'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"',
+                'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"',
             ]
         )
         + chr(10)
@@ -115,6 +149,7 @@ def _entrypoint_env(tmp_path):
     env["TERMINAL_MCP_ENV_FILE_PATH"] = str(env_path)
     env.pop("TERMINAL_MCP_DATABASE_PATH", None)
     env.pop("TERMINAL_MCP_PUBLIC_BASE_URL", None)
+    env.pop("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", None)
     source = str(Path(__file__).resolve().parents[1] / "src")
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
@@ -145,8 +180,8 @@ def test_console_script_pair_exits_zero_and_emits_url_once(tmp_path):
     assert len(lines) == 1
     parsed = urlsplit(lines[0])
     assert parsed.scheme == "https"
-    assert parsed.netloc == "terminal.example"
-    assert parsed.path == "/base/connect"
+    assert parsed.netloc == "terminal-console.solvenger.app"
+    assert parsed.path == "/connect"
     assert parsed.query == ""
     assert parsed.fragment
 

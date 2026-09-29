@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8080
     public_base_url: str = "http://127.0.0.1:8080"
+    console_public_base_url: str = "https://terminal-console.solvenger.app"
     console_allowed_origins: str = ""
     env_file_path: Path = Path("/etc/terminal-mcp/terminal-mcp.env")
     database_path: Path = Path("./data/terminal-mcp.sqlite3")

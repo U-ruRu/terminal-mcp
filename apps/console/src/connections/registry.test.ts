@@ -14,6 +14,15 @@ import {
   REGISTRY_STORAGE_KEY,
 } from './registry'
 
+function pairingLink(server: string, name: string, secret: string): string {
+  const payload = JSON.stringify({ v: 1, server, name, secret })
+  const bytes = new TextEncoder().encode(payload)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  const encoded = btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+  return `https://terminal-console.solvenger.app/connect#${encoded}`
+}
+
 class MemoryStorage implements KeyValueStorage {
   data = new Map<string, string>()
 
@@ -131,7 +140,7 @@ test('pairs from a CLI pairing link, keeps the secret out of storage, and blocks
   const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('paired-a'))
 
   const paired = await registry.pairAndAdd(
-    'https://terminal.example/connect#one-time-secret',
+    pairingLink('https://terminal.example', 'Payload Primary', 'one-time-secret-123456789'),
     'Fleet browser',
     'Primary',
     new PairingTransport(fetcher),
@@ -150,7 +159,7 @@ test('pairs from a CLI pairing link, keeps the secret out of storage, and blocks
 
   await expect(
     registry.pairAndAdd(
-      'https://terminal.example/connect#another-secret',
+      pairingLink('https://terminal.example', 'Payload Duplicate', 'another-secret-value-123456789'),
       'Fleet browser',
       undefined,
       new PairingTransport(fetcher),

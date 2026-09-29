@@ -1,9 +1,11 @@
 import argparse
 import asyncio
+import base64
 import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 
@@ -22,8 +24,21 @@ def _local_settings() -> Settings:
     return Settings()
 
 
-def _pairing_url(public_base_url: str, secret: str) -> str:
-    return f"{public_base_url.rstrip('/')}/connect#{secret}"
+def _pairing_url(
+    console_public_base_url: str,
+    public_base_url: str,
+    secret: str,
+    display_name: str | None = None,
+) -> str:
+    target = urlsplit(public_base_url)
+    target_origin = f"{target.scheme}://{target.netloc}"
+    preferred_name = display_name.strip() if display_name is not None else ""
+    name = (preferred_name or target.hostname or target.netloc).strip()[:120]
+    payload = {"v": 1, "server": target_origin, "name": name, "secret": secret}
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    return f"{console_public_base_url.rstrip('/')}/connect#{encoded}"
 
 
 async def _pairing_store() -> PairingStore:
@@ -33,11 +48,13 @@ async def _pairing_store() -> PairingStore:
     return store
 
 
-async def _issue_pairing(ttl_seconds: int) -> str:
+async def _issue_pairing(ttl_seconds: int, display_name: str | None = None) -> str:
     settings = _local_settings()
     store = await _pairing_store()
     secret = await store.create(ttl_seconds)
-    return _pairing_url(settings.public_base_url, secret)
+    return _pairing_url(
+        settings.console_public_base_url, settings.public_base_url, secret, display_name
+    )
 
 
 async def _list_devices() -> list[dict]:
@@ -58,6 +75,12 @@ def _parser() -> argparse.ArgumentParser:
         default=PAIRING_DEFAULT_TTL_SEC,
         metavar="SECONDS",
         help=f"pairing lifetime in seconds (default: {PAIRING_DEFAULT_TTL_SEC})",
+    )
+    pair.add_argument(
+        "--name",
+        default=None,
+        metavar="DISPLAY_NAME",
+        help="suggested server display name embedded in the pairing link",
     )
     devices = subcommands.add_parser("devices", help="manage paired Console devices")
     device_commands = devices.add_subparsers(dest="device_command", required=True)
@@ -82,7 +105,7 @@ def main(argv: list[str] | None = None):
     if parsed.command == "pair":
         if parsed.ttl <= 0:
             _parser().error("--ttl must be a positive number of seconds")
-        url = asyncio.run(_issue_pairing(parsed.ttl))
+        url = asyncio.run(_issue_pairing(parsed.ttl, parsed.name))
         print(url)
         return 0
     if parsed.command == "devices":

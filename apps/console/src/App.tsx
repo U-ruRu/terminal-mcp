@@ -32,6 +32,7 @@ export function App({ model, instances, loadActivity, loadTask }: AppProps) {
         <Route path="/health" element={<ServerChooser model={model} section="health" />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
+        <Route path="/connect" element={<Connections />} />
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />

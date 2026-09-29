@@ -6,6 +6,7 @@ import {
   STORAGE_KEY as LEGACY_CONNECTION_KEY,
   type KeyValueStorage,
 } from '../auth/vault'
+import { parseCanonicalPairingLink } from './pairingLink'
 import type {
   ConnectionProfile,
   ConnectionProfileMetadata,
@@ -132,25 +133,12 @@ function parseDocument(raw: string): ConnectionRegistryDocument {
   }
 }
 
-function parsePairingLink(value: string): { origin: string; secret: string } {
-  let url: URL
+function parsePairingLink(value: string): { origin: string; name: string; secret: string } {
   try {
-    url = new URL(value)
+    return parseCanonicalPairingLink(value)
   } catch {
     throw new ConnectionRegistryError('invalid_pairing_link')
   }
-  if (
-    !['http:', 'https:'].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.pathname !== '/connect' ||
-    url.search ||
-    !url.hash ||
-    url.hash === '#'
-  ) {
-    throw new ConnectionRegistryError('invalid_pairing_link')
-  }
-  return { origin: canonicalOrigin(url.origin), secret: url.hash.slice(1) }
 }
 
 export class BrowserConnectionRegistry {
@@ -274,7 +262,7 @@ export class BrowserConnectionRegistry {
         status: 'error',
         profile,
         retryable: transportError.retryable,
-        message: transportError.code,
+        message: transportError.message,
       }
     }
   }
@@ -286,7 +274,7 @@ export class BrowserConnectionRegistry {
     transport = new PairingTransport(),
     keyFactory: () => Promise<string> = generateDevicePublicKey,
   ): Promise<PairedProfile> {
-    const { origin, secret } = parsePairingLink(pairingLink)
+    const { origin, name, secret } = parsePairingLink(pairingLink)
     const document = this.document()
     this.assertOriginAvailable(document, origin)
 
@@ -302,7 +290,7 @@ export class BrowserConnectionRegistry {
       refreshToken: exchanged.refresh_token,
       pairedAt,
     }
-    const profile = this.add(connection, displayName)
+    const profile = this.add(connection, displayName ?? name)
     return {
       profile,
       accessToken: exchanged.access_token,
