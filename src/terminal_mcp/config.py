@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     oauth_required_scopes: str = "terminal:read terminal:execute"
     oauth_admin_username: str = "admin"
     oauth_admin_password: str = "change-me"
-    oauth_access_ttl_sec: int = 900
+    oauth_access_ttl_sec: int = 30 * 24 * 60 * 60
     oauth_refresh_ttl_sec: int = 2592000
     oauth_code_ttl_sec: int = 300
     console_ws_ticket_ttl_sec: int = 30
