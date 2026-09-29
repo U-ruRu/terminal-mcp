@@ -170,6 +170,61 @@ class AgentStore:
             await db.commit()
             return cur.rowcount == 1
 
+    async def refresh_foreign_session_plan(
+        self,
+        agent_id,
+        task_summary,
+        intent,
+        work_scope,
+        details,
+        current_step,
+        event_at,
+        *,
+        source_instance_id,
+        registered_at,
+        global_expires_at,
+    ):
+        scope = json.dumps(work_scope or [], separators=(",", ":"))
+        plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            row = await (
+                await db.execute(
+                    "SELECT task_summary,intent,work_scope,details,current_step "
+                    "FROM agent_sessions WHERE agent_id=? AND state='active' "
+                    "AND source_instance_id=? AND registered_at=? AND global_expires_at=?",
+                    (agent_id, source_instance_id, registered_at, global_expires_at),
+                )
+            ).fetchone()
+            if row is None:
+                return False
+            expected = (task_summary, intent, scope, plan, current_step)
+            if tuple(row) == expected:
+                return True
+            cur = await db.execute(
+                "UPDATE agent_sessions SET task_summary=?,intent=?,work_scope=?,details=?,current_step=? "
+                "WHERE agent_id=? AND state='active' AND source_instance_id=? "
+                "AND registered_at=? AND global_expires_at=?",
+                (
+                    task_summary,
+                    intent,
+                    scope,
+                    plan,
+                    current_step,
+                    agent_id,
+                    source_instance_id,
+                    registered_at,
+                    global_expires_at,
+                ),
+            )
+            if cur.rowcount:
+                await db.execute(
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
+                    "VALUES(?,?,?,?,?)",
+                    (agent_id, event_at, intent, scope, current_step),
+                )
+            await db.commit()
+            return cur.rowcount == 1
+
     async def get_session(self, agent_id):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             row = await (

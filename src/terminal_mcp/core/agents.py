@@ -124,7 +124,7 @@ class AgentCoordinator:
         except Exception:
             return None
 
-    async def _reconcile_foreign_terminal(self, agent_id, current):
+    async def _reconcile_foreign_session(self, agent_id, current):
         if (
             current is None
             or current.get("state") != "active"
@@ -143,6 +143,64 @@ class AgentCoordinator:
                 agent_id, "Fleet identity source changed for an attached session."
             )
         if resolution.get("state") == "active":
+            started_at = resolution.get("session_started_at")
+            expires_at = resolution.get("expires_at")
+            if (
+                not started_at
+                or not expires_at
+                or started_at != current.get("registered_at")
+                or expires_at != current.get("global_expires_at")
+            ):
+                return current, self._foreign_unavailable(
+                    agent_id, "Fleet identity changed the attached session clock."
+                )
+
+            task_summary = resolution.get("task_summary")
+            intent = resolution.get("intent")
+            details = list(resolution.get("details") or [])
+            work_scope = list(resolution.get("work_scope") or [])
+            current_step = int(resolution.get("current_step") or 1)
+            if not task_summary or not intent or not details:
+                return current, self._foreign_unavailable(
+                    agent_id, "Fleet identity does not contain a signed shared-session plan."
+                )
+            if current_step < 1 or current_step > len(details):
+                return current, self._foreign_unavailable(
+                    agent_id, "Fleet identity shared-session step is outside the signed plan."
+                )
+
+            plan = (
+                task_summary,
+                intent,
+                work_scope,
+                details,
+                current_step,
+            )
+            local_plan = (
+                current.get("task_summary"),
+                current.get("intent"),
+                list(current.get("work_scope") or []),
+                list(current.get("details") or []),
+                int(current.get("current_step") or 1),
+            )
+            if plan != local_plan:
+                changed = await self.store.refresh_foreign_session_plan(
+                    agent_id,
+                    task_summary,
+                    intent,
+                    work_scope,
+                    details,
+                    current_step,
+                    resolution.get("updated_at") or utc_text(),
+                    source_instance_id=current["source_instance_id"],
+                    registered_at=current["registered_at"],
+                    global_expires_at=current["global_expires_at"],
+                )
+                if not changed:
+                    return current, self._foreign_unavailable(
+                        agent_id, "Local foreign-session attachment changed concurrently."
+                    )
+                current = await self.store.get_session(agent_id)
             return current, None
 
         state = "finished" if resolution.get("state") == "finished" else "forced"
@@ -248,7 +306,7 @@ class AgentCoordinator:
             current = await self.store.get_session(agent_id)
             if current is not None:
                 current = await self._enforce_session(current)
-                current, foreign_terminal = await self._reconcile_foreign_terminal(
+                current, foreign_terminal = await self._reconcile_foreign_session(
                     agent_id, current
                 )
                 if foreign_terminal:
@@ -469,7 +527,7 @@ class AgentCoordinator:
     async def validate(self, agent_id, tool, *, touch=True):
         session = await self.store.get_session(agent_id)
         session = await self._enforce_session(session)
-        session, foreign_terminal = await self._reconcile_foreign_terminal(agent_id, session)
+        session, foreign_terminal = await self._reconcile_foreign_session(agent_id, session)
         if foreign_terminal:
             return foreign_terminal
         if not session:
@@ -771,6 +829,10 @@ class AgentCoordinator:
         for row in rows:
             session = await self.store.get_session(row["agent_id"])
             session = await self._enforce_session(session, now)
+            if session:
+                session, _ = await self._reconcile_foreign_session(
+                    row["agent_id"], session
+                )
             if not session or session["state"] != "active":
                 continue
             marker = row["last_command_hash"] or "started"
@@ -1295,6 +1357,10 @@ class AgentCoordinator:
         normalized = []
         for session in sessions:
             current = await self._enforce_session(session, now)
+            if current:
+                current, _ = await self._reconcile_foreign_session(
+                    current["agent_id"], current
+                )
             if current:
                 normalized.append(current)
         sessions = normalized

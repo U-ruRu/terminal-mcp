@@ -186,6 +186,8 @@ class FleetReplicationService:
             "expires_at": record.expires_at,
             "ended_at": record.ended_at,
             "end_reason": record.end_reason,
+            "updated_at": record.updated_at,
+            "revision": record.revision,
             "payload_version": record.payload_version,
             "task_summary": record.task_summary,
             "intent": record.intent,
