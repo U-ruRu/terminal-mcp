@@ -49,12 +49,27 @@ export function ServerSection({
             {server.staleReason ? <p className="muted">{server.staleReason}</p> : null}
             {server.lastError ? <p className="connection-error" role="status">{server.lastError}</p> : null}
           </>
+        ) : section === 'context' ? (
+          <>
+            <h3>{title} {t('section.on')} {server.displayName}</h3>
+            {(server.contexts ?? []).length === 0 ? <p className="muted">{t('context.empty')}</p> : (
+              <div className="stack context-list">
+                {(server.contexts ?? []).map((context) => (
+                  <section className="context-entry" key={context.id}>
+                    <div className="section-heading">
+                      <strong>{context.summary}</strong>
+                      <span className="chip">{context.primary ? t('context.primary') : t('context.additional')}</span>
+                    </div>
+                    {context.content ? <pre>{context.content}</pre> : null}
+                  </section>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           <>
             <h3>{title} {t('section.on')} {server.displayName}</h3>
-            <p className="muted">
-              {t('section.scopedDescription')}
-            </p>
+            <p className="muted">{t('section.scopedDescription')}</p>
           </>
         )}
       </article>

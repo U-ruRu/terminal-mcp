@@ -5,7 +5,6 @@ import hashlib
 import secrets
 import time
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse
@@ -13,6 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
 from terminal_mcp.core.orchestration import public_agent_name, public_session_ref
+from terminal_mcp.http.browser_security import canonical_origin
 
 
 class ConsoleTaskDetailRequest(BaseModel):
@@ -22,7 +22,8 @@ class ConsoleTaskDetailRequest(BaseModel):
 
 class ConsoleActivityRequest(BaseModel):
     since: int = Field(default=0, ge=0)
-    limit: int = Field(default=100, ge=1, le=200)
+    before: int | None = Field(default=None, ge=1)
+    limit: int = Field(default=100, ge=1, le=1000)
     event_types: list[str] = Field(default_factory=list, max_length=50)
     entity_types: list[str] = Field(default_factory=list, max_length=20)
 
@@ -74,18 +75,6 @@ class WebSocketTicketStore:
         for key in expired:
             self._tickets.pop(key, None)
 
-
-def _origin(value: str) -> str:
-    parsed = urlsplit(value)
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        return ""
-    host = parsed.hostname.lower()
-    if ":" in host:
-        host = f"[{host}]"
-    port = parsed.port
-    default_port = 443 if parsed.scheme.lower() == "https" else 80
-    suffix = f":{port}" if port is not None and port != default_port else ""
-    return f"{parsed.scheme.lower()}://{host}{suffix}"
 
 
 async def _oauth_device(request: Request, auth, pairing_store):
@@ -169,12 +158,58 @@ async def _project_activity_event(service, event: dict) -> dict:
 async def _activity_page(service, event_store, body: ConsoleActivityRequest) -> dict:
     event_types = {item.strip() for item in body.event_types if item.strip()}
     entity_types = {item.strip() for item in body.entity_types if item.strip()}
+    scanned = 0
+    max_scan = 5000
+
+    def matches(event: dict) -> bool:
+        if event_types and event["event_type"] not in event_types:
+            return False
+        if entity_types and event["entity_type"] not in entity_types:
+            return False
+        return True
+
+    if body.before is not None:
+        cursor = body.before
+        newest_first = []
+        first_page = None
+        high_water = 0
+        while len(newest_first) < body.limit and scanned < max_scan:
+            scan_limit = min(1000, max(100, body.limit * 4), max_scan - scanned)
+            page = await event_store.read_before(before=cursor, limit=scan_limit)
+            if first_page is None:
+                first_page = page
+            high_water = page["high_water_seq"]
+            batch = page["events"]
+            if not batch:
+                break
+            for event in reversed(batch):
+                scanned += 1
+                if matches(event):
+                    newest_first.append(await _project_activity_event(service, event))
+                    if len(newest_first) >= body.limit:
+                        break
+            cursor = batch[0]["seq"]
+            oldest = page["oldest_seq"]
+            if len(newest_first) >= body.limit or (oldest is not None and cursor <= oldest):
+                break
+        first_page = first_page or await event_store.read_before(before=body.before, limit=1)
+        events = list(reversed(newest_first[: body.limit]))
+        return {
+            "ok": True,
+            "events": events,
+            "since": body.since,
+            "next_cursor": events[-1]["seq"] if events else max(0, body.before - 1),
+            "oldest_seq": first_page["oldest_seq"],
+            "high_water_seq": high_water,
+            "gap": False,
+            "gap_from_seq": None,
+            "gap_to_seq": None,
+        }
+
     cursor = body.since
     events = []
     first_page = None
     high_water = body.since
-    scanned = 0
-    max_scan = 5000
     while len(events) < body.limit and scanned < max_scan:
         scan_limit = min(1000, max(100, body.limit * 4), max_scan - scanned)
         page = await event_store.read(since=cursor, limit=scan_limit)
@@ -186,9 +221,7 @@ async def _activity_page(service, event_store, body: ConsoleActivityRequest) -> 
         for event in page["events"]:
             cursor = event["seq"]
             scanned += 1
-            if event_types and event["event_type"] not in event_types:
-                continue
-            if entity_types and event["entity_type"] not in entity_types:
+            if not matches(event):
                 continue
             events.append(await _project_activity_event(service, event))
             if len(events) >= body.limit:
@@ -211,12 +244,18 @@ async def _activity_page(service, event_store, body: ConsoleActivityRequest) -> 
 
 def build_console_events_router(settings, auth, pairing_store, service, event_store, ticket_store):
     router = APIRouter()
-    expected_origin = _origin(settings.public_base_url)
+    allowed_origins = frozenset(settings.browser_allowed_origins())
+
+    def origin_allowed(value: str) -> bool:
+        try:
+            return canonical_origin(value) in allowed_origins
+        except ValueError:
+            return False
 
     @router.post("/console/ws-ticket", include_in_schema=False)
     async def issue_ticket(request: Request):
         request_origin = request.headers.get("origin")
-        if request_origin and _origin(request_origin) != expected_origin:
+        if request_origin and not origin_allowed(request_origin):
             return JSONResponse(
                 {"error": "origin_not_allowed"},
                 status_code=403,
@@ -283,7 +322,7 @@ def build_console_events_router(settings, auth, pairing_store, service, event_st
 
     @router.websocket("/console/events")
     async def console_events(websocket: WebSocket):
-        if _origin(websocket.headers.get("origin", "")) != expected_origin:
+        if not origin_allowed(websocket.headers.get("origin", "")):
             await websocket.close(code=4403, reason="origin_not_allowed")
             return
 

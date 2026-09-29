@@ -111,6 +111,7 @@ export class ConsoleClient {
 
   async activity(options: {
     since?: number
+    before?: number
     limit?: number
     eventTypes?: string[]
     entityTypes?: string[]
@@ -120,6 +121,7 @@ export class ConsoleClient {
         method: 'POST',
         body: JSON.stringify({
           since: options.since ?? 0,
+          before: options.before,
           limit: options.limit ?? 100,
           event_types: options.eventTypes ?? [],
           entity_types: options.entityTypes ?? [],

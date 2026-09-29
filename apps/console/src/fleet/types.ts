@@ -17,7 +17,7 @@ export type FleetInstanceView = {
   runtime: FleetInstanceRuntimeState
 }
 
-export type FleetActivityOptions = { since?: number; limit?: number; eventTypes?: string[]; entityTypes?: string[] }
+export type FleetActivityOptions = { since?: number; before?: number; limit?: number; eventTypes?: string[]; entityTypes?: string[] }
 
 export type FleetInstanceActor = {
   readonly instanceId: string

@@ -536,3 +536,44 @@ def test_websocket_heartbeat_carries_cursor_and_high_water(tmp_path):
     assert heartbeat["type"] == "heartbeat"
     assert heartbeat["cursor"] == high_water
     assert heartbeat["high_water_seq"] == high_water
+
+
+def test_configured_console_origin_can_issue_ticket_and_open_websocket(tmp_path):
+    capacitor_origin = "https://localhost"
+    app = create_app(settings(tmp_path, console_allowed_origins=capacitor_origin))
+    with TestClient(app) as client:
+        paired = pair(client, app)
+        ws_ticket = ticket(client, paired["access_token"], origin=capacitor_origin)
+        high_water = asyncio.run(app.state.event_store.high_water_seq())
+        with client.websocket_connect(
+            f"/console/events?ticket={ws_ticket}&since={high_water}",
+            headers={"Origin": capacitor_origin},
+        ) as websocket:
+            heartbeat = websocket.receive_json()
+    assert heartbeat["type"] == "heartbeat"
+
+
+def test_activity_supports_bounded_backward_history(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app) as client:
+        paired = pair(client, app)
+        headers = {"Authorization": f"Bearer {paired['access_token']}", "Origin": ORIGIN}
+        seqs = [
+            asyncio.run(app.state.event_store.append("history.changed", "history", str(index)))
+            for index in range(8)
+        ]
+        newest = client.post(
+            "/console/activity",
+            headers=headers,
+            json={"before": seqs[-1] + 1, "limit": 3, "entity_types": ["history"]},
+        ).json()
+        older = client.post(
+            "/console/activity",
+            headers=headers,
+            json={"before": newest["events"][0]["seq"], "limit": 3, "entity_types": ["history"]},
+        ).json()
+
+    assert [item["seq"] for item in newest["events"]] == seqs[-3:]
+    assert [item["seq"] for item in older["events"]] == seqs[-6:-3]
+    assert newest["high_water_seq"] == seqs[-1]
+    assert newest["oldest_seq"] is not None

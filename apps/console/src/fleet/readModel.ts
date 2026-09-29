@@ -2,6 +2,7 @@ import type {
   AgentReadModel,
   CommunicationReadModel,
   ConsoleSnapshotReadModel,
+  ContextReadModel,
   HostResourcesReadModel,
   TaskReadModel,
 } from '../api/models'
@@ -83,6 +84,7 @@ export type FleetServerReadModel = FleetSource & {
   version?: string
   healthy?: boolean
   resources?: HostResourcesReadModel
+  contexts?: ContextReadModel[]
   lastSeenAt?: string
   reconnectAttempt: number
   lastError?: string
@@ -367,6 +369,7 @@ export function buildFleetReadModel(
       version: snapshot?.instance.version,
       healthy: snapshot?.instance.healthy,
       resources: snapshot?.instance.resources,
+      contexts: snapshot?.contexts ?? [],
       lastSeenAt: snapshot
         ? snapshotLastSeen(snapshot, instance.runtime.realtime?.lastEvent)
         : undefined,

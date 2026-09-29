@@ -65,7 +65,7 @@ test('switches servers, filters messages and renders direct task navigation', as
   expect(screen.getByText('Ship it')).toBeInTheDocument()
   expect(screen.queryByText('task.updated · #1')).not.toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ since: 0 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 1000 })))
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
   expect(await screen.findByText('health.changed · #7')).toBeInTheDocument()
 })
@@ -80,7 +80,7 @@ test('does not silently choose a server when activity has no server context', as
   expect(screen.getByText('Choose a server to view activity.')).toBeInTheDocument()
   expect(load).not.toHaveBeenCalled()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ since: 0 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 3, limit: 1000 })))
 })
 
 

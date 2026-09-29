@@ -382,6 +382,51 @@ class EventJournalStore:
             ).fetchone()
         return int(row[0])
 
+    async def read_before(self, *, before: int, limit: int = DEFAULT_EVENT_LIMIT) -> dict:
+        before = int(before)
+        if before < 1:
+            raise ValueError("before must be positive")
+        limit = max(1, min(int(limit), MAX_EVENT_LIMIT))
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            bounds = await (
+                await db.execute(
+                    "SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events"
+                )
+            ).fetchone()
+            oldest = int(bounds[0]) if bounds[0] is not None else None
+            high_water = int(bounds[1])
+            rows = await (
+                await db.execute(
+                    "SELECT seq,event_type,entity_type,entity_id,actor_id,payload_json,created_at "
+                    "FROM instance_events WHERE seq<? ORDER BY seq DESC LIMIT ?",
+                    (before, limit),
+                )
+            ).fetchall()
+
+        rows = list(reversed(rows))
+        events = [
+            {
+                "seq": int(row[0]),
+                "event_type": row[1],
+                "entity_type": row[2],
+                "entity_id": row[3],
+                "actor_id": row[4],
+                "payload": json.loads(row[5]),
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+        return {
+            "events": events,
+            "since": 0,
+            "next_cursor": events[-1]["seq"] if events else max(0, before - 1),
+            "oldest_seq": oldest,
+            "high_water_seq": high_water,
+            "gap": False,
+            "gap_from_seq": None,
+            "gap_to_seq": None,
+        }
+
     async def read(self, *, since: int = 0, limit: int = DEFAULT_EVENT_LIMIT) -> dict:
         since = int(since)
         if since < 0:
