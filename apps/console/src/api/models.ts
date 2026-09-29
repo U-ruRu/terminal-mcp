@@ -49,6 +49,16 @@ export type InstanceReadModel = {
   resources: HostResourcesReadModel
 }
 
+export type AgentIntentScopeReadModel = {
+  instanceId: string
+  intent: string
+  currentStep: number
+  updatedAt: string
+  ageSeconds: number
+  status: 'fresh' | 'stale'
+  local: boolean
+}
+
 export type AgentReadModel = {
   name: string
   status: string
@@ -56,6 +66,11 @@ export type AgentReadModel = {
   currentStep: number
   lastActivity: string
   lastActivityAt: string
+  logicalLastActivityAt?: string
+  logicalIdleSeconds?: number
+  logicalSessionStatus?: 'active' | 'finished' | 'forced'
+  localIntentStatus?: 'fresh' | 'stale' | 'missing'
+  intentScopes?: AgentIntentScopeReadModel[]
   idleSeconds?: number
   sessionAgeSeconds?: number
   sessionRemainingSeconds?: number

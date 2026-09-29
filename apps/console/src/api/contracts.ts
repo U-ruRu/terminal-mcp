@@ -148,6 +148,19 @@ function owner(value: unknown, path: string): TaskOwnerReadModel | undefined {
   }
 }
 
+function agentIntentScope(value: unknown, path: string) {
+  const item = record(value, path)
+  return {
+    instanceId: string(item.instance_id, path + '.instance_id'),
+    intent: string(item.intent, path + '.intent'),
+    currentStep: integer(item.current_step, path + '.current_step'),
+    updatedAt: string(item.updated_at, path + '.updated_at'),
+    ageSeconds: integer(item.age_seconds, path + '.age_seconds'),
+    status: enumValue(item.status, ['fresh', 'stale'] as const, path + '.status'),
+    local: boolean(item.local, path + '.local'),
+  }
+}
+
 function agent(value: unknown, path: string): AgentReadModel {
   const item = record(value, path)
   return {
@@ -155,9 +168,36 @@ function agent(value: unknown, path: string): AgentReadModel {
     status: string(item.status, `${path}.status`),
     intent: string(item.intent, `${path}.intent`),
     currentStep: integer(item.current_step, `${path}.current_step`),
-    lastActivity: string(item.last_activity, `${path}.last_activity`),
-    lastActivityAt: string(item.last_activity_at, `${path}.last_activity_at`),
-    idleSeconds: optionalInteger(item.idle_seconds, `${path}.idle_seconds`),
+    lastActivity: string(item.last_activity, path + '.last_activity'),
+    lastActivityAt: string(item.last_activity_at, path + '.last_activity_at'),
+    logicalLastActivityAt: optionalString(
+      item.logical_last_activity_at,
+      path + '.logical_last_activity_at',
+    ),
+    logicalIdleSeconds: optionalInteger(
+      item.logical_idle_seconds,
+      path + '.logical_idle_seconds',
+    ),
+    logicalSessionStatus:
+      item.logical_session_status === undefined
+        ? undefined
+        : enumValue(
+            item.logical_session_status,
+            ['active', 'finished', 'forced'] as const,
+            path + '.logical_session_status',
+          ),
+    localIntentStatus:
+      item.local_intent_status === undefined || item.local_intent_status === null
+        ? undefined
+        : enumValue(
+            item.local_intent_status,
+            ['fresh', 'stale', 'missing'] as const,
+            path + '.local_intent_status',
+          ),
+    intentScopes: array(item.intent_scopes ?? [], path + '.intent_scopes').map(
+      (raw, index) => agentIntentScope(raw, path + '.intent_scopes[' + index + ']'),
+    ),
+    idleSeconds: optionalInteger(item.idle_seconds, path + '.idle_seconds'),
     sessionAgeSeconds: optionalInteger(item.session_age_seconds, `${path}.session_age_seconds`),
     sessionRemainingSeconds: optionalInteger(
       item.session_remaining_seconds,

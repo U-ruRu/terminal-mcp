@@ -19,6 +19,23 @@ def _encode(value: bytes) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentIntentScope:
+    instance_id: str
+    intent: str
+    current_step: int
+    updated_at: str
+
+    def __post_init__(self):
+        if not self.instance_id.strip():
+            raise ValueError("intent scope instance_id must not be empty")
+        if not self.intent.strip():
+            raise ValueError("intent scope intent must not be empty")
+        if self.current_step < 1:
+            raise ValueError("intent scope current_step must be positive")
+        parse_utc(self.updated_at)
+
+
+@dataclass(frozen=True, slots=True)
 class AgentIdentityRecord:
     source_instance_id: str
     agent_id: str
@@ -35,6 +52,8 @@ class AgentIdentityRecord:
     work_scope: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
     current_step: int = 1
+    last_activity_at: str = ""
+    intent_scopes: tuple[AgentIntentScope, ...] = ()
 
     def __post_init__(self):
         if not self.source_instance_id.strip():
@@ -45,8 +64,8 @@ class AgentIdentityRecord:
             raise ValueError("state must be active, finished or forced")
         if self.revision < 1:
             raise ValueError("revision must be positive")
-        if self.payload_version not in {1, 2}:
-            raise ValueError("payload_version must be 1 or 2")
+        if self.payload_version not in {1, 2, 3}:
+            raise ValueError("payload_version must be 1, 2 or 3")
         if self.state == "active" and self.ended_at is not None:
             raise ValueError("active identity must not have ended_at")
         if self.state == "active" and self.end_reason is not None:
@@ -71,6 +90,36 @@ class AgentIdentityRecord:
                 raise ValueError("v2 identity requires details")
             if self.current_step < 1 or self.current_step > len(self.details):
                 raise ValueError("v2 identity current_step is outside details")
+        if self.payload_version >= 3:
+            if not self.last_activity_at:
+                raise ValueError("v3 identity requires last_activity_at")
+            parse_utc(self.last_activity_at)
+            seen: set[str] = set()
+            for scope in self.intent_scopes:
+                if scope.instance_id in seen:
+                    raise ValueError("v3 identity intent scopes must be unique by instance_id")
+                if scope.current_step > len(self.details):
+                    raise ValueError("v3 intent scope current_step is outside details")
+                seen.add(scope.instance_id)
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> AgentIdentityRecord:
+        normalized = dict(payload)
+        for key in ("work_scope", "details"):
+            if key in normalized and isinstance(normalized[key], list):
+                normalized[key] = tuple(normalized[key])
+        scopes = normalized.get("intent_scopes")
+        if isinstance(scopes, list):
+            normalized["intent_scopes"] = tuple(
+                item if isinstance(item, AgentIntentScope) else AgentIntentScope(**item)
+                for item in scopes
+            )
+        elif isinstance(scopes, tuple):
+            normalized["intent_scopes"] = tuple(
+                item if isinstance(item, AgentIntentScope) else AgentIntentScope(**item)
+                for item in scopes
+            )
+        return cls(**normalized)
 
     @property
     def public_name(self) -> str:
@@ -86,8 +135,13 @@ class AgentIdentityRecord:
                 "work_scope",
                 "details",
                 "current_step",
+                "last_activity_at",
+                "intent_scopes",
             ):
                 payload.pop(key, None)
+        elif self.payload_version == 2:
+            payload.pop("last_activity_at", None)
+            payload.pop("intent_scopes", None)
         return payload
 
     def canonical_bytes(self) -> bytes:
@@ -116,11 +170,7 @@ class SignedAgentIdentity:
         signature = payload.get("signature")
         if not isinstance(record, dict) or not isinstance(signature, str) or not signature:
             raise ValueError("signed identity requires record and signature")
-        normalized = dict(record)
-        for key in ("work_scope", "details"):
-            if key in normalized and isinstance(normalized[key], list):
-                normalized[key] = tuple(normalized[key])
-        return cls(AgentIdentityRecord(**normalized), signature)
+        return cls(AgentIdentityRecord.from_dict(record), signature)
 
 
 def sign_identity_record(record: AgentIdentityRecord, private_key: str) -> str:

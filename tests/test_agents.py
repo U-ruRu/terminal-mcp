@@ -177,6 +177,44 @@ async def test_activity_refresh_expiry_and_reregistration(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agents_projects_logical_liveness_separately_from_scoped_intent_freshness(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    service.agent_coordinator.local_instance_id = "server-a"
+    started = await register(service, "Scoped intent", "local fresh", ["repo:tests"])
+    agent_id = started["self"]["agent_id"]
+    store = AgentStore(repo.path)
+
+    now = utc_now()
+    remote_updated = utc_text(now - timedelta(seconds=400))
+    current_activity = utc_text(now - timedelta(seconds=1))
+    assert await store.apply_origin_session_update(
+        agent_id,
+        "server-b",
+        current_activity,
+        intent="remote stale",
+        step=1,
+        intent_updated_at=remote_updated,
+        local_instance_id="server-a",
+    )
+
+    observed = await service.agents(agent_id, target=public_agent_name(agent_id))
+    session = observed["sessions"][0]
+    assert session["logical_session_status"] == "active"
+    assert session["logical_idle_seconds"] < 10
+    assert session["local_intent_status"] == "fresh"
+    projected_scopes = [
+        (item["instance_id"], item["status"], item["local"])
+        for item in session["intent_scopes"]
+    ]
+    assert projected_scopes == [
+        ("server-a", "fresh", True),
+        ("server-b", "stale", False),
+    ]
+    assert session["intent"] == "local fresh"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
 async def test_command_attribution_recent_order_and_global_read(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     started = await register(service, "Attribution", "Run commands", ["repo:tests"])

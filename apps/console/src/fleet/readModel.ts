@@ -27,6 +27,17 @@ export type FleetSessionAttachment = FleetSource & {
   currentStep: number
   lastActivityAt: string
   attachment?: boolean
+  localIntentStatus?: 'fresh' | 'stale' | 'missing'
+}
+
+export type FleetScopedIntent = {
+  instanceId: string
+  displayName: string
+  intent: string
+  currentStep: number
+  updatedAt: string
+  ageSeconds: number
+  status: 'fresh' | 'stale'
 }
 
 export type FleetSessionReadModel = {
@@ -36,6 +47,7 @@ export type FleetSessionReadModel = {
   sessionAgeSeconds?: number
   sessionRemainingSeconds?: number
   attachments: FleetSessionAttachment[]
+  scopedIntents: FleetScopedIntent[]
 }
 
 export type FleetTaskItem = FleetSource & {
@@ -281,12 +293,35 @@ export function buildFleetReadModel(
         intent: agent.intent,
         taskSummary: agent.taskSummary,
         currentStep: agent.currentStep,
-        lastActivityAt: agent.lastActivityAt,
+        lastActivityAt: agent.logicalLastActivityAt ?? agent.lastActivityAt,
         attachment: agent.attachment,
+        localIntentStatus: agent.localIntentStatus,
       }
+      const scopedIntents = (agent.intentScopes ?? []).map((scope) => ({
+        instanceId: scope.instanceId,
+        displayName:
+          instances.find((candidate) => candidate.profile.instanceId === scope.instanceId)
+            ?.profile.displayName ?? scope.instanceId,
+        intent: scope.intent,
+        currentStep: scope.currentStep,
+        updatedAt: scope.updatedAt,
+        ageSeconds: scope.ageSeconds,
+        status: scope.status,
+      }))
       const current = sessionsByRef.get(sessionRef)
       if (current) {
         current.attachments.push(attachment)
+        for (const scope of scopedIntents) {
+          const existing = current.scopedIntents.find((item) => item.instanceId === scope.instanceId)
+          if (!existing) {
+            current.scopedIntents.push(scope)
+          } else if (
+            scope.updatedAt > existing.updatedAt ||
+            (scope.updatedAt === existing.updatedAt && scope.intent > existing.intent)
+          ) {
+            Object.assign(existing, scope)
+          }
+        }
         if (agent.originInstanceId && !current.originInstanceId) {
           current.originInstanceId = agent.originInstanceId
         }
@@ -310,6 +345,7 @@ export function buildFleetReadModel(
           sessionAgeSeconds: agent.sessionAgeSeconds,
           sessionRemainingSeconds: agent.sessionRemainingSeconds,
           attachments: [attachment],
+          scopedIntents,
         })
       }
     }
@@ -340,8 +376,14 @@ export function buildFleetReadModel(
       activeAgentCount: agents.filter((agent) => agent.status === 'active').length,
       activeIntents: agents
         .filter((agent) => agent.status === 'active')
-        .map((agent) => agent.intent)
-        .filter(Boolean)
+        .flatMap((agent) => {
+          const scopes = agent.intentScopes ?? []
+          if (scopes.length === 0) return agent.intent ? [agent.intent] : []
+          const local = scopes.find(
+            (scope) => scope.instanceId === source.instanceId && scope.status === 'fresh',
+          )
+          return local?.intent ? [local.intent] : []
+        })
         .sort((a, b) => a.localeCompare(b)),
       taskCounts: counts,
       communication,
@@ -352,7 +394,12 @@ export function buildFleetReadModel(
 
   servers.sort(serverSort)
   const sessions = [...sessionsByRef.values()]
-  for (const session of sessions) session.attachments.sort(sourceSort)
+  for (const session of sessions) {
+    session.attachments.sort(sourceSort)
+    session.scopedIntents.sort(
+      (a, b) => a.displayName.localeCompare(b.displayName) || a.instanceId.localeCompare(b.instanceId),
+    )
+  }
   sessions.sort((a, b) => a.name.localeCompare(b.name) || a.sessionRef.localeCompare(b.sessionRef))
   activeAgents.sort(
     (a, b) =>

@@ -7,10 +7,11 @@ from datetime import timedelta
 
 import httpx
 
-from terminal_mcp.core.orchestration import parse_utc, utc_text
+from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
 from terminal_mcp.fleet.identity import (
     AgentIdentityRecord,
+    AgentIntentScope,
     SignedAgentIdentity,
     sign_identity_record,
     verify_identity_record,
@@ -95,9 +96,11 @@ class FleetReplicationService:
         work_scope: tuple[str, ...],
         details: tuple[str, ...],
         current_step: int,
+        last_activity_at: str,
+        intent_scopes: tuple[AgentIntentScope, ...],
     ) -> bool:
         return (
-            previous.payload_version >= 2
+            previous.payload_version >= 3
             and previous.state == state
             and previous.session_started_at == session_started_at
             and previous.expires_at == expires_at
@@ -108,6 +111,8 @@ class FleetReplicationService:
             and previous.work_scope == work_scope
             and previous.details == details
             and previous.current_step == current_step
+            and previous.last_activity_at == last_activity_at
+            and previous.intent_scopes == intent_scopes
         )
 
     async def sync_local_session(self, agent_id: str) -> SignedAgentIdentity | None:
@@ -124,6 +129,24 @@ class FleetReplicationService:
         )
         work_scope = tuple(session["work_scope"])
         details = tuple(session["details"])
+        scope_map = dict(session.get("intent_scopes") or {})
+        if self.config.instance_id not in scope_map and session.get("intent"):
+            local_task_at = await self.agent_store.latest_task_at(agent_id)
+            scope_map[self.config.instance_id] = {
+                "intent": session["intent"],
+                "current_step": int(session["current_step"]),
+                "updated_at": local_task_at or session["registered_at"],
+            }
+        intent_scopes = tuple(
+            AgentIntentScope(
+                instance_id=instance_id,
+                intent=item["intent"],
+                current_step=int(item["current_step"]),
+                updated_at=item["updated_at"],
+            )
+            for instance_id, item in sorted(scope_map.items())
+        )
+        last_activity_at = session["last_activity_at"]
         previous = await self.local_envelope(agent_id)
         if previous and self._same_lifecycle(
             previous.record,
@@ -137,6 +160,8 @@ class FleetReplicationService:
             work_scope=work_scope,
             details=details,
             current_step=session["current_step"],
+            last_activity_at=last_activity_at,
+            intent_scopes=intent_scopes,
         ):
             return previous
 
@@ -152,12 +177,14 @@ class FleetReplicationService:
             revision=revision,
             ended_at=session["ended_at"],
             end_reason=session["end_reason"],
-            payload_version=2,
+            payload_version=3,
             task_summary=session["task_summary"],
             intent=session["intent"],
             work_scope=work_scope,
             details=details,
             current_step=session["current_step"],
+            last_activity_at=last_activity_at,
+            intent_scopes=intent_scopes,
         )
         envelope = SignedAgentIdentity(
             record,
@@ -194,6 +221,15 @@ class FleetReplicationService:
             "work_scope": list(record.work_scope),
             "details": list(record.details),
             "current_step": record.current_step,
+            "last_activity_at": record.last_activity_at or record.updated_at,
+            "intent_scopes": {
+                scope.instance_id: {
+                    "intent": scope.intent,
+                    "current_step": scope.current_step,
+                    "updated_at": scope.updated_at,
+                }
+                for scope in record.intent_scopes
+            },
         }
 
     def _valid_foreign_envelope(self, envelope: SignedAgentIdentity, agent_id: str) -> bool:
@@ -274,6 +310,137 @@ class FleetReplicationService:
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await task
         return None
+
+    async def queue_session_update(
+        self,
+        agent_id: str,
+        activity_at: str,
+        *,
+        intent: str | None = None,
+        step: int | None = None,
+        intent_updated_at: str | None = None,
+    ) -> bool:
+        session = await self.agent_store.get_session(agent_id)
+        if session is None:
+            return False
+        origin = session.get("source_instance_id")
+        if not origin or origin == self.config.instance_id:
+            self.schedule_local_sync(agent_id)
+            return False
+        await self.store.enqueue_session_update(
+            origin,
+            agent_id,
+            self.config.instance_id,
+            activity_at,
+            intent=intent,
+            intent_step=step,
+            intent_updated_at=intent_updated_at,
+        )
+        self.kick()
+        return True
+
+    async def receive_session_update(
+        self,
+        agent_id: str,
+        source_instance_id: str,
+        activity_at: str,
+        *,
+        intent: str | None = None,
+        step: int | None = None,
+        intent_updated_at: str | None = None,
+        authenticated_peer_id: str,
+    ) -> bool:
+        if authenticated_peer_id not in self.config.peers_by_id:
+            raise ValueError("session update source is not a configured fleet peer")
+        if authenticated_peer_id != source_instance_id:
+            raise ValueError("authenticated peer does not match session update source")
+        activity_dt = parse_utc(activity_at)
+        if (intent is None) != (step is None):
+            raise ValueError("session update intent and step must be provided together")
+        if intent is not None:
+            if not intent.strip():
+                raise ValueError("session update intent must not be empty")
+            if intent_updated_at is None:
+                raise ValueError("session update intent requires intent_updated_at")
+            parse_utc(intent_updated_at)
+
+        session = await self.agent_store.get_session(agent_id)
+        if session is None:
+            return False
+        origin = session.get("source_instance_id")
+        if origin and origin != self.config.instance_id:
+            raise ValueError("session update target is not authoritative on this instance")
+        expires_at = session.get("global_expires_at") or utc_text(
+            parse_utc(session["registered_at"]) + timedelta(seconds=self.max_session_seconds)
+        )
+        expires_dt = parse_utc(expires_at)
+        if activity_dt >= expires_dt or utc_now() >= expires_dt:
+            return False
+        if step is not None and (step < 1 or step > len(session.get("details") or [])):
+            raise ValueError("session update step is outside the shared plan")
+        allow_reactivate = bool(
+            session.get("state") == "forced"
+            and session.get("end_reason") == "idle_timeout"
+            and session.get("ended_at")
+            and activity_dt > parse_utc(session["ended_at"])
+        )
+        changed = await self.agent_store.apply_origin_session_update(
+            agent_id,
+            source_instance_id,
+            activity_at,
+            intent=intent,
+            step=step,
+            intent_updated_at=intent_updated_at,
+            local_instance_id=self.config.instance_id,
+            allow_reactivate=allow_reactivate,
+        )
+        if changed:
+            await self.sync_local_session(agent_id)
+        return bool(changed)
+
+    async def flush_session_updates_once(self) -> None:
+        pending = await self.store.pending_session_updates()
+        if not pending:
+            return
+        async with self.client_factory() as client:
+            for item in pending:
+                peer = self.config.peers_by_id.get(item["origin_instance_id"])
+                if peer is None:
+                    await self.store.session_update_delivery_result(
+                        item["origin_instance_id"],
+                        item["agent_id"],
+                        item["source_instance_id"],
+                        error="UnknownOrigin",
+                    )
+                    continue
+                try:
+                    response = await client.post(
+                        f"{peer.origin}/internal/fleet/session-update",
+                        headers=self._headers(peer),
+                        json={
+                            "agent_id": item["agent_id"],
+                            "source_instance_id": item["source_instance_id"],
+                            "activity_at": item["activity_at"],
+                            "intent": item["intent"],
+                            "step": item["intent_step"],
+                            "intent_updated_at": item["intent_updated_at"],
+                        },
+                    )
+                    response.raise_for_status()
+                except Exception as exc:
+                    await self.store.session_update_delivery_result(
+                        item["origin_instance_id"],
+                        item["agent_id"],
+                        item["source_instance_id"],
+                        error=exc.__class__.__name__,
+                    )
+                    continue
+                await self.store.session_update_delivery_result(
+                    item["origin_instance_id"],
+                    item["agent_id"],
+                    item["source_instance_id"],
+                    error=None,
+                )
 
     async def queue_finish(self, agent_id: str) -> bool:
         session = await self.agent_store.get_session(agent_id)
@@ -374,6 +541,7 @@ class FleetReplicationService:
         async def run():
             try:
                 await self.flush_once()
+                await self.flush_session_updates_once()
                 await self.flush_finishes_once()
             except Exception as exc:
                 self._emit("fleet_replication_flush", outcome="error", error=exc.__class__.__name__)
@@ -465,6 +633,7 @@ class FleetReplicationService:
             while not self._stopped.is_set():
                 try:
                     await self.flush_once()
+                    await self.flush_session_updates_once()
                     await self.flush_finishes_once()
                     await self.pull_once()
                     await self.sync_local_sessions()

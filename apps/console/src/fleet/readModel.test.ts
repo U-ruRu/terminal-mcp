@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 
-import type { ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
+import type { AgentReadModel, ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
 import type { ConnectionProfile } from '../connections/types'
 import type { RealtimeState } from '../realtime/state'
 import { buildFleetReadModel } from './readModel'
@@ -40,6 +40,8 @@ function snapshot(
     sessionAgeSeconds?: number
     sessionRemainingSeconds?: number
     attachment?: boolean
+    intentScopes?: AgentReadModel['intentScopes']
+    localIntentStatus?: AgentReadModel['localIntentStatus']
     tasks?: TaskReadModel[]
     alert?: number
     reply?: number
@@ -81,6 +83,8 @@ function snapshot(
             sessionAgeSeconds: options.sessionAgeSeconds,
             sessionRemainingSeconds: options.sessionRemainingSeconds,
             attachment: options.attachment,
+            intentScopes: options.intentScopes,
+            localIntentStatus: options.localIntentStatus,
             workScope: [],
             messagesAwaitingRead: 0,
             messagesAwaitingReply: 0,
@@ -400,6 +404,70 @@ test('collapses one shared session across origin and attachment while preserving
     sessionRemainingSeconds: 475,
   })
   expect(model.sessions[0].attachments.map((item) => item.instanceId)).toEqual(['origin', 'peer'])
+})
+
+test('keeps server-scoped intents distinct and never relabels remote intent as local', () => {
+  const scopes = [
+    {
+      instanceId: 'origin',
+      intent: 'origin work',
+      currentStep: 1,
+      updatedAt: '2026-09-28T10:02:00Z',
+      ageSeconds: 5,
+      status: 'fresh' as const,
+      local: true,
+    },
+    {
+      instanceId: 'peer',
+      intent: 'peer work',
+      currentStep: 2,
+      updatedAt: '2026-09-28T09:50:00Z',
+      ageSeconds: 720,
+      status: 'stale' as const,
+      local: false,
+    },
+  ]
+  const origin = instance(
+    'origin',
+    'Origin',
+    'live',
+    snapshot('https://origin.example', '0.10.1', {
+      agentName: 'Alpha',
+      intent: 'origin work',
+      sessionRef: 'session-scoped',
+      originInstanceId: 'origin',
+      intentScopes: scopes,
+      localIntentStatus: 'fresh',
+    }),
+  )
+  const peer = instance(
+    'peer',
+    'Peer',
+    'live',
+    snapshot('https://peer.example', '0.10.1', {
+      agentName: 'Alpha',
+      intent: 'origin work',
+      sessionRef: 'session-scoped',
+      originInstanceId: 'origin',
+      attachment: true,
+      intentScopes: scopes.map((scope) => ({
+        ...scope,
+        local: scope.instanceId === 'peer',
+      })),
+      localIntentStatus: 'stale',
+    }),
+  )
+
+  const model = buildFleetReadModel([peer, origin])
+  expect(model.sessions).toHaveLength(1)
+  expect(model.sessions[0].scopedIntents).toEqual([
+    expect.objectContaining({ instanceId: 'origin', displayName: 'Origin', intent: 'origin work', status: 'fresh' }),
+    expect.objectContaining({ instanceId: 'peer', displayName: 'Peer', intent: 'peer work', status: 'stale' }),
+  ])
+  expect(model.servers.find((server) => server.instanceId === 'origin')?.activeIntents).toEqual([
+    'origin work',
+  ])
+  expect(model.servers.find((server) => server.instanceId === 'peer')?.activeIntents).toEqual([])
 })
 
 test('keeps duplicate public names separate when their opaque session refs differ', () => {

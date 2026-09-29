@@ -9,8 +9,48 @@ import aiosqlite
 _SESSION_COLUMNS = (
     "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
     "details,current_step,ended_at,end_reason,preferred_queue_id,source_instance_id,"
-    "global_expires_at"
+    "global_expires_at,intent_scopes"
 )
+
+
+def _normalize_scopes(value):
+    if not value:
+        return {}
+    if isinstance(value, str):
+        value = json.loads(value)
+    result = {}
+    for instance_id, item in dict(value).items():
+        if not isinstance(item, dict):
+            continue
+        intent = str(item.get("intent") or "").strip()
+        updated_at = str(item.get("updated_at") or "").strip()
+        step = int(item.get("current_step") or 1)
+        if instance_id and intent and updated_at and step > 0:
+            result[str(instance_id)] = {
+                "intent": intent,
+                "current_step": step,
+                "updated_at": updated_at,
+            }
+    return result
+
+
+def _scope_json(value):
+    return json.dumps(
+        _normalize_scopes(value), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+
+
+def _merge_scopes(current, incoming):
+    merged = _normalize_scopes(current)
+    for instance_id, item in _normalize_scopes(incoming).items():
+        previous = merged.get(instance_id)
+        if previous is None or item["updated_at"] > previous["updated_at"]:
+            merged[instance_id] = item
+        elif item["updated_at"] == previous["updated_at"] and json.dumps(
+            item, sort_keys=True
+        ) > json.dumps(previous, sort_keys=True):
+            merged[instance_id] = item
+    return merged
 
 
 class AgentStore:
@@ -30,21 +70,26 @@ class AgentStore:
         registered_at=None,
         source_instance_id=None,
         global_expires_at=None,
+        intent_scopes=None,
+        last_activity_at=None,
+        record_task_event=True,
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+        scopes = _scope_json(intent_scopes)
         started = registered_at or now
+        activity = last_activity_at or now
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO agent_sessions("
                 "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
                 "details,current_step,ended_at,end_reason,preferred_queue_id,source_instance_id,"
-                "global_expires_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)",
+                "global_expires_at,intent_scopes) "
+                "VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?)",
                 (
                     agent_id,
                     started,
-                    now,
+                    activity,
                     task_summary,
                     intent,
                     scope,
@@ -53,30 +98,62 @@ class AgentStore:
                     current_step,
                     source_instance_id,
                     global_expires_at,
+                    scopes,
                 ),
             )
-            await db.execute(
-                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
-                "VALUES(?,?,?,?,?)",
-                (agent_id, now, intent, scope, current_step),
-            )
+            if record_task_event:
+                await db.execute(
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
+                    "VALUES(?,?,?,?,?)",
+                    (agent_id, now, intent, scope, current_step),
+                )
             await db.commit()
 
     async def update_session(
-        self, agent_id, task_summary, intent, work_scope, details, current_step, now
+        self,
+        agent_id,
+        task_summary,
+        intent,
+        work_scope,
+        details,
+        current_step,
+        now,
+        *,
+        local_instance_id=None,
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            row = await (
+                await db.execute(
+                    "SELECT intent_scopes FROM agent_sessions WHERE agent_id=? AND state='active'",
+                    (agent_id,),
+                )
+            ).fetchone()
+            scopes = _normalize_scopes(row[0] if row else None)
+            if local_instance_id:
+                scopes[local_instance_id] = {
+                    "intent": intent,
+                    "current_step": current_step,
+                    "updated_at": now,
+                }
             cur = await db.execute(
-                "UPDATE agent_sessions SET last_activity_at=?,task_summary=?,intent=?,"
-                "work_scope=?,details=?,current_step=? WHERE agent_id=? AND state='active'",
-                (now, task_summary, intent, scope, plan, current_step, agent_id),
+                "UPDATE agent_sessions SET last_activity_at=?,task_summary=?,intent=?,work_scope=?,details=?,current_step=?,intent_scopes=? "
+                "WHERE agent_id=? AND state='active'",
+                (
+                    now,
+                    task_summary,
+                    intent,
+                    scope,
+                    plan,
+                    current_step,
+                    _scope_json(scopes),
+                    agent_id,
+                ),
             )
             if cur.rowcount:
                 await db.execute(
-                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
-                    "VALUES(?,?,?,?,?)",
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) VALUES(?,?,?,?,?)",
                     (agent_id, now, intent, scope, current_step),
                 )
             await db.commit()
@@ -139,33 +216,41 @@ class AgentStore:
         registered_at,
         source_instance_id,
         global_expires_at,
+        last_activity_at=None,
+        intent_scopes=None,
+        local_instance_id=None,
+        record_task_event=True,
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+        scopes = _normalize_scopes(intent_scopes)
+        chosen = scopes.get(local_instance_id) if local_instance_id else None
+        visible_intent = chosen["intent"] if chosen else intent
+        visible_step = chosen["current_step"] if chosen else current_step
+        activity = last_activity_at or now
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             cur = await db.execute(
-                "UPDATE agent_sessions SET registered_at=?,last_activity_at=?,task_summary=?,"
-                "intent=?,work_scope=?,state='active',details=?,current_step=?,ended_at=NULL,"
-                "end_reason=NULL,source_instance_id=?,global_expires_at=? "
+                "UPDATE agent_sessions SET registered_at=?,last_activity_at=?,task_summary=?,intent=?,work_scope=?,state='active',"
+                "details=?,current_step=?,ended_at=NULL,end_reason=NULL,source_instance_id=?,global_expires_at=?,intent_scopes=? "
                 "WHERE agent_id=? AND state='forced' AND end_reason='idle_timeout'",
                 (
                     registered_at,
-                    now,
+                    activity,
                     task_summary,
-                    intent,
+                    visible_intent,
                     scope,
                     plan,
-                    current_step,
+                    visible_step,
                     source_instance_id,
                     global_expires_at,
+                    _scope_json(scopes),
                     agent_id,
                 ),
             )
-            if cur.rowcount:
+            if cur.rowcount and record_task_event:
                 await db.execute(
-                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
-                    "VALUES(?,?,?,?,?)",
-                    (agent_id, now, intent, scope, current_step),
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) VALUES(?,?,?,?,?)",
+                    (agent_id, now, visible_intent, scope, visible_step),
                 )
             await db.commit()
             return cur.rowcount == 1
@@ -183,44 +268,53 @@ class AgentStore:
         source_instance_id,
         registered_at,
         global_expires_at,
+        last_activity_at=None,
+        intent_scopes=None,
+        local_instance_id=None,
+        record_task_event=True,
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
-                    "SELECT task_summary,intent,work_scope,details,current_step "
-                    "FROM agent_sessions WHERE agent_id=? AND state='active' "
-                    "AND source_instance_id=? AND registered_at=? AND global_expires_at=?",
+                    "SELECT task_summary,intent,work_scope,details,current_step,last_activity_at,intent_scopes "
+                    "FROM agent_sessions WHERE agent_id=? AND state='active' AND source_instance_id=? "
+                    "AND registered_at=? AND global_expires_at=?",
                     (agent_id, source_instance_id, registered_at, global_expires_at),
                 )
             ).fetchone()
             if row is None:
                 return False
-            expected = (task_summary, intent, scope, plan, current_step)
-            if tuple(row) == expected:
-                return True
-            cur = await db.execute(
-                "UPDATE agent_sessions SET task_summary=?,intent=?,work_scope=?,details=?,current_step=? "
-                "WHERE agent_id=? AND state='active' AND source_instance_id=? "
-                "AND registered_at=? AND global_expires_at=?",
-                (
-                    task_summary,
-                    intent,
-                    scope,
-                    plan,
-                    current_step,
-                    agent_id,
-                    source_instance_id,
-                    registered_at,
-                    global_expires_at,
-                ),
+            merged = _merge_scopes(row[6], intent_scopes)
+            chosen = merged.get(local_instance_id) if local_instance_id else None
+            visible_intent = chosen["intent"] if chosen else intent
+            visible_step = chosen["current_step"] if chosen else current_step
+            merged_activity = row[5]
+            if last_activity_at and (not merged_activity or last_activity_at > merged_activity):
+                merged_activity = last_activity_at
+            expected = (
+                task_summary,
+                visible_intent,
+                scope,
+                plan,
+                visible_step,
+                merged_activity,
+                _scope_json(merged),
             )
-            if cur.rowcount:
+            current = (row[0], row[1], row[2], row[3], int(row[4]), row[5], _scope_json(row[6]))
+            if current == expected:
+                return True
+            task_context_changed = current[:5] != expected[:5]
+            cur = await db.execute(
+                "UPDATE agent_sessions SET task_summary=?,intent=?,work_scope=?,details=?,current_step=?,last_activity_at=?,intent_scopes=? "
+                "WHERE agent_id=? AND state='active' AND source_instance_id=? AND registered_at=? AND global_expires_at=?",
+                (*expected, agent_id, source_instance_id, registered_at, global_expires_at),
+            )
+            if cur.rowcount and record_task_event and task_context_changed:
                 await db.execute(
-                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
-                    "VALUES(?,?,?,?,?)",
-                    (agent_id, event_at, intent, scope, current_step),
+                    "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) VALUES(?,?,?,?,?)",
+                    (agent_id, event_at, visible_intent, scope, visible_step),
                 )
             await db.commit()
             return cur.rowcount == 1
@@ -278,8 +372,9 @@ class AgentStore:
     async def touch(self, agent_id, now):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             cur = await db.execute(
-                "UPDATE agent_sessions SET last_activity_at=? WHERE agent_id=? AND state='active'",
-                (now, agent_id),
+                "UPDATE agent_sessions SET last_activity_at=CASE WHEN last_activity_at<? THEN ? ELSE last_activity_at END "
+                "WHERE agent_id=? AND state='active'",
+                (now, now, agent_id),
             )
             await db.commit()
             return cur.rowcount == 1
@@ -313,27 +408,121 @@ class AgentStore:
             await db.commit()
             return cur.rowcount == 1
 
-    async def update_coordinate(self, agent_id, intent, step, now):
+    async def update_coordinate(self, agent_id, intent, step, now, *, local_instance_id=None):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
-                    "SELECT work_scope FROM agent_sessions WHERE agent_id=? AND state='active'",
+                    "SELECT work_scope,intent_scopes FROM agent_sessions WHERE agent_id=? AND state='active'",
                     (agent_id,),
                 )
             ).fetchone()
             if row is None:
                 return False
+            scopes = _normalize_scopes(row[1])
+            if local_instance_id:
+                scopes[local_instance_id] = {
+                    "intent": intent,
+                    "current_step": step,
+                    "updated_at": now,
+                }
             await db.execute(
-                "UPDATE agent_sessions SET intent=?,current_step=? WHERE agent_id=? AND state='active'",
-                (intent, step, agent_id),
+                "UPDATE agent_sessions SET intent=?,current_step=?,intent_scopes=? WHERE agent_id=? AND state='active'",
+                (intent, step, _scope_json(scopes), agent_id),
             )
             await db.execute(
-                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) "
-                "VALUES(?,?,?,?,?)",
+                "INSERT INTO agent_task_events(agent_id,timestamp,intent,work_scope,step) VALUES(?,?,?,?,?)",
                 (agent_id, now, intent, row[0], step),
             )
             await db.commit()
             return True
+
+    async def apply_origin_session_update(
+        self,
+        agent_id,
+        source_instance_id,
+        activity_at,
+        *,
+        intent=None,
+        step=None,
+        intent_updated_at=None,
+        local_instance_id=None,
+        allow_reactivate=False,
+    ):
+        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (
+                await db.execute(
+                    "SELECT state,ended_at,end_reason,last_activity_at,intent_scopes,"
+                    "intent,current_step FROM agent_sessions WHERE agent_id=?",
+                    (agent_id,),
+                )
+            ).fetchone()
+            if row is None:
+                await db.commit()
+                return False
+            (
+                state,
+                ended_at,
+                end_reason,
+                last_activity,
+                raw_scopes,
+                visible_intent,
+                visible_step,
+            ) = row
+            original_state = state
+            if state != "active":
+                can_reactivate = (
+                    allow_reactivate and state == "forced" and end_reason == "idle_timeout"
+                )
+                if not can_reactivate:
+                    await db.commit()
+                    return False
+                state, ended_at, end_reason = "active", None, None
+
+            scopes = _normalize_scopes(raw_scopes)
+            scope_changed = False
+            if intent is not None and step is not None and intent_updated_at:
+                candidate = {
+                    "intent": intent,
+                    "current_step": int(step),
+                    "updated_at": intent_updated_at,
+                }
+                previous = scopes.get(source_instance_id)
+                newer = (
+                    previous is None
+                    or candidate["updated_at"] > previous["updated_at"]
+                    or (
+                        candidate["updated_at"] == previous["updated_at"]
+                        and json.dumps(candidate, sort_keys=True)
+                        > json.dumps(previous, sort_keys=True)
+                    )
+                )
+                if newer:
+                    scopes[source_instance_id] = candidate
+                    scope_changed = True
+
+            new_activity = max(last_activity or activity_at, activity_at)
+            local_scope = scopes.get(local_instance_id) if local_instance_id else None
+            if local_scope:
+                visible_intent = local_scope["intent"]
+                visible_step = local_scope["current_step"]
+            await db.execute(
+                "UPDATE agent_sessions SET state=?,ended_at=?,end_reason=?,"
+                "last_activity_at=?,intent_scopes=?,intent=?,current_step=? "
+                "WHERE agent_id=?",
+                (
+                    state,
+                    ended_at,
+                    end_reason,
+                    new_activity,
+                    _scope_json(scopes),
+                    visible_intent,
+                    visible_step,
+                    agent_id,
+                ),
+            )
+            await db.commit()
+            return bool(new_activity != last_activity or scope_changed or original_state != state)
 
     async def activity(self, agent_id, tool, now, command_hash=None):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
@@ -911,4 +1100,5 @@ class AgentStore:
             "preferred_queue_id": row[11],
             "source_instance_id": row[12],
             "global_expires_at": row[13],
+            "intent_scopes": _normalize_scopes(row[14]),
         }

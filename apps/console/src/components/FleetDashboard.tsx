@@ -156,9 +156,33 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
             {model.sessions.map((session) => (
               <li key={session.sessionRef} aria-label={session.name + ' ' + t('fleet.globalSession')}>
                 <strong>{session.name}</strong>
-                <span>{t('fleet.origin')} {session.originInstanceId ?? t('common.unavailable')} · {session.attachments.length} {t('fleet.attached')}</span>
-                <small>{t('fleet.age')} {session.sessionAgeSeconds ?? '—'}s · {t('fleet.remaining')} {session.sessionRemainingSeconds ?? '—'}s</small>
-                <small>{session.attachments.map((item) => item.displayName + ': ' + item.intent).join(' · ')}</small>
+                <span>
+                  {t('fleet.origin')} {session.originInstanceId ?? t('common.unavailable')} ·{' '}
+                  {session.attachments.length} {t('fleet.attached')}
+                </span>
+                <small>
+                  {t('fleet.age')} {session.sessionAgeSeconds ?? '—'}s · {t('fleet.remaining')}{' '}
+                  {session.sessionRemainingSeconds ?? '—'}s
+                </small>
+                <small>
+                  {(session.scopedIntents ?? []).length > 0
+                    ? (session.scopedIntents ?? [])
+                        .map(
+                          (item) =>
+                            item.displayName +
+                            ': ' +
+                            item.intent +
+                            ' (' +
+                            (item.status === 'fresh' ? t('fleet.live') : t('fleet.stale')) +
+                            ', ' +
+                            number(item.ageSeconds) +
+                            's)',
+                        )
+                        .join(' · ')
+                    : session.attachments
+                        .map((item) => item.displayName + ': ' + item.intent)
+                        .join(' · ')}
+                </small>
               </li>
             ))}
           </ul>

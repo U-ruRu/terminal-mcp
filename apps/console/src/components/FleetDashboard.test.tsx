@@ -80,6 +80,7 @@ test('renders shared-session continuity without exposing private identity', () =
         originInstanceId: 'server-a',
         sessionAgeSeconds: 1200,
         sessionRemainingSeconds: 180,
+        scopedIntents: [],
         attachments: [
           {
             instanceId: 'server-a',

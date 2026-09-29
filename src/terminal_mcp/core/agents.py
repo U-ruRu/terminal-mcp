@@ -36,6 +36,7 @@ class AgentCoordinator:
         task_store=None,
         foreign_session_resolver=None,
         local_instance_id: str | None = None,
+        session_update_notifier=None,
     ):
         self.store = store
         self.metrics = metrics
@@ -43,6 +44,7 @@ class AgentCoordinator:
         self.task_store = task_store
         self.foreign_session_resolver = foreign_session_resolver
         self.local_instance_id = local_instance_id
+        self.session_update_notifier = session_update_notifier
         # Mutable aliases preserve the existing testing/diagnostic surface.
         self.ttl_seconds = self.policy.idle_ttl_seconds
         self.task_context_ttl_seconds = self.policy.intent_ttl_seconds
@@ -124,6 +126,28 @@ class AgentCoordinator:
         except Exception:
             return None
 
+    async def _notify_session_update(
+        self,
+        agent_id,
+        activity_at,
+        *,
+        intent=None,
+        step=None,
+        intent_updated_at=None,
+    ):
+        if self.session_update_notifier is None:
+            return False
+        try:
+            return await self.session_update_notifier(
+                agent_id,
+                activity_at,
+                intent=intent,
+                step=step,
+                intent_updated_at=intent_updated_at,
+            )
+        except Exception:
+            return False
+
     async def _reconcile_foreign_session(self, agent_id, current):
         if (
             current is None
@@ -169,38 +193,27 @@ class AgentCoordinator:
                     agent_id, "Fleet identity shared-session step is outside the signed plan."
                 )
 
-            plan = (
+            changed = await self.store.refresh_foreign_session_plan(
+                agent_id,
                 task_summary,
                 intent,
                 work_scope,
                 details,
                 current_step,
+                resolution.get("updated_at") or utc_text(),
+                source_instance_id=current["source_instance_id"],
+                registered_at=current["registered_at"],
+                global_expires_at=current["global_expires_at"],
+                last_activity_at=resolution.get("last_activity_at"),
+                intent_scopes=resolution.get("intent_scopes") or {},
+                local_instance_id=self.local_instance_id,
+                record_task_event=False,
             )
-            local_plan = (
-                current.get("task_summary"),
-                current.get("intent"),
-                list(current.get("work_scope") or []),
-                list(current.get("details") or []),
-                int(current.get("current_step") or 1),
-            )
-            if plan != local_plan:
-                changed = await self.store.refresh_foreign_session_plan(
-                    agent_id,
-                    task_summary,
-                    intent,
-                    work_scope,
-                    details,
-                    current_step,
-                    resolution.get("updated_at") or utc_text(),
-                    source_instance_id=current["source_instance_id"],
-                    registered_at=current["registered_at"],
-                    global_expires_at=current["global_expires_at"],
+            if not changed:
+                return current, self._foreign_unavailable(
+                    agent_id, "Local foreign-session attachment changed concurrently."
                 )
-                if not changed:
-                    return current, self._foreign_unavailable(
-                        agent_id, "Local foreign-session attachment changed concurrently."
-                    )
-                current = await self.store.get_session(agent_id)
+            current = await self.store.get_session(agent_id)
             return current, None
 
         state = "finished" if resolution.get("state") == "finished" else "forced"
@@ -261,6 +274,10 @@ class AgentCoordinator:
                 registered_at=resolution["session_started_at"],
                 source_instance_id=source,
                 global_expires_at=expires_at,
+                last_activity_at=resolution.get("last_activity_at"),
+                intent_scopes=resolution.get("intent_scopes") or {},
+                local_instance_id=self.local_instance_id,
+                record_task_event=False,
             )
             if not changed:
                 return None, self._foreign_unavailable(
@@ -279,6 +296,9 @@ class AgentCoordinator:
                     registered_at=resolution["session_started_at"],
                     source_instance_id=source,
                     global_expires_at=expires_at,
+                    intent_scopes=resolution.get("intent_scopes") or {},
+                    last_activity_at=resolution.get("last_activity_at"),
+                    record_task_event=False,
                 )
             except IntegrityError:
                 raced = await self.store.get_session(agent_id)
@@ -350,6 +370,7 @@ class AgentCoordinator:
                     resolved_details,
                     current_step,
                     now,
+                    local_instance_id=self.local_instance_id,
                 )
                 self._inc("terminal_mcp_agent_plan_updates_total")
                 return await self.overview(
@@ -421,6 +442,17 @@ class AgentCoordinator:
                         now,
                         source_instance_id=self.local_instance_id,
                         global_expires_at=expires_at,
+                        intent_scopes=(
+                            {
+                                self.local_instance_id: {
+                                    "intent": intent,
+                                    "current_step": 1,
+                                    "updated_at": now,
+                                }
+                            }
+                            if self.local_instance_id
+                            else None
+                        ),
                     )
                     await self.store.consume_proposal(agent_id)
                 except IntegrityError:
@@ -552,6 +584,7 @@ class AgentCoordinator:
             stamp = utc_text()
             await self.store.touch(agent_id, stamp)
             await self.store.activity(agent_id, tool, stamp)
+            await self._notify_session_update(agent_id, stamp)
         return None
 
     async def touch_if_active(self, agent_id, tool):
@@ -622,6 +655,29 @@ class AgentCoordinator:
             "task_context_ttl_seconds": self.task_context_ttl_seconds,
             "preferred_queue_id": session["preferred_queue_id"],
         }
+
+    def _intent_scope_views(self, session, now):
+        views = []
+        local_status = "missing" if self.local_instance_id else None
+        for instance_id, item in sorted((session.get("intent_scopes") or {}).items()):
+            updated_at = item["updated_at"]
+            age_seconds = max(0, int((now - parse_utc(updated_at)).total_seconds()))
+            status = "fresh" if age_seconds <= self.task_context_ttl_seconds else "stale"
+            local = bool(self.local_instance_id and instance_id == self.local_instance_id)
+            if local:
+                local_status = status
+            views.append(
+                {
+                    "instance_id": instance_id,
+                    "intent": item["intent"],
+                    "current_step": int(item["current_step"]),
+                    "updated_at": updated_at,
+                    "age_seconds": age_seconds,
+                    "status": status,
+                    "local": local,
+                }
+            )
+        return views, local_status
 
     async def _session_status(self, session, task_age=None):
         if session["state"] == "finished":
@@ -878,6 +934,7 @@ class AgentCoordinator:
         stamp = utc_text()
         await self.store.touch(agent_id, stamp)
         await self.store.activity(agent_id, tool, stamp, command_hash)
+        await self._notify_session_update(agent_id, stamp)
         self._inc("terminal_mcp_agent_commands_total")
 
     async def resolve_queue(self, agent_id, requested_queue_id, queue_count, least_loaded):
@@ -919,7 +976,20 @@ class AgentCoordinator:
             }
         if intent is not None:
             now = utc_text()
-            await self.store.update_coordinate(agent_id, intent, requested_step, now)
+            await self.store.update_coordinate(
+                agent_id,
+                intent,
+                requested_step,
+                now,
+                local_instance_id=self.local_instance_id,
+            )
+            await self._notify_session_update(
+                agent_id,
+                now,
+                intent=intent,
+                step=requested_step,
+                intent_updated_at=now,
+            )
             self._inc("terminal_mcp_agent_task_updates_total")
             current = await self.store.get_session(agent_id)
 
@@ -1401,6 +1471,7 @@ class AgentCoordinator:
                 if global_expires_at
                 else max(0, self.max_session_seconds - session_age_seconds)
             )
+            intent_scopes, local_intent_status = self._intent_scope_views(session, now)
             record = {
                 "name": public_agent_name(session["agent_id"]),
                 "session_ref": public_session_ref(
@@ -1417,12 +1488,21 @@ class AgentCoordinator:
                 "status": await self._session_status(session, task_age=task_age),
                 "last_activity": relative_time(session["last_activity_at"], now),
                 "last_activity_at": session["last_activity_at"],
+                "logical_last_activity_at": session["last_activity_at"],
+                "logical_idle_seconds": idle_seconds,
+                "logical_session_status": (
+                    "active" if session["state"] == "active" else session["state"]
+                ),
                 "idle_seconds": idle_seconds,
                 "session_age_seconds": session_age_seconds,
                 "intent": session["intent"],
                 "current_step": session["current_step"],
                 "end_reason": session["end_reason"],
             }
+            if intent_scopes:
+                record["intent_scopes"] = intent_scopes
+            if local_intent_status is not None:
+                record["local_intent_status"] = local_intent_status
             obligations = await self.store.message_obligations(session["agent_id"])
             activity = await self.store.latest_activity(session["agent_id"])
             record["last_activity_tool"] = activity["tool"] if activity else None
@@ -1483,10 +1563,15 @@ class AgentCoordinator:
                 active_record = {
                     "name": record["name"],
                     "status": record["status"],
+                    "logical_session_status": record["logical_session_status"],
                     "session_age_seconds": record["session_age_seconds"],
                     "idle_seconds": idle,
+                    "logical_idle_seconds": record["logical_idle_seconds"],
+                    "logical_last_activity_at": record["logical_last_activity_at"],
                     "intent": session["intent"],
                     "current_step": session["current_step"],
+                    "intent_scopes": record.get("intent_scopes", []),
+                    "local_intent_status": record.get("local_intent_status"),
                 }
                 if show_details:
                     active_record["task_summary"] = session["task_summary"]
@@ -1503,6 +1588,10 @@ class AgentCoordinator:
         own = await self.store.get_session(agent_id) if agent_id else None
         self_payload = None
         if own:
+            own_scopes, own_local_intent_status = self._intent_scope_views(own, now)
+            own_idle = max(
+                0, int((now - parse_utc(own["last_activity_at"])).total_seconds())
+            )
             self_payload = {
                 "name": public_agent_name(agent_id),
                 "ttl_seconds": self.ttl_seconds,
@@ -1514,6 +1603,13 @@ class AgentCoordinator:
                 "details": own["details"],
                 "current_step": own["current_step"],
                 "preferred_queue_id": own["preferred_queue_id"],
+                "logical_session_status": (
+                    "active" if own["state"] == "active" else own["state"]
+                ),
+                "logical_last_activity_at": own["last_activity_at"],
+                "logical_idle_seconds": own_idle,
+                "intent_scopes": own_scopes,
+                "local_intent_status": own_local_intent_status,
             }
             managed_tasks = await self._managed_task_refs(agent_id)
             if managed_tasks:

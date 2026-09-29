@@ -721,7 +721,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 14
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(

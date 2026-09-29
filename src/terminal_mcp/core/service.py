@@ -138,6 +138,11 @@ class TerminalService:
                 local_instance_id=(
                     fleet_replication.config.instance_id if fleet_replication else None
                 ),
+                session_update_notifier=(
+                    getattr(fleet_replication, "queue_session_update", None)
+                    if fleet_replication
+                    else None
+                ),
             )
             if self.agent_store
             else None
@@ -154,9 +159,7 @@ class TerminalService:
             else None
         )
         if self.fleet_replication:
-            self.fleet_replication.bind_origin_finish_handler(
-                self._finish_fleet_origin_session
-            )
+            self.fleet_replication.bind_origin_finish_handler(self._finish_fleet_origin_session)
 
     async def reconcile_agent_sessions(self):
         if not self.agent_coordinator:

@@ -121,7 +121,7 @@ async def test_identity_store_deduplicates_and_rejects_stale_or_conflicting_revi
     assert loaded == newer
 
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 14
 
 
 @pytest.mark.asyncio

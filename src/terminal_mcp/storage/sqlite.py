@@ -126,7 +126,8 @@ class SqliteRepository:
                     task_summary TEXT NOT NULL, intent TEXT NOT NULL, work_scope TEXT NOT NULL, state TEXT NOT NULL,
                     details TEXT NOT NULL DEFAULT '[]', current_step INTEGER NOT NULL DEFAULT 1,
                     ended_at TEXT, end_reason TEXT, preferred_queue_id INTEGER,
-                    source_instance_id TEXT, global_expires_at TEXT
+                    source_instance_id TEXT, global_expires_at TEXT,
+                    intent_scopes TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS agent_admission_proposals(
                     agent_id TEXT PRIMARY KEY,
@@ -274,6 +275,22 @@ class SqliteRepository:
                 );
                 CREATE INDEX IF NOT EXISTS ix_fleet_finish_outbox_origin
                     ON fleet_finish_outbox(origin_instance_id,queued_at);
+                CREATE TABLE IF NOT EXISTS fleet_session_update_outbox(
+                    origin_instance_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    source_instance_id TEXT NOT NULL,
+                    activity_at TEXT NOT NULL,
+                    intent TEXT,
+                    intent_step INTEGER,
+                    intent_updated_at TEXT,
+                    queued_at TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    last_error TEXT,
+                    PRIMARY KEY(origin_instance_id,agent_id,source_instance_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_fleet_session_update_outbox_origin
+                    ON fleet_session_update_outbox(origin_instance_id,queued_at);
                 """
             )
             await self._migrate(db)
@@ -285,7 +302,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=13")
+            await db.execute("PRAGMA user_version=14")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
@@ -321,6 +338,7 @@ class SqliteRepository:
                 ("preferred_queue_id", "INTEGER"),
                 ("source_instance_id", "TEXT"),
                 ("global_expires_at", "TEXT"),
+                ("intent_scopes", "TEXT NOT NULL DEFAULT '{}'"),
             ],
         )
         await db.execute(

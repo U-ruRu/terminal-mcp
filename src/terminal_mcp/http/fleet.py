@@ -31,6 +31,46 @@ def build_fleet_router(replication) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "status": status}
 
+    @router.post("/internal/fleet/session-update", include_in_schema=False)
+    async def update_session(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        agent_id = payload.get("agent_id")
+        source_instance_id = payload.get("source_instance_id")
+        activity_at = payload.get("activity_at")
+        intent = payload.get("intent")
+        step = payload.get("step")
+        intent_updated_at = payload.get("intent_updated_at")
+        if not all(
+            isinstance(value, str) and value
+            for value in (agent_id, source_instance_id, activity_at)
+        ):
+            raise HTTPException(status_code=400, detail="session update payload is incomplete")
+        if intent is not None and not isinstance(intent, str):
+            raise HTTPException(status_code=400, detail="session update intent must be a string")
+        if step is not None and not isinstance(step, int):
+            raise HTTPException(status_code=400, detail="session update step must be an integer")
+        if intent_updated_at is not None and not isinstance(intent_updated_at, str):
+            raise HTTPException(
+                status_code=400, detail="session update intent_updated_at must be a string"
+            )
+        try:
+            changed = await replication.receive_session_update(
+                agent_id,
+                source_instance_id,
+                activity_at,
+                intent=intent,
+                step=step,
+                intent_updated_at=intent_updated_at,
+                authenticated_peer_id=peer.instance_id,
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "changed": changed}
+
     @router.post("/internal/fleet/session-finish", include_in_schema=False)
     async def finish_session(
         payload: dict,

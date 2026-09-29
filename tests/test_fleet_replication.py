@@ -487,6 +487,92 @@ async def fleet_service(tmp_path, instance_id, private, peers, *, transport=None
 
 
 @pytest.mark.asyncio
+async def test_two_peer_scoped_intent_round_trip_preserves_both_server_intents(tmp_path):
+    private_a, public_a = keypair()
+    private_b, public_b = keypair()
+    peer_a = FleetPeer(
+        "server-a",
+        "https://server-a.example.invalid",
+        public_a,
+        "placeholder-peer-token-a",
+    )
+    peer_b = FleetPeer(
+        "server-b",
+        "https://server-b.example.invalid",
+        public_b,
+        "placeholder-peer-token-b",
+    )
+    _, agents_a, identities_a, replication_a, terminal_a, service_a = await fleet_service(
+        tmp_path, "server-a", private_a, [peer_b]
+    )
+    _, agents_b, identities_b, replication_b, terminal_b, service_b = await fleet_service(
+        tmp_path, "server-b", private_b, [peer_a]
+    )
+    plan = {
+        "task_summary": "shared scoped intent",
+        "intent": "origin intent",
+        "details": ["work safely"],
+        "work_scope": ["repo:shared"],
+    }
+    proposed = await service_a.agent_start(**plan)
+    agent_id = proposed["proposed_agent_id"]
+    assert (await service_a.agent_start(agent_id=agent_id, **plan))["ok"] is True
+    origin_v1 = await replication_a.sync_local_session(agent_id)
+    assert origin_v1 is not None
+    assert origin_v1.record.payload_version == 3
+
+    assert await replication_b.receive(
+        origin_v1, authenticated_peer_id="server-a"
+    ) == "applied"
+    assert (await service_b.agent_start(agent_id=agent_id))["ok"] is True
+    changed = await service_b.coordinate(agent_id, step=1, intent="peer intent")
+    assert changed["ok"] is True
+
+    pending = await identities_b.pending_session_updates()
+    assert len(pending) == 1
+    update = pending[0]
+    assert update["origin_instance_id"] == "server-a"
+    assert update["source_instance_id"] == "server-b"
+    assert await replication_a.receive_session_update(
+        agent_id,
+        "server-b",
+        update["activity_at"],
+        intent=update["intent"],
+        step=update["intent_step"],
+        intent_updated_at=update["intent_updated_at"],
+        authenticated_peer_id="server-b",
+    ) is True
+
+    origin_v2 = await identities_a.get("server-a", agent_id)
+    assert origin_v2 is not None
+    assert origin_v2.record.payload_version == 3
+    merged_scopes = {
+        scope.instance_id: scope.intent for scope in origin_v2.record.intent_scopes
+    }
+    assert merged_scopes == {
+        "server-a": "origin intent",
+        "server-b": "peer intent",
+    }
+
+    assert await replication_b.receive(
+        origin_v2, authenticated_peer_id="server-a"
+    ) == "applied"
+    observed = await service_b.agents(agent_id, target=agent_id.split("-", 1)[0])
+    scopes = observed["sessions"][0]["intent_scopes"]
+    assert {item["instance_id"]: item["intent"] for item in scopes} == {
+        "server-a": "origin intent",
+        "server-b": "peer intent",
+    }
+    assert observed["sessions"][0]["local_intent_status"] == "fresh"
+    assert (await agents_b.get_session(agent_id))["intent"] == "peer intent"
+
+    await replication_a.stop()
+    await replication_b.stop()
+    await terminal_a.stop()
+    await terminal_b.stop()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_lookup_never_returns_stale_active_after_newer_terminal_revision(
     tmp_path,
 ):
@@ -712,7 +798,9 @@ async def test_newer_active_foreign_identity_refreshes_attached_plan_without_res
     assert after["registered_at"] == before["registered_at"] == started
     assert after["global_expires_at"] == before["global_expires_at"] == expires
     assert after["source_instance_id"] == before["source_instance_id"] == "server-a"
-    assert await agents.latest_task_at(agent_id) == updated_at
+    # M4 keeps task-context freshness server-local: an authoritative remote
+    # plan update may refresh the shared shadow without minting a local intent event.
+    assert await agents.latest_task_at(agent_id) is None
 
     observed = await service.agents(agent_id=agent_id, target="Bravo", show_details=True)
     assert observed["ok"] is True
