@@ -25,6 +25,7 @@ TERMINAL_MCP_PUBLIC_BASE_URL="${TERMINAL_MCP_PUBLIC_BASE_URL:-https://server-a.e
 TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"
 TERMINAL_MCP_ENV_FILE_PATH="$ENV_FILE"
 TERMINAL_MCP_DATABASE_PATH="$DATA/terminal-mcp.sqlite3"
+TERMINAL_MCP_AUTH_DATABASE_PATH="$DATA/auth.sqlite3"
 TERMINAL_MCP_OUTPUT_CACHE_PATH="$CACHE/output.sqlite3"
 TERMINAL_MCP_OUTPUT_LINE_MAX_BYTES="${TERMINAL_MCP_OUTPUT_LINE_MAX_BYTES:-4194304}"
 TERMINAL_MCP_OUTPUT_COMMAND_MAX_BYTES="${TERMINAL_MCP_OUTPUT_COMMAND_MAX_BYTES:-8388608}"
@@ -68,6 +69,7 @@ ensure_env_defaults(){
   ensure_env(){ key=$1; value=$2; grep -q "^${key}=" "$ENV_FILE" || printf '%s="%s"\n' "$key" "$value" >>"$ENV_FILE"; }
   ensure_env TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS "${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"
   ensure_env TERMINAL_MCP_OUTPUT_CACHE_PATH "$CACHE/output.sqlite3"
+  ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"
   ensure_env TERMINAL_MCP_OAUTH_REQUIRED_SCOPES "${TERMINAL_MCP_OAUTH_REQUIRED_SCOPES:-terminal:read terminal:execute}"
   ensure_env TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC "${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"
   ensure_env TERMINAL_MCP_OUTPUT_LINE_MAX_BYTES "${TERMINAL_MCP_OUTPUT_LINE_MAX_BYTES:-4194304}"
@@ -176,6 +178,7 @@ mkdir -p "$ROOT/releases"
 install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
 find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0600 {} +
 [ ! -e "$DATA/terminal-mcp.sqlite3" ] || chmod 0600 "$DATA/terminal-mcp.sqlite3"
+[ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
 case "$CMD" in
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
  update) ensure_env_defaults; backup; stage; activate "$STAGED_RELEASE" ;;

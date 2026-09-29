@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     console_allowed_origins: str = ""
     env_file_path: Path = Path("/etc/terminal-mcp/terminal-mcp.env")
     database_path: Path = Path("./data/terminal-mcp.sqlite3")
+    auth_database_path: Path = Path("./data/auth.sqlite3")
     output_cache_path: Path = Path("./data/output.sqlite3")
     output_line_max_bytes: int = 4 * 1024 * 1024
     output_command_max_bytes: int = 8 * 1024 * 1024

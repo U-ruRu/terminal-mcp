@@ -5,6 +5,7 @@ from fastapi.openapi.utils import get_openapi
 from starlette.routing import Mount
 
 from terminal_mcp.auth.credentials import CredentialManager
+from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.auth.pairing import PairingStore
 from terminal_mcp.auth.routes import build_oauth_router
@@ -50,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output_prune_rows=settings.output_retention_prune_rows,
     )
     oauth_store = OAuthStore(settings.database_path)
+    auth_foundation = AuthFoundationStore(settings.auth_database_path)
     pairing_store = PairingStore(settings.database_path)
     ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     credentials = CredentialManager(settings)
@@ -125,6 +127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await repo.initialize()
         await service.reconcile_agent_sessions()
         await oauth_store.initialize()
+        await auth_foundation.initialize()
         await pairing_store.initialize()
         if fleet_replication:
             await fleet_replication.start()
@@ -145,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.service = service
     app.state.oauth_store = oauth_store
+    app.state.auth_foundation = auth_foundation
     app.state.pairing_store = pairing_store
     app.state.ws_ticket_store = ws_ticket_store
     app.state.credentials = credentials

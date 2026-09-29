@@ -177,3 +177,14 @@ def test_caddy_example_documents_fleet_ingress_contract():
 
     assert "/internal/fleet/*" in caddy
     assert "application fleet-signing check" in caddy
+
+
+def test_installer_separates_durable_auth_database_from_runtime_backup():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    assert 'TERMINAL_MCP_AUTH_DATABASE_PATH="$DATA/auth.sqlite3"' in script
+    assert 'ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"' in script
+    assert 'chmod 0600 "$DATA/auth.sqlite3"' in script
+    backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
+    assert "terminal-mcp.sqlite3" in backup_body
+    assert "auth.sqlite3" not in backup_body
