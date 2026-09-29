@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=android-signing-env.sh
+source "$ROOT/scripts/android-signing-env.sh"
+load_terminal_mcp_android_signing_env
 APK="${TERMINAL_MCP_ANDROID_APK_PATH:-$ROOT/android/app/build/outputs/apk/release/app-release.apk}"
 EXPECTED_CERT="${TERMINAL_MCP_ANDROID_SIGNING_CERT_SHA256:-}"
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"

@@ -3,12 +3,17 @@
 android/version.json is the canonical Android version source. Increment versionCode for every
 installable build; keep versionName user-facing.
 
-Release signing material is never committed. A release build requires these environment
-variables: TERMINAL_MCP_ANDROID_KEYSTORE, TERMINAL_MCP_ANDROID_STORE_PASSWORD,
-TERMINAL_MCP_ANDROID_KEY_ALIAS and TERMINAL_MCP_ANDROID_KEY_PASSWORD.
-
-Build with npm run android:build:release. The Gradle build fails closed when any release
-signing input is missing.
+Release signing material is never committed. Build with `npm run android:build:release`.
+The release wrapper accepts the standard environment variables
+`TERMINAL_MCP_ANDROID_KEYSTORE`, `TERMINAL_MCP_ANDROID_STORE_PASSWORD`,
+`TERMINAL_MCP_ANDROID_KEY_ALIAS` and `TERMINAL_MCP_ANDROID_KEY_PASSWORD`. When none are set,
+it automatically loads the protected host file
+`/root/secrets/terminal-mcp/android-console/release.env` (override with
+`TERMINAL_MCP_ANDROID_SIGNING_ENV_FILE`). Partial signing environments fail closed instead of
+mixing credentials. Direct `./gradlew assembleRelease` intentionally still requires the signing
+variables; the npm command is the supported release entrypoint. The same wrapper defaults
+`ANDROID_HOME`/`ANDROID_SDK_ROOT` to `/opt/android-sdk` on the build host, so release builds do
+not depend on shell profile exports.
 
 Before publishing, set TERMINAL_MCP_ANDROID_SIGNING_CERT_SHA256 to the pinned production
 certificate fingerprint and run npm run android:verify:release. Verification checks the APK
