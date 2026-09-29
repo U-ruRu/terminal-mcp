@@ -92,3 +92,20 @@ def test_installer_checks_runtime_imports_before_activation():
     assert "import terminal_mcp.app" in script
     assert "Staged release runtime import check failed" in script
     assert script.index(import_check) < script.index("activate(){")
+
+
+def test_oauth_access_ttl_defaults_to_30_days_everywhere():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "deploy" / "install.sh").read_text()
+    env_example = (root / ".env.example").read_text()
+
+    assert (
+        'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"'
+        in script
+    )
+    assert (
+        'ensure_env TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC '
+        '"${TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC:-2592000}"'
+        in script
+    )
+    assert 'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="2592000"' in env_example

@@ -62,6 +62,10 @@ def file_oauth_credentials(monkeypatch):
     monkeypatch.setattr(credential_module, "_read_oauth_credential", read)
     return configure
 
+
+def test_oauth_access_ttl_default_is_30_days():
+    assert Settings(_env_file=None).oauth_access_ttl_sec == 30 * 24 * 60 * 60
+
 def start_agent(client, headers):
     plan = {
         "task_summary": "HTTP test",
