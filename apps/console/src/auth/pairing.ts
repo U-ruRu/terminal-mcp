@@ -95,7 +95,7 @@ export class ConnectionManager {
         status: 'error',
         operation: 'pair',
         retryable: transportError.retryable,
-        message: transportError.code,
+        message: transportError.message,
       }
     }
     return this.state
@@ -142,7 +142,7 @@ export class ConnectionManager {
           status: 'error',
           operation: 'restore',
           retryable: transportError.retryable,
-          message: transportError.code,
+          message: transportError.message,
           connection: publicFields,
         }
       }

@@ -179,7 +179,7 @@ test('transient restore failure preserves refresh material for explicit retry', 
     status: 'error',
     operation: 'restore',
     retryable: true,
-    message: 'network_error',
+    message: 'Cannot reach the server. Check the server address and network connection. Diagnostic: network_error.',
   })
   expect(vault.load()?.refreshToken).toBe('keep-me')
 })
