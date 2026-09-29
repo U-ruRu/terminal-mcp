@@ -251,12 +251,15 @@ async def test_stop_kills_process_that_ignores_sigterm(tmp_path):
 
 
 async def register_queue_agent(service, label):
-    result = await service.agent_start(
-        task_summary=f"{label} queue test",
-        intent="exercise durable queue lifecycle",
-        details=["exercise durable queue lifecycle"],
-        work_scope=[],
-    )
+    plan = {
+        "task_summary": f"{label} queue test",
+        "intent": "exercise durable queue lifecycle",
+        "details": ["exercise durable queue lifecycle"],
+        "work_scope": [],
+    }
+    proposed = await service.agent_start(**plan)
+    assert proposed["admission_required"] is True
+    result = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
     assert result["ok"] is True
     return result["self"]["agent_id"]
 
