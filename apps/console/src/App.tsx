@@ -1,11 +1,13 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
+import { AppShell } from './components/AppShell'
 import type { FleetReadModel } from './fleet/readModel'
 import type { FleetInstanceView } from './fleet/types'
-import { AppShell } from './components/AppShell'
 import { Activity, type ActivityLoader } from './routes/Activity'
 import { Overview } from './routes/Overview'
-import { Placeholder } from './routes/Placeholder'
+import { ServerChooser } from './routes/ServerChooser'
+import { Settings } from './routes/Settings'
+import { ServerSection } from './routes/ServerSection'
 import { ServerTasks, type ServerTaskLoader } from './routes/ServerTasks'
 import { ServerWorkspace } from './routes/ServerWorkspace'
 
@@ -18,13 +20,19 @@ export type AppProps = {
 
 export function App({ model, instances, loadActivity, loadTask }: AppProps) {
   return (
-    <AppShell>
+    <AppShell servers={model.servers}>
       <Routes>
         <Route path="/" element={<Overview model={model} />} />
-        <Route path="/agents" element={<Placeholder title="Agents" />} />
-        <Route path="/tasks" element={<Placeholder title="Tasks" />} />
-        <Route path="/context" element={<Placeholder title="Context" />} />
+        <Route path="/servers" element={<Overview model={model} />} />
+        <Route path="/agents" element={<ServerChooser model={model} section="agents" />} />
+        <Route path="/tasks" element={<ServerChooser model={model} section="tasks" />} />
+        <Route path="/context" element={<ServerChooser model={model} section="context" />} />
+        <Route path="/health" element={<ServerChooser model={model} section="health" />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
+        <Route path="/servers/:instanceId/agents" element={<ServerSection model={model} section="agents" />} />
+        <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" />} />
+        <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/activity" element={<Activity instances={instances} loadActivity={loadActivity} />} />

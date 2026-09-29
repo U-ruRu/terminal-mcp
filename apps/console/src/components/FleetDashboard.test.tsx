@@ -4,15 +4,16 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
 
 import { fixtureFleetModel } from '../fixtures/fleet'
+import { I18nProvider } from '../i18n/I18nProvider'
 import { FleetDashboard } from './FleetDashboard'
 
 afterEach(() => cleanup())
 
 function dashboard(model = fixtureFleetModel) {
   return (
-    <MemoryRouter>
+    <I18nProvider><MemoryRouter>
       <FleetDashboard model={model} />
-    </MemoryRouter>
+    </MemoryRouter></I18nProvider>
   )
 }
 
@@ -20,9 +21,9 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
   render(dashboard())
 
   expect(screen.getByRole('heading', { name: 'Fleet overview' })).toBeInTheDocument()
-  expect(screen.getByRole('article', { name: 'Server A server' })).toHaveTextContent('offline')
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('stale')
-  expect(screen.getByRole('article', { name: 'Server C server' })).toHaveTextContent('fresh')
+  expect(screen.getByRole('article', { name: 'Server A server' })).toHaveTextContent('Offline')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('Stale')
+  expect(screen.getByRole('article', { name: 'Server C server' })).toHaveTextContent('Fresh')
   expect(screen.getByRole('article', { name: 'Server A server' })).toHaveTextContent('Unavailable')
   expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('cursor_gap')
   expect(screen.getByRole('article', { name: 'Server C server' })).toHaveTextContent('28%')
@@ -43,7 +44,7 @@ test('filters problem servers without refetching fleet state', async () => {
 
 test('updates incrementally when the supplied fleet model changes', () => {
   const { rerender } = render(dashboard())
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('stale')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('Stale')
 
   const updated = {
     ...fixtureFleetModel,
@@ -63,7 +64,7 @@ test('updates incrementally when the supplied fleet model changes', () => {
   }
 
   rerender(dashboard(updated))
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('fresh')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('Fresh')
   expect(screen.getByLabelText('Fleet totals')).toHaveTextContent('Live2')
 })
 

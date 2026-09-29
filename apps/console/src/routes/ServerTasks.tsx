@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 
 import type { TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
+import { useI18n } from '../i18n/useI18n'
 
 export type ServerTaskLoader = (
   instanceId: string,
@@ -22,6 +23,7 @@ export function ServerTasks({
   instances: FleetInstanceView[]
   loadTask?: ServerTaskLoader
 }) {
+  const { t } = useI18n()
   const { instanceId = '', namespace, taskId } = useParams()
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
   const tasks = useMemo(
@@ -56,20 +58,20 @@ export function ServerTasks({
       <div className="page-heading">
         <div>
           <p className="eyebrow">{instance.profile.displayName}</p>
-          <h2 id="server-tasks-title">Tasks</h2>
-          <p className="muted">Authoritative task snapshot for this Terminal MCP server.</p>
+          <h2 id="server-tasks-title">{t('nav.tasks')}</h2>
+          <p className="muted">{t('tasks.description')}</p>
         </div>
         <span className={'status status-' + instance.runtime.status}>{instance.runtime.status}</span>
       </div>
 
       {instance.runtime.status !== 'live' && (
         <div className="attention-strip" role="status">
-          Showing cached tasks while the server is {instance.runtime.status}.
+          {t('tasks.cached')} {instance.runtime.status}.
         </div>
       )}
 
       {detail && (
-        <article className="panel" aria-label="Task detail">
+        <article className="panel" aria-label={t('title.taskDetail')}>
           <div className="section-heading">
             <div>
               <p className="eyebrow">{detail.namespace}</p>
@@ -77,18 +79,18 @@ export function ServerTasks({
             </div>
             <span className="chip">{detail.operationalStatus}</span>
           </div>
-          <p>{detail.nextAction || 'No next action recorded.'}</p>
+          <p>{detail.nextAction || t('tasks.noNextAction')}</p>
           <div className="chip-row">
             <span className="chip">{detail.priority}</span>
             <span className="chip">{detail.lane}</span>
-            {detail.owner && <span className="chip">Owner {detail.owner.agentName}</span>}
-            {detail.candidateRef && <span className="chip">Candidate {detail.candidateRef.slice(0, 12)}</span>}
+            {detail.owner && <span className="chip">{t('common.owner')} {detail.owner.agentName}</span>}
+            {detail.candidateRef && <span className="chip">{t('common.candidate')} {detail.candidateRef.slice(0, 12)}</span>}
           </div>
-          {error && <p className="muted">Live detail refresh failed: {error}. Cached detail remains visible.</p>}
+          {error && <p className="muted">{t('tasks.refreshFailed')} {error}. {t('tasks.cachedRemains')}</p>}
         </article>
       )}
 
-      <div className="task-list" aria-label="Server tasks">
+      <div className="task-list" aria-label={t('tasks.serverTasks')}>
         {tasks.map((task) => (
           <article className="panel" key={task.key}>
             <div className="section-heading">
@@ -98,18 +100,18 @@ export function ServerTasks({
               </div>
               <span className="chip">{task.operationalStatus}</span>
             </div>
-            <p>{task.nextAction || 'No next action recorded.'}</p>
-            <Link className="text-link" to={taskHref(instanceId, task)}>Open detail</Link>
+            <p>{task.nextAction || t('tasks.noNextAction')}</p>
+            <Link className="text-link" to={taskHref(instanceId, task)}>{t('tasks.openDetail')}</Link>
           </article>
         ))}
         {tasks.length === 0 && (
-          <article className="panel"><p className="muted">No tasks in the cached snapshot.</p></article>
+          <article className="panel"><p className="muted">{t('tasks.noTasks')}</p></article>
         )}
       </div>
 
       <div className="server-actions">
-        <Link className="nav-link" to={'/servers/' + encodeURIComponent(instanceId)}>Back to server</Link>
-        <Link className="nav-link" to={'/activity?server=' + encodeURIComponent(instanceId)}>Activity</Link>
+        <Link className="nav-link" to={'/servers/' + encodeURIComponent(instanceId)}>{t('nav.backToServer')}</Link>
+        <Link className="nav-link" to={'/activity?server=' + encodeURIComponent(instanceId)}>{t('nav.activity')}</Link>
       </div>
     </section>
   )

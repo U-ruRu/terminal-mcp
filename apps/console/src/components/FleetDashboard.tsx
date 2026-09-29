@@ -2,25 +2,29 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { FleetReadModel, FleetServerReadModel } from '../fleet/readModel'
+import { useI18n } from '../i18n/useI18n'
 
 type FleetFilter = 'all' | 'attention' | 'live'
 
-function percent(value: number | undefined): string {
-  return value === undefined ? 'Unavailable' : Math.round(value) + '%'
+function percent(value: number | undefined, unavailable: string): string {
+  return value === undefined ? unavailable : Math.round(value) + '%'
 }
 
-function resourceValue(server: FleetServerReadModel, kind: 'cpu' | 'memory' | 'filesystem') {
+function resourceValue(
+  server: FleetServerReadModel,
+  kind: 'cpu' | 'memory' | 'filesystem',
+  unavailable: string,
+  loadLabel: string,
+) {
   const resources = server.resources
-  if (!resources) return 'Unavailable'
+  if (!resources) return unavailable
   if (kind === 'cpu') {
-    if (resources.cpu.status !== 'available') return 'Unavailable'
-    if (resources.cpu.usagePercent !== undefined) return percent(resources.cpu.usagePercent)
-    return resources.cpu.load1m === undefined
-      ? 'Unavailable'
-      : 'Load ' + resources.cpu.load1m.toFixed(2)
+    if (resources.cpu.status !== 'available') return unavailable
+    if (resources.cpu.usagePercent !== undefined) return percent(resources.cpu.usagePercent, unavailable)
+    return resources.cpu.load1m === undefined ? unavailable : loadLabel + ' ' + resources.cpu.load1m.toFixed(2)
   }
   const item = kind === 'memory' ? resources.memory : resources.filesystem
-  return item.status === 'available' ? percent(item.usedPercent) : 'Unavailable'
+  return item.status === 'available' ? percent(item.usedPercent, unavailable) : unavailable
 }
 
 function needsAttention(server: FleetServerReadModel): boolean {
@@ -33,13 +37,8 @@ function needsAttention(server: FleetServerReadModel): boolean {
   )
 }
 
-function lastHealth(server: FleetServerReadModel): string {
-  if (!server.snapshotAvailable) return 'No snapshot'
-  if (!server.lastSeenAt) return 'Last health unavailable'
-  return 'Last health ' + server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC')
-}
-
 export function FleetDashboard({ model }: { model: FleetReadModel }) {
+  const { t, number } = useI18n()
   const [filter, setFilter] = useState<FleetFilter>('all')
   const servers = useMemo(() => {
     if (filter === 'attention') return model.servers.filter(needsAttention)
@@ -47,39 +46,47 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
     return model.servers
   }, [filter, model.servers])
 
+  const lastHealth = (server: FleetServerReadModel): string => {
+    if (!server.snapshotAvailable) return t('fleet.noSnapshot')
+    if (!server.lastSeenAt) return t('fleet.lastHealthUnavailable')
+    return t('fleet.lastHealth') + ' ' + server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC')
+  }
+
+  const freshness = (value: FleetServerReadModel['freshness']) => {
+    if (value === 'fresh') return t('status.fresh')
+    if (value === 'stale') return t('status.stale')
+    return t('status.offline')
+  }
+
   return (
     <section className="stack" aria-labelledby="fleet-title">
       <div className="page-heading">
         <div>
-          <p className="eyebrow">Terminal MCP fleet</p>
-          <h2 id="fleet-title">Fleet overview</h2>
-          <p className="muted">Health, work pressure and recent activity across paired servers.</p>
+          <p className="eyebrow">{t('fleet.eyebrow')}</p>
+          <h2 id="fleet-title">{t('fleet.title')}</h2>
+          <p className="muted">{t('fleet.description')}</p>
         </div>
-        <span className="environment-badge">{model.summary.totalServers} servers</span>
+        <span className="environment-badge">{number(model.summary.totalServers)} {t('fleet.servers')}</span>
       </div>
 
-      <div className="fleet-summary" aria-label="Fleet totals">
-        <article className="card"><span>Live</span><strong>{model.summary.liveServers}</strong></article>
-        <article className="card"><span>Stale</span><strong>{model.summary.staleServers}</strong></article>
-        <article className="card"><span>Offline</span><strong>{model.summary.offlineServers}</strong></article>
-        <article className="card"><span>Active agents</span><strong>{model.summary.activeAgents}</strong></article>
-        <article className="card"><span>Blocked tasks</span><strong>{model.summary.blockedTasks}</strong></article>
-        <article className="card"><span>Alerts</span><strong>{model.summary.alerts}</strong></article>
+      <div className="fleet-summary" aria-label={t('fleet.totals')}>
+        <article className="card"><span>{t('fleet.live')}</span><strong>{number(model.summary.liveServers)}</strong></article>
+        <article className="card"><span>{t('fleet.stale')}</span><strong>{number(model.summary.staleServers)}</strong></article>
+        <article className="card"><span>{t('fleet.offline')}</span><strong>{number(model.summary.offlineServers)}</strong></article>
+        <article className="card"><span>{t('fleet.activeAgents')}</span><strong>{number(model.summary.activeAgents)}</strong></article>
+        <article className="card"><span>{t('fleet.blockedTasks')}</span><strong>{number(model.summary.blockedTasks)}</strong></article>
+        <article className="card"><span>{t('fleet.alerts')}</span><strong>{number(model.summary.alerts)}</strong></article>
       </div>
 
-      <div className="fleet-filter" role="group" aria-label="Filter servers">
+      <div className="fleet-filter" role="group" aria-label={t('fleet.filterServers')}>
         <button type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>
-          All ({model.summary.totalServers})
+          {t('common.all')} ({number(model.summary.totalServers)})
         </button>
-        <button
-          type="button"
-          aria-pressed={filter === 'attention'}
-          onClick={() => setFilter('attention')}
-        >
-          Needs attention
+        <button type="button" aria-pressed={filter === 'attention'} onClick={() => setFilter('attention')}>
+          {t('fleet.needsAttention')}
         </button>
         <button type="button" aria-pressed={filter === 'live'} onClick={() => setFilter('live')}>
-          Live
+          {t('fleet.live')}
         </button>
       </div>
 
@@ -88,49 +95,47 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
           <article
             className={'fleet-server fleet-server-' + server.freshness}
             key={server.instanceId}
-            aria-label={server.displayName + ' server'}
+            aria-label={server.displayName + ' ' + t('fleet.serverSuffix')}
           >
             <div className="fleet-server-heading">
               <div>
-                <p className="eyebrow">{server.version ?? 'Version unavailable'}</p>
+                <p className="eyebrow">{server.version ?? t('fleet.versionUnavailable')}</p>
                 <h3>{server.displayName}</h3>
                 <p className="muted">{server.origin}</p>
               </div>
-              <span className={'status fleet-status-' + server.freshness}>{server.freshness}</span>
+              <span className={'status fleet-status-' + server.freshness}>{freshness(server.freshness)}</span>
             </div>
 
             <p className="muted">{lastHealth(server)}</p>
 
             <dl className="resource-grid">
-              <div><dt>CPU</dt><dd>{resourceValue(server, 'cpu')}</dd></div>
-              <div><dt>RAM</dt><dd>{resourceValue(server, 'memory')}</dd></div>
-              <div><dt>Disk</dt><dd>{resourceValue(server, 'filesystem')}</dd></div>
+              <div><dt>{t('common.cpu')}</dt><dd>{resourceValue(server, 'cpu', t('common.unavailable'), t('fleet.load'))}</dd></div>
+              <div><dt>{t('common.ram')}</dt><dd>{resourceValue(server, 'memory', t('common.unavailable'), t('fleet.load'))}</dd></div>
+              <div><dt>{t('common.disk')}</dt><dd>{resourceValue(server, 'filesystem', t('common.unavailable'), t('fleet.load'))}</dd></div>
             </dl>
 
             <div className="fleet-pressure">
-              <span>{server.activeAgentCount} agents</span>
-              <span>{server.taskCounts.inProgress} running</span>
-              <span>{server.taskCounts.ready} ready</span>
-              <span>{server.taskCounts.blocked} blocked</span>
+              <span>{number(server.activeAgentCount)} {t('fleet.agents')}</span>
+              <span>{number(server.taskCounts.inProgress)} {t('fleet.running')}</span>
+              <span>{number(server.taskCounts.ready)} {t('fleet.ready')}</span>
+              <span>{number(server.taskCounts.blocked)} {t('fleet.blocked')}</span>
             </div>
 
             {server.activeIntents.length > 0 ? (
-              <ul className="intent-list" aria-label={server.displayName + ' active intents'}>
+              <ul className="intent-list" aria-label={server.displayName + ' ' + t('fleet.activeIntents')}>
                 {server.activeIntents.slice(0, 3).map((intent) => <li key={intent}>{intent}</li>)}
               </ul>
             ) : (
-              <p className="muted">No active intents.</p>
+              <p className="muted">{t('fleet.noActiveIntents')}</p>
             )}
 
-            <Link className="server-open-link" to={'/servers/' + server.instanceId}>
-              Open server
-            </Link>
+            <Link className="server-open-link" to={'/servers/' + server.instanceId}>{t('fleet.openServer')}</Link>
 
             {needsAttention(server) ? (
               <div className="attention-strip">
-                {server.communication.alerts > 0 ? <span>{server.communication.alerts} alert</span> : null}
-                {server.communication.replyRequired > 0 ? <span>{server.communication.replyRequired} reply</span> : null}
-                {server.blockerCount > 0 ? <span>{server.blockerCount} blocker</span> : null}
+                {server.communication.alerts > 0 ? <span>{number(server.communication.alerts)} {t('fleet.alert')}</span> : null}
+                {server.communication.replyRequired > 0 ? <span>{number(server.communication.replyRequired)} {t('fleet.reply')}</span> : null}
+                {server.blockerCount > 0 ? <span>{number(server.blockerCount)} {t('fleet.blocker')}</span> : null}
                 {server.lastError ? <span>{server.lastError}</span> : null}
                 {server.staleReason ? <span>{server.staleReason}</span> : null}
               </div>
@@ -141,27 +146,19 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
 
       <article className="panel">
         <div>
-          <p className="eyebrow">Shared sessions</p>
-          <h3>Agent continuity</h3>
+          <p className="eyebrow">{t('fleet.sharedSessions')}</p>
+          <h3>{t('fleet.agentContinuity')}</h3>
         </div>
         {model.sessions.length === 0 ? (
-          <p className="muted">No active shared sessions.</p>
+          <p className="muted">{t('fleet.noActiveSharedSessions')}</p>
         ) : (
           <ul className="session-list">
             {model.sessions.map((session) => (
-              <li key={session.sessionRef} aria-label={session.name + ' global session'}>
+              <li key={session.sessionRef} aria-label={session.name + ' ' + t('fleet.globalSession')}>
                 <strong>{session.name}</strong>
-                <span>
-                  origin {session.originInstanceId ?? 'unknown'} · {session.attachments.length} attached
-                </span>
-                <small>
-                  age {session.sessionAgeSeconds ?? '—'}s · remaining {session.sessionRemainingSeconds ?? '—'}s
-                </small>
-                <small>
-                  {session.attachments
-                    .map((item) => item.displayName + ': ' + item.intent)
-                    .join(' · ')}
-                </small>
+                <span>{t('fleet.origin')} {session.originInstanceId ?? t('common.unavailable')} · {session.attachments.length} {t('fleet.attached')}</span>
+                <small>{t('fleet.age')} {session.sessionAgeSeconds ?? '—'}s · {t('fleet.remaining')} {session.sessionRemainingSeconds ?? '—'}s</small>
+                <small>{session.attachments.map((item) => item.displayName + ': ' + item.intent).join(' · ')}</small>
               </li>
             ))}
           </ul>
@@ -170,11 +167,11 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
 
       <article className="panel">
         <div>
-          <p className="eyebrow">Recent activity</p>
-          <h3>Across the fleet</h3>
+          <p className="eyebrow">{t('fleet.recentActivity')}</p>
+          <h3>{t('fleet.acrossFleet')}</h3>
         </div>
         {model.recentActivity.length === 0 ? (
-          <p className="muted">No recent activity.</p>
+          <p className="muted">{t('fleet.noRecentActivity')}</p>
         ) : (
           <ol className="activity-list">
             {model.recentActivity.slice(0, 8).map((item, index) => (
