@@ -56,8 +56,126 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         authenticate(x_terminal_mcp_peer, authorization)
         return await source.snapshot()
 
-    return router
+    @router.get("/internal/fleet/v1/source/bootstrap", include_in_schema=False)
+    async def bootstrap(
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        return await source.bootstrap()
 
+    @router.get("/internal/fleet/v1/source/current/{scope}", include_in_schema=False)
+    async def current_recovery(
+        scope: str,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+        source_stream_generation: str | None = Query(default=None),
+        snapshot_id: str | None = Query(default=None),
+        cursor: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=100),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await source.current_recovery(
+                scope,
+                source_stream_generation=source_stream_generation,
+                snapshot_id=snapshot_id,
+                cursor=cursor,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/internal/fleet/v1/source/query/{resource}", include_in_schema=False)
+    async def query(
+        resource: str,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+        cursor: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=100),
+        q: str | None = Query(default=None),
+        namespace: str | None = Query(default=None),
+        task_id: str | None = Query(default=None),
+        state: str | None = Query(default=None),
+        lane: str | None = Query(default=None),
+        priority: int | None = Query(default=None),
+        status: str | None = Query(default=None),
+        agent_id: str | None = Query(default=None),
+        logical_agent_id: str | None = Query(default=None),
+        work_session_id: str | None = Query(default=None),
+        event_type: str | None = Query(default=None),
+        as_of: str | None = Query(default=None),
+        through_seq: int | None = Query(default=None, ge=0),
+        include_count: bool = Query(default=False),
+        include_facets: bool = Query(default=False),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        filters = {
+            "namespace": namespace,
+            "task_id": task_id,
+            "state": state,
+            "lane": lane,
+            "priority": priority,
+            "status": status,
+            "agent_id": agent_id,
+            "logical_agent_id": logical_agent_id,
+            "work_session_id": work_session_id,
+            "event_type": event_type,
+        }
+        try:
+            return await source.query(
+                resource,
+                cursor=cursor,
+                limit=limit,
+                q=q,
+                filters={key: value for key, value in filters.items() if value is not None},
+                as_of=as_of,
+                through_seq=through_seq,
+                include_count=include_count,
+                include_facets=include_facets,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/internal/fleet/v1/source/detail/{resource}", include_in_schema=False)
+    async def detail(
+        resource: str,
+        entity_id: str = Query(...),
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            item = await source.detail(resource, entity_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if item is None:
+            raise HTTPException(status_code=404, detail="entity not found")
+        return item
+
+    @router.get("/internal/fleet/v1/source/namespaces", include_in_schema=False)
+    async def namespaces(
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+        cursor: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=100),
+        q: str | None = Query(default=None),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        return await source.query_namespaces(cursor=cursor, limit=limit, q=q)
+
+    @router.get("/internal/fleet/v1/source/task-graph", include_in_schema=False)
+    async def task_graph(
+        namespace: str,
+        task_id: str,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+        depth: int = Query(default=2, ge=0, le=8),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        return await source.task_graph(namespace=namespace, task_id=task_id, depth=depth)
+
+    return router
 
 
 def build_fleet_v1_projection_router(projection, replication) -> APIRouter:

@@ -12,6 +12,7 @@ from terminal_mcp.fleet.protocol import (
     SourceEvent,
     canonical_event_id,
 )
+from terminal_mcp.fleet.source_query import CURRENT_SCOPE_VERSION, FleetSourceQueryPlane
 from terminal_mcp.storage.events import EventJournalStore
 
 _CANONICAL_ENTITY_TYPES = {
@@ -36,11 +37,20 @@ class FleetSourceService:
         meta_store,
         *,
         runtime_health_provider=None,
+        output_db_path=None,
+        metrics=None,
+        events=None,
     ):
         self.runtime_db_path = runtime_db_path
         self.journal = journal
         self.meta_store = meta_store
         self.runtime_health_provider = runtime_health_provider
+        self.query_plane = FleetSourceQueryPlane(
+            runtime_db_path,
+            output_db_path=output_db_path,
+            metrics=metrics,
+            events=events,
+        )
 
     async def _current_meta(self):
         high_water = await self.journal.high_water_seq()
@@ -173,6 +183,64 @@ class FleetSourceService:
             ),
         }
 
+    async def bootstrap(self) -> dict[str, Any]:
+        meta, high_water, rotated = await self._current_meta()
+        return {
+            "protocol_major": FLEET_PROTOCOL_MAJOR,
+            "fleet_id": meta.fleet_id,
+            "node_id": meta.node_id,
+            "source_stream_generation": meta.source_stream_generation,
+            "scope_version": CURRENT_SCOPE_VERSION,
+            "current_scopes": self.query_plane.scope_names(),
+            "barrier_source_seq": high_water,
+            "high_water_source_seq": high_water,
+            "generation_rotated": rotated,
+            "resources": await self.query_plane.sampled_resources(),
+        }
+
+    async def current_recovery(
+        self,
+        scope: str,
+        *,
+        source_stream_generation: str | None = None,
+        snapshot_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        meta, high_water, rotated = await self._current_meta()
+        if source_stream_generation and source_stream_generation != meta.source_stream_generation:
+            return {
+                "source_stream_generation": meta.source_stream_generation,
+                "scope": scope,
+                "entities": [],
+                "reset_required": True,
+                "reset_reason": "source_stream_generation_changed",
+            }
+        page = await self.query_plane.recovery_page(
+            scope=scope,
+            generation=meta.source_stream_generation,
+            barrier=high_water,
+            high_water=high_water,
+            snapshot_id=snapshot_id,
+            cursor=cursor,
+            limit=limit,
+        )
+        page["generation_rotated"] = rotated
+        page["reset_required"] = False
+        return page
+
+    async def query(self, resource: str, **kwargs) -> dict[str, Any]:
+        return await self.query_plane.query(resource, **kwargs)
+
+    async def detail(self, resource: str, entity_id: str):
+        return await self.query_plane.detail(resource, entity_id)
+
+    async def query_namespaces(self, **kwargs) -> dict[str, Any]:
+        return await self.query_plane.namespaces(**kwargs)
+
+    async def task_graph(self, **kwargs) -> dict[str, Any]:
+        return await self.query_plane.task_graph(**kwargs)
+
     async def runtime_health(self) -> dict[str, Any]:
         if self.runtime_health_provider is None:
             return {
@@ -183,13 +251,9 @@ class FleetSourceService:
             }
         value = await self.runtime_health_provider()
         return {
-            "finalization_pending_commands": list(
-                value.get("finalization_pending_commands") or []
-            ),
+            "finalization_pending_commands": list(value.get("finalization_pending_commands") or []),
             "stale_running_commands": list(value.get("stale_running_commands") or []),
-            "unowned_running_commands": list(
-                value.get("unowned_running_commands") or []
-            ),
+            "unowned_running_commands": list(value.get("unowned_running_commands") or []),
             "queues": list(value.get("queues") or []),
         }
 

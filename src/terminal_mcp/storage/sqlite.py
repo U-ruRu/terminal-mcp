@@ -353,6 +353,18 @@ class SqliteRepository:
                     ON work_items(namespace,lane,state,priority DESC,updated_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_work_claims_active
                     ON work_claims(namespace,task_id,released_at,claimed_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_work_claims_current
+                    ON work_claims(released_at,id);
+                CREATE INDEX IF NOT EXISTS ix_work_items_current
+                    ON work_items(archived_at,state,namespace,task_id);
+                CREATE INDEX IF NOT EXISTS ix_logical_work_sessions_current
+                    ON logical_agent_work_sessions(state,work_session_id);
+                CREATE INDEX IF NOT EXISTS ix_node_attachments_current
+                    ON logical_agent_node_attachments(revoked_at,node_attachment_id);
+                CREATE INDEX IF NOT EXISTS ix_message_obligations_current
+                    ON persistent_message_obligations(resolved_at,message_ref);
+                CREATE INDEX IF NOT EXISTS ix_commands_current
+                    ON commands(status,hash);
                 CREATE INDEX IF NOT EXISTS ix_work_dependencies_target
                     ON work_dependencies(dependency_namespace,dependency_task_id);
                 CREATE INDEX IF NOT EXISTS ix_work_relations_source

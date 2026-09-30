@@ -157,6 +157,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             service.event_store,
             fleet_node_meta,
             runtime_health_provider=terminal.health,
+            output_db_path=settings.output_cache_path,
+            metrics=metrics,
+            events=events,
         )
 
     fleet_projection = None
