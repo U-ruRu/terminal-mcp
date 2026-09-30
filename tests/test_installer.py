@@ -188,3 +188,37 @@ def test_installer_separates_durable_auth_database_from_runtime_backup():
     backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
     assert "terminal-mcp.sqlite3" in backup_body
     assert "auth.sqlite3" not in backup_body
+
+def test_installer_pins_isolated_fixed_sqlite_runtime():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    assert "SQLITE_VERSION=3.53.4" in script
+    assert "sqlite-autoconf-3530400.tar.gz" in script
+    assert "454e45f61c6bd75b7420e7190732dea03ce6639c63ada47bbc592f67fc340338" in script
+    assert 'native/libsqlite3.so.0' in script
+    assert r'--library-path "\$RELEASE/lib/terminal-mcp-native"' in script
+    assert "LD_LIBRARY_PATH" not in script
+    assert "LD_PRELOAD" not in script
+    assert "import sqlite3; print(sqlite3.sqlite_version)" in script
+
+
+def test_installer_builds_sqlite_before_runtime_import_check():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    build_call = 'build_sqlite_runtime "$STAGED_RELEASE"'
+    import_check = "from mcp.server.transport_security import TransportSecuritySettings"
+    assert script.index(build_call) < script.index(import_check)
+    assert 'runtime_python "$STAGED_RELEASE" -c' in script
+
+
+def test_update_stages_fixed_sqlite_before_backup_and_activation():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    update = next(line for line in script.splitlines() if line.startswith(" update)"))
+    assert (
+        update.index("stage")
+        < update.index('backup "$STAGED_RELEASE"')
+        < update.index("activate")
+    )
+    backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
+    assert 'runtime_python "$release"' in backup_body
