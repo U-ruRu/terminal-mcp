@@ -374,6 +374,7 @@ test('persistent snapshot and mutation keep authority fields typed and POST exac
         manual_rearm: true,
         admission_mode: 'bearer',
         legacy_admission_enabled: false,
+        policy_control_supported: true,
       },
       slots: [{
         slot: {
@@ -399,7 +400,7 @@ test('persistent snapshot and mutation keep authority fields typed and POST exac
   expect(model.persistent).toMatchObject({
     enabled: true,
     available: true,
-    policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1320, legacyAdmissionEnabled: false },
+    policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1320, legacyAdmissionEnabled: false, policyControlSupported: true },
     slots: [{ logicalAgentId: 'la_alpha', selector: 'A1B2', slotRevision: 7, authorityEpoch: 3 }],
   })
   const result = await client.persistentMutation('/actions/persistent/slots/play', {

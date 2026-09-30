@@ -28,7 +28,8 @@ def build_console_router(service, settings):
                     "alert_after_seconds": settings.persistent_session_alert_after_sec,
                     "manual_rearm": True,
                     "admission_mode": settings.mode_for("mcp"),
-                    "legacy_admission_enabled": settings.legacy_admission_allowed(),
+                    "legacy_admission_enabled": bool(service.legacy_agent_admission_enabled),
+                    "policy_control_supported": True,
                 },
             ),
         )

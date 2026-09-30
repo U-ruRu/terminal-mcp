@@ -20,6 +20,7 @@ PUBLIC_PREFIXES = (
 # deliberately remain unavailable through this fallback.
 PAIRED_CONSOLE_PERSISTENT_MUTATIONS = frozenset(
     {
+        "/actions/persistent/policy",
         "/actions/persistent/slots/create",
         "/actions/persistent/slots/rotate-selector",
         "/actions/persistent/slots/play",

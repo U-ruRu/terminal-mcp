@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from terminal_mcp.core.persistent_policy import PersistentPolicyError
 
 
 class StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+
+class PersistentPolicyRequest(StrictRequest):
+    duration_seconds: int | None = Field(default=None, ge=1)
+    warning_after_seconds: int | None = Field(default=None, ge=1)
+    alert_after_seconds: int | None = Field(default=None, ge=1)
+    legacy_admission_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def require_one_change(self):
+        if (
+            self.duration_seconds is None
+            and self.warning_after_seconds is None
+            and self.alert_after_seconds is None
+            and self.legacy_admission_enabled is None
+        ):
+            raise ValueError("at least one policy field is required")
+        return self
 
 class SlotCreateRequest(StrictRequest):
     display_name: str = Field(min_length=1, max_length=120)
@@ -68,7 +87,7 @@ class ClaimReassignRequest(ClaimReleaseRequest):
     idempotency_key: str = Field(min_length=8, max_length=128)
 
 
-def build_persistent_router(service) -> APIRouter:
+def build_persistent_router(service, policy_controller=None) -> APIRouter:
     router = APIRouter(prefix="/actions/persistent", tags=["persistent-agents"])
 
     def backend():
@@ -76,6 +95,24 @@ def build_persistent_router(service) -> APIRouter:
 
     def unavailable():
         return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+
+    @router.post("/policy", operation_id="updatePersistentPolicy")
+    async def policy_update(body: PersistentPolicyRequest):
+        if policy_controller is None:
+            return unavailable()
+        try:
+            policy = await policy_controller.update(
+                duration_seconds=body.duration_seconds,
+                warning_after_seconds=body.warning_after_seconds,
+                alert_after_seconds=body.alert_after_seconds,
+                legacy_admission_enabled=body.legacy_admission_enabled,
+            )
+        except PersistentPolicyError as exc:
+            result = {"ok": False, "code": exc.code, "error": exc.code}
+            if exc.blockers:
+                result["blockers"] = exc.blockers
+            return result
+        return {"ok": True, "policy": policy}
 
     @router.post("/slots/list", operation_id="listPersistentSlots")
     async def slot_list():

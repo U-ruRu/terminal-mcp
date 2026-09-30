@@ -158,6 +158,7 @@ export type PersistentPolicyReadModel = {
   manualRearm: boolean
   admissionMode: string
   legacyAdmissionEnabled: boolean
+  policyControlSupported: boolean
 }
 
 export type PersistentClaimReadModel = {

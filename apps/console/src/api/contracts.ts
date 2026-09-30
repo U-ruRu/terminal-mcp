@@ -470,6 +470,7 @@ function persistentProjection(value: unknown, path: string): PersistentConsoleRe
       manualRearm: boolean(policy.manual_rearm ?? false, path + '.policy.manual_rearm'),
       admissionMode: string(policy.admission_mode ?? 'none', path + '.policy.admission_mode'),
       legacyAdmissionEnabled: boolean(policy.legacy_admission_enabled ?? true, path + '.policy.legacy_admission_enabled'),
+      policyControlSupported: boolean(policy.policy_control_supported ?? false, path + '.policy.policy_control_supported'),
     },
     slots: array(item.slots ?? [], path + '.slots').map((raw, index) => persistentSlot(raw, `${path}.slots[${index}]`)),
   }

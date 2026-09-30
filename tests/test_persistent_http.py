@@ -12,6 +12,7 @@ def settings(tmp_path, **overrides):
         auth_database_path=tmp_path / "auth.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
+        env_file_path=tmp_path / "terminal-mcp.env",
         log_path=tmp_path / "terminal-mcp.log",
         metrics_port=0,
         cwd=tmp_path,
