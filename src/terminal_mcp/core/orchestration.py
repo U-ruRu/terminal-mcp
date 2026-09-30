@@ -110,7 +110,10 @@ async def live_task_claims(
     current = now or utc_now()
     live = []
     for claim in claims:
-        session = await agent_store.get_session(claim["agent_id"])
+        if claim.get("owner_kind", "legacy_session") == "logical_agent":
+            live.append(claim)
+            continue
+        session = await agent_store.get_session(claim.get("owner_id") or claim["agent_id"])
         if session_is_live(
             session,
             now=current,

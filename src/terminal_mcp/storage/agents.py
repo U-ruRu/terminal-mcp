@@ -1019,7 +1019,8 @@ class AgentStore:
             row = await (
                 await db.execute(
                     "SELECT c.hash,c.cmd,c.status,c.queue_id,c.queue_sequence,c.enqueued_at,c.claimed_at,"
-                    "c.started_at,c.finished_at,c.exit_code,c.error,a.agent_id,a.command_type,a.created_at "
+                    "c.started_at,c.finished_at,c.exit_code,c.error,a.agent_id,a.command_type,a.created_at,"
+                    "a.logical_agent_id,a.work_session_id,a.session_epoch "
                     "FROM commands c LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash "
                     "WHERE c.hash=?",
                     (command_hash,),
@@ -1027,7 +1028,7 @@ class AgentStore:
             ).fetchone()
         if row is None:
             return None
-        return {
+        result = {
             "command_hash": row[0],
             "cmd": row[1],
             "status": row[2],
@@ -1043,6 +1044,15 @@ class AgentStore:
             "command_type": row[12],
             "created_at": row[13],
         }
+        if row[14] is not None or row[15] is not None or row[16] is not None:
+            result.update(
+                {
+                    "logical_agent_id": row[14],
+                    "work_session_id": row[15],
+                    "session_epoch": row[16],
+                }
+            )
+        return result
 
     async def intent_journal(self, agent_id, cutoff=None, limit=100):
         condition = "agent_id=?"

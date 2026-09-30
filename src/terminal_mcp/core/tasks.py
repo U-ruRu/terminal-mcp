@@ -1317,8 +1317,12 @@ class TaskCoordinator:
         stale_claims = 0
         now = utc_now()
         for claim in await self.store.all_active_claims():
+            if claim.get("owner_kind", "legacy_session") == "logical_agent":
+                continue
             session = (
-                await self.agent_store.get_session(claim["agent_id"]) if self.agent_store else None
+                await self.agent_store.get_session(claim.get("owner_id") or claim["agent_id"])
+                if self.agent_store
+                else None
             )
             if not session_is_live(
                 session,

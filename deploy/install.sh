@@ -289,6 +289,44 @@ src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); src.backup(d
 PYBACKUP
   chmod 600 "$BACKUPS/terminal-mcp-$stamp.sqlite3"
 }
+schema_rollback_safe(){
+  local release=$1
+  [ -f "$DATA/terminal-mcp.sqlite3" ] || return 0
+  runtime_python "$release" - "$DATA/terminal-mcp.sqlite3" <<'PYSCHEMA'
+import sqlite3, sys
+
+try:
+    from terminal_mcp.storage import sqlite as target_sqlite
+    target_version = int(getattr(target_sqlite, "SCHEMA_VERSION", 14))
+except Exception:
+    target_version = 14
+
+with sqlite3.connect(sys.argv[1]) as db:
+    current_version = int(db.execute("PRAGMA user_version").fetchone()[0])
+    if current_version <= target_version:
+        raise SystemExit(0)
+
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    persistent = False
+    if "logical_agents" in tables:
+        persistent = db.execute("SELECT 1 FROM logical_agents LIMIT 1").fetchone() is not None
+    if not persistent and "work_claims" in tables:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(work_claims)")}
+        if "owner_kind" in columns:
+            persistent = db.execute(
+                "SELECT 1 FROM work_claims WHERE owner_kind='logical_agent' LIMIT 1"
+            ).fetchone() is not None
+
+    if persistent:
+        print(
+            f"Refusing schema downgrade {current_version}->{target_version}: "
+            "Persistent Slot ownership exists",
+            file=sys.stderr,
+        )
+        raise SystemExit(42)
+PYSCHEMA
+}
+
 install_cli_link(){
   mkdir -p "$(dirname "$CLI_LINK")"
   ln -sfn "$ROOT/current/bin/terminal-mcp" "$CLI_LINK"
@@ -303,9 +341,16 @@ activate(){
     fi
     sleep 1
   done
-  [ -n "$old" ] && ln -sfn "$old" "$ROOT/current"
-  $SYSTEMCTL restart terminal-mcp
-  echo 'Health check failed; previous release restored' >&2; return 1
+  if [ -n "$old" ]; then
+    if schema_rollback_safe "$old"; then
+      ln -sfn "$old" "$ROOT/current"
+      $SYSTEMCTL restart terminal-mcp
+      echo 'Health check failed; previous release restored' >&2
+    else
+      echo 'Health check failed; automatic rollback blocked by durable schema state' >&2
+    fi
+  fi
+  return 1
 }
 mkdir -p "$ROOT/releases"
 install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
@@ -314,7 +359,7 @@ find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0
 [ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
 case "$CMD" in
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
- update) ensure_env_defaults; stage; backup "$STAGED_RELEASE"; activate "$STAGED_RELEASE" ;;
+ update) ensure_env_defaults; stage; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; activate "$STAGED_RELEASE" ;;
  doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress ;;
  *) echo 'Usage: install.sh {install|update|doctor}'; exit 1 ;;
 esac

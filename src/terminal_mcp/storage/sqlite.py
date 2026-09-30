@@ -22,6 +22,8 @@ from terminal_mcp.storage.output import (
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
+SCHEMA_VERSION = 15
+
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
     "queue_id,queue_sequence,enqueued_at,claimed_at"
@@ -114,6 +116,11 @@ class SqliteRepository:
         secure_database_path(self.path)
         await self.output.initialize()
         async with self._connect("initialize") as db:
+            current_version = int((await (await db.execute("PRAGMA user_version")).fetchone())[0])
+            if current_version > SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"database schema {current_version} is newer than supported {SCHEMA_VERSION}"
+                )
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS commands(
@@ -146,7 +153,8 @@ class SqliteRepository:
                 );
                 CREATE TABLE IF NOT EXISTS command_agent_attribution(
                     command_hash TEXT PRIMARY KEY, agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
-                    command_type TEXT NOT NULL, command_preview TEXT NOT NULL
+                    command_type TEXT NOT NULL, command_preview TEXT NOT NULL,
+                    logical_agent_id TEXT, work_session_id TEXT, session_epoch INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS agent_activity_events(
                     id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, timestamp TEXT NOT NULL,
@@ -190,6 +198,9 @@ class SqliteRepository:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, task_id TEXT NOT NULL,
                     agent_id TEXT NOT NULL, claimed_at TEXT NOT NULL, released_at TEXT,
                     claim_intent TEXT NOT NULL DEFAULT '',
+                    owner_kind TEXT NOT NULL DEFAULT 'legacy_session'
+                        CHECK(owner_kind IN ('legacy_session','logical_agent')),
+                    owner_id TEXT NOT NULL,
                     FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
                 );
                 CREATE TABLE IF NOT EXISTS work_dependencies(
@@ -216,7 +227,46 @@ class SqliteRepository:
                 CREATE TABLE IF NOT EXISTS work_events(
                     id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, task_id TEXT NOT NULL,
                     event_type TEXT NOT NULL, agent_id TEXT, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+                    logical_agent_id TEXT, work_session_id TEXT, session_epoch INTEGER,
                     FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS logical_agents(
+                    logical_agent_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'suspended'
+                        CHECK(state IN ('suspended','armed','active','stopping','deleting','deleted')),
+                    authority_node_id TEXT NOT NULL, authority_epoch INTEGER NOT NULL CHECK(authority_epoch > 0),
+                    slot_revision INTEGER NOT NULL DEFAULT 1 CHECK(slot_revision > 0),
+                    selector_generation INTEGER NOT NULL DEFAULT 1 CHECK(selector_generation > 0),
+                    auth_generation INTEGER NOT NULL DEFAULT 1 CHECK(auth_generation > 0),
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, tombstone_reason TEXT
+                );
+                CREATE TABLE IF NOT EXISTS logical_agent_selectors(
+                    selector TEXT PRIMARY KEY CHECK(length(selector)=4), logical_agent_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL CHECK(generation > 0), created_at TEXT NOT NULL,
+                    retired_at TEXT, tombstoned_at TEXT,
+                    UNIQUE(logical_agent_id,generation),
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS logical_agent_arms(
+                    logical_agent_id TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation > 0),
+                    armed_at TEXT NOT NULL, armed_until TEXT NOT NULL,
+                    captured_duration_seconds INTEGER NOT NULL CHECK(captured_duration_seconds > 0),
+                    selector_generation INTEGER NOT NULL CHECK(selector_generation > 0),
+                    auth_generation INTEGER NOT NULL CHECK(auth_generation > 0),
+                    slot_revision INTEGER NOT NULL CHECK(slot_revision > 0), consumed_at TEXT, revoked_at TEXT,
+                    PRIMARY KEY(logical_agent_id,generation),
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS logical_agent_work_sessions(
+                    work_session_id TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL,
+                    session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+                    authority_node_id TEXT NOT NULL, authority_epoch INTEGER NOT NULL CHECK(authority_epoch > 0),
+                    started_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, auth_principal_id TEXT,
+                    auth_generation INTEGER NOT NULL CHECK(auth_generation > 0),
+                    state TEXT NOT NULL CHECK(state IN ('active','stopping','ended','expired','suspended','failed')),
+                    origin_instance_id TEXT, ended_at TEXT, end_reason TEXT,
+                    UNIQUE(logical_agent_id,session_epoch),
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
                 );
                 CREATE INDEX IF NOT EXISTS ix_agent_sessions_last_activity ON agent_sessions(last_activity_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_agent_task_events_agent ON agent_task_events(agent_id, id DESC);
@@ -231,8 +281,6 @@ class SqliteRepository:
                     ON work_items(namespace,lane,state,priority DESC,updated_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_work_claims_active
                     ON work_claims(namespace,task_id,released_at,claimed_at DESC);
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_work_claims_agent_active
-                    ON work_claims(namespace,task_id,agent_id) WHERE released_at IS NULL;
                 CREATE INDEX IF NOT EXISTS ix_work_dependencies_target
                     ON work_dependencies(dependency_namespace,dependency_task_id);
                 CREATE INDEX IF NOT EXISTS ix_work_relations_source
@@ -309,7 +357,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
-            await db.execute("PRAGMA user_version=14")
+            await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
@@ -386,11 +434,27 @@ class SqliteRepository:
         )
         await add_columns(
             "work_claims",
-            [("claim_intent", "TEXT NOT NULL DEFAULT ''")],
+            [
+                ("claim_intent", "TEXT NOT NULL DEFAULT ''"),
+                ("owner_kind", "TEXT NOT NULL DEFAULT 'legacy_session'"),
+                ("owner_id", "TEXT"),
+            ],
         )
         await db.execute(
             "UPDATE work_claims SET claim_intent='legacy claim' "
             "WHERE claim_intent IS NULL OR claim_intent=''"
+        )
+        await db.execute(
+            "UPDATE work_claims SET owner_kind='legacy_session',owner_id=agent_id "
+            "WHERE owner_id IS NULL OR owner_id=''"
+        )
+        await add_columns(
+            "command_agent_attribution",
+            [("logical_agent_id", "TEXT"), ("work_session_id", "TEXT"), ("session_epoch", "INTEGER")],
+        )
+        await add_columns(
+            "work_events",
+            [("logical_agent_id", "TEXT"), ("work_session_id", "TEXT"), ("session_epoch", "INTEGER")],
         )
         await self._migrate_work_items_archive_lifecycle(db)
         # Schema v10: add creator-supplied isolation metadata after the v9 work_items rebuild.
@@ -422,6 +486,19 @@ class SqliteRepository:
                 "SELECT created_at FROM coordination_messages m WHERE m.message_hash=coordination_message_recipients.message_hash"
                 ") WHERE delivered_at IS NULL"
             )
+        await db.execute("DROP INDEX IF EXISTS ux_work_claims_agent_active")
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_work_claims_owner_active "
+            "ON work_claims(namespace,task_id,owner_kind,owner_id) WHERE released_at IS NULL"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_claims_owner "
+            "ON work_claims(owner_kind,owner_id,released_at,claimed_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_logical_agent_sessions_agent "
+            "ON logical_agent_work_sessions(logical_agent_id,session_epoch DESC)"
+        )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_commands_queue ON commands(queue_id, status, queue_sequence)"
         )
@@ -718,6 +795,9 @@ class SqliteRepository:
         command_type="run",
         command_preview="",
         queue_id=None,
+        logical_agent_id=None,
+        work_session_id=None,
+        session_epoch=None,
     ):
         attempts = 1 if cmd_hash is not None else 32
         for _ in range(attempts):
@@ -763,8 +843,19 @@ class SqliteRepository:
                     )
                     if agent_id:
                         await db.execute(
-                            "INSERT INTO command_agent_attribution VALUES(?,?,?,?,?)",
-                            (h, agent_id, now, command_type, command_preview),
+                            "INSERT INTO command_agent_attribution("
+                            "command_hash,agent_id,created_at,command_type,command_preview,"
+                            "logical_agent_id,work_session_id,session_epoch) VALUES(?,?,?,?,?,?,?,?)",
+                            (
+                                h,
+                                agent_id,
+                                now,
+                                command_type,
+                                command_preview,
+                                logical_agent_id,
+                                work_session_id,
+                                session_epoch,
+                            ),
                         )
                     await db.commit()
                 return Command(

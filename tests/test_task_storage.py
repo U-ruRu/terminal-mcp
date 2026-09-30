@@ -18,7 +18,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     with sqlite3.connect(repo.path) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == 14
+    assert version == 15
     assert {
         "work_items",
         "work_claims",
@@ -228,12 +228,13 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
     legacy = await tasks.get_task("project", "LEGACY-1")
     assert legacy["isolation_hint"] == "none"
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 15
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         claim = db.execute(
-            "SELECT agent_id FROM work_claims WHERE namespace='project' AND task_id='LEGACY-1'"
+            "SELECT agent_id,owner_kind,owner_id FROM work_claims "
+            "WHERE namespace='project' AND task_id='LEGACY-1'"
         ).fetchone()
-        assert claim == ("Alpha-1111",)
+        assert claim == ("Alpha-1111", "legacy_session", "Alpha-1111")
 
     migrated = await tasks.update_task(
         "project",
