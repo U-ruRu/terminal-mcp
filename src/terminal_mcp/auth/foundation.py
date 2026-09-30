@@ -8,6 +8,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from terminal_mcp.storage.permissions import secure_database_path
+from terminal_mcp.storage.sqlite_observability import (
+    SqliteDiagnostics,
+    open_observed_connection,
+)
 
 
 class AuthFoundationError(RuntimeError):
@@ -46,14 +50,25 @@ class AuthFoundationStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.passwords = PasswordHasher()
+        self.sqlite_diagnostics = SqliteDiagnostics("auth")
+
+    def configure_observability(self, events, metrics):
+        self.sqlite_diagnostics.configure(events, metrics)
 
     async def _connect(self):
-        db = await aiosqlite.connect(self.path, timeout=5.0)
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA synchronous=FULL")
-        await db.execute("PRAGMA busy_timeout=5000")
-        await db.execute("PRAGMA foreign_keys=ON")
-        return db
+        return await open_observed_connection(
+            aiosqlite.connect,
+            self.path,
+            busy_timeout=5.0,
+            diagnostics=self.sqlite_diagnostics,
+            operation="auth_foundation",
+            pragmas=(
+                "PRAGMA journal_mode=WAL",
+                "PRAGMA synchronous=FULL",
+                "PRAGMA busy_timeout=5000",
+                "PRAGMA foreign_keys=ON",
+            ),
+        )
 
     async def initialize(self) -> None:
         secure_database_path(self.path)

@@ -1,7 +1,6 @@
 # ruff: noqa: E501
 import json
 import secrets
-import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +20,7 @@ from terminal_mcp.storage.output import (
     OutputStore,
 )
 from terminal_mcp.storage.permissions import secure_database_path
+from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -55,48 +55,55 @@ class SqliteRepository:
         self.output_line_max_bytes = self.output.line_max_bytes
         self.events = None
         self.metrics = None
+        self.sqlite_diagnostics = SqliteDiagnostics("durable")
 
     def configure_observability(self, events, metrics):
         self.events = events
         self.metrics = metrics
+        self.sqlite_diagnostics.configure(events, metrics)
+        self.output.configure_observability(events, metrics)
 
     @asynccontextmanager
-    async def _connect(self, operation="unknown"):
+    async def _connect(
+        self,
+        operation="unknown",
+        *,
+        command_hash=None,
+        execution_outcome=None,
+        durable_finalization_outcome=None,
+    ):
         started = time.monotonic()
-        try:
-            db = await aiosqlite.connect(self.path, timeout=1.0)
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA synchronous=NORMAL")
-            await db.execute("PRAGMA busy_timeout=1000")
-            await db.execute("PRAGMA foreign_keys=ON")
-            if self.metrics:
-                self.metrics.inc(
-                    "terminal_mcp_sqlite_operations_total",
-                    (("operation", operation), ("outcome", "success")),
-                )
-                self.metrics.observe(
-                    "terminal_mcp_sqlite_operation_duration_seconds",
-                    time.monotonic() - started,
-                    (("operation", operation),),
-                )
-            yield db
-        except sqlite3.OperationalError as exc:
-            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+        async with observed_connection(
+            aiosqlite.connect,
+            self.path,
+            busy_timeout=1.0,
+            diagnostics=self.sqlite_diagnostics,
+            operation=operation,
+            pragmas=(
+                "PRAGMA journal_mode=WAL",
+                "PRAGMA synchronous=NORMAL",
+                "PRAGMA busy_timeout=1000",
+                "PRAGMA foreign_keys=ON",
+            ),
+            command_hash=command_hash,
+            execution_outcome=execution_outcome,
+            durable_finalization_outcome=durable_finalization_outcome,
+        ) as db:
+            outcome = "error"
+            try:
+                yield db
+                outcome = "success"
+            finally:
                 if self.metrics:
-                    self.metrics.inc("terminal_mcp_sqlite_busy_total")
-                if self.events:
-                    self.events.emit(
-                        "sqlite_busy", level="WARNING", outcome="error", operation=operation
+                    self.metrics.inc(
+                        "terminal_mcp_sqlite_operations_total",
+                        (("operation", operation), ("outcome", outcome)),
                     )
-                raise RuntimeError(f"sqlite.{operation}: database busy after 1000 ms") from exc
-            if self.events:
-                self.events.emit(
-                    "sqlite_error", level="ERROR", outcome="error", operation=operation
-                )
-            raise
-        finally:
-            if "db" in locals():
-                await db.close()
+                    self.metrics.observe(
+                        "terminal_mcp_sqlite_operation_duration_seconds",
+                        time.monotonic() - started,
+                        (("operation", operation),),
+                    )
 
     async def ping(self):
         async with self._connect("health") as db:
@@ -718,7 +725,7 @@ class SqliteRepository:
             now = utc_text()
             effective_queue = (queue_id or 1) if status == "queued" else queue_id
             try:
-                async with self._connect("create_command") as db:
+                async with self._connect("create_command", command_hash=h) as db:
                     if status == "queued":
                         await db.execute("BEGIN IMMEDIATE")
                         row = await (
@@ -784,7 +791,7 @@ class SqliteRepository:
             command.started_at = now
         if command.status in {"completed", "failed", "cancelled"} and command.finished_at is None:
             command.finished_at = now
-        async with self._connect("update_command") as db:
+        async with self._connect("update_command", command_hash=command.cmd_hash) as db:
             await db.execute(
                 "UPDATE commands SET status=?,pid=?,exit_code=?,error=?,started_at=?,finished_at=?,"
                 "queue_id=?,queue_sequence=?,enqueued_at=?,claimed_at=? WHERE hash=?",
@@ -836,7 +843,7 @@ class SqliteRepository:
         return Command(*row)
 
     async def set_pid(self, cmd_hash, pid):
-        async with self._connect("set_pid") as db:
+        async with self._connect("set_pid", command_hash=cmd_hash) as db:
             cur = await db.execute(
                 "UPDATE commands SET pid=? WHERE hash=? AND status='running'", (pid, cmd_hash)
             )
@@ -847,7 +854,12 @@ class SqliteRepository:
         if status not in {"completed", "failed", "cancelled"}:
             raise ValueError("finish_running requires a terminal status")
         finished_at = utc_text()
-        async with self._connect("finish_command") as db:
+        async with self._connect(
+            "finish_command",
+            command_hash=cmd_hash,
+            execution_outcome=status,
+            durable_finalization_outcome="failed",
+        ) as db:
             cur = await db.execute(
                 "UPDATE commands SET status=?,exit_code=?,error=?,finished_at=? "
                 "WHERE hash=? AND status='running'",
@@ -864,7 +876,7 @@ class SqliteRepository:
         command is returned unchanged so the caller can perform running cancellation.
         """
         finished_at = utc_text()
-        async with self._connect("cancel_if_queued") as db:
+        async with self._connect("cancel_if_queued", command_hash=cmd_hash) as db:
             await db.execute("BEGIN IMMEDIATE")
             row = await (
                 await db.execute(
@@ -985,7 +997,7 @@ class SqliteRepository:
 
     async def delete_command(self, cmd_hash):
         await self.output.delete_command(cmd_hash)
-        async with self._connect("delete_command") as db:
+        async with self._connect("delete_command", command_hash=cmd_hash) as db:
             await db.execute(
                 "DELETE FROM command_agent_attribution WHERE command_hash=?", (cmd_hash,)
             )
@@ -994,7 +1006,7 @@ class SqliteRepository:
             await db.commit()
 
     async def get(self, cmd_hash):
-        async with self._connect("get_command") as db:
+        async with self._connect("get_command", command_hash=cmd_hash) as db:
             row = await (
                 await db.execute(
                     f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,)
@@ -1003,7 +1015,7 @@ class SqliteRepository:
         return Command(*row) if row else None
 
     async def mark_output_truncated(self, cmd_hash):
-        async with self._connect("mark_output_truncated") as db:
+        async with self._connect("mark_output_truncated", command_hash=cmd_hash) as db:
             await db.execute(
                 "INSERT INTO command_output_state(command_hash,truncated,pruned_at) VALUES(?,1,NULL) "
                 "ON CONFLICT(command_hash) DO UPDATE SET truncated=1",
@@ -1022,7 +1034,7 @@ class SqliteRepository:
 
     async def output_status(self, cmd_hash):
         meta = await self.output.command_meta(cmd_hash)
-        async with self._connect("output_status") as db:
+        async with self._connect("output_status", command_hash=cmd_hash) as db:
             state = await (
                 await db.execute(
                     "SELECT truncated,pruned_at FROM command_output_state WHERE command_hash=?",

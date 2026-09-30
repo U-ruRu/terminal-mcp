@@ -59,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     metrics = Metrics(runtime, settings.metrics_host, settings.metrics_port)
     events = EventLogger(settings.log_path, runtime, metrics)
     repo.configure_observability(events, metrics)
+    auth_foundation.configure_observability(events, metrics)
     runtime.warning_callback = lambda error: events.emit(
         "runtime_config_invalid", level="WARNING", outcome="invalid", error=error
     )

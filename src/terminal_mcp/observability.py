@@ -108,6 +108,11 @@ class EventLogger:
             self.listener = None
 
     def emit(self, event, level="INFO", **fields):
+        if (
+            event in {"sqlite_busy", "sqlite_error"}
+            and not getattr(self.provider.current, "sqlite_diagnostics", True)
+        ):
+            return
         if event not in _MINIMAL and not self.provider.current.detailed_logging:
             return
         payload = {

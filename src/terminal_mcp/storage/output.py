@@ -8,6 +8,7 @@ import aiosqlite
 
 from terminal_mcp.core.models import Line
 from terminal_mcp.storage.permissions import secure_database_path
+from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
 MIB = 1024 * 1024
 DEFAULT_LINE_MAX_BYTES = 4 * MIB
@@ -62,21 +63,31 @@ class OutputStore:
             raise ValueError("output max rows must be positive")
         if requested_prune_rows <= 0:
             raise ValueError("output prune rows must be positive")
+        self.sqlite_diagnostics = SqliteDiagnostics("output")
+
+    def configure_observability(self, events, metrics):
+        self.sqlite_diagnostics.configure(events, metrics)
 
     @asynccontextmanager
-    async def _connect(self):
-        db = await aiosqlite.connect(self.path, timeout=2.0)
-        try:
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA synchronous=NORMAL")
-            await db.execute("PRAGMA busy_timeout=2000")
+    async def _connect(self, operation="output", *, command_hash=None):
+        async with observed_connection(
+            aiosqlite.connect,
+            self.path,
+            busy_timeout=2.0,
+            diagnostics=self.sqlite_diagnostics,
+            operation=operation,
+            pragmas=(
+                "PRAGMA journal_mode=WAL",
+                "PRAGMA synchronous=NORMAL",
+                "PRAGMA busy_timeout=2000",
+            ),
+            command_hash=command_hash,
+        ) as db:
             yield db
-        finally:
-            await db.close()
 
     async def initialize(self):
         secure_database_path(self.path)
-        async with self._connect() as db:
+        async with self._connect("output_initialize") as db:
             pages = int((await (await db.execute("PRAGMA page_count")).fetchone())[0])
             if pages <= 1:
                 await db.execute("PRAGMA auto_vacuum=INCREMENTAL")
@@ -114,7 +125,7 @@ class OutputStore:
     async def append_records(self, cmd_hash: str, records: list[tuple[int | None, str, str]]):
         if not records:
             return {"accepting": True, "truncated": False, "stored_bytes": 0, "stored_lines": 0}
-        async with self._connect() as db:
+        async with self._connect("output_append", command_hash=cmd_hash) as db:
             await db.execute("BEGIN IMMEDIATE")
             row = await (
                 await db.execute(
@@ -184,7 +195,7 @@ class OutputStore:
         }
 
     async def command_meta(self, cmd_hash: str):
-        async with self._connect() as db:
+        async with self._connect("output_meta", command_hash=cmd_hash) as db:
             row = await (
                 await db.execute(
                     "SELECT stored_bytes,stored_lines,truncated,last_seq "
@@ -206,7 +217,7 @@ class OutputStore:
         return int(meta["stored_lines"]) if meta else 0
 
     async def read_command_lines(self, cmd_hash: str, limit: int, offset: int):
-        async with self._connect() as db:
+        async with self._connect("output_read", command_hash=cmd_hash) as db:
             rows = await (
                 await db.execute(
                     "SELECT seq,hash,appeared_at,text FROM lines WHERE hash=? "
@@ -217,7 +228,7 @@ class OutputStore:
         return [Line(*row) for row in rows]
 
     async def read_global_after_cursor(self, limit: int, cursor: int):
-        async with self._connect() as db:
+        async with self._connect("output_read_global") as db:
             rows = await (
                 await db.execute(
                     "SELECT seq,hash,appeared_at,text FROM lines WHERE seq>? ORDER BY seq LIMIT ?",
@@ -235,7 +246,7 @@ class OutputStore:
             skip = max(distance - take, 0)
         if take == 0:
             return []
-        async with self._connect() as db:
+        async with self._connect("output_read_global") as db:
             rows = await (
                 await db.execute(
                     "SELECT seq,hash,appeared_at,text FROM lines "
@@ -254,7 +265,7 @@ class OutputStore:
         return [Line(*row) for row in rows]
 
     async def reset(self):
-        async with self._connect() as db:
+        async with self._connect("output_reset") as db:
             await db.executescript(
                 "DELETE FROM lines; DELETE FROM output_meta; DELETE FROM cache_state;"
             )
@@ -263,13 +274,13 @@ class OutputStore:
             await db.execute("PRAGMA incremental_vacuum(4096)")
 
     async def delete_command(self, cmd_hash: str):
-        async with self._connect() as db:
+        async with self._connect("output_delete", command_hash=cmd_hash) as db:
             await db.execute("DELETE FROM lines WHERE hash=?", (cmd_hash,))
             await db.execute("DELETE FROM output_meta WHERE hash=?", (cmd_hash,))
             await db.commit()
 
     async def stats(self):
-        async with self._connect() as db:
+        async with self._connect("output_stats") as db:
             totals = await (
                 await db.execute(
                     "SELECT COALESCE(SUM(stored_bytes),0),COALESCE(SUM(stored_lines),0),COUNT(*),"
@@ -305,7 +316,7 @@ class OutputStore:
         line_pressure = lines > self.max_rows
         line_target = max(0, self.max_rows - self.prune_rows) if line_pressure else self.max_rows
         pruned: list[str] = []
-        async with self._connect() as db:
+        async with self._connect("output_prune") as db:
             await db.execute("BEGIN IMMEDIATE")
             candidates = await (
                 await db.execute(

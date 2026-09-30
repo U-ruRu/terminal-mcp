@@ -11,6 +11,7 @@ class RuntimeConfig:
     detailed_logging: bool = False
     log_level: str = "INFO"
     metrics_enabled: bool = True
+    sqlite_diagnostics: bool = True
 
 
 class RuntimeConfigProvider:
@@ -116,4 +117,5 @@ class RuntimeConfigProvider:
             flag("TERMINAL_MCP_DETAILED_LOGGING", False),
             level,
             flag("TERMINAL_MCP_METRICS_ENABLED", True),
+            flag("TERMINAL_MCP_SQLITE_DIAGNOSTICS", True),
         )
