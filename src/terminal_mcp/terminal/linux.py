@@ -35,6 +35,8 @@ class LinuxTerminalAdapter:
         self.execution_done = {}
         self.output_readers = {}
         self.output_transports = {}
+        self.finalization_pending = {}
+        self.reconciler_task = None
         self.stopping = False
         self.queue = ()  # compatibility surface; SQLite is the queue source of truth.
 
@@ -46,9 +48,17 @@ class LinuxTerminalAdapter:
                 self.workers[queue_id] = asyncio.create_task(
                     self._worker(queue_id), name=f"terminal-worker-q{queue_id}"
                 )
+        if self.reconciler_task is None or self.reconciler_task.done():
+            self.reconciler_task = asyncio.create_task(
+                self._reconciler(), name="terminal-finalization-reconciler"
+            )
 
     async def stop(self):
         self.stopping = True
+        if self.reconciler_task is not None:
+            self.reconciler_task.cancel()
+            await asyncio.gather(self.reconciler_task, return_exceptions=True)
+            self.reconciler_task = None
         processes = [*self.processes.values(), *self.capture_processes]
         if processes:
             await asyncio.gather(
@@ -96,20 +106,162 @@ class LinuxTerminalAdapter:
         except TimeoutError:
             pass
 
+    def _emit_runtime_event(self, event, level="WARNING", **fields):
+        events = getattr(self.repo, "events", None)
+        if events:
+            events.emit(event, level=level, **fields)
+
+    def _update_finalization_metric(self):
+        metrics = getattr(self.repo, "metrics", None)
+        if metrics:
+            metrics.set("terminal_mcp_finalization_pending", len(self.finalization_pending))
+
+    @staticmethod
+    def _pid_exists(pid):
+        if not pid:
+            return False
+        try:
+            os.kill(int(pid), 0)
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    async def _finish_with_retry(self, command, status, exit_code=None, error=None, attempts=3):
+        pending_before = command.cmd_hash in self.finalization_pending
+        for attempt in range(1, attempts + 1):
+            try:
+                changed = await self.repo.finish_running(
+                    command.cmd_hash, status, exit_code, error
+                )
+                if changed:
+                    self.finalization_pending.pop(command.cmd_hash, None)
+                    self._update_finalization_metric()
+                    if pending_before or attempt > 1:
+                        self._emit_runtime_event(
+                            "runtime_finalization_recovered",
+                            level="INFO",
+                            outcome="success",
+                            command_hash=command.cmd_hash,
+                            queue_id=command.queue_id,
+                            terminal_status=status,
+                            attempt=attempt,
+                        )
+                    return True
+                current = await self.repo.get(command.cmd_hash)
+                if current is None or current.status != "running":
+                    self.finalization_pending.pop(command.cmd_hash, None)
+                    self._update_finalization_metric()
+                    return current is not None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                already_pending = command.cmd_hash in self.finalization_pending
+                self.finalization_pending[command.cmd_hash] = {
+                    "status": status,
+                    "exit_code": exit_code,
+                    "error": error,
+                    "queue_id": command.queue_id,
+                    "attempt": attempt,
+                    "exception_class": type(exc).__name__,
+                }
+                self._update_finalization_metric()
+                if not already_pending:
+                    self._emit_runtime_event(
+                        "runtime_finalization_pending",
+                        outcome="error",
+                        command_hash=command.cmd_hash,
+                        queue_id=command.queue_id,
+                        terminal_status=status,
+                        attempt=attempt,
+                        exception_class=type(exc).__name__,
+                    )
+            if attempt < attempts:
+                await asyncio.sleep(0.05 * (2 ** (attempt - 1)))
+        return False
+
+    async def finalize_running(self, command, status, exit_code=None, error=None):
+        return await self._finish_with_retry(command, status, exit_code, error)
+
+    async def _reconcile_processless_running(self):
+        for command in await self.repo.list_running():
+            cmd_hash = command.cmd_hash
+            process = self.processes.get(cmd_hash)
+            if process is not None and process.returncode is None:
+                continue
+            if cmd_hash in self.execution_done:
+                continue
+
+            pending = self.finalization_pending.get(cmd_hash)
+            if pending is not None:
+                await self._finish_with_retry(
+                    command,
+                    pending["status"],
+                    pending["exit_code"],
+                    pending["error"],
+                )
+                continue
+
+            if command.pid is None or self._pid_exists(command.pid):
+                continue
+
+            if await self._finish_with_retry(
+                command,
+                "failed",
+                command.exit_code,
+                "runtime.reconcile: process no longer exists",
+            ):
+                self._emit_runtime_event(
+                    "runtime_stale_reconciled",
+                    level="WARNING",
+                    outcome="recovered",
+                    command_hash=cmd_hash,
+                    queue_id=command.queue_id,
+                )
+
+    async def _reconciler(self):
+        while not self.stopping:
+            try:
+                await self._reconcile_processless_running()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._emit_runtime_event(
+                    "worker_failed",
+                    outcome="error",
+                    worker="finalization-reconciler",
+                    exception_class=type(exc).__name__,
+                )
+            await asyncio.sleep(self.queue_reconcile_sec)
+
     async def _worker(self, queue_id):
         while not self.stopping:
-            command = await self.repo.claim_next(queue_id)
-            if command is None:
-                await self._wait_for_work(queue_id)
-                continue
+            command = None
             try:
+                command = await self.repo.claim_next(queue_id)
+                if command is None:
+                    await self._wait_for_work(queue_id)
+                    continue
                 await self._execute(command, method="run")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await self.repo.finish_running(
-                    command.cmd_hash, "failed", command.exit_code, f"run.worker: {exc}"
+                self._emit_runtime_event(
+                    "worker_failed",
+                    outcome="error",
+                    queue_id=queue_id,
+                    command_hash=command.cmd_hash if command else None,
+                    exception_class=type(exc).__name__,
                 )
+                if command is not None:
+                    await self._finish_with_retry(
+                        command,
+                        "failed",
+                        command.exit_code,
+                        f"run.worker: {type(exc).__name__}",
+                    )
+                await asyncio.sleep(min(0.1, self.queue_reconcile_sec))
 
     def _drop_privileges(self):
         account = pwd.getpwnam(self.user)
@@ -321,7 +473,7 @@ class LinuxTerminalAdapter:
             return round((time.monotonic() - started) * 1000)
         command = current
         if command.cmd_hash in self.cancel_requested:
-            await self.repo.finish_running(command.cmd_hash, "cancelled")
+            await self._finish_with_retry(command, "cancelled")
             self.cancel_requested.discard(command.cmd_hash)
             return round((time.monotonic() - started) * 1000)
 
@@ -369,7 +521,6 @@ class LinuxTerminalAdapter:
                 command.exit_code = process.returncode
             final_status = "cancelled"
             error = f"{method}.cancelled: upstream disconnected"
-            await self.repo.finish_running(command.cmd_hash, final_status, command.exit_code, error)
             raise
         except Exception as exc:
             final_status = "failed"
@@ -387,10 +538,11 @@ class LinuxTerminalAdapter:
             self.process_queues.pop(command.cmd_hash, None)
             self._release_output_stream(process)
             if final_status is not None:
-                await self.repo.finish_running(
-                    command.cmd_hash, final_status, command.exit_code, error
+                finalized = await self._finish_with_retry(
+                    command, final_status, command.exit_code, error
                 )
-                await self.repo.prune_output_cache()
+                if finalized:
+                    await self.repo.prune_output_cache()
             self.cancel_requested.discard(command.cmd_hash)
             if command.queue_id in self.queue_events:
                 self.queue_events[command.queue_id].set()
@@ -528,10 +680,42 @@ class LinuxTerminalAdapter:
     async def health(self):
         uid = os.geteuid()
         queues = await self.repo.queue_snapshot(self.queue_workers)
-        running = [item["running"] for item in queues if item["running"]]
+        durable_running = await self.repo.list_running()
+        live = {
+            cmd_hash
+            for cmd_hash, process in self.processes.items()
+            if process.returncode is None
+        }
+        pending = sorted(self.finalization_pending)
+        stale = []
+        unowned = []
+        for command in durable_running:
+            if command.cmd_hash in live or command.cmd_hash in self.execution_done:
+                continue
+            if command.cmd_hash in self.finalization_pending or command.pid is None:
+                continue
+            if self._pid_exists(command.pid):
+                unowned.append(command.cmd_hash)
+            else:
+                stale.append(command.cmd_hash)
+
+        live_by_queue = {
+            queue_id: cmd_hash
+            for cmd_hash, queue_id in self.process_queues.items()
+            if cmd_hash in live
+        }
+        for item in queues:
+            durable = item["running"]
+            item["durable_running"] = durable
+            item["running"] = live_by_queue.get(item["queue_id"])
+
+        worker_health = {
+            str(queue_id): not worker.done() for queue_id, worker in self.workers.items()
+        }
+        degraded = bool(pending or stale or unowned)
         output_cache = await self.repo.output_cache_stats()
         return {
-            "ok": bool(self.workers) and all(not worker.done() for worker in self.workers.values()),
+            "ok": bool(self.workers) and all(worker_health.values()) and not degraded,
             "user": pwd.getpwuid(uid).pw_name,
             "uid": uid,
             "gid": os.getegid(),
@@ -542,10 +726,12 @@ class LinuxTerminalAdapter:
             "scheduler": "numbered-fifo",
             "parallelism": self.queue_workers,
             "queue_size": sum(item["queued"] for item in queues),
-            "running_commands": running,
+            "running_commands": sorted(live),
+            "finalization_pending_commands": pending,
+            "stale_running_commands": sorted(stale),
+            "unowned_running_commands": sorted(unowned),
+            "degraded": degraded,
             "queues": queues,
-            "worker_health": {
-                str(queue_id): not worker.done() for queue_id, worker in self.workers.items()
-            },
+            "worker_health": worker_health,
             "output_cache": output_cache,
         }

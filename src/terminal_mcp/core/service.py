@@ -570,8 +570,8 @@ class TerminalService:
         except Exception as exc:
             elapsed = round((asyncio.get_running_loop().time() - started_at) * 1000)
             if command is not None:
-                await self.repo.finish_running(
-                    command.cmd_hash, "failed", command.exit_code, _error("recovery", stage, exc)
+                await self.terminal.finalize_running(
+                    command, "failed", command.exit_code, _error("recovery", stage, exc)
                 )
             return {
                 "ok": False,

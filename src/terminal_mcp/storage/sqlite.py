@@ -1069,6 +1069,25 @@ class SqliteRepository:
                 result[queue_id]["running"] = cmd_hash
         return [result[i] for i in sorted(result)]
 
+    async def list_running(self, queue_id=None):
+        async with self._connect("running_commands") as db:
+            if queue_id is None:
+                rows = await (
+                    await db.execute(
+                        f"SELECT {_COMMAND_COLUMNS} FROM commands "
+                        "WHERE status='running' ORDER BY claimed_at,rowid"
+                    )
+                ).fetchall()
+            else:
+                rows = await (
+                    await db.execute(
+                        f"SELECT {_COMMAND_COLUMNS} FROM commands "
+                        "WHERE status='running' AND queue_id=? ORDER BY claimed_at,rowid",
+                        (queue_id,),
+                    )
+                ).fetchall()
+        return [Command(*row) for row in rows]
+
     async def command_queue_ids(self, hashes):
         values = list(dict.fromkeys(hashes))
         if not values:

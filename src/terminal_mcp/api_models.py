@@ -148,6 +148,7 @@ class CancelResponse(SessionStatus):
 class QueueHealth(BaseModel):
     queue_id: int
     running: str | None = None
+    durable_running: str | None = None
     queued: int
 
 
@@ -177,6 +178,10 @@ class TerminalHealth(BaseModel):
     parallelism: int
     queue_size: int
     running_commands: list[str]
+    finalization_pending_commands: list[str] = Field(default_factory=list)
+    stale_running_commands: list[str] = Field(default_factory=list)
+    unowned_running_commands: list[str] = Field(default_factory=list)
+    degraded: bool = False
     queues: list[QueueHealth] = Field(default_factory=list)
     worker_health: dict[str, bool] = Field(default_factory=dict)
     output_cache: OutputCacheHealth | None = None
