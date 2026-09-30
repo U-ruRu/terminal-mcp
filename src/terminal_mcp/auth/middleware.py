@@ -13,6 +13,23 @@ PUBLIC_PREFIXES = (
     "/redoc",
 )
 
+# In mixed deployments actions remain protected by the legacy static bearer token,
+# while the paired Console authenticates with its short-lived OAuth device token.
+# Keep that OAuth fallback narrowly scoped to the Console control plane: snapshot
+# reads plus Persistent slot/claim mutations. Agent execution/session/task routes
+# deliberately remain unavailable through this fallback.
+PAIRED_CONSOLE_PERSISTENT_MUTATIONS = frozenset(
+    {
+        "/actions/persistent/slots/create",
+        "/actions/persistent/slots/rotate-selector",
+        "/actions/persistent/slots/play",
+        "/actions/persistent/slots/suspend",
+        "/actions/persistent/slots/delete",
+        "/actions/persistent/claims/release",
+        "/actions/persistent/claims/reassign",
+    }
+)
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, settings, auth_service, pairing_store):
@@ -47,12 +64,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             if mode == "bearer":
                 if not self.auth.bearer_valid(token):
-                    if path != "/actions/console/snapshot":
+                    paired_scopes = self._paired_console_scopes(path, request.method)
+                    if paired_scopes is None:
                         raise PermissionError("invalid_token")
                     try:
-                        claims = await self.auth.verify_access(
-                            token, self._scopes(path, request.method)
-                        )
+                        claims = await self.auth.verify_access(token, paired_scopes)
                         client_id = str(claims.get("sub", ""))
                         device = await self.pairing_store.active_device_for_client(client_id)
                         if not client_id or device is None:
@@ -82,6 +98,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         finally:
             reset_admission_context(context_token)
+
+    @staticmethod
+    def _paired_console_scopes(path, method):
+        if method.upper() == "GET" and path == "/actions/console/snapshot":
+            return ["terminal:read"]
+        if method.upper() == "POST" and path in PAIRED_CONSOLE_PERSISTENT_MUTATIONS:
+            return ["terminal:read", "terminal:execute"]
+        return None
 
     @staticmethod
     def _scopes(path, method):

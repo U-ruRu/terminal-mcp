@@ -119,6 +119,8 @@ def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
             tmp_path,
             actions_auth_mode="bearer",
             bearer_tokens="legacy-static-token",
+            oauth_required_scopes="terminal:read terminal:execute",
+            persistent_agents_enabled=True,
         )
     )
     with TestClient(app) as client:
@@ -134,12 +136,121 @@ def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
 
         assert client.get("/actions/console/snapshot", headers=paired_headers).status_code == 200
 
-        paired_non_console = client.get("/actions/health", headers=paired_headers)
-        assert paired_non_console.status_code == 401
-        assert paired_non_console.json() == {
-            "error": "unauthorized",
-            "detail": "invalid_token",
-        }
+        created = client.post(
+            "/actions/persistent/slots/create",
+            headers=paired_headers,
+            json={"display_name": "Phone acceptance"},
+        )
+        assert created.status_code == 200
+        created_body = created.json()
+        assert created_body["ok"] is True
+        logical_agent_id = created_body["slot"]["logical_agent_id"]
+        revision = created_body["slot"]["slot_revision"]
+
+        played = client.post(
+            "/actions/persistent/slots/play",
+            headers=paired_headers,
+            json={
+                "logical_agent_id": logical_agent_id,
+                "expected_revision": revision,
+                "idempotency_key": "paired-console-play",
+            },
+        )
+        assert played.status_code == 200
+        played_body = played.json()
+        assert played_body["ok"] is True
+
+        # Claim controls are on the Console allowlist too. Empty bodies fail
+        # request validation (422), which proves auth passed without mutating state.
+        for path in (
+            "/actions/persistent/claims/release",
+            "/actions/persistent/claims/reassign",
+        ):
+            assert client.post(path, headers=paired_headers, json={}).status_code == 422
+
+        # Paired Console OAuth is intentionally not a general Actions credential:
+        # command/session/task execution surfaces remain closed.
+        for path, payload in (
+            ("/actions/health", None),
+            (
+                "/actions/persistent/sessions/start",
+                {
+                    "selector": created_body["selector"]["selector"],
+                    "expected_revision": played_body["slot"]["slot_revision"],
+                },
+            ),
+            (
+                "/actions/persistent/run",
+                {
+                    "logical_agent_id": logical_agent_id,
+                    "work_session_id": "ws_fake",
+                    "session_epoch": 1,
+                    "cmd": "true",
+                    "task_scope": "none",
+                },
+            ),
+            (
+                "/actions/persistent/task",
+                {
+                    "logical_agent_id": logical_agent_id,
+                    "work_session_id": "ws_fake",
+                    "session_epoch": 1,
+                    "action": "comment",
+                    "namespace": "ns",
+                    "task_id": "T-1",
+                    "payload": {},
+                },
+            ),
+        ):
+            response = (
+                client.get(path, headers=paired_headers)
+                if payload is None
+                else client.post(path, headers=paired_headers, json=payload)
+            )
+            assert response.status_code == 401
+            assert response.json() == {
+                "error": "unauthorized",
+                "detail": "invalid_token",
+            }
+
+        suspended = client.post(
+            "/actions/persistent/slots/suspend",
+            headers=paired_headers,
+            json={
+                "logical_agent_id": logical_agent_id,
+                "expected_revision": played_body["slot"]["slot_revision"],
+                "idempotency_key": "paired-console-suspend",
+            },
+        )
+        assert suspended.status_code == 200
+        suspended_body = suspended.json()
+        assert suspended_body["ok"] is True
+
+        rotated = client.post(
+            "/actions/persistent/slots/rotate-selector",
+            headers=paired_headers,
+            json={
+                "logical_agent_id": logical_agent_id,
+                "selector": "A1B2",
+                "expected_revision": suspended_body["slot"]["slot_revision"],
+                "idempotency_key": "paired-console-rotate",
+            },
+        )
+        assert rotated.status_code == 200
+        rotated_body = rotated.json()
+        assert rotated_body["ok"] is True
+
+        deleted = client.post(
+            "/actions/persistent/slots/delete",
+            headers=paired_headers,
+            json={
+                "logical_agent_id": logical_agent_id,
+                "expected_revision": rotated_body["slot"]["slot_revision"],
+                "idempotency_key": "paired-console-delete",
+            },
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["ok"] is True
 
         ordinary_client_id, _ = asyncio.run(
             app.state.oauth_store.register_client(
@@ -149,21 +260,25 @@ def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
         ordinary_auth = AuthService(
             app.state.settings, app.state.oauth_store, app.state.credentials
         )
-        ordinary_token = ordinary_auth.issue_access(ordinary_client_id, "terminal:read")
+        ordinary_token = ordinary_auth.issue_access(
+            ordinary_client_id, "terminal:read terminal:execute"
+        )
         ordinary_headers = {"Authorization": f"Bearer {ordinary_token}"}
 
-        ordinary_snapshot = client.get("/actions/console/snapshot", headers=ordinary_headers)
-        assert ordinary_snapshot.status_code == 401
-        assert ordinary_snapshot.json() == {
-            "error": "unauthorized",
-            "detail": "invalid_token",
-        }
-        ordinary_non_console = client.get("/actions/health", headers=ordinary_headers)
-        assert ordinary_non_console.status_code == 401
-        assert ordinary_non_console.json() == {
-            "error": "unauthorized",
-            "detail": "invalid_token",
-        }
+        for path, payload in (
+            ("/actions/console/snapshot", None),
+            ("/actions/persistent/slots/create", {"display_name": "Forbidden"}),
+        ):
+            response = (
+                client.get(path, headers=ordinary_headers)
+                if payload is None
+                else client.post(path, headers=ordinary_headers, json=payload)
+            )
+            assert response.status_code == 401
+            assert response.json() == {
+                "error": "unauthorized",
+                "detail": "invalid_token",
+            }
 
         bogus = client.get(
             "/actions/console/snapshot",
@@ -173,9 +288,17 @@ def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
         assert bogus.json() == {"error": "unauthorized", "detail": "invalid_token"}
 
         assert asyncio.run(app.state.pairing_store.revoke_device(body["device_id"])) is True
-        revoked = client.get("/actions/console/snapshot", headers=paired_headers)
-        assert revoked.status_code == 401
-        assert revoked.json() == {"error": "unauthorized", "detail": "invalid_token"}
+        for path, payload in (
+            ("/actions/console/snapshot", None),
+            ("/actions/persistent/slots/create", {"display_name": "Revoked"}),
+        ):
+            response = (
+                client.get(path, headers=paired_headers)
+                if payload is None
+                else client.post(path, headers=paired_headers, json=payload)
+            )
+            assert response.status_code == 401
+            assert response.json() == {"error": "unauthorized", "detail": "invalid_token"}
 
 
 def test_pairing_exchange_rejects_replay_expiry_and_malformed_without_secret_leak(tmp_path):
