@@ -585,10 +585,12 @@ class TaskCoordinator:
             "next_cursor": next_cursor,
         }
 
-    async def mutate(self, agent_id, *, action, namespace, task_id=None, **kwargs):
+    async def mutate(
+        self, agent_id, *, action, namespace, task_id=None, _claim_owner=None, **kwargs
+    ):
         if not namespace:
             return {"ok": False, "error": "task.namespace: required", "warnings": []}
-        if self.agent_store:
+        if self.agent_store and _claim_owner is None:
             session = await self.agent_store.get_session(agent_id)
             if not session or session["state"] != "active":
                 return {
@@ -596,6 +598,8 @@ class TaskCoordinator:
                     "error": "task.agent_id: active session required",
                     "warnings": [],
                 }
+        if _claim_owner is not None:
+            kwargs["_claim_owner"] = _claim_owner
         handler = getattr(self, f"_action_{action}", None) if action in ACTIONS else None
         if handler is None:
             return {
@@ -756,10 +760,13 @@ class TaskCoordinator:
             return dependency_failure
         now = utc_text()
         try:
-            await self.store.claim(
+            owner = kwargs.get("_claim_owner")
+            claim_method = self.store.claim_owner if owner is not None else self.store.claim
+            claim_identity = owner if owner is not None else agent_id
+            await claim_method(
                 namespace,
                 task_id,
-                agent_id,
+                claim_identity,
                 claim_intent=claim_intent,
                 exclusive=not bool(current.get("cooperative")),
                 event_payload={"warnings": [item["code"] for item in warnings]},
@@ -805,9 +812,15 @@ class TaskCoordinator:
         reason, error = self._clean_reason(kwargs.get("release_reason"), "release_reason")
         if error:
             return {"ok": False, "error": error, "warnings": []}
-        await self.store.release_claim_mutation(
-            namespace, task_id, agent_id, reason=reason, now=utc_text()
-        )
+        owner = kwargs.get("_claim_owner")
+        if owner is None:
+            await self.store.release_claim_mutation(
+                namespace, task_id, agent_id, reason=reason, now=utc_text()
+            )
+        else:
+            await self.store.release_owner_claim_mutation(
+                namespace, task_id, owner, reason=reason, now=utc_text()
+            )
         return await self._result(namespace, task_id, [])
 
     async def _action_checkpoint(self, agent_id, namespace, task_id, **kwargs):
@@ -1393,7 +1406,17 @@ class TaskCoordinator:
             )
         return result
 
-    async def record_command(self, agent_id, command_hash, command_type, task_refs):
+    async def record_command(
+        self,
+        agent_id,
+        command_hash,
+        command_type,
+        task_refs,
+        *,
+        logical_agent_id=None,
+        work_session_id=None,
+        session_epoch=None,
+    ):
         now = utc_text()
         for item in task_refs:
             await self.store.add_event(
@@ -1403,6 +1426,9 @@ class TaskCoordinator:
                 agent_id=agent_id,
                 payload={"command_hash": command_hash, "command_type": command_type},
                 now=now,
+                logical_agent_id=logical_agent_id,
+                work_session_id=work_session_id,
+                session_epoch=session_epoch,
             )
 
     async def _result(self, namespace, task_id, warnings, *, ok=True, error=None):

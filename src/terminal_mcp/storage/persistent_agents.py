@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 import aiosqlite
 
-from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.core.orchestration import parse_utc, utc_text
 from terminal_mcp.core.persistent_agents import (
     ArmGeneration,
     PersistentSlot,
@@ -12,6 +15,13 @@ from terminal_mcp.core.persistent_agents import (
     normalize_slot_selector,
 )
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
+
+
+class PersistentStoreError(RuntimeError):
+    def __init__(self, code: str, *, blockers: list[dict] | None = None):
+        self.code = code
+        self.blockers = blockers or []
+        super().__init__(code)
 
 
 class PersistentAgentStore:
@@ -271,3 +281,980 @@ class PersistentAgentStore:
                 )
             ).fetchone()
         return claim is not None
+
+    async def list_slots(self, *, include_deleted: bool = False) -> list[PersistentSlot]:
+        where = "" if include_deleted else " WHERE state<>'deleted'"
+        async with self._connect("persistent_slot_list") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT logical_agent_id,display_name,state,authority_node_id,authority_epoch,"
+                    "slot_revision,selector_generation,auth_generation,created_at,updated_at,"
+                    "deleted_at,tombstone_reason FROM logical_agents"
+                    + where
+                    + " ORDER BY created_at,logical_agent_id"
+                )
+            ).fetchall()
+        return [self._slot(row) for row in rows]
+
+    async def active_selector(self, logical_agent_id: str) -> dict | None:
+        async with self._connect("persistent_selector_active") as db:
+            row = await (
+                await db.execute(
+                    "SELECT s.selector,s.generation,s.created_at FROM logical_agent_selectors s "
+                    "JOIN logical_agents a ON a.logical_agent_id=s.logical_agent_id "
+                    "WHERE s.logical_agent_id=? AND s.generation=a.selector_generation "
+                    "AND s.retired_at IS NULL AND s.tombstoned_at IS NULL",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+        return (
+            {"selector": row[0], "generation": int(row[1]), "created_at": row[2]} if row else None
+        )
+
+    async def rename_slot(
+        self,
+        logical_agent_id: str,
+        display_name: str,
+        *,
+        expected_revision: int,
+        now: str | None = None,
+    ) -> PersistentSlot:
+        name = display_name.strip()
+        if not name:
+            raise ValueError("display name is required")
+        stamp = now or utc_text()
+        async with self._connect("persistent_slot_rename") as db:
+            cur = await db.execute(
+                "UPDATE logical_agents SET display_name=?,"
+                "slot_revision=slot_revision+1,updated_at=? "
+                "WHERE logical_agent_id=? AND slot_revision=? AND state<>'deleted'",
+                (name, stamp, logical_agent_id, expected_revision),
+            )
+            await db.commit()
+        if cur.rowcount != 1:
+            if await self.get_slot(logical_agent_id) is None:
+                raise PersistentStoreError("slot_not_found")
+            raise PersistentStoreError("revision_conflict")
+        return await self.get_slot(logical_agent_id)
+
+    async def arm_slot(
+        self,
+        logical_agent_id: str,
+        duration_seconds: int,
+        *,
+        expected_revision: int,
+        now: str | None = None,
+    ) -> tuple[PersistentSlot, ArmGeneration]:
+        if duration_seconds < 1:
+            raise ValueError("duration_seconds must be positive")
+        stamp = now or utc_text()
+        armed_until = utc_text(parse_utc(stamp) + timedelta(seconds=duration_seconds))
+        async with self._connect("persistent_slot_arm") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT state,slot_revision,selector_generation,auth_generation "
+                        "FROM logical_agents WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if row is None or row[0] == "deleted":
+                    raise PersistentStoreError("slot_not_found")
+                if int(row[1]) != int(expected_revision):
+                    raise PersistentStoreError("revision_conflict")
+                if row[0] in {"active", "stopping", "deleting"}:
+                    raise PersistentStoreError(
+                        "session_already_active" if row[0] == "active" else "session_stopping"
+                    )
+                generation_row = await (
+                    await db.execute(
+                        "SELECT COALESCE(MAX(generation),0)+1 FROM logical_agent_arms "
+                        "WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                generation = int(generation_row[0])
+                await db.execute(
+                    "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
+                    "WHERE logical_agent_id=? AND consumed_at IS NULL AND revoked_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                next_revision = int(row[1]) + 1
+                arm = ArmGeneration(
+                    logical_agent_id,
+                    generation,
+                    stamp,
+                    armed_until,
+                    duration_seconds,
+                    int(row[2]),
+                    int(row[3]),
+                    next_revision,
+                )
+                await db.execute(
+                    "INSERT INTO logical_agent_arms("
+                    "logical_agent_id,generation,armed_at,armed_until,captured_duration_seconds,"
+                    "selector_generation,auth_generation,slot_revision,consumed_at,revoked_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,NULL,NULL)",
+                    (
+                        arm.logical_agent_id,
+                        arm.generation,
+                        arm.armed_at,
+                        arm.armed_until,
+                        arm.captured_duration_seconds,
+                        arm.selector_generation,
+                        arm.auth_generation,
+                        arm.slot_revision,
+                    ),
+                )
+                await db.execute(
+                    "UPDATE logical_agents SET state='armed',slot_revision=?,updated_at=? "
+                    "WHERE logical_agent_id=?",
+                    (next_revision, stamp, logical_agent_id),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.get_slot(logical_agent_id), arm
+
+    async def start_session(
+        self,
+        *,
+        selector: str,
+        work_session_id: str,
+        expected_revision: int,
+        principal_id: str,
+        auth_generation: int,
+        authority_node_id: str,
+        origin_instance_id: str | None,
+        now: str | None = None,
+    ) -> tuple[PersistentSlot, WorkSessionRecord]:
+        selector = normalize_slot_selector(selector)
+        stamp = now or utc_text()
+        current = parse_utc(stamp)
+        async with self._connect("persistent_session_start") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT a.logical_agent_id,a.state,a.authority_node_id,a.authority_epoch,"
+                        "a.slot_revision,a.selector_generation,a.auth_generation "
+                        "FROM logical_agents a JOIN logical_agent_selectors s "
+                        "ON s.logical_agent_id=a.logical_agent_id "
+                        "WHERE s.selector=? AND s.generation=a.selector_generation "
+                        "AND s.retired_at IS NULL AND s.tombstoned_at IS NULL",
+                        (selector,),
+                    )
+                ).fetchone()
+                if row is None or row[1] == "deleted":
+                    raise PersistentStoreError("slot_not_found")
+                logical_agent_id = row[0]
+                if int(row[4]) != int(expected_revision):
+                    raise PersistentStoreError("revision_conflict")
+                if row[2] != authority_node_id:
+                    raise PersistentStoreError("authority_unavailable")
+                if row[1] == "stopping":
+                    raise PersistentStoreError("session_stopping")
+                if row[1] == "active":
+                    raise PersistentStoreError("session_already_active")
+                if row[1] != "armed":
+                    raise PersistentStoreError("slot_not_armed")
+                arm_row = await (
+                    await db.execute(
+                        "SELECT generation,armed_at,armed_until,captured_duration_seconds,"
+                        "selector_generation,auth_generation,slot_revision,consumed_at,revoked_at "
+                        "FROM logical_agent_arms WHERE logical_agent_id=? "
+                        "ORDER BY generation DESC LIMIT 1",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if arm_row is None or arm_row[7] is not None or arm_row[8] is not None:
+                    raise PersistentStoreError("slot_not_armed")
+                if current >= parse_utc(arm_row[2]):
+                    await db.execute(
+                        "UPDATE logical_agent_arms SET revoked_at=? WHERE logical_agent_id=? "
+                        "AND generation=? AND revoked_at IS NULL",
+                        (stamp, logical_agent_id, int(arm_row[0])),
+                    )
+                    await db.execute(
+                        "UPDATE logical_agents SET state='suspended',slot_revision=slot_revision+1,"
+                        "updated_at=? WHERE logical_agent_id=? AND state='armed'",
+                        (stamp, logical_agent_id),
+                    )
+                    await db.commit()
+                    raise PersistentStoreError("arm_expired")
+                if int(arm_row[4]) != int(row[5]) or int(arm_row[5]) != int(row[6]):
+                    raise PersistentStoreError("policy_incompatible")
+                active = await (
+                    await db.execute(
+                        "SELECT 1 FROM logical_agent_work_sessions WHERE logical_agent_id=? "
+                        "AND state IN ('active','stopping') LIMIT 1",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if active is not None:
+                    raise PersistentStoreError("session_already_active")
+                epoch_row = await (
+                    await db.execute(
+                        "SELECT COALESCE(MAX(session_epoch),0)+1 FROM logical_agent_work_sessions "
+                        "WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                session_epoch = int(epoch_row[0])
+                hard_expires_at = utc_text(current + timedelta(seconds=int(arm_row[3])))
+                next_revision = int(row[4]) + 1
+                await db.execute(
+                    "UPDATE logical_agent_arms SET consumed_at=? WHERE logical_agent_id=? "
+                    "AND generation=? AND consumed_at IS NULL AND revoked_at IS NULL",
+                    (stamp, logical_agent_id, int(arm_row[0])),
+                )
+                cur = await db.execute(
+                    "UPDATE logical_agents SET state='active',slot_revision=?,updated_at=? "
+                    "WHERE logical_agent_id=? AND state='armed' AND slot_revision=?",
+                    (next_revision, stamp, logical_agent_id, expected_revision),
+                )
+                if cur.rowcount != 1:
+                    raise PersistentStoreError("revision_conflict")
+                session = WorkSessionRecord(
+                    work_session_id,
+                    logical_agent_id,
+                    session_epoch,
+                    authority_node_id,
+                    int(row[3]),
+                    stamp,
+                    hard_expires_at,
+                    principal_id,
+                    auth_generation,
+                    "active",
+                    origin_instance_id=origin_instance_id,
+                )
+                await db.execute(
+                    "INSERT INTO logical_agent_work_sessions("
+                    "work_session_id,logical_agent_id,session_epoch,authority_node_id,authority_epoch,"
+                    "started_at,hard_expires_at,auth_principal_id,auth_generation,state,"
+                    "origin_instance_id,ended_at,end_reason) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
+                    (
+                        session.work_session_id,
+                        session.logical_agent_id,
+                        session.session_epoch,
+                        session.authority_node_id,
+                        session.authority_epoch,
+                        session.started_at,
+                        session.hard_expires_at,
+                        session.auth_principal_id,
+                        session.auth_generation,
+                        session.state,
+                        session.origin_instance_id,
+                    ),
+                )
+                await db.commit()
+            except PersistentStoreError as exc:
+                if exc.code == "arm_expired":
+                    raise
+                await db.rollback()
+                raise
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.get_slot(logical_agent_id), session
+
+    async def active_session_for_slot(self, logical_agent_id: str) -> WorkSessionRecord | None:
+        async with self._connect("persistent_session_active") as db:
+            row = await (
+                await db.execute(
+                    "SELECT work_session_id,logical_agent_id,session_epoch,authority_node_id,"
+                    "authority_epoch,started_at,hard_expires_at,auth_principal_id,auth_generation,"
+                    "state,origin_instance_id,ended_at,end_reason FROM logical_agent_work_sessions "
+                    "WHERE logical_agent_id=? AND state IN ('active','stopping') "
+                    "ORDER BY session_epoch DESC LIMIT 1",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+        return self._session(row)
+
+    async def assert_session_authority(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        now: str | None = None,
+    ) -> WorkSessionRecord:
+        stamp = now or utc_text()
+        async with self._connect("persistent_session_authorize") as db:
+            row = await (
+                await db.execute(
+                    "SELECT s.work_session_id,s.logical_agent_id,s.session_epoch,"
+                    "s.authority_node_id,"
+                    "s.authority_epoch,s.started_at,s.hard_expires_at,s.auth_principal_id,"
+                    "s.auth_generation,s.state,s.origin_instance_id,s.ended_at,s.end_reason,"
+                    "a.state,a.authority_epoch FROM logical_agent_work_sessions s "
+                    "JOIN logical_agents a ON a.logical_agent_id=s.logical_agent_id "
+                    "WHERE s.logical_agent_id=? AND s.work_session_id=? AND s.session_epoch=?",
+                    (logical_agent_id, work_session_id, session_epoch),
+                )
+            ).fetchone()
+        if row is None:
+            raise PersistentStoreError("session_not_found")
+        session = self._session(row[:13])
+        if session.state != "active" or row[13] != "active":
+            raise PersistentStoreError("session_not_active")
+        if int(row[14]) != session.authority_epoch:
+            raise PersistentStoreError("authority_unavailable")
+        if parse_utc(stamp) >= parse_utc(session.hard_expires_at):
+            raise PersistentStoreError("session_expired")
+        return session
+
+    async def begin_session_stop(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        reason: str,
+        now: str | None = None,
+    ) -> WorkSessionRecord:
+        stamp = now or utc_text()
+        async with self._connect("persistent_session_stop_begin") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT state FROM logical_agent_work_sessions WHERE logical_agent_id=? "
+                        "AND work_session_id=? AND session_epoch=?",
+                        (logical_agent_id, work_session_id, session_epoch),
+                    )
+                ).fetchone()
+                if row is None:
+                    raise PersistentStoreError("session_not_found")
+                if row[0] not in {"active", "stopping"}:
+                    await db.commit()
+                    return await self.get_work_session(work_session_id)
+                await db.execute(
+                    "UPDATE logical_agent_work_sessions SET state='stopping',end_reason=? "
+                    "WHERE work_session_id=? AND state='active'",
+                    (reason, work_session_id),
+                )
+                await db.execute(
+                    "UPDATE logical_agents SET state='stopping',slot_revision=slot_revision+1,"
+                    "updated_at=? WHERE logical_agent_id=? AND state='active'",
+                    (stamp, logical_agent_id),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.get_work_session(work_session_id)
+
+    async def finalize_session_stop(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        reason: str,
+        terminal_state: str = "ended",
+        now: str | None = None,
+    ) -> tuple[PersistentSlot, WorkSessionRecord]:
+        if terminal_state not in {"ended", "expired", "suspended", "failed"}:
+            raise ValueError("invalid terminal session state")
+        stamp = now or utc_text()
+        async with self._connect("persistent_session_stop_finalize") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cur = await db.execute(
+                    "UPDATE logical_agent_work_sessions SET state=?,ended_at=COALESCE(ended_at,?),"
+                    "end_reason=? WHERE logical_agent_id=? AND work_session_id=? "
+                    "AND session_epoch=? "
+                    "AND state IN ('active','stopping')",
+                    (
+                        terminal_state,
+                        stamp,
+                        reason,
+                        logical_agent_id,
+                        work_session_id,
+                        session_epoch,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    existing = await (
+                        await db.execute(
+                            "SELECT state FROM logical_agent_work_sessions WHERE work_session_id=?",
+                            (work_session_id,),
+                        )
+                    ).fetchone()
+                    if existing is None:
+                        raise PersistentStoreError("session_not_found")
+                await db.execute(
+                    "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
+                    "WHERE logical_agent_id=? AND consumed_at IS NULL AND revoked_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                await db.execute(
+                    "UPDATE logical_agents SET state='suspended',slot_revision=slot_revision+1,"
+                    "updated_at=? WHERE logical_agent_id=? "
+                    "AND state IN ('active','stopping','armed')",
+                    (stamp, logical_agent_id),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.get_slot(logical_agent_id), await self.get_work_session(work_session_id)
+
+    async def suspend_non_active(
+        self,
+        logical_agent_id: str,
+        *,
+        expected_revision: int,
+        now: str | None = None,
+    ) -> PersistentSlot:
+        stamp = now or utc_text()
+        async with self._connect("persistent_slot_suspend") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT state,slot_revision FROM logical_agents WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if row is None or row[0] == "deleted":
+                    raise PersistentStoreError("slot_not_found")
+                if int(row[1]) != int(expected_revision):
+                    raise PersistentStoreError("revision_conflict")
+                if row[0] in {"active", "stopping"}:
+                    raise PersistentStoreError(
+                        "session_already_active" if row[0] == "active" else "session_stopping"
+                    )
+                await db.execute(
+                    "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
+                    "WHERE logical_agent_id=? AND consumed_at IS NULL AND revoked_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                if row[0] != "suspended":
+                    await db.execute(
+                        "UPDATE logical_agents SET state='suspended',slot_revision=slot_revision+1,"
+                        "updated_at=? WHERE logical_agent_id=?",
+                        (stamp, logical_agent_id),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.get_slot(logical_agent_id)
+
+    async def release_logical_claim(
+        self, namespace: str, task_id: str, logical_agent_id: str, *, now: str | None = None
+    ) -> bool:
+        stamp = now or utc_text()
+        async with self._connect("persistent_claim_release") as db:
+            cur = await db.execute(
+                "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? "
+                "AND owner_kind='logical_agent' AND owner_id=? AND released_at IS NULL",
+                (stamp, namespace, task_id, logical_agent_id),
+            )
+            await db.commit()
+        return cur.rowcount == 1
+
+    async def reassign_logical_claim(
+        self,
+        namespace: str,
+        task_id: str,
+        from_logical_agent_id: str,
+        to_logical_agent_id: str,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        stamp = now or utc_text()
+        async with self._connect("persistent_claim_reassign") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                target = await (
+                    await db.execute(
+                        "SELECT state FROM logical_agents WHERE logical_agent_id=?",
+                        (to_logical_agent_id,),
+                    )
+                ).fetchone()
+                if target is None or target[0] == "deleted":
+                    raise PersistentStoreError("slot_not_found")
+                duplicate = await (
+                    await db.execute(
+                        "SELECT 1 FROM work_claims WHERE namespace=? AND task_id=? "
+                        "AND owner_kind='logical_agent' AND owner_id=? AND released_at IS NULL",
+                        (namespace, task_id, to_logical_agent_id),
+                    )
+                ).fetchone()
+                if duplicate is not None:
+                    raise PersistentStoreError("reassign_blocked")
+                cur = await db.execute(
+                    "UPDATE work_claims SET owner_id=?,agent_id=? WHERE namespace=? AND task_id=? "
+                    "AND owner_kind='logical_agent' AND owner_id=? AND released_at IS NULL",
+                    (
+                        to_logical_agent_id,
+                        to_logical_agent_id,
+                        namespace,
+                        task_id,
+                        from_logical_agent_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise PersistentStoreError("claim_not_found")
+                await db.execute(
+                    "INSERT INTO work_events(namespace,task_id,event_type,agent_id,"
+                    "payload_json,created_at,"
+                    "logical_agent_id) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        "claim_reassigned",
+                        to_logical_agent_id,
+                        json.dumps(
+                            {"from": from_logical_agent_id, "to": to_logical_agent_id},
+                            separators=(",", ":"),
+                        ),
+                        stamp,
+                        to_logical_agent_id,
+                    ),
+                )
+                await db.commit()
+                return True
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def delete_slot(
+        self,
+        logical_agent_id: str,
+        *,
+        expected_revision: int,
+        now: str | None = None,
+    ) -> PersistentSlot:
+        stamp = now or utc_text()
+        async with self._connect("persistent_slot_delete") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT state,slot_revision FROM logical_agents WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if row is None:
+                    raise PersistentStoreError("slot_not_found")
+                if row[0] == "deleted":
+                    await db.commit()
+                    return await self.get_slot(logical_agent_id)
+                if int(row[1]) != int(expected_revision):
+                    raise PersistentStoreError("revision_conflict")
+                if row[0] in {"active", "stopping", "deleting"}:
+                    raise PersistentStoreError(
+                        "delete_blocked",
+                        blockers=[{"kind": row[0], "logical_agent_id": logical_agent_id}],
+                    )
+                live = await (
+                    await db.execute(
+                        "SELECT work_session_id,state FROM logical_agent_work_sessions "
+                        "WHERE logical_agent_id=? AND state IN ('active','stopping') LIMIT 1",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if live is not None:
+                    raise PersistentStoreError(
+                        "delete_blocked", blockers=[{"kind": live[1], "work_session_id": live[0]}]
+                    )
+                await db.execute(
+                    "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
+                    "WHERE logical_agent_id=? AND revoked_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                await db.execute(
+                    "UPDATE logical_agent_selectors SET retired_at=COALESCE(retired_at,?),"
+                    "tombstoned_at=COALESCE(tombstoned_at,?) WHERE logical_agent_id=?",
+                    (stamp, stamp, logical_agent_id),
+                )
+                await db.execute(
+                    "UPDATE work_claims SET released_at=? WHERE owner_kind='logical_agent' "
+                    "AND owner_id=? AND released_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                await db.execute(
+                    "UPDATE logical_agents SET state='deleted',deleted_at=?,"
+                    "tombstone_reason='operator_delete',"
+                    "slot_revision=slot_revision+1,auth_generation=auth_generation+1,updated_at=? "
+                    "WHERE logical_agent_id=?",
+                    (stamp, stamp, logical_agent_id),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.get_slot(logical_agent_id)
+
+    @staticmethod
+    def idempotency_fingerprint(payload: dict) -> str:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    async def idempotency_get(
+        self,
+        logical_agent_id: str,
+        operation: str,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> dict | None:
+        async with self._connect("persistent_idempotency_get") as db:
+            row = await (
+                await db.execute(
+                    "SELECT request_fingerprint,state,result_json FROM persistent_idempotency "
+                    "WHERE logical_agent_id=? AND operation=? AND idempotency_key=?",
+                    (logical_agent_id, operation, idempotency_key),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        if row[0] != fingerprint:
+            raise PersistentStoreError("idempotency_conflict")
+        if row[1] == "pending":
+            raise PersistentStoreError("idempotency_in_progress")
+        if row[1] != "complete" or row[2] is None:
+            raise PersistentStoreError("idempotency_conflict")
+        return json.loads(row[2])
+
+    async def idempotency_reserve(
+        self,
+        logical_agent_id: str,
+        operation: str,
+        idempotency_key: str,
+        fingerprint: str,
+        *,
+        now: str | None = None,
+    ) -> dict | None:
+        stamp = now or utc_text()
+        async with self._connect("persistent_idempotency_reserve") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT request_fingerprint,state,result_json FROM persistent_idempotency "
+                        "WHERE logical_agent_id=? AND operation=? AND idempotency_key=?",
+                        (logical_agent_id, operation, idempotency_key),
+                    )
+                ).fetchone()
+                if row is not None:
+                    if row[0] != fingerprint:
+                        raise PersistentStoreError("idempotency_conflict")
+                    if row[1] == "pending":
+                        raise PersistentStoreError("idempotency_in_progress")
+                    if row[1] != "complete" or row[2] is None:
+                        raise PersistentStoreError("idempotency_conflict")
+                    await db.commit()
+                    return json.loads(row[2])
+                await db.execute(
+                    "INSERT INTO persistent_idempotency("
+                    "logical_agent_id,operation,idempotency_key,request_fingerprint,"
+                    "state,result_json,created_at) VALUES(?,?,?,?, 'pending',NULL,?)",
+                    (logical_agent_id, operation, idempotency_key, fingerprint, stamp),
+                )
+                await db.commit()
+                return None
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def idempotency_complete(
+        self,
+        logical_agent_id: str,
+        operation: str,
+        idempotency_key: str,
+        fingerprint: str,
+        result: dict,
+    ) -> dict:
+        payload = json.dumps(result, sort_keys=True, separators=(",", ":"), default=str)
+        async with self._connect("persistent_idempotency_complete") as db:
+            cur = await db.execute(
+                "UPDATE persistent_idempotency SET state='complete',result_json=? "
+                "WHERE logical_agent_id=? AND operation=? AND idempotency_key=? "
+                "AND request_fingerprint=? AND state='pending'",
+                (payload, logical_agent_id, operation, idempotency_key, fingerprint),
+            )
+            await db.commit()
+        if cur.rowcount != 1:
+            replay = await self.idempotency_get(
+                logical_agent_id, operation, idempotency_key, fingerprint
+            )
+            if replay is None:
+                raise PersistentStoreError("idempotency_conflict")
+            return replay
+        return result
+
+    async def idempotency_abort(
+        self,
+        logical_agent_id: str,
+        operation: str,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> bool:
+        async with self._connect("persistent_idempotency_abort") as db:
+            cur = await db.execute(
+                "DELETE FROM persistent_idempotency WHERE logical_agent_id=? AND operation=? "
+                "AND idempotency_key=? AND request_fingerprint=? AND state='pending'",
+                (logical_agent_id, operation, idempotency_key, fingerprint),
+            )
+            await db.commit()
+        return cur.rowcount == 1
+
+    async def idempotency_put(
+        self,
+        logical_agent_id: str,
+        operation: str,
+        idempotency_key: str,
+        fingerprint: str,
+        result: dict,
+        *,
+        now: str | None = None,
+    ) -> dict:
+        replay = await self.idempotency_reserve(
+            logical_agent_id,
+            operation,
+            idempotency_key,
+            fingerprint,
+            now=now,
+        )
+        if replay is not None:
+            return replay
+        return await self.idempotency_complete(
+            logical_agent_id, operation, idempotency_key, fingerprint, result
+        )
+
+    async def record_node_attachment(
+        self,
+        *,
+        node_attachment_id: str,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        node_instance_id: str,
+        authority_epoch: int,
+        hard_expires_at: str,
+        now: str | None = None,
+    ) -> dict:
+        stamp = now or utc_text()
+        async with self._connect("persistent_attachment_record") as db:
+            await db.execute(
+                "INSERT INTO logical_agent_node_attachments("
+                "node_attachment_id,logical_agent_id,work_session_id,session_epoch,node_instance_id,"
+                "authority_epoch,attached_at,hard_expires_at,revoked_at) "
+                "VALUES(?,?,?,?,?,?,?,?,NULL) "
+                "ON CONFLICT(logical_agent_id,work_session_id,session_epoch,node_instance_id) "
+                "DO UPDATE SET authority_epoch=excluded.authority_epoch,"
+                "hard_expires_at=excluded.hard_expires_at,revoked_at=NULL",
+                (
+                    node_attachment_id,
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    node_instance_id,
+                    authority_epoch,
+                    stamp,
+                    hard_expires_at,
+                ),
+            )
+            await db.commit()
+            row = await (
+                await db.execute(
+                    "SELECT node_attachment_id,logical_agent_id,work_session_id,session_epoch,"
+                    "node_instance_id,authority_epoch,attached_at,hard_expires_at,revoked_at "
+                    "FROM logical_agent_node_attachments WHERE logical_agent_id=? "
+                    "AND work_session_id=? "
+                    "AND session_epoch=? AND node_instance_id=?",
+                    (logical_agent_id, work_session_id, session_epoch, node_instance_id),
+                )
+            ).fetchone()
+        keys = (
+            "node_attachment_id",
+            "logical_agent_id",
+            "work_session_id",
+            "session_epoch",
+            "node_instance_id",
+            "authority_epoch",
+            "attached_at",
+            "hard_expires_at",
+            "revoked_at",
+        )
+        return dict(zip(keys, row, strict=True))
+
+    async def attachments_for_session(
+        self, logical_agent_id: str, work_session_id: str, session_epoch: int, *, active_only=True
+    ) -> list[dict]:
+        clause = " AND revoked_at IS NULL" if active_only else ""
+        async with self._connect("persistent_attachment_list") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT node_attachment_id,logical_agent_id,work_session_id,session_epoch,"
+                    "node_instance_id,authority_epoch,attached_at,hard_expires_at,revoked_at "
+                    "FROM logical_agent_node_attachments WHERE logical_agent_id=? "
+                    "AND work_session_id=? "
+                    "AND session_epoch=?" + clause + " ORDER BY attached_at,node_instance_id",
+                    (logical_agent_id, work_session_id, session_epoch),
+                )
+            ).fetchall()
+        keys = (
+            "node_attachment_id",
+            "logical_agent_id",
+            "work_session_id",
+            "session_epoch",
+            "node_instance_id",
+            "authority_epoch",
+            "attached_at",
+            "hard_expires_at",
+            "revoked_at",
+        )
+        return [dict(zip(keys, row, strict=True)) for row in rows]
+
+    async def revoke_node_attachment(
+        self, node_attachment_id: str, *, now: str | None = None
+    ) -> bool:
+        stamp = now or utc_text()
+        async with self._connect("persistent_attachment_revoke") as db:
+            cur = await db.execute(
+                "UPDATE logical_agent_node_attachments SET revoked_at=COALESCE(revoked_at,?) "
+                "WHERE node_attachment_id=?",
+                (stamp, node_attachment_id),
+            )
+            await db.commit()
+        return cur.rowcount > 0
+
+    async def record_command_permit(self, command_hash: str, permit: dict) -> None:
+        async with self._connect("persistent_permit_record") as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO persistent_command_permits("
+                "command_hash,logical_agent_id,work_session_id,session_epoch,authority_node_id,"
+                "authority_epoch,node_attachment_id,node_instance_id,scope,hard_expires_at,permit_expires_at,"
+                "signature,created_at,revoked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+                (
+                    command_hash,
+                    permit["logical_agent_id"],
+                    permit["work_session_id"],
+                    int(permit["session_epoch"]),
+                    permit["authority_node_id"],
+                    int(permit["authority_epoch"]),
+                    permit["node_attachment_id"],
+                    permit["node_instance_id"],
+                    permit["scope"],
+                    permit["hard_expires_at"],
+                    permit["permit_expires_at"],
+                    permit["signature"],
+                    permit["issued_at"],
+                ),
+            )
+            await db.commit()
+
+    async def revoke_command_permits(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        now: str | None = None,
+    ) -> int:
+        stamp = now or utc_text()
+        async with self._connect("persistent_permit_revoke") as db:
+            cur = await db.execute(
+                "UPDATE persistent_command_permits SET revoked_at=COALESCE(revoked_at,?) "
+                "WHERE logical_agent_id=? AND work_session_id=? AND session_epoch=? "
+                "AND revoked_at IS NULL",
+                (stamp, logical_agent_id, work_session_id, session_epoch),
+            )
+            await db.commit()
+        return int(cur.rowcount)
+
+    async def expired_remote_permit_sessions(self, *, now: str | None = None) -> list[dict]:
+        stamp = now or utc_text()
+        async with self._connect("persistent_permit_expired") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT DISTINCT logical_agent_id,work_session_id,session_epoch,"
+                    "authority_node_id "
+                    "FROM persistent_command_permits WHERE revoked_at IS NULL "
+                    "AND hard_expires_at<=?",
+                    (stamp,),
+                )
+            ).fetchall()
+        return [
+            {
+                "logical_agent_id": row[0],
+                "work_session_id": row[1],
+                "session_epoch": int(row[2]),
+                "authority_node_id": row[3],
+            }
+            for row in rows
+        ]
+
+    async def add_audit_event(
+        self,
+        logical_agent_id: str,
+        event_type: str,
+        *,
+        principal_id: str,
+        work_session_id: str | None = None,
+        session_epoch: int | None = None,
+        payload: dict | None = None,
+        now: str | None = None,
+    ) -> dict:
+        stamp = now or utc_text()
+        encoded = json.dumps(payload or {}, sort_keys=True, separators=(",", ":"), default=str)
+        async with self._connect("persistent_audit_add") as db:
+            cur = await db.execute(
+                "INSERT INTO persistent_agent_audit("
+                "logical_agent_id,event_type,principal_id,work_session_id,session_epoch,payload_json,created_at"
+                ") VALUES(?,?,?,?,?,?,?)",
+                (
+                    logical_agent_id,
+                    event_type,
+                    principal_id,
+                    work_session_id,
+                    session_epoch,
+                    encoded,
+                    stamp,
+                ),
+            )
+            await db.commit()
+        return {
+            "id": int(cur.lastrowid),
+            "logical_agent_id": logical_agent_id,
+            "event_type": event_type,
+            "principal_id": principal_id,
+            "work_session_id": work_session_id,
+            "session_epoch": session_epoch,
+            "payload": payload or {},
+            "created_at": stamp,
+        }
+
+    async def audit_events(self, logical_agent_id: str, *, limit: int = 100) -> list[dict]:
+        limit = max(1, min(int(limit), 500))
+        async with self._connect("persistent_audit_list") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT id,event_type,principal_id,work_session_id,session_epoch,"
+                    "payload_json,created_at "
+                    "FROM persistent_agent_audit WHERE logical_agent_id=? ORDER BY id DESC LIMIT ?",
+                    (logical_agent_id, limit),
+                )
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "logical_agent_id": logical_agent_id,
+                "event_type": row[1],
+                "principal_id": row[2],
+                "work_session_id": row[3],
+                "session_epoch": int(row[4]) if row[4] is not None else None,
+                "payload": json.loads(row[5]),
+                "created_at": row[6],
+            }
+            for row in rows
+        ]

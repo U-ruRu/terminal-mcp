@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,6 +83,29 @@ class Settings(BaseSettings):
     fleet_request_timeout_sec: float = 3.0
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
+    persistent_agents_enabled: bool = False
+    persistent_session_duration_sec: int = 23 * 60
+    persistent_session_warning_after_sec: int = 20 * 60
+    persistent_session_alert_after_sec: int = 22 * 60
+
+    @model_validator(mode="after")
+    def validate_persistent_session_thresholds(self):
+        if not self.persistent_agents_enabled:
+            return self
+        duration = self.persistent_session_duration_sec
+        warning = self.persistent_session_warning_after_sec
+        alert = self.persistent_session_alert_after_sec
+        if duration <= 0:
+            raise ValueError("persistent_session_duration_sec must be positive")
+        if warning <= 0 or warning >= duration:
+            raise ValueError(
+                "persistent_session_warning_after_sec must be positive and below duration"
+            )
+        if alert <= warning or alert >= duration:
+            raise ValueError(
+                "persistent_session_alert_after_sec must be above warning and below duration"
+            )
+        return self
 
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode

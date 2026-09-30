@@ -598,6 +598,16 @@ class TerminalService:
         execution_started = None
         try:
             async with asyncio.timeout(_budget(CANCEL_TIMEOUT_SECONDS)):
+                persistent = await self.repo.persistent_attribution(cmd_hash)
+                if persistent is not None:
+                    return {
+                        "ok": False,
+                        "cmd_hash": cmd_hash,
+                        "error": "cancel.persistent: exact work-session context required",
+                        "cancelled_from": None,
+                        "execution_started": None,
+                        **context,
+                    }
                 command, cancelled_before_start = await self.repo.cancel_if_queued(cmd_hash)
                 if command is None:
                     return {

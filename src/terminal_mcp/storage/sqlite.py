@@ -22,7 +22,7 @@ from terminal_mcp.storage.output import (
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -268,6 +268,35 @@ class SqliteRepository:
                     UNIQUE(logical_agent_id,session_epoch),
                     FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
                 );
+                CREATE TABLE IF NOT EXISTS persistent_agent_audit(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, logical_agent_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL, principal_id TEXT NOT NULL, work_session_id TEXT,
+                    session_epoch INTEGER, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS persistent_idempotency(
+                    logical_agent_id TEXT NOT NULL, operation TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('pending','complete')),
+                    result_json TEXT, created_at TEXT NOT NULL,
+                    PRIMARY KEY(logical_agent_id,operation,idempotency_key),
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS logical_agent_node_attachments(
+                    node_attachment_id TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL,
+                    work_session_id TEXT NOT NULL, session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+                    node_instance_id TEXT NOT NULL, authority_epoch INTEGER NOT NULL CHECK(authority_epoch > 0),
+                    attached_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, revoked_at TEXT,
+                    UNIQUE(logical_agent_id,work_session_id,session_epoch,node_instance_id),
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS persistent_command_permits(
+                    command_hash TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL, work_session_id TEXT NOT NULL,
+                    session_epoch INTEGER NOT NULL CHECK(session_epoch > 0), authority_node_id TEXT NOT NULL,
+                    authority_epoch INTEGER NOT NULL CHECK(authority_epoch > 0), node_attachment_id TEXT NOT NULL,
+                    node_instance_id TEXT NOT NULL, scope TEXT NOT NULL, hard_expires_at TEXT NOT NULL,
+                    permit_expires_at TEXT NOT NULL, signature TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT
+                );
                 CREATE INDEX IF NOT EXISTS ix_agent_sessions_last_activity ON agent_sessions(last_activity_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_agent_task_events_agent ON agent_task_events(agent_id, id DESC);
                 CREATE INDEX IF NOT EXISTS ix_command_agent_agent ON command_agent_attribution(agent_id, created_at DESC);
@@ -450,11 +479,19 @@ class SqliteRepository:
         )
         await add_columns(
             "command_agent_attribution",
-            [("logical_agent_id", "TEXT"), ("work_session_id", "TEXT"), ("session_epoch", "INTEGER")],
+            [
+                ("logical_agent_id", "TEXT"),
+                ("work_session_id", "TEXT"),
+                ("session_epoch", "INTEGER"),
+            ],
         )
         await add_columns(
             "work_events",
-            [("logical_agent_id", "TEXT"), ("work_session_id", "TEXT"), ("session_epoch", "INTEGER")],
+            [
+                ("logical_agent_id", "TEXT"),
+                ("work_session_id", "TEXT"),
+                ("session_epoch", "INTEGER"),
+            ],
         )
         await self._migrate_work_items_archive_lifecycle(db)
         # Schema v10: add creator-supplied isolation metadata after the v9 work_items rebuild.
@@ -498,6 +535,22 @@ class SqliteRepository:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_logical_agent_sessions_agent "
             "ON logical_agent_work_sessions(logical_agent_id,session_epoch DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_audit_agent "
+            "ON persistent_agent_audit(logical_agent_id,id DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_attachments_session "
+            "ON logical_agent_node_attachments(logical_agent_id,work_session_id,session_epoch,revoked_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_permits_session "
+            "ON persistent_command_permits(logical_agent_id,work_session_id,session_epoch,revoked_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_permits_expiry "
+            "ON persistent_command_permits(revoked_at,hard_expires_at,permit_expires_at)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_commands_queue ON commands(queue_id, status, queue_sequence)"
@@ -798,6 +851,7 @@ class SqliteRepository:
         logical_agent_id=None,
         work_session_id=None,
         session_epoch=None,
+        persistent_permit=None,
     ):
         attempts = 1 if cmd_hash is not None else 32
         for _ in range(attempts):
@@ -857,6 +911,31 @@ class SqliteRepository:
                                 session_epoch,
                             ),
                         )
+                    if persistent_permit is not None:
+                        if not logical_agent_id or not work_session_id or session_epoch is None:
+                            raise ValueError("persistent permit requires exact command attribution")
+                        await db.execute(
+                            "INSERT INTO persistent_command_permits("
+                            "command_hash,logical_agent_id,work_session_id,session_epoch,authority_node_id,"
+                            "authority_epoch,node_attachment_id,node_instance_id,scope,hard_expires_at,"
+                            "permit_expires_at,signature,created_at,revoked_at) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+                            (
+                                h,
+                                logical_agent_id,
+                                work_session_id,
+                                session_epoch,
+                                persistent_permit["authority_node_id"],
+                                int(persistent_permit["authority_epoch"]),
+                                persistent_permit["node_attachment_id"],
+                                persistent_permit["node_instance_id"],
+                                persistent_permit["scope"],
+                                persistent_permit["hard_expires_at"],
+                                persistent_permit["permit_expires_at"],
+                                persistent_permit["signature"],
+                                persistent_permit["issued_at"],
+                            ),
+                        )
                     await db.commit()
                 return Command(
                     h,
@@ -906,32 +985,76 @@ class SqliteRepository:
         now = utc_text()
         async with self._connect("claim_command") as db:
             await db.execute("BEGIN IMMEDIATE")
-            row = await (
-                await db.execute(
-                    "SELECT hash FROM commands WHERE queue_id=? AND status='queued' "
-                    "ORDER BY queue_sequence,rowid LIMIT 1",
-                    (queue_id,),
+            while True:
+                row = await (
+                    await db.execute(
+                        "SELECT hash FROM commands WHERE queue_id=? AND status='queued' "
+                        "ORDER BY queue_sequence,rowid LIMIT 1",
+                        (queue_id,),
+                    )
+                ).fetchone()
+                if row is None:
+                    await db.commit()
+                    return None
+                cmd_hash = row[0]
+                attribution = await (
+                    await db.execute(
+                        "SELECT logical_agent_id,work_session_id,session_epoch "
+                        "FROM command_agent_attribution WHERE command_hash=?",
+                        (cmd_hash,),
+                    )
+                ).fetchone()
+                if attribution and attribution[0] is not None:
+                    allowed = await (
+                        await db.execute(
+                            "SELECT 1 FROM logical_agent_work_sessions s "
+                            "JOIN logical_agents a ON a.logical_agent_id=s.logical_agent_id "
+                            "WHERE s.logical_agent_id=? AND s.work_session_id=? AND s.session_epoch=? "
+                            "AND s.state='active' AND a.state='active' "
+                            "AND s.authority_epoch=a.authority_epoch AND s.hard_expires_at>?",
+                            (attribution[0], attribution[1], attribution[2], now),
+                        )
+                    ).fetchone()
+                    if allowed is None:
+                        allowed = await (
+                            await db.execute(
+                                "SELECT 1 FROM persistent_command_permits p "
+                                "WHERE p.command_hash=? AND p.logical_agent_id=? "
+                                "AND p.work_session_id=? AND p.session_epoch=? "
+                                "AND p.scope='run' AND p.revoked_at IS NULL "
+                                "AND p.permit_expires_at>? AND p.hard_expires_at>?",
+                                (
+                                    cmd_hash,
+                                    attribution[0],
+                                    attribution[1],
+                                    attribution[2],
+                                    now,
+                                    now,
+                                ),
+                            )
+                        ).fetchone()
+                    if allowed is None:
+                        await db.execute(
+                            "UPDATE commands SET status='cancelled',error='persistent.session_fenced',"
+                            "finished_at=? WHERE hash=? AND status='queued'",
+                            (now, cmd_hash),
+                        )
+                        continue
+                cur = await db.execute(
+                    "UPDATE commands SET status='running', started_at=COALESCE(started_at,?), claimed_at=? "
+                    "WHERE hash=? AND status='queued'",
+                    (now, now, cmd_hash),
                 )
-            ).fetchone()
-            if row is None:
+                if cur.rowcount != 1:
+                    await db.rollback()
+                    return None
+                row = await (
+                    await db.execute(
+                        f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,)
+                    )
+                ).fetchone()
                 await db.commit()
-                return None
-            cmd_hash = row[0]
-            cur = await db.execute(
-                "UPDATE commands SET status='running', started_at=COALESCE(started_at,?), claimed_at=? "
-                "WHERE hash=? AND status='queued'",
-                (now, now, cmd_hash),
-            )
-            if cur.rowcount != 1:
-                await db.rollback()
-                return None
-            row = await (
-                await db.execute(
-                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,)
-                )
-            ).fetchone()
-            await db.commit()
-        return Command(*row)
+                return Command(*row)
 
     async def set_pid(self, cmd_hash, pid):
         async with self._connect("set_pid", command_hash=cmd_hash) as db:
@@ -1169,6 +1292,58 @@ class SqliteRepository:
                 )
             ).fetchone()
         return Command(*row) if row else None
+
+    async def persistent_attribution(self, cmd_hash):
+        async with self._connect("persistent_attribution", command_hash=cmd_hash) as db:
+            row = await (
+                await db.execute(
+                    "SELECT logical_agent_id,work_session_id,session_epoch "
+                    "FROM command_agent_attribution WHERE command_hash=?",
+                    (cmd_hash,),
+                )
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return {
+            "logical_agent_id": row[0],
+            "work_session_id": row[1],
+            "session_epoch": int(row[2]) if row[2] is not None else None,
+        }
+
+    async def persistent_commands(
+        self,
+        logical_agent_id,
+        *,
+        work_session_id=None,
+        session_epoch=None,
+        statuses=("queued", "running"),
+    ):
+        where = ["a.logical_agent_id=?"]
+        params = [logical_agent_id]
+        if work_session_id is not None:
+            where.append("a.work_session_id=?")
+            params.append(work_session_id)
+        if session_epoch is not None:
+            where.append("a.session_epoch=?")
+            params.append(session_epoch)
+        if statuses:
+            marks = ",".join("?" for _ in statuses)
+            where.append(f"c.status IN ({marks})")
+            params.extend(statuses)
+        columns = (
+            "c.hash,c.cmd,c.status,c.pid,c.exit_code,c.error,c.started_at,c.finished_at,"
+            "c.queue_id,c.queue_sequence,c.enqueued_at,c.claimed_at"
+        )
+        async with self._connect("persistent_commands") as db:
+            rows = await (
+                await db.execute(
+                    f"SELECT {columns} FROM commands c JOIN command_agent_attribution a "
+                    f"ON a.command_hash=c.hash WHERE {' AND '.join(where)} "
+                    "ORDER BY c.enqueued_at,c.hash",
+                    params,
+                )
+            ).fetchall()
+        return [Command(*row) for row in rows]
 
     async def mark_output_truncated(self, cmd_hash):
         async with self._connect("mark_output_truncated", command_hash=cmd_hash) as db:

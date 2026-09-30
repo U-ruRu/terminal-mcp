@@ -1,4 +1,5 @@
 import contextlib
+import socket
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
@@ -13,6 +14,13 @@ from terminal_mcp.auth.service import AuthService
 from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
 from terminal_mcp.core.agent_policy import AgentPolicy
+from terminal_mcp.core.persistent_backend import PersistentBackend
+from terminal_mcp.core.persistent_execution import (
+    CompositePersistentExecutionFence,
+    PersistentExecutionFence,
+)
+from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
+from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.replication import FleetReplicationService
@@ -24,6 +32,8 @@ from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
 from terminal_mcp.http.fleet import build_fleet_router
 from terminal_mcp.http.pairing import build_pairing_router
+from terminal_mcp.http.persistent import build_persistent_router
+from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.server import build_mcp
@@ -31,6 +41,7 @@ from terminal_mcp.metrics import Metrics
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
 from terminal_mcp.storage.agents import AgentStore
+from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 from terminal_mcp.trace import TraceMiddleware
@@ -116,8 +127,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         agent_policy,
         fleet_replication,
     )
+    persistent_store = PersistentAgentStore(settings.database_path)
+    persistent_store.configure_observability(events, metrics)
+    persistent_local_fence = PersistentExecutionFence(repo, terminal, service.task_store)
+    persistent_fleet = (
+        PersistentFleetBridge(fleet_config, persistent_store, repo, terminal, service.task_store)
+        if fleet_config and settings.persistent_agents_enabled
+        else None
+    )
+    if persistent_fleet:
+        persistent_fleet.execution_fence = persistent_local_fence
+        persistent_fence = CompositePersistentExecutionFence(
+            persistent_local_fence, persistent_fleet
+        )
+    else:
+        persistent_fence = persistent_local_fence
+    persistent_lifecycle = PersistentLifecycleCoordinator(
+        persistent_store,
+        enabled=settings.persistent_agents_enabled,
+        authority_node_id=(
+            fleet_config.instance_id
+            if fleet_config
+            else (settings.fleet_instance_id.strip() or socket.gethostname())
+        ),
+        session_duration_seconds=settings.persistent_session_duration_sec,
+        execution_fence=persistent_fence,
+    )
+    service.persistent = PersistentBackend(service, persistent_lifecycle, persistent_fleet)
+    service.persistent_lifecycle = persistent_lifecycle
     auth = AuthService(settings, oauth_store, credentials)
-    mcp = build_mcp(service, settings.public_base_url, settings.mode_for("mcp"))
+    mcp = build_mcp(
+        service,
+        settings.public_base_url,
+        settings.mode_for("mcp"),
+        persistent_enabled=settings.persistent_agents_enabled,
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -133,10 +177,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if fleet_replication:
             await fleet_replication.start()
         await terminal.start()
+        if persistent_fleet:
+            await persistent_fleet.start()
+        await persistent_lifecycle.start()
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
+            await persistent_lifecycle.stop()
+            if persistent_fleet:
+                await persistent_fleet.stop()
             await terminal.stop()
             if fleet_replication:
                 await fleet_replication.stop()
@@ -158,9 +208,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.events = events
     app.state.event_store = service.event_store
     app.state.fleet_replication = fleet_replication
+    app.state.persistent_backend = service.persistent
+    app.state.persistent_lifecycle = persistent_lifecycle
+    app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
     if fleet_replication:
         app.include_router(build_fleet_router(fleet_replication))
+        if persistent_fleet:
+            app.include_router(build_persistent_fleet_router(fleet_replication, persistent_fleet))
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(
         build_console_events_router(
@@ -174,6 +229,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
+    if settings.persistent_agents_enabled:
+        app.include_router(build_persistent_router(service))
     app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))

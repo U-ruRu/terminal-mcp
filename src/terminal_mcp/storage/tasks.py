@@ -1113,6 +1113,34 @@ class TaskStore:
         rows = await self.reviews(namespace, task_id, candidate_ref=stored_candidate)
         return next(row for row in rows if row["dimension"] == dimension)
 
+    async def persistent_task_commands(
+        self, namespace: str, task_id: str, logical_agent_id: str
+    ) -> list[dict]:
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT json_extract(payload_json,'$.command_hash'),work_session_id,session_epoch "
+                    "FROM work_events WHERE namespace=? AND task_id=? AND event_type='command' "
+                    "AND logical_agent_id=? AND json_extract(payload_json,'$.command_hash') IS NOT NULL "
+                    "ORDER BY id DESC",
+                    (namespace, task_id, logical_agent_id),
+                )
+            ).fetchall()
+        seen = set()
+        result = []
+        for command_hash, work_session_id, session_epoch in rows:
+            if command_hash in seen:
+                continue
+            seen.add(command_hash)
+            result.append(
+                {
+                    "command_hash": command_hash,
+                    "work_session_id": work_session_id,
+                    "session_epoch": session_epoch,
+                }
+            )
+        return result
+
     async def add_event(
         self,
         namespace: str,

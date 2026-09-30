@@ -60,7 +60,13 @@ def _overview_summary(data: AgentOverviewResponse) -> str:
     return f"{identity} | active={len(data.active)} | overlaps={len(data.overlaps or [])}"
 
 
-def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode: str = "none"):
+def build_mcp(
+    service,
+    public_base_url: str = "http://127.0.0.1:8080",
+    auth_mode: str = "none",
+    *,
+    persistent_enabled: bool = False,
+):
     parsed = urlparse(public_base_url)
     hostname = parsed.hostname or "127.0.0.1"
     hosts = list(
@@ -540,6 +546,223 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
         return _structured_result(data, summary)
 
     @mcp.tool(
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description="Manage feature-gated Persistent Slots. Selector is a non-secret locator; authenticated admission is required by the server.",
+    )
+    async def persistent_slot(
+        action: Literal[
+            "list", "get", "create", "rename", "rotate_selector", "play", "suspend", "delete"
+        ],
+        logical_agent_id: str | None = None,
+        display_name: str | None = None,
+        selector: str | None = None,
+        expected_revision: Annotated[int | None, Field(ge=1)] = None,
+        idempotency_key: Annotated[str | None, Field(min_length=8, max_length=128)] = None,
+    ) -> dict:
+        backend = getattr(service, "persistent", None)
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        if action == "list":
+            return await backend.slot_list()
+        if action == "get" and logical_agent_id:
+            return await backend.slot_get(logical_agent_id)
+        if action == "create" and display_name:
+            return await backend.slot_create(display_name)
+        if (
+            action == "rename"
+            and logical_agent_id
+            and display_name
+            and expected_revision
+            and idempotency_key
+        ):
+            return await backend.slot_rename(
+                logical_agent_id,
+                display_name,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        if (
+            action == "rotate_selector"
+            and logical_agent_id
+            and selector
+            and expected_revision
+            and idempotency_key
+        ):
+            return await backend.slot_rotate_selector(
+                logical_agent_id,
+                selector,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        if action == "play" and logical_agent_id and expected_revision and idempotency_key:
+            return await backend.slot_play(
+                logical_agent_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        if action == "suspend" and logical_agent_id and expected_revision and idempotency_key:
+            return await backend.slot_suspend(
+                logical_agent_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        if action == "delete" and logical_agent_id and expected_revision and idempotency_key:
+            return await backend.slot_delete(
+                logical_agent_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        return {
+            "ok": False,
+            "code": "invalid_request",
+            "error": f"persistent_slot.{action}: required fields missing",
+        }
+
+    @mcp.tool(
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description="Start or end one immutable Persistent work session. Starting requires an Armed slot plus verified authenticated admission.",
+    )
+    async def persistent_session(
+        action: Literal["start", "end"],
+        selector: str | None = None,
+        expected_revision: Annotated[int | None, Field(ge=1)] = None,
+        logical_agent_id: str | None = None,
+        work_session_id: str | None = None,
+        session_epoch: Annotated[int | None, Field(ge=1)] = None,
+    ) -> dict:
+        backend = getattr(service, "persistent", None)
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        if action == "start" and selector and expected_revision:
+            return await backend.session_start(selector, expected_revision=expected_revision)
+        if action == "end" and logical_agent_id and work_session_id and session_epoch:
+            return await backend.session_end(logical_agent_id, work_session_id, session_epoch)
+        return {
+            "ok": False,
+            "code": "invalid_request",
+            "error": f"persistent_session.{action}: required fields missing",
+        }
+
+    @mcp.tool(
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description="Run a command under exact Persistent work-session authority. Queue claim rechecks the session fence before execution.",
+    )
+    async def persistent_run(
+        cmd: str,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: Annotated[int, Field(ge=1)],
+        task_scope: str,
+        queue_id: Annotated[int | None, Field(ge=1)] = None,
+    ) -> dict:
+        backend = getattr(service, "persistent", None)
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        return await backend.run(
+            cmd,
+            logical_agent_id=logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+            queue_id=queue_id,
+            task_scope=task_scope,
+        )
+
+    @mcp.tool(
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description="Cancel one Persistent command under exact logical-agent/work-session authority.",
+    )
+    async def persistent_cancel(
+        cmd_hash: str,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: Annotated[int, Field(ge=1)],
+    ) -> dict:
+        backend = getattr(service, "persistent", None)
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        return await backend.cancel(
+            cmd_hash,
+            logical_agent_id=logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+        )
+
+    @mcp.tool(
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description="Mutate a managed task under exact Persistent work-session authority. payload contains the existing task action fields.",
+    )
+    async def persistent_task(
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: Annotated[int, Field(ge=1)],
+        action: str,
+        namespace: str,
+        task_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> dict:
+        backend = getattr(service, "persistent", None)
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        return await backend.task(
+            logical_agent_id=logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+            action=action,
+            namespace=namespace,
+            task_id=task_id,
+            **(payload or {}),
+        )
+
+    @mcp.tool(
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description="Explicitly release or atomically reassign a durable Persistent task claim.",
+    )
+    async def persistent_claim(
+        action: Literal["release", "reassign"],
+        namespace: str,
+        task_id: str,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: Annotated[int, Field(ge=1)],
+        to_logical_agent_id: str | None = None,
+        expected_revision: Annotated[int | None, Field(ge=1)] = None,
+        idempotency_key: Annotated[str | None, Field(min_length=8, max_length=128)] = None,
+    ) -> dict:
+        backend = getattr(service, "persistent", None)
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        if action == "release":
+            return await backend.claim_release(
+                namespace,
+                task_id,
+                logical_agent_id,
+                work_session_id=work_session_id,
+                session_epoch=session_epoch,
+            )
+        if to_logical_agent_id and expected_revision and idempotency_key:
+            return await backend.claim_reassign(
+                namespace,
+                task_id,
+                logical_agent_id,
+                to_logical_agent_id,
+                work_session_id=work_session_id,
+                session_epoch=session_epoch,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        return {
+            "ok": False,
+            "code": "invalid_request",
+            "error": "persistent_claim.reassign: required fields missing",
+        }
+
+    @mcp.tool(
         structured_output=True,
         annotations=_SAFE_READ_ONLY,
         description="Return terminal service health. agent_id is optional; when supplied for a live session it refreshes session TTL and includes pending coordination messages.",
@@ -553,5 +776,16 @@ def build_mcp(service, public_base_url: str = "http://127.0.0.1:8080", auth_mode
             data,
             "Terminal service is healthy." if data.ok else "Terminal service is unhealthy.",
         )
+
+    if not persistent_enabled:
+        for tool_name in (
+            "persistent_slot",
+            "persistent_session",
+            "persistent_run",
+            "persistent_cancel",
+            "persistent_task",
+            "persistent_claim",
+        ):
+            mcp.remove_tool(tool_name)
 
     return mcp
