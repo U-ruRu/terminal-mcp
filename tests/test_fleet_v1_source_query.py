@@ -100,3 +100,63 @@ async def test_query_keyset_reaches_beyond_first_page(tmp_path):
     assert len(first["items"]) == 100
     assert len(second["items"]) == 15
     assert second["complete"] is True
+
+
+
+@pytest.mark.asyncio
+async def test_command_current_recovery_keeps_active_plus_bounded_recent_terminal(tmp_path):
+    runtime = tmp_path / "runtime.sqlite3"
+    output = tmp_path / "output.sqlite3"
+    repo = SqliteRepository(runtime, output)
+    await repo.initialize()
+    async with aiosqlite.connect(runtime) as db:
+        await db.executemany(
+            "INSERT INTO commands(hash,cmd,status,finished_at) VALUES(?,?,?,?)",
+            [
+                (
+                    f"done-{index:03d}",
+                    "printf done",
+                    "completed",
+                    f"2026-09-30T00:{index // 60:02d}:{index % 60:02d}Z",
+                )
+                for index in range(300)
+            ],
+        )
+        await db.execute(
+            "INSERT INTO commands(hash,cmd,status,enqueued_at) VALUES(?,?,?,?)",
+            ("running-1", "sleep 1", "running", "2026-09-30T01:00:00Z"),
+        )
+        await db.commit()
+
+    journal = EventJournalStore(runtime)
+    meta = FleetNodeMetaStore(
+        tmp_path / "fleet-node-meta.sqlite3",
+        fleet_id="fleet-a",
+        node_id="node-a",
+    )
+    await meta.initialize()
+    source = FleetSourceService(runtime, journal, meta, output_db_path=output)
+
+    cursor = snapshot_id = None
+    entities = []
+    while True:
+        page = await source.current_recovery(
+            "commands",
+            snapshot_id=snapshot_id,
+            cursor=cursor,
+            limit=100,
+        )
+        entities.extend(page["entities"])
+        if page["page_complete"]:
+            break
+        snapshot_id = page["snapshot_id"]
+        cursor = page["next_cursor"]
+
+    statuses = [item["payload"]["status"] for item in entities]
+    assert statuses.count("running") == 1
+    assert statuses.count("completed") == 256
+    assert len(entities) == 257
+
+    health = await source.runtime_health()
+    assert "resources" in health
+    assert "sample_age_ms" in health["resources"]

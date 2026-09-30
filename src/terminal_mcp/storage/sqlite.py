@@ -365,6 +365,9 @@ class SqliteRepository:
                     ON persistent_message_obligations(resolved_at,message_ref);
                 CREATE INDEX IF NOT EXISTS ix_commands_current
                     ON commands(status,hash);
+                CREATE INDEX IF NOT EXISTS ix_commands_terminal_recent
+                    ON commands(finished_at DESC,hash)
+                    WHERE status IN ('completed','failed','cancelled');
                 CREATE INDEX IF NOT EXISTS ix_work_dependencies_target
                     ON work_dependencies(dependency_namespace,dependency_task_id);
                 CREATE INDEX IF NOT EXISTS ix_work_relations_source

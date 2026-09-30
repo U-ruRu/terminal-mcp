@@ -285,12 +285,14 @@ class FleetSourceService:
         return await self.query_plane.task_graph(**kwargs)
 
     async def runtime_health(self) -> dict[str, Any]:
+        resources = await self.query_plane.sampled_resources()
         if self.runtime_health_provider is None:
             return {
                 "finalization_pending_commands": [],
                 "stale_running_commands": [],
                 "unowned_running_commands": [],
                 "queues": [],
+                "resources": resources,
             }
         value = await self.runtime_health_provider()
         return {
@@ -298,6 +300,7 @@ class FleetSourceService:
             "stale_running_commands": list(value.get("stale_running_commands") or []),
             "unowned_running_commands": list(value.get("unowned_running_commands") or []),
             "queues": list(value.get("queues") or []),
+            "resources": resources,
         }
 
     async def snapshot(self) -> dict[str, Any]:
