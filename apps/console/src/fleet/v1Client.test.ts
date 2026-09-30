@@ -15,10 +15,14 @@ test('fleet v1 client authenticates probe/snapshot/events to exactly one ingress
     if (url.pathname.endsWith('/probe')) {
       return response({
         ok: true,
+        protocol_major: 1,
+        fleet_id: 'fleet-a',
+        node_id: 'node-a',
         projection_epoch: 2,
         projection_seq: 4,
         role: 'owner',
         owner_node_id: 'node-a',
+        capabilities: ['fleet.projection.current-v2'],
         sources: [],
       })
     }
@@ -58,10 +62,14 @@ test('fleet v1 client never treats a selector or profile id as authorization', a
     expect(String((init?.headers as Record<string, string>).Authorization)).toBe('Bearer oauth-secret')
     return response({
       ok: true,
+      protocol_major: 1,
+      fleet_id: 'fleet-a',
+      node_id: 'node-a',
       projection_epoch: 1,
       projection_seq: 0,
       role: 'owner',
-      owner_node_id: 'ABCD',
+      owner_node_id: 'node-a',
+      capabilities: ['fleet.projection.current-v2'],
       sources: [],
     })
   })

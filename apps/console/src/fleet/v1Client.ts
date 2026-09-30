@@ -9,10 +9,14 @@ import type {
 } from './v1Types'
 
 export type FleetV1Probe = {
+  protocolMajor: number
+  fleetId: string
+  nodeId: string
   projectionEpoch: number
   projectionSeq: number
   role: 'owner' | 'follower'
   ownerNodeId: string
+  capabilities: string[]
   sources: FleetProjectionSource[]
 }
 
@@ -102,10 +106,16 @@ export function decodeFleetV1Probe(value: unknown): FleetV1Probe {
   const role = stringValue(item.role, 'role')
   if (role !== 'owner' && role !== 'follower') throw new Error('invalid_role')
   return {
+    protocolMajor: integer(item.protocol_major, 'protocol_major'),
+    fleetId: stringValue(item.fleet_id, 'fleet_id'),
+    nodeId: stringValue(item.node_id, 'node_id'),
     projectionEpoch: integer(item.projection_epoch, 'projection_epoch'),
     projectionSeq: integer(item.projection_seq, 'projection_seq'),
     role,
     ownerNodeId: stringValue(item.owner_node_id, 'owner_node_id'),
+    capabilities: Array.isArray(item.capabilities)
+      ? item.capabilities.map((value) => stringValue(value, 'capability'))
+      : [],
     sources: Array.isArray(item.sources) ? item.sources.map(source) : [],
   }
 }

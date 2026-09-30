@@ -70,7 +70,9 @@ export class FleetAdaptiveReadRuntime {
     })
     for (const endpoint of ordered) {
       try {
-        const decision = this.selector.observeProbe(await endpoint.probe(), this.now())
+        const probe = await endpoint.probe()
+        if (cached.fleetId && probe.fleetId !== cached.fleetId) continue
+        const decision = this.selector.observeProbe(probe, this.now())
         if (!decision) continue
         await this.applyHandover(endpoint, decision)
         return true
@@ -87,7 +89,9 @@ export class FleetAdaptiveReadRuntime {
   async evaluate(endpoints = [...this.endpoints.values()]): Promise<void> {
     for (const endpoint of endpoints) {
       try {
-        const decision = this.selector.observeProbe(await endpoint.probe(), this.now())
+        const probe = await endpoint.probe()
+        if (this.state.fleetId && probe.fleetId !== this.state.fleetId) continue
+        const decision = this.selector.observeProbe(probe, this.now())
         if (decision) {
           await this.applyHandover(endpoint, decision)
           return
@@ -127,7 +131,9 @@ export class FleetAdaptiveReadRuntime {
     for (const endpoint of this.endpoints.values()) {
       if (endpoint.candidateId === this.active.candidateId) continue
       try {
-        const decision = this.selector.observeProbe(await endpoint.probe(), this.now())
+        const probe = await endpoint.probe()
+        if (this.state.fleetId && probe.fleetId !== this.state.fleetId) continue
+        const decision = this.selector.observeProbe(probe, this.now())
         if (!decision) continue
         await this.applyHandover(endpoint, decision)
         return true

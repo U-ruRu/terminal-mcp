@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
+from terminal_mcp.fleet.protocol import FLEET_PROTOCOL_MAJOR
 from terminal_mcp.http.browser_security import canonical_origin
 from terminal_mcp.http.console_events import _oauth_device
 
@@ -72,6 +73,9 @@ def build_console_fleet_router(
         return JSONResponse(
             {
                 "ok": True,
+                "protocol_major": FLEET_PROTOCOL_MAJOR,
+                "fleet_id": meta["fleet_id"],
+                "node_id": meta["node_id"],
                 "projection_epoch": meta["projection_epoch"],
                 "projection_seq": meta["projection_seq"],
                 "role": meta["role"],

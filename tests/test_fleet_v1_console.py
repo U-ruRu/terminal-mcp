@@ -80,6 +80,12 @@ async def test_console_fleet_http_surface_requires_paired_oauth():
         headers = {"authorization": "Bearer good"}
         probe = await client.get("/console/fleet/v1/probe", headers=headers)
         assert probe.status_code == 200
+        assert probe.json()["protocol_major"] == 1
+        assert probe.json()["fleet_id"] == "fleet-a"
+        assert probe.json()["node_id"] == "projection-a"
+        assert probe.json()["protocol_major"] == 1
+        assert probe.json()["fleet_id"] == "fleet-a"
+        assert probe.json()["node_id"] == "projection-a"
         assert probe.json()["projection_epoch"] == 3
         assert probe.json()["projection_seq"] == 8
 

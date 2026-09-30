@@ -136,3 +136,17 @@ test('network changes never force handover and background freezes tournament', a
   await runtime.evaluate([b])
   expect(runtime.getState().activeIngressId).toBe('a')
 })
+
+test('runtime rejects a successful probe from another fleet before handover', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  await cache.applySnapshot(snapshot('a'))
+  const runtime = new FleetAdaptiveReadRuntime(cache)
+  const bad = endpoint('bad')
+  bad.probe = vi.fn(async () => ({
+    candidateId: 'bad', authenticated: true, compatible: true, fleetId: 'fleet-b',
+    projectionEpoch: 3, projectionSeq: 10, rttMs: 1, successRate: 1,
+    reconnectRate: 0, completeness: 1, freshness: 1,
+  }))
+  expect(await runtime.start([bad])).toBe(false)
+  expect(bad.snapshot).not.toHaveBeenCalled()
+})
