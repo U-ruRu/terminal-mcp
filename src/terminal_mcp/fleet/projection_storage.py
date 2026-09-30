@@ -528,6 +528,222 @@ class FleetProjectionStore:
             ],
         }
 
+    async def replica_snapshot(self) -> dict:
+        if self.role != "owner":
+            raise FleetProjectionError("only owner can publish replica snapshot")
+        return await self.snapshot()
+
+    async def apply_owner_snapshot(
+        self,
+        snapshot: dict,
+        *,
+        owner_node_id: str,
+    ) -> dict:
+        if self.role != "follower":
+            raise FleetProjectionError("only follower can apply owner snapshot")
+        if owner_node_id != self.owner_node_id:
+            raise FleetProjectionError("projection owner mismatch")
+        if snapshot.get("fleet_id") != self.fleet_id:
+            raise FleetProjectionError("projection fleet_id mismatch")
+        incoming_epoch = int(snapshot["projection_epoch"])
+        incoming_seq = int(snapshot["projection_seq"])
+        current = await self.meta()
+        if incoming_epoch < current["projection_epoch"]:
+            raise FleetProjectionError("old projection epoch fenced")
+        stamp = utc_text()
+        async with self._connect("fleet_projection_apply_owner_snapshot") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute("DELETE FROM projection_events")
+                await db.execute("DELETE FROM projection_entities")
+                await db.execute("DELETE FROM projection_sources")
+                await db.execute("DELETE FROM projection_runtime_overlay")
+                for item in snapshot.get("sources") or []:
+                    await db.execute(
+                        "INSERT INTO projection_sources("
+                        "source_node_id,source_stream_generation,source_seq,freshness,updated_at"
+                        ") VALUES(?,?,?,?,?)",
+                        (
+                            item["source_node_id"],
+                            item["source_stream_generation"],
+                            int(item["source_seq"]),
+                            item["freshness"],
+                            item.get("updated_at") or stamp,
+                        ),
+                    )
+                for item in snapshot.get("entities") or []:
+                    await db.execute(
+                        "INSERT INTO projection_entities("
+                        "source_node_id,entity_type,entity_id,entity_revision,payload_version,"
+                        "payload_json,authority_node_id,authority_epoch,source_stream_generation,"
+                        "source_seq,projection_seq,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            item["source_node_id"],
+                            item["entity_type"],
+                            item["entity_id"],
+                            int(item["entity_revision"]),
+                            int(item.get("payload_version") or 1),
+                            json.dumps(item.get("payload") or {}, separators=(",", ":")),
+                            item.get("authority_node_id"),
+                            item.get("authority_epoch"),
+                            item["source_stream_generation"],
+                            int(item["source_seq"]),
+                            int(item["projection_seq"]),
+                            item.get("updated_at") or stamp,
+                        ),
+                    )
+                for item in snapshot.get("runtime_overlays") or []:
+                    await db.execute(
+                        "INSERT INTO projection_runtime_overlay("
+                        "source_node_id,payload_json,observed_at,freshness) VALUES(?,?,?,?)",
+                        (
+                            item["source_node_id"],
+                            json.dumps(item.get("payload") or {}, separators=(",", ":")),
+                            item.get("observed_at") or stamp,
+                            item.get("freshness") or "stale",
+                        ),
+                    )
+                await db.execute(
+                    "UPDATE projection_meta SET owner_node_id=?,projection_epoch=?,"
+                    "projection_seq=?,updated_at=? WHERE singleton=1",
+                    (owner_node_id, incoming_epoch, incoming_seq, stamp),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.meta()
+
+    async def apply_owner_events(
+        self,
+        page: dict,
+        *,
+        owner_node_id: str,
+    ) -> dict:
+        if self.role != "follower":
+            raise FleetProjectionError("only follower can apply owner events")
+        if owner_node_id != self.owner_node_id:
+            raise FleetProjectionError("projection owner mismatch")
+        incoming_epoch = int(page["projection_epoch"])
+        current = await self.meta()
+        if incoming_epoch != current["projection_epoch"]:
+            if incoming_epoch < current["projection_epoch"]:
+                raise FleetProjectionError("old projection epoch fenced")
+            raise FleetProjectionError("projection epoch changed; snapshot required")
+        events = list(page.get("events") or [])
+        stamp = utc_text()
+        async with self._connect("fleet_projection_apply_owner_events") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                expected = current["projection_seq"] + 1
+                for item in events:
+                    seq = int(item["projection_seq"])
+                    if seq < expected:
+                        duplicate = await (
+                            await db.execute(
+                                "SELECT event_id FROM projection_events WHERE projection_seq=?",
+                                (seq,),
+                            )
+                        ).fetchone()
+                        if duplicate is None or duplicate[0] != item["event_id"]:
+                            raise FleetProjectionError("projection prefix conflict")
+                        continue
+                    if seq != expected:
+                        raise FleetProjectionError("projection prefix gap")
+                    await db.execute(
+                        "INSERT INTO projection_events("
+                        "projection_epoch,projection_seq,event_id,source_node_id,"
+                        "source_stream_generation,source_seq,event_type,entity_type,entity_id,"
+                        "entity_revision,payload_version,payload_json,created_at"
+                        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            incoming_epoch,
+                            seq,
+                            item["event_id"],
+                            item["source_node_id"],
+                            item["source_stream_generation"],
+                            int(item["source_seq"]),
+                            item["event_type"],
+                            item["entity_type"],
+                            item["entity_id"],
+                            int(item["entity_revision"]),
+                            int(item.get("payload_version") or 1),
+                            json.dumps(item.get("payload") or {}, separators=(",", ":")),
+                            item["created_at"],
+                        ),
+                    )
+                    current_entity = await (
+                        await db.execute(
+                            "SELECT entity_revision FROM projection_entities "
+                            "WHERE source_node_id=? AND entity_type=? AND entity_id=?",
+                            (
+                                item["source_node_id"],
+                                item["entity_type"],
+                                item["entity_id"],
+                            ),
+                        )
+                    ).fetchone()
+                    if current_entity is None or int(item["entity_revision"]) >= int(
+                        current_entity[0]
+                    ):
+                        await db.execute(
+                            "INSERT INTO projection_entities("
+                            "source_node_id,entity_type,entity_id,entity_revision,payload_version,"
+                            "payload_json,authority_node_id,authority_epoch,"
+                            "source_stream_generation,source_seq,projection_seq,updated_at"
+                            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                            "ON CONFLICT(source_node_id,entity_type,entity_id) DO UPDATE SET "
+                            "entity_revision=excluded.entity_revision,"
+                            "payload_version=excluded.payload_version,"
+                            "payload_json=excluded.payload_json,"
+                            "authority_node_id=excluded.authority_node_id,"
+                            "authority_epoch=excluded.authority_epoch,"
+                            "source_stream_generation=excluded.source_stream_generation,"
+                            "source_seq=excluded.source_seq,projection_seq=excluded.projection_seq,"
+                            "updated_at=excluded.updated_at",
+                            (
+                                item["source_node_id"],
+                                item["entity_type"],
+                                item["entity_id"],
+                                int(item["entity_revision"]),
+                                int(item.get("payload_version") or 1),
+                                json.dumps(item.get("payload") or {}, separators=(",", ":")),
+                                item.get("authority_node_id"),
+                                item.get("authority_epoch"),
+                                item["source_stream_generation"],
+                                int(item["source_seq"]),
+                                seq,
+                                stamp,
+                            ),
+                        )
+                    await db.execute(
+                        "INSERT INTO projection_sources("
+                        "source_node_id,source_stream_generation,source_seq,freshness,updated_at"
+                        ") VALUES(?,?,?,'fresh',?) "
+                        "ON CONFLICT(source_node_id) DO UPDATE SET "
+                        "source_stream_generation=excluded.source_stream_generation,"
+                        "source_seq=MAX(projection_sources.source_seq,excluded.source_seq),"
+                        "freshness='fresh',updated_at=excluded.updated_at",
+                        (
+                            item["source_node_id"],
+                            item["source_stream_generation"],
+                            int(item["source_seq"]),
+                            stamp,
+                        ),
+                    )
+                    expected = seq + 1
+                if events:
+                    await db.execute(
+                        "UPDATE projection_meta SET projection_seq=?,updated_at=? "
+                        "WHERE singleton=1",
+                        (expected - 1, stamp),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.meta()
+
     async def promote(self, *, expected_epoch: int) -> dict:
         if self.role != "follower":
             raise FleetProjectionError("only follower can be promoted")

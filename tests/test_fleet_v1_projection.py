@@ -147,3 +147,77 @@ async def test_projection_reset_and_follower_promotion_are_explicit(tmp_path):
     assert promoted["projection_epoch"] == 2
     assert promoted["role"] == "owner"
     assert promoted["owner_node_id"] == "projection-b"
+
+
+@pytest.mark.asyncio
+async def test_follower_applies_exact_owner_prefix_and_fences_old_epoch(tmp_path):
+    owner = FleetProjectionStore(
+        tmp_path / "owner.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-a",
+        owner_node_id="projection-a",
+    )
+    await owner.initialize()
+    await owner.apply_snapshot(snapshot())
+    base = await owner.replica_snapshot()
+
+    follower = FleetProjectionStore(
+        tmp_path / "follower.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-b",
+        owner_node_id="projection-a",
+        role="follower",
+    )
+    await follower.initialize()
+    replicated = await follower.apply_owner_snapshot(
+        base, owner_node_id="projection-a"
+    )
+    assert replicated["projection_epoch"] == base["projection_epoch"]
+    assert replicated["projection_seq"] == base["projection_seq"]
+
+    await owner.apply_source_page(page())
+    owner_events = await owner.events(since=base["projection_seq"])
+    applied = await follower.apply_owner_events(
+        owner_events, owner_node_id="projection-a"
+    )
+    assert applied["projection_seq"] == owner_events["projection_seq"]
+
+    follower_state = await follower.snapshot()
+    owner_state = await owner.snapshot()
+    follower_logical = next(
+        item
+        for item in follower_state["entities"]
+        if item["entity_type"] == "logical_agent"
+    )
+    owner_logical = next(
+        item
+        for item in owner_state["entities"]
+        if item["entity_type"] == "logical_agent"
+    )
+    assert follower_logical["payload"] == owner_logical["payload"]
+
+    with pytest.raises(FleetProjectionError, match="prefix gap"):
+        await follower.apply_owner_events(
+            {
+                "projection_epoch": applied["projection_epoch"],
+                "projection_seq": applied["projection_seq"] + 2,
+                "events": [
+                    {
+                        **owner_events["events"][0],
+                        "projection_seq": applied["projection_seq"] + 2,
+                        "event_id": "gap-event",
+                    }
+                ],
+            },
+            owner_node_id="projection-a",
+        )
+
+    promoted = await follower.promote(expected_epoch=applied["projection_epoch"])
+    assert promoted["projection_epoch"] == applied["projection_epoch"] + 1
+    follower.role = "follower"
+    follower.owner_node_id = "projection-a"
+    with pytest.raises(FleetProjectionError, match="old projection epoch fenced"):
+        await follower.apply_owner_events(
+            owner_events,
+            owner_node_id="projection-a",
+        )
