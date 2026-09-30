@@ -392,6 +392,25 @@ class FleetProjectionStore:
                 raise
         return await self.meta()
 
+    async def source_state(self, source_node_id: str) -> dict | None:
+        async with self._connect("fleet_projection_source_state") as db:
+            row = await (
+                await db.execute(
+                    "SELECT source_stream_generation,source_seq,freshness,updated_at "
+                    "FROM projection_sources WHERE source_node_id=?",
+                    (source_node_id,),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "source_node_id": source_node_id,
+            "source_stream_generation": row[0],
+            "source_seq": int(row[1]),
+            "freshness": row[2],
+            "updated_at": row[3],
+        }
+
     async def mark_source(self, source_node_id: str, generation: str, freshness: str) -> None:
         if freshness not in {"fresh", "stale", "reset_required", "unavailable"}:
             raise ValueError("invalid source freshness")
@@ -527,6 +546,42 @@ class FleetProjectionStore:
                 for row in rows
             ],
         }
+
+    async def apply_owner_overlays(
+        self,
+        overlays: list[dict],
+        *,
+        owner_node_id: str,
+        projection_epoch: int,
+    ) -> None:
+        if self.role != "follower":
+            raise FleetProjectionError("only follower can apply owner overlays")
+        if owner_node_id != self.owner_node_id:
+            raise FleetProjectionError("projection owner mismatch")
+        current = await self.meta()
+        if int(projection_epoch) != current["projection_epoch"]:
+            if int(projection_epoch) < current["projection_epoch"]:
+                raise FleetProjectionError("old projection epoch fenced")
+            raise FleetProjectionError("projection epoch changed; snapshot required")
+        async with self._connect("fleet_projection_apply_owner_overlays") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute("DELETE FROM projection_runtime_overlay")
+                for item in overlays:
+                    await db.execute(
+                        "INSERT INTO projection_runtime_overlay("
+                        "source_node_id,payload_json,observed_at,freshness) VALUES(?,?,?,?)",
+                        (
+                            item["source_node_id"],
+                            json.dumps(item.get("payload") or {}, separators=(",", ":")),
+                            item["observed_at"],
+                            item.get("freshness") or "stale",
+                        ),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
     async def replica_snapshot(self) -> dict:
         if self.role != "owner":

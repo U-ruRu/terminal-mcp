@@ -29,10 +29,18 @@ _CANONICAL_ENTITY_TYPES = {
 class FleetSourceService:
     """Canonical read-only Fleet v1 source over durable local runtime truth."""
 
-    def __init__(self, runtime_db_path, journal: EventJournalStore, meta_store):
+    def __init__(
+        self,
+        runtime_db_path,
+        journal: EventJournalStore,
+        meta_store,
+        *,
+        runtime_health_provider=None,
+    ):
         self.runtime_db_path = runtime_db_path
         self.journal = journal
         self.meta_store = meta_store
+        self.runtime_health_provider = runtime_health_provider
 
     async def _current_meta(self):
         high_water = await self.journal.high_water_seq()
@@ -163,6 +171,26 @@ class FleetSourceService:
                 if rotated
                 else ("retention_gap" if page["gap"] else None)
             ),
+        }
+
+    async def runtime_health(self) -> dict[str, Any]:
+        if self.runtime_health_provider is None:
+            return {
+                "finalization_pending_commands": [],
+                "stale_running_commands": [],
+                "unowned_running_commands": [],
+                "queues": [],
+            }
+        value = await self.runtime_health_provider()
+        return {
+            "finalization_pending_commands": list(
+                value.get("finalization_pending_commands") or []
+            ),
+            "stale_running_commands": list(value.get("stale_running_commands") or []),
+            "unowned_running_commands": list(
+                value.get("unowned_running_commands") or []
+            ),
+            "queues": list(value.get("queues") or []),
         }
 
     async def snapshot(self) -> dict[str, Any]:
