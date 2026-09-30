@@ -151,6 +151,89 @@ export type CommunicationReadModel = {
   intentJournal: IntentReadModel[]
 }
 
+export type PersistentPolicyReadModel = {
+  durationSeconds: number
+  warningAfterSeconds: number
+  alertAfterSeconds: number
+  manualRearm: boolean
+  admissionMode: string
+  legacyAdmissionEnabled: boolean
+}
+
+export type PersistentClaimReadModel = {
+  namespace: string
+  taskId: string
+  lane: string
+  priority: string
+  state: string
+  claimedAt: string
+  claimIntent: string
+}
+
+export type PersistentAuditReadModel = {
+  id: number
+  eventType: string
+  principalId: string
+  workSessionId?: string
+  sessionEpoch?: number
+  payload: JsonRecord
+  createdAt: string
+}
+
+export type PersistentAttachmentReadModel = {
+  nodeAttachmentId: string
+  nodeInstanceId: string
+  attachedAt: string
+  hardExpiresAt: string
+}
+
+export type PersistentWorkSessionReadModel = {
+  workSessionId: string
+  sessionEpoch: number
+  authorityNodeId: string
+  authorityEpoch: number
+  startedAt: string
+  hardExpiresAt: string
+  state: string
+  originInstanceId?: string
+}
+
+export type PersistentSlotReadModel = {
+  logicalAgentId: string
+  displayName: string
+  state: string
+  authorityNodeId: string
+  authorityEpoch: number
+  slotRevision: number
+  selector: string
+  selectorGeneration: number
+  authGeneration: number
+  createdAt: string
+  updatedAt: string
+  serverNow: string
+  workSession?: PersistentWorkSessionReadModel
+  claims: PersistentClaimReadModel[]
+  audit: PersistentAuditReadModel[]
+  attachments: PersistentAttachmentReadModel[]
+}
+
+export type PersistentConsoleReadModel = {
+  enabled: boolean
+  available: boolean
+  error?: string
+  serverNow?: string
+  policy: PersistentPolicyReadModel
+  slots: PersistentSlotReadModel[]
+}
+
+export type PersistentMutationResult = {
+  ok: boolean
+  code?: string
+  error?: string
+  blockers?: JsonRecord[]
+  payload: JsonRecord
+}
+
 export type ConsoleSnapshotReadModel = {
   highWaterSeq: number
   replayFromSeq: number
@@ -160,6 +243,7 @@ export type ConsoleSnapshotReadModel = {
   tasks: TaskReadModel[]
   contexts: ContextReadModel[]
   communications: CommunicationReadModel[]
+  persistent?: PersistentConsoleReadModel
 }
 
 export type WebSocketTicketReadModel = {

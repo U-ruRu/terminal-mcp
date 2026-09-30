@@ -12,6 +12,8 @@ import type {
   IntentReadModel,
   JsonRecord,
   MessageReadModel,
+  PersistentConsoleReadModel,
+  PersistentSlotReadModel,
   TaskCollectionReadModel,
   TaskOwnerReadModel,
   TaskReadModel,
@@ -382,6 +384,97 @@ export function decodeContexts(value: unknown, path = '$'): ContextCollectionRea
   }
 }
 
+function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
+  const item = record(value, path)
+  const slot = record(item.slot, path + '.slot')
+  const selector = record(item.selector, path + '.selector')
+  const rawSession = item.work_session
+  const workSession = rawSession === undefined || rawSession === null
+    ? undefined
+    : (() => {
+        const session = record(rawSession, path + '.work_session')
+        return {
+          workSessionId: string(session.work_session_id, path + '.work_session.work_session_id'),
+          sessionEpoch: integer(session.session_epoch, path + '.work_session.session_epoch'),
+          authorityNodeId: string(session.authority_node_id, path + '.work_session.authority_node_id'),
+          authorityEpoch: integer(session.authority_epoch, path + '.work_session.authority_epoch'),
+          startedAt: string(session.started_at, path + '.work_session.started_at'),
+          hardExpiresAt: string(session.hard_expires_at, path + '.work_session.hard_expires_at'),
+          state: string(session.state, path + '.work_session.state'),
+          originInstanceId: optionalString(session.origin_instance_id, path + '.work_session.origin_instance_id'),
+        }
+      })()
+  return {
+    logicalAgentId: string(slot.logical_agent_id, path + '.slot.logical_agent_id'),
+    displayName: string(slot.display_name, path + '.slot.display_name'),
+    state: string(slot.state, path + '.slot.state'),
+    authorityNodeId: string(slot.authority_node_id, path + '.slot.authority_node_id'),
+    authorityEpoch: integer(slot.authority_epoch, path + '.slot.authority_epoch'),
+    slotRevision: integer(slot.slot_revision, path + '.slot.slot_revision'),
+    selector: string(selector.selector, path + '.selector.selector'),
+    selectorGeneration: integer(slot.selector_generation, path + '.slot.selector_generation'),
+    authGeneration: integer(slot.auth_generation, path + '.slot.auth_generation'),
+    createdAt: string(slot.created_at, path + '.slot.created_at'),
+    updatedAt: string(slot.updated_at, path + '.slot.updated_at'),
+    serverNow: string(item.server_now, path + '.server_now'),
+    workSession,
+    claims: array(item.claims ?? [], path + '.claims').map((raw, index) => {
+      const claim = record(raw, `${path}.claims[${index}]`)
+      return {
+        namespace: string(claim.namespace, `${path}.claims[${index}].namespace`),
+        taskId: string(claim.task_id, `${path}.claims[${index}].task_id`),
+        lane: string(claim.lane, `${path}.claims[${index}].lane`),
+        priority: string(claim.priority, `${path}.claims[${index}].priority`),
+        state: string(claim.state, `${path}.claims[${index}].state`),
+        claimedAt: string(claim.claimed_at, `${path}.claims[${index}].claimed_at`),
+        claimIntent: string(claim.claim_intent, `${path}.claims[${index}].claim_intent`),
+      }
+    }),
+    audit: array(item.audit ?? [], path + '.audit').map((raw, index) => {
+      const audit = record(raw, `${path}.audit[${index}]`)
+      return {
+        id: integer(audit.id, `${path}.audit[${index}].id`),
+        eventType: string(audit.event_type, `${path}.audit[${index}].event_type`),
+        principalId: string(audit.principal_id, `${path}.audit[${index}].principal_id`),
+        workSessionId: optionalString(audit.work_session_id, `${path}.audit[${index}].work_session_id`),
+        sessionEpoch: optionalInteger(audit.session_epoch, `${path}.audit[${index}].session_epoch`),
+        payload: record(audit.payload ?? {}, `${path}.audit[${index}].payload`),
+        createdAt: string(audit.created_at, `${path}.audit[${index}].created_at`),
+      }
+    }),
+    attachments: array(item.attachments ?? [], path + '.attachments').map((raw, index) => {
+      const attachment = record(raw, `${path}.attachments[${index}]`)
+      return {
+        nodeAttachmentId: string(attachment.node_attachment_id, `${path}.attachments[${index}].node_attachment_id`),
+        nodeInstanceId: string(attachment.node_instance_id, `${path}.attachments[${index}].node_instance_id`),
+        attachedAt: string(attachment.attached_at, `${path}.attachments[${index}].attached_at`),
+        hardExpiresAt: string(attachment.hard_expires_at, `${path}.attachments[${index}].hard_expires_at`),
+      }
+    }),
+  }
+}
+
+function persistentProjection(value: unknown, path: string): PersistentConsoleReadModel | undefined {
+  if (value === undefined || value === null) return undefined
+  const item = record(value, path)
+  const policy = record(item.policy ?? {}, path + '.policy')
+  return {
+    enabled: boolean(item.enabled, path + '.enabled'),
+    available: boolean(item.available, path + '.available'),
+    error: optionalString(item.error, path + '.error'),
+    serverNow: optionalString(item.server_now, path + '.server_now'),
+    policy: {
+      durationSeconds: integer(policy.duration_seconds ?? 0, path + '.policy.duration_seconds'),
+      warningAfterSeconds: integer(policy.warning_after_seconds ?? 0, path + '.policy.warning_after_seconds'),
+      alertAfterSeconds: integer(policy.alert_after_seconds ?? 0, path + '.policy.alert_after_seconds'),
+      manualRearm: boolean(policy.manual_rearm ?? false, path + '.policy.manual_rearm'),
+      admissionMode: string(policy.admission_mode ?? 'none', path + '.policy.admission_mode'),
+      legacyAdmissionEnabled: boolean(policy.legacy_admission_enabled ?? true, path + '.policy.legacy_admission_enabled'),
+    },
+    slots: array(item.slots ?? [], path + '.slots').map((raw, index) => persistentSlot(raw, `${path}.slots[${index}]`)),
+  }
+}
+
 export function decodeSnapshot(value: unknown, path = '$'): ConsoleSnapshotReadModel {
   const root = record(value, path)
   if (root.ok !== true) throw new ConsoleContractError(`${path}.ok`, 'expected true')
@@ -427,6 +520,7 @@ export function decodeSnapshot(value: unknown, path = '$'): ConsoleSnapshotReadM
     communications: array(root.communications ?? [], `${path}.communications`).map(
       (raw, index) => communication(raw, `${path}.communications[${index}]`),
     ),
+    persistent: persistentProjection(root.persistent, `${path}.persistent`),
   }
 }
 

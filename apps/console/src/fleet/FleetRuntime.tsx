@@ -127,6 +127,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
       instances={instances}
       loadActivity={(instanceId, options) => manager.activity(instanceId, options)}
       loadTask={(instanceId, namespace, taskId) => manager.task(instanceId, namespace, taskId)}
+      mutatePersistent={(instanceId, path, body) => manager.persistentMutation(instanceId, path, body)}
       />
     </ConnectionRuntimeProvider>
   )

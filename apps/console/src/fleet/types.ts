@@ -1,4 +1,4 @@
-import type { ActivityFeedReadModel, TaskReadModel } from '../api/models'
+import type { ActivityFeedReadModel, PersistentMutationResult, TaskReadModel } from '../api/models'
 import type { ConnectionState } from '../auth/types'
 import type { ConnectionProfile } from '../connections/types'
 import type { RealtimeState, RealtimeStatus } from '../realtime/state'
@@ -26,6 +26,7 @@ export type FleetInstanceActor = {
   retryNow(): Promise<void>
   activity(options?: FleetActivityOptions): Promise<ActivityFeedReadModel>
   task(namespace: string, taskId: string): Promise<TaskReadModel>
+  persistentMutation(path: string, body: Record<string, unknown>): Promise<PersistentMutationResult>
   getState(): FleetInstanceRuntimeState
   subscribe(listener: (state: FleetInstanceRuntimeState) => void): () => void
 }

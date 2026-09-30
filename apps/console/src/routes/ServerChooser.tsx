@@ -4,10 +4,11 @@ import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 
-export type ServerDestination = 'agents' | 'tasks' | 'context' | 'health'
+export type ServerDestination = 'agents' | 'slots' | 'tasks' | 'context' | 'health'
 
 const labels: Record<ServerDestination, MessageKey> = {
   agents: 'nav.agents',
+  slots: 'nav.slots',
   tasks: 'nav.tasks',
   context: 'nav.context',
   health: 'nav.health',

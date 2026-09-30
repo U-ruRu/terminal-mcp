@@ -126,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         metrics,
         agent_policy,
         fleet_replication,
+        legacy_agent_admission_enabled=settings.legacy_admission_allowed(),
     )
     persistent_store = PersistentAgentStore(settings.database_path)
     persistent_store.configure_observability(events, metrics)

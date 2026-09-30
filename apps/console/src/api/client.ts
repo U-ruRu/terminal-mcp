@@ -13,6 +13,7 @@ import type {
   AgentCollectionReadModel,
   ConsoleSnapshotReadModel,
   ContextCollectionReadModel,
+  PersistentMutationResult,
   TaskCollectionReadModel,
   TaskReadModel,
   WebSocketTicketReadModel,
@@ -128,6 +129,21 @@ export class ConsoleClient {
         }),
       }),
     )
+  }
+
+  async persistentMutation(path: string, body: Record<string, unknown>): Promise<PersistentMutationResult> {
+    if (!path.startsWith('/actions/persistent/')) throw new Error('invalid_persistent_path')
+    const raw = await this.request(path, { method: 'POST', body: JSON.stringify(body) })
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ConsoleContractError('$', 'persistent mutation response was not an object')
+    const payload = raw as Record<string, unknown>
+    if (typeof payload.ok !== 'boolean') throw new ConsoleContractError('$.ok', 'expected boolean')
+    return {
+      ok: payload.ok,
+      code: typeof payload.code === 'string' ? payload.code : undefined,
+      error: typeof payload.error === 'string' ? payload.error : undefined,
+      blockers: Array.isArray(payload.blockers) ? payload.blockers.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : undefined,
+      payload,
+    }
   }
 
   async webSocketTicket(): Promise<WebSocketTicketReadModel> {

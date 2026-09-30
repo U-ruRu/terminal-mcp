@@ -5,6 +5,7 @@ from sqlite3 import IntegrityError
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.agents import AgentCoordinator
 from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.host_resources import collect_host_resources
 from terminal_mcp.storage.agents import AgentStore
@@ -111,6 +112,7 @@ class TerminalService:
         metrics=None,
         agent_policy: AgentPolicy | None = None,
         fleet_replication=None,
+        legacy_agent_admission_enabled=True,
     ):
         self.repo = repo
         self.terminal = terminal
@@ -122,6 +124,7 @@ class TerminalService:
         self.metrics = metrics
         self.agent_policy = agent_policy or AgentPolicy()
         self.fleet_replication = fleet_replication
+        self.legacy_agent_admission_enabled = bool(legacy_agent_admission_enabled)
         self.agent_store = AgentStore(repo.path) if hasattr(repo, "path") else None
         self.context_store = ContextStore(repo.path) if hasattr(repo, "path") else None
         self.task_store = TaskStore(repo.path) if hasattr(repo, "path") else None
@@ -773,12 +776,60 @@ class TerminalService:
                 **context,
             }
 
+    async def _persistent_console_snapshot(self, policy: dict | None):
+        if policy is None:
+            return None
+        projection = {
+            "enabled": bool(policy.get("enabled")),
+            "available": False,
+            "policy": {key: value for key, value in policy.items() if key != "enabled"},
+            "slots": [],
+        }
+        if not projection["enabled"]:
+            return projection
+        backend = getattr(self, "persistent", None)
+        if backend is None:
+            projection["error"] = "policy_incompatible"
+            return projection
+        result = await backend.slot_list()
+        if not result.get("ok"):
+            projection["error"] = (
+                result.get("code") or result.get("error") or "persistent_unavailable"
+            )
+            return projection
+        projection["available"] = True
+        projection["server_now"] = result.get("server_now")
+        rows = []
+        for item in result.get("slots") or []:
+            slot = item.get("slot") or {}
+            logical_agent_id = slot.get("logical_agent_id")
+            claims = []
+            audit = []
+            attachments = []
+            if logical_agent_id and self.task_store:
+                claims = await self.task_store.claims_for_owner(
+                    ClaimOwner.logical_agent(logical_agent_id)
+                )
+            if logical_agent_id:
+                audit = await backend.lifecycle.store.audit_events(logical_agent_id, limit=50)
+            work_session = item.get("work_session")
+            if logical_agent_id and work_session:
+                attachments = await backend.lifecycle.store.attachments_for_session(
+                    logical_agent_id,
+                    work_session["work_session_id"],
+                    int(work_session["session_epoch"]),
+                )
+            rows.append({**item, "claims": claims, "audit": audit, "attachments": attachments})
+        projection["slots"] = rows
+        return projection
+
     async def console_snapshot(
         self,
         auth_mode,
         *,
         public_base_url,
         history_minutes=60,
+        persistent_policy=None,
     ):
         if not self.event_store or not self.agent_coordinator or not self.task_coordinator:
             return {
@@ -795,6 +846,7 @@ class TerminalService:
                 "tasks": {},
                 "contexts": {},
                 "communications": [],
+                "persistent": await self._persistent_console_snapshot(persistent_policy),
                 "error": "console snapshot unavailable",
             }
 
@@ -884,6 +936,7 @@ class TerminalService:
             "replay_from_seq": high_water_seq,
             "duplicate_events_possible": True,
         }
+        persistent = await self._persistent_console_snapshot(persistent_policy)
         return {
             "ok": True,
             "high_water_seq": high_water_seq,
@@ -893,6 +946,7 @@ class TerminalService:
             "tasks": tasks,
             "contexts": contexts,
             "communications": communications,
+            "persistent": persistent,
             "error": None,
         }
 
@@ -904,6 +958,14 @@ class TerminalService:
         work_scope=None,
         agent_id=None,
     ):
+        if not self.legacy_agent_admission_enabled:
+            return {
+                "ok": False,
+                "code": "legacy_admission_disabled",
+                "legacy_admission_disabled": True,
+                "persistent_agents_enabled": True,
+                "error": "legacy_admission_disabled",
+            }
         if not self.agent_coordinator:
             return {"ok": False, "error": "agent coordination unavailable"}
         result = await self.agent_coordinator.start(
