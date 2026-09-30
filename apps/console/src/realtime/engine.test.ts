@@ -135,3 +135,32 @@ test('event bursts coalesce snapshot refreshes instead of creating an unbounded 
   expect(client.snapshot).toHaveBeenCalledTimes(3)
   engine.stop()
 })
+
+
+test('foreground retry replaces a possibly suspended live socket immediately from the current cursor', async () => {
+  const client = {
+    snapshot: vi.fn().mockResolvedValue(snap(7)),
+    webSocketTicket: vi.fn().mockResolvedValueOnce({ ticket: 'first', expiresIn: 10 }).mockResolvedValueOnce({ ticket: 'resume', expiresIn: 10 }),
+  }
+  const sockets: Sock[] = []
+  const urls: string[] = []
+  const engine = new RealtimeConsoleEngine(client, 'https://terminal.example', {
+    socketFactory: (url) => {
+      urls.push(url)
+      const socket = new Sock()
+      sockets.push(socket)
+      return socket
+    },
+  })
+
+  await engine.start()
+  sockets[0].open()
+  expect(engine.getState().status).toBe('live')
+  await engine.retryNow()
+  expect(sockets[0].closed).toBe(true)
+  expect(sockets).toHaveLength(2)
+  expect(urls[1]).toBe(consoleEventsUrl('https://terminal.example', 'resume', 7))
+  sockets[1].open()
+  expect(engine.getState().status).toBe('live')
+  engine.stop()
+})

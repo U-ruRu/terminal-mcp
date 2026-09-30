@@ -112,6 +112,26 @@ export class FleetConnectionManager {
     await Promise.all(workers)
   }
 
+  async recoverAll(): Promise<void> {
+    this.syncProfiles()
+    const queue = [...this.actors.values()]
+    const workers = Array.from(
+      { length: Math.min(this.maxConcurrentStarts, queue.length) },
+      async () => {
+        while (queue.length > 0) {
+          const actor = queue.shift()
+          if (!actor) return
+          try {
+            await actor.retryNow()
+          } catch {
+            // One failed foreground recovery must not delay healthy peers.
+          }
+        }
+      },
+    )
+    await Promise.all(workers)
+  }
+
   async activity(
     instanceId: string,
     options: FleetActivityOptions = {},

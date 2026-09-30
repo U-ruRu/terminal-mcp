@@ -72,6 +72,7 @@ test('background policy suspends fleet after grace and resumes once visible', as
   const visibility = new Visibility()
   const fleet = {
     startAll: vi.fn(async () => {}),
+    recoverAll: vi.fn(async () => {}),
     stopAll: vi.fn(),
   }
   const controller = new FleetVisibilityController(fleet, visibility, scheduler, 30_000)
@@ -91,6 +92,7 @@ test('background policy suspends fleet after grace and resumes once visible', as
   visibility.set('visible')
   expect(scheduler.queue).toHaveLength(0)
   expect(fleet.stopAll).toHaveBeenCalledTimes(1)
+  await vi.waitFor(() => expect(fleet.recoverAll).toHaveBeenCalledTimes(1))
 
   controller.stop()
 })

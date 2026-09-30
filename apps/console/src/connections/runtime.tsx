@@ -11,6 +11,7 @@ import {
 
 import { PairingTransport } from '../auth/transport'
 import { BrowserConnectionRegistry } from './registry'
+import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { ConnectionProfile, ProfileRestoreResult } from './types'
 
 export type RuntimeProfileState =
@@ -59,6 +60,7 @@ export function ConnectionRuntimeProvider({
   deviceLabel = 'Terminal MCP Console',
   onProfilesChanged,
   restoreOnMount = true,
+  diagnostics,
 }: {
   children: ReactNode
   registry?: BrowserConnectionRegistry
@@ -66,6 +68,7 @@ export function ConnectionRuntimeProvider({
   deviceLabel?: string
   onProfilesChanged?: () => void
   restoreOnMount?: boolean
+  diagnostics?: BrowserDiagnosticJournal
 }) {
   const [registry] = useState(() => registryProp ?? new BrowserConnectionRegistry())
   const [transport] = useState(() => transportProp ?? new PairingTransport())
@@ -117,6 +120,7 @@ export function ConnectionRuntimeProvider({
           displayName,
           transport,
         )
+        diagnostics?.append({ type: 'profile_paired', instanceId: paired.profile.instanceId, server: paired.profile.displayName, status: 'connected' })
         syncProfiles()
         onProfilesChanged?.()
         setStates((current) => ({
@@ -129,24 +133,29 @@ export function ConnectionRuntimeProvider({
         }))
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : 'pairing_failed'
+        diagnostics?.append({ type: 'profile_pair_failed', code: message, detail: message })
         setError(message)
         throw cause
       }
     },
-    [deviceLabel, onProfilesChanged, registry, syncProfiles, transport],
+    [deviceLabel, diagnostics, onProfilesChanged, registry, syncProfiles, transport],
   )
 
   const retry = useCallback(
     async (instanceId: string) => {
       setError(null)
+      const profile = registry.get(instanceId)
+      diagnostics?.append({ type: 'profile_retry', instanceId, server: profile?.displayName })
       await restoreOne(instanceId)
     },
-    [restoreOne],
+    [diagnostics, registry, restoreOne],
   )
 
   const disconnect = useCallback(
     (instanceId: string) => {
+      const profile = registry.get(instanceId)
       registry.disconnect(instanceId)
+      diagnostics?.append({ type: 'profile_removed', instanceId, server: profile?.displayName })
       syncProfiles()
       onProfilesChanged?.()
       setStates((current) => {
@@ -155,7 +164,7 @@ export function ConnectionRuntimeProvider({
         return next
       })
     },
-    [onProfilesChanged, registry, syncProfiles],
+    [diagnostics, onProfilesChanged, registry, syncProfiles],
   )
 
   const value = useMemo(

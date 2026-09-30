@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from './components/AppShell'
+import type { BrowserDiagnosticJournal } from './diagnostics/journal'
 import type { FleetReadModel } from './fleet/readModel'
 import type { FleetInstanceView } from './fleet/types'
 import { Activity, type ActivityLoader } from './routes/Activity'
@@ -18,9 +19,10 @@ export type AppProps = {
   instances: FleetInstanceView[]
   loadActivity?: ActivityLoader
   loadTask?: ServerTaskLoader
+  diagnostics?: BrowserDiagnosticJournal
 }
 
-export function App({ model, instances, loadActivity, loadTask }: AppProps) {
+export function App({ model, instances, loadActivity, loadTask, diagnostics }: AppProps) {
   return (
     <AppShell servers={model.servers}>
       <Routes>
@@ -36,8 +38,8 @@ export function App({ model, instances, loadActivity, loadTask }: AppProps) {
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />
-        <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" />} />
-        <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" />} />
+        <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" diagnostics={diagnostics} />} />
+        <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" diagnostics={diagnostics} />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/activity" element={<Activity instances={instances} loadActivity={loadActivity} />} />

@@ -62,19 +62,29 @@ export type FleetVisibilitySource = {
 
 export type FleetLifecycle = {
   startAll(): Promise<void>
+  recoverAll(): Promise<void>
   stopAll(): void
 }
+
+export type FleetVisibilityEvent =
+  | 'app_background'
+  | 'app_foreground'
+  | 'background_suspended'
+  | 'foreground_recover_requested'
+  | 'foreground_restart_requested'
 
 export class FleetVisibilityController {
   private timer: unknown = null
   private suspended = false
   private started = false
+  private wasHidden = false
 
   constructor(
     private readonly fleet: FleetLifecycle,
     private readonly visibility: FleetVisibilitySource,
     private readonly scheduler: RealtimeScheduler = browserScheduler,
     private readonly suspendAfterMs = DEFAULT_FLEET_BACKGROUND_SUSPEND_MS,
+    private readonly onLifecycleEvent?: (event: FleetVisibilityEvent) => void,
   ) {
     if (!Number.isFinite(suspendAfterMs) || suspendAfterMs < 0) {
       throw new Error('background_suspend_must_be_non_negative')
@@ -98,14 +108,24 @@ export class FleetVisibilityController {
   private readonly onVisibilityChange = (): void => {
     if (!this.started) return
     if (this.visibility.visibilityState === 'hidden') {
+      if (!this.wasHidden) this.onLifecycleEvent?.('app_background')
+      this.wasHidden = true
       this.scheduleSuspend()
       return
     }
 
     this.clearTimer()
-    if (!this.suspended) return
-    this.suspended = false
-    void this.fleet.startAll().catch(() => {})
+    if (!this.wasHidden) return
+    this.wasHidden = false
+    this.onLifecycleEvent?.('app_foreground')
+    if (this.suspended) {
+      this.suspended = false
+      this.onLifecycleEvent?.('foreground_restart_requested')
+      void this.fleet.startAll().catch(() => {})
+      return
+    }
+    this.onLifecycleEvent?.('foreground_recover_requested')
+    void this.fleet.recoverAll().catch(() => {})
   }
 
   private scheduleSuspend(): void {
@@ -114,6 +134,7 @@ export class FleetVisibilityController {
       this.timer = null
       if (!this.started || this.visibility.visibilityState !== 'hidden') return
       this.suspended = true
+      this.onLifecycleEvent?.('background_suspended')
       this.fleet.stopAll()
     }, this.suspendAfterMs)
   }

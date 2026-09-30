@@ -124,7 +124,20 @@ export class RealtimeConsoleEngine {
   async retryNow(): Promise<void> {
     if (!this.running) return this.start()
     this.clearReconnectTimer()
-    if (this.state.snapshot === null || this.state.staleReason === 'journal_gap') return this.resync(this.state.staleReason ?? 'manual_retry')
+    this.clearRefreshTimer()
+    if (this.state.snapshot === null || this.state.staleReason === 'journal_gap') {
+      return this.resync(this.state.staleReason ?? 'manual_retry')
+    }
+    this.generation += 1
+    const socket = this.socket
+    this.socket = null
+    if (socket) {
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onclose = null
+      socket.onerror = null
+      socket.close(1000, 'console_foreground_recover')
+    }
     return this.connect(true)
   }
 

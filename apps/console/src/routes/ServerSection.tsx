@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 
+import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
@@ -15,16 +17,41 @@ const titles: Record<ServerSectionKind, MessageKey> = {
 export function ServerSection({
   model,
   section,
+  diagnostics,
 }: {
   model: FleetReadModel
   section: ServerSectionKind
+  diagnostics?: BrowserDiagnosticJournal
 }) {
-  const { t, dateTime } = useI18n()
+  const { t, dateTime, number } = useI18n()
   const { instanceId } = useParams()
   const server = model.servers.find((item) => item.instanceId === instanceId)
+  const [, setDiagnosticRevision] = useState(0)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => diagnostics?.subscribe(() => setDiagnosticRevision((value) => value + 1)), [diagnostics])
   if (!server) return <Navigate to={'/' + section} replace />
 
+  const diagnosticEntries = diagnostics?.list(server.instanceId) ?? []
   const title = t(titles[section])
+
+  async function copyDiagnostics() {
+    if (!diagnostics) return
+    const text = diagnostics.exportText(server!.instanceId)
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1800)
+  }
   return (
     <section className="stack" aria-labelledby="server-section-title">
       <div className="page-heading">
@@ -73,6 +100,31 @@ export function ServerSection({
           </>
         )}
       </article>
+
+      {section === 'health' && diagnostics ? (
+        <details className="panel diagnostics-panel">
+          <summary>{t('diagnostics.title')} · {number(diagnosticEntries.length)}</summary>
+          <p className="muted">{t('diagnostics.description')}</p>
+          <div className="diagnostics-actions">
+            <button type="button" className="secondary-action" onClick={() => void copyDiagnostics()}>
+              {copied ? t('diagnostics.copied') : t('diagnostics.copy')}
+            </button>
+          </div>
+          {diagnosticEntries.length === 0 ? <p className="muted">{t('diagnostics.empty')}</p> : (
+            <div className="diagnostics-log" aria-label={t('diagnostics.title')}>
+              {diagnosticEntries.map((event) => (
+                <div className="diagnostics-entry" key={event.seq}>
+                  <div><time dateTime={event.at}>{dateTime(event.at)}</time> <code>#{event.seq} {event.type}</code></div>
+                  <div className="muted">
+                    {[event.server, event.status, event.authStatus ? `auth=${event.authStatus}` : '', event.code ? `code=${event.code}` : ''].filter(Boolean).join(' · ')}
+                  </div>
+                  {event.detail ? <div className="diagnostics-detail">{event.detail}</div> : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </details>
+      ) : null}
 
       <Link className="text-link" to={'/servers/' + encodeURIComponent(server.instanceId)}>
         {t('section.openOverview')}

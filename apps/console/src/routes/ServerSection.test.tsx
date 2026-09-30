@@ -2,6 +2,8 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { expect, test } from 'vitest'
 
+import type { KeyValueStorage } from '../auth/vault'
+import { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerSection } from './ServerSection'
@@ -35,4 +37,32 @@ test('renders actual snapshot context entries for the selected server', () => {
   expect(screen.getByText('Primary')).toBeInTheDocument()
   expect(screen.getByText('Extra note')).toBeInTheDocument()
   expect(screen.getByText('Additional')).toBeInTheDocument()
+})
+
+
+class MemoryStorage implements KeyValueStorage {
+  values = new Map<string, string>()
+  getItem(key: string) { return this.values.get(key) ?? null }
+  setItem(key: string, value: string) { this.values.set(key, value) }
+  removeItem(key: string) { this.values.delete(key) }
+}
+
+test('health exposes the persistent local diagnostic journal on demand', () => {
+  const diagnostics = new BrowserDiagnosticJournal(new MemoryStorage(), () => new Date('2026-09-30T06:00:00Z'))
+  diagnostics.append({ type: 'app_background' })
+  diagnostics.append({ type: 'connection_state', instanceId: 'secondary', server: 'Secondary', status: 'reconnecting', code: 'dns_error', detail: 'attempt=1' })
+
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/servers/secondary/health']}>
+        <Routes><Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" diagnostics={diagnostics} />} /></Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+
+  expect(screen.getByText(/Local diagnostics/)).toBeInTheDocument()
+  expect(screen.getByText(/#1 app_background/)).toBeInTheDocument()
+  expect(screen.getByText(/#2 connection_state/)).toBeInTheDocument()
+  expect(screen.getByText(/code=dns_error/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Copy as text' })).toBeInTheDocument()
 })

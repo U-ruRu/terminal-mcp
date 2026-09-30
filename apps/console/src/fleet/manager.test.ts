@@ -191,6 +191,21 @@ test('one failed instance does not block healthy peers and runtime state stays i
   expect(actors.get('good')?.startCalls).toBe(1)
 })
 
+test('foreground recovery retries every paired server without recreating actors', async () => {
+  const registry = new MutableRegistry(['a', 'b', 'c'].map(makeProfile))
+  const actors = new Map<string, FakeActor>()
+  const manager = new FleetConnectionManager(registry, (item) => {
+    const actor = new FakeActor(item.instanceId)
+    actors.set(item.instanceId, actor)
+    return actor
+  }, 2)
+
+  manager.syncProfiles()
+  await manager.recoverAll()
+  expect([...actors.values()].map((actor) => actor.retryCalls)).toEqual([1, 1, 1])
+  expect([...actors.values()].map((actor) => actor.startCalls)).toEqual([0, 0, 0])
+})
+
 test('manual retry targets exactly one server', async () => {
   const registry = new MutableRegistry(['a', 'b'].map(makeProfile))
   const actors = new Map<string, FakeActor>()
