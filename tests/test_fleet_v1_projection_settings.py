@@ -13,6 +13,9 @@ def base(tmp_path):
         "fleet_node_id": "node-a",
         "fleet_instance_id": "node-a",
         "fleet_signing_private_key": "placeholder",
+        "persistent_agents_enabled": True,
+        "fleet_v1_authority_enabled": True,
+        "fleet_control_node_id": "node-a",
     }
 
 

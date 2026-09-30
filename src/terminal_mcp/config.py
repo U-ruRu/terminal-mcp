@@ -160,6 +160,8 @@ class Settings(BaseSettings):
             return self
         if not self.fleet_v1_source_enabled:
             raise ValueError("fleet v1 projection requires fleet_v1_source_enabled")
+        if not self.fleet_v1_authority_enabled:
+            raise ValueError("fleet v1 projection requires fleet_v1_authority_enabled")
         owner = self.fleet_projection_owner_node_id.strip()
         if not owner:
             raise ValueError(
@@ -167,6 +169,12 @@ class Settings(BaseSettings):
             )
         local = self.effective_fleet_node_id()
         follower = self.fleet_projection_follower_node_id.strip()
+        if not follower:
+            raise ValueError(
+                "fleet_projection_follower_node_id is required when projection is enabled"
+            )
+        if follower == owner:
+            raise ValueError("projection owner and follower must differ")
         if local not in {owner, follower}:
             raise ValueError(
                 "local fleet node must be configured projection owner or follower"

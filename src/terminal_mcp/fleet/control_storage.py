@@ -81,6 +81,13 @@ class FleetControlStore:
                         state TEXT NOT NULL CHECK(state IN ('active','draining','offline')),
                         updated_at TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS projection_topology(
+                        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                        owner_node_id TEXT NOT NULL,
+                        follower_node_id TEXT NOT NULL,
+                        projection_epoch INTEGER NOT NULL CHECK(projection_epoch>0),
+                        updated_at TEXT NOT NULL
+                    );
                     CREATE TABLE IF NOT EXISTS authority_routes(
                         logical_agent_id TEXT PRIMARY KEY,
                         authority_node_id TEXT NOT NULL,
@@ -228,6 +235,94 @@ class FleetControlStore:
             (revision, stamp),
         )
         return revision
+
+    async def ensure_projection_topology(
+        self,
+        owner_node_id: str,
+        follower_node_id: str,
+        *,
+        now: str | None = None,
+    ) -> dict:
+        owner_node_id = validate_protocol_id(owner_node_id, "projection owner_node_id")
+        follower_node_id = validate_protocol_id(
+            follower_node_id, "projection follower_node_id"
+        )
+        if owner_node_id == follower_node_id:
+            raise ValueError("projection owner and follower must differ")
+        stamp = now or utc_text()
+        async with self._connect("fleet_control_projection_topology_ensure") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT owner_node_id,follower_node_id,projection_epoch,updated_at "
+                        "FROM projection_topology WHERE singleton=1"
+                    )
+                ).fetchone()
+                if row is None:
+                    await db.execute(
+                        "INSERT INTO projection_topology("
+                        "singleton,owner_node_id,follower_node_id,projection_epoch,updated_at"
+                        ") VALUES(1,?,?,1,?)",
+                        (owner_node_id, follower_node_id, stamp),
+                    )
+                elif (row[0], row[1]) != (owner_node_id, follower_node_id):
+                    raise FleetControlError("projection_topology_mismatch")
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.projection_topology()
+
+    async def projection_topology(self) -> dict | None:
+        async with self._connect("fleet_control_projection_topology_get") as db:
+            row = await (
+                await db.execute(
+                    "SELECT owner_node_id,follower_node_id,projection_epoch,updated_at "
+                    "FROM projection_topology WHERE singleton=1"
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "owner_node_id": row[0],
+            "follower_node_id": row[1],
+            "projection_epoch": int(row[2]),
+            "updated_at": row[3],
+        }
+
+    async def promote_projection(
+        self,
+        *,
+        expected_epoch: int,
+        now: str | None = None,
+    ) -> dict:
+        if self.node_id != self.control_node_id:
+            raise FleetControlError("control_authority_required")
+        stamp = now or utc_text()
+        async with self._connect("fleet_control_projection_promote") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT owner_node_id,follower_node_id,projection_epoch "
+                        "FROM projection_topology WHERE singleton=1"
+                    )
+                ).fetchone()
+                if row is None:
+                    raise FleetControlError("projection_topology_missing")
+                if int(row[2]) != int(expected_epoch):
+                    raise FleetControlError("projection_epoch_conflict")
+                await db.execute(
+                    "UPDATE projection_topology SET owner_node_id=?,follower_node_id=?,"
+                    "projection_epoch=projection_epoch+1,updated_at=? WHERE singleton=1",
+                    (row[1], row[0], stamp),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.projection_topology()
 
     async def route(self, logical_agent_id: str) -> dict | None:
         async with self._connect("fleet_control_route_get") as db:

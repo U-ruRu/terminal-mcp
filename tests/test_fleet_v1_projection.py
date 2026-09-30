@@ -1,5 +1,6 @@
 import pytest
 
+from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlStore
 from terminal_mcp.fleet.projection_storage import FleetProjectionError, FleetProjectionStore
 
 
@@ -266,3 +267,36 @@ async def test_projection_promotion_requires_control_authority(tmp_path):
     await follower.initialize()
     with pytest.raises(FleetProjectionError, match="control authority"):
         await follower.promote(expected_epoch=1)
+
+
+@pytest.mark.asyncio
+async def test_control_manifest_owns_projection_topology_and_promotion(tmp_path):
+    control = FleetControlStore(
+        tmp_path / "control.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-a",
+        control_node_id="projection-a",
+    )
+    await control.initialize()
+    initial = await control.ensure_projection_topology(
+        "projection-a", "projection-b"
+    )
+    assert initial["owner_node_id"] == "projection-a"
+    assert initial["follower_node_id"] == "projection-b"
+    assert initial["projection_epoch"] == 1
+
+    promoted = await control.promote_projection(expected_epoch=1)
+    assert promoted["owner_node_id"] == "projection-b"
+    assert promoted["follower_node_id"] == "projection-a"
+    assert promoted["projection_epoch"] == 2
+
+    non_control = FleetControlStore(
+        tmp_path / "other-control.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-b",
+        control_node_id="projection-a",
+    )
+    await non_control.initialize()
+    await non_control.ensure_projection_topology("projection-a", "projection-b")
+    with pytest.raises(FleetControlError, match="control_authority_required"):
+        await non_control.promote_projection(expected_epoch=1)

@@ -264,6 +264,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     peer.instance_id,
                     (),
                 )
+            if fleet_projection:
+                await fleet_control.ensure_projection_topology(
+                    settings.fleet_projection_owner_node_id,
+                    settings.fleet_projection_follower_node_id,
+                )
         await service.reconcile_agent_sessions()
         await oauth_store.initialize()
         await auth_foundation.initialize()
