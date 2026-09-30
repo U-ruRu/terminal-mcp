@@ -56,7 +56,7 @@ function emptyState(now = Date.now()): FleetDurableCacheState {
 }
 
 function removalEvent(event: FleetProjectionEvent): boolean {
-  return event.payload.deleted === true || /(?:deleted|removed|released|resolved)$/.test(event.eventType)
+  return event.eventType === 'projection.remove' || event.payload.deleted === true || /(?:deleted|removed|released|resolved)$/.test(event.eventType)
 }
 
 function applyEntityEvent(

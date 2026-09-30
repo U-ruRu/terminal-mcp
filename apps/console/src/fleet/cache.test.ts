@@ -123,3 +123,31 @@ test('bounded activity evicts old events without losing entity state', async () 
   expect(final.activity.map((item) => item.projectionSeq)).toEqual([12, 13])
   expect(final.entities[0].payload.status).toBe('completed')
 })
+
+test('materialized projection.remove deletes entity instead of caching empty payload', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  await cache.applySnapshot(snapshot())
+  const removed: FleetProjectionEventPage = {
+    projectionEpoch: 4,
+    projectionSeq: 11,
+    resetRequired: false,
+    events: [{
+      projectionEpoch: 4,
+      projectionSeq: 11,
+      eventId: 'event-remove-11',
+      sourceNodeId: 'node-a',
+      sourceStreamGeneration: 'gen-a',
+      sourceSeq: 11,
+      eventType: 'projection.remove',
+      entityType: 'command',
+      entityId: 'cmd-1',
+      entityRevision: 11,
+      payloadVersion: 2,
+      payload: {},
+      createdAt: '2026-09-30T18:00:11Z',
+    }],
+  }
+  const next = await cache.applyEvents(removed)
+  expect(next.appliedProjectionSeq).toBe(11)
+  expect(next.entities).toEqual([])
+})

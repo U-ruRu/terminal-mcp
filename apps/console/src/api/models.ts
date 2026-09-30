@@ -159,6 +159,7 @@ export type PersistentPolicyReadModel = {
   admissionMode: string
   legacyAdmissionEnabled: boolean
   policyControlSupported: boolean
+  projected?: boolean
 }
 
 export type PersistentClaimReadModel = {
