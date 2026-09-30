@@ -1,12 +1,15 @@
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { expect, test } from 'vitest'
+import { afterEach, expect, test } from 'vitest'
 
 import type { KeyValueStorage } from '../auth/vault'
 import { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerSection } from './ServerSection'
+
+afterEach(() => cleanup())
 
 const model: FleetReadModel = {
   servers: [{
@@ -65,4 +68,23 @@ test('health exposes the persistent local diagnostic journal on demand', () => {
   expect(screen.getByText(/#2 connection_state/)).toBeInTheDocument()
   expect(screen.getByText(/code=dns_error/)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Copy as text' })).toBeInTheDocument()
+})
+
+
+test('clear diagnostics empties the local journal for an isolated test', async () => {
+  const diagnostics = new BrowserDiagnosticJournal(new MemoryStorage(), () => new Date('2026-09-30T06:00:00Z'))
+  diagnostics.append({ type: 'connection_state', instanceId: 'secondary', server: 'Secondary', status: 'reconnecting', code: 'dns_error' })
+
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/servers/secondary/health']}>
+        <Routes><Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" diagnostics={diagnostics} />} /></Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+
+  expect(screen.getByText(/#1 connection_state/)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Clear log' }))
+  expect(screen.getByText('No diagnostic events yet.')).toBeInTheDocument()
+  expect(diagnostics.list()).toEqual([])
 })

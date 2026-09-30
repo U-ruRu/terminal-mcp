@@ -90,6 +90,11 @@ export class BrowserDiagnosticJournal {
     return () => this.listeners.delete(listener)
   }
 
+  clear(): void {
+    this.storage.removeItem(STORAGE_KEY)
+    for (const listener of this.listeners) listener()
+  }
+
   recordApplicationStart(version: string, build: string): void {
     const current = `${version} (${build})`
     const previous = this.storage.getItem(BUILD_KEY)

@@ -106,7 +106,10 @@ export function ServerSection({
           <summary>{t('diagnostics.title')} · {number(diagnosticEntries.length)}</summary>
           <p className="muted">{t('diagnostics.description')}</p>
           <div className="diagnostics-actions">
-            <button type="button" className="secondary-action" onClick={() => void copyDiagnostics()}>
+            <button type="button" className="secondary-action" onClick={() => diagnostics.clear()} disabled={diagnosticEntries.length === 0}>
+              {t('diagnostics.clear')}
+            </button>
+            <button type="button" className="secondary-action" onClick={() => void copyDiagnostics()} disabled={diagnosticEntries.length === 0}>
               {copied ? t('diagnostics.copied') : t('diagnostics.copy')}
             </button>
           </div>

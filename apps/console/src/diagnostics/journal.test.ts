@@ -41,3 +41,19 @@ test('extracts stable diagnostic error codes', () => {
   expect(diagnosticErrorCode('network_error')).toBe('network_error')
   expect(diagnosticErrorCode('long human readable message')).toBeUndefined()
 })
+
+
+test('clear removes only diagnostic events and preserves the app build marker', () => {
+  const storage = new MemoryStorage()
+  const journal = new BrowserDiagnosticJournal(storage, () => new Date('2026-09-30T07:00:00Z'))
+  journal.recordApplicationStart('0.2.8', '10')
+  journal.append({ type: 'network_error', code: 'network_error' })
+  expect(journal.list().length).toBeGreaterThan(0)
+
+  journal.clear()
+  expect(journal.list()).toEqual([])
+
+  journal.recordApplicationStart('0.2.9', '11')
+  expect(journal.list().map((event) => event.type)).toEqual(['app_updated', 'app_started'])
+  expect(journal.exportText()).toContain('0.2.8 (10) -> 0.2.9 (11)')
+})
