@@ -8,6 +8,7 @@ from typing import Any
 
 FLEET_PROTOCOL_MAJOR = 1
 MAX_SOURCE_REPLAY_LIMIT = 1000
+MAX_RECENT_TERMINAL_COMMANDS = 256
 SOURCE_CAPABILITIES = frozenset(
     {
         "fleet.source.v1",

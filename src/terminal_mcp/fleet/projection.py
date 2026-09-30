@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from terminal_mcp.fleet.projection_storage import FleetProjectionError
+from terminal_mcp.fleet.source_query import CURRENT_SCOPE_VERSION
 
 DELTA_BATCH_SIZE = 250
 MAX_SYNC_PAGES = 10_000
@@ -236,6 +237,8 @@ class FleetProjectionService:
             or str(bootstrap.get("source_stream_generation") or "") != generation
         ):
             raise FleetProjectionError("source recovery identity changed")
+        if int(bootstrap.get("scope_version") or 0) != CURRENT_SCOPE_VERSION:
+            raise FleetProjectionError("source recovery scope version changed")
         scopes = [str(value) for value in bootstrap.get("current_scopes") or []]
         barrier = int(bootstrap.get("barrier_source_seq") or 0)
         recovery_id = f"{generation}:{barrier}:{time.monotonic_ns()}"
@@ -259,6 +262,8 @@ class FleetProjectionService:
                     raise FleetProjectionError(
                         f"source recovery reset: {page.get('reset_reason') or 'unknown'}"
                     )
+                if int(page.get("scope_version") or 0) != CURRENT_SCOPE_VERSION:
+                    raise FleetProjectionError("source recovery page scope version changed")
                 if int(page.get("barrier_source_seq") or -1) != barrier:
                     raise FleetProjectionError("source recovery barrier changed")
                 staged = await self.store.stage_current_recovery_page(
@@ -439,10 +444,16 @@ class FleetProjectionService:
             high_water = int(page.get("high_water_source_seq") or cursor)
             backlog = max(0, high_water - cursor)
             if self.metrics:
+                labels = (("source_node_id", node_id),)
                 self.metrics.set(
                     "terminal_mcp_fleet_projection_backlog_events",
                     backlog,
-                    (("source_node_id", node_id),),
+                    labels,
+                )
+                self.metrics.set(
+                    "terminal_mcp_fleet_projection_source_lag_events",
+                    backlog,
+                    labels,
                 )
             if cursor >= high_water:
                 break
@@ -452,7 +463,18 @@ class FleetProjectionService:
             bootstrap = await bootstrap_getter()
             scopes = [str(value) for value in bootstrap.get("current_scopes") or []]
         await self.store.mark_source_live(node_id, generation, scopes)
-        await self.store.put_runtime_overlay(node_id, await health_getter())
+        health = await health_getter()
+        if self.metrics:
+            queue_pressure = sum(
+                max(0, int(item.get("queued") or 0))
+                for item in health.get("queues") or []
+            )
+            self.metrics.set(
+                "terminal_mcp_fleet_projection_queue_pressure",
+                queue_pressure,
+                (("source_node_id", node_id),),
+            )
+        await self.store.put_runtime_overlay(node_id, health)
 
     async def _sync_local_source(self) -> None:
         manifest = await self.local_source.manifest()
@@ -681,10 +703,16 @@ class FleetProjectionService:
             )
             overlay_response.raise_for_status()
             overlay_page = overlay_response.json()
+            sources = overlay_page.get("sources")
+            scope_statuses = overlay_page.get("scope_statuses")
             await self.store.apply_owner_overlays(
                 list(overlay_page.get("runtime_overlays") or []),
                 owner_node_id=peer.instance_id,
                 projection_epoch=int(overlay_page["projection_epoch"]),
+                sources=list(sources) if sources is not None else None,
+                scope_statuses=(
+                    list(scope_statuses) if scope_statuses is not None else None
+                ),
             )
 
     async def _follower_snapshot(self, client, peer) -> None:

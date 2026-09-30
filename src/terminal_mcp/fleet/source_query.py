@@ -9,6 +9,7 @@ from typing import Any
 
 import aiosqlite
 
+from terminal_mcp.fleet.protocol import MAX_RECENT_TERMINAL_COMMANDS
 from terminal_mcp.host_resources import collect_host_resources
 
 CURRENT_SCOPE_VERSION = 1
@@ -122,14 +123,23 @@ CURRENT_SCOPES = {
     ),
     "commands": CurrentScope(
         "command",
-        """
+        f"""
         SELECT c.hash AS k1,c.status,c.exit_code,c.queue_id,c.started_at,c.finished_at,
                c.enqueued_at,c.claimed_at,c.error,a.logical_agent_id,a.work_session_id,
                a.session_epoch,s.truncated,s.pruned_at
         FROM commands c
         LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash
         LEFT JOIN command_output_state s ON s.command_hash=c.hash
-        WHERE c.status IN ('queued','running')""",
+        WHERE c.status IN ('queued','running')
+           OR c.hash IN (
+               SELECT recent.hash
+               FROM commands recent
+               WHERE recent.status IN ('completed','failed','cancelled')
+               ORDER BY COALESCE(
+                   recent.finished_at,recent.started_at,recent.claimed_at,recent.enqueued_at,''
+               ) DESC,recent.hash DESC
+               LIMIT {MAX_RECENT_TERMINAL_COMMANDS}
+           )""",
     ),
     "fleet_gates": CurrentScope(
         "fleet_gate",

@@ -267,6 +267,8 @@ def build_fleet_v1_projection_router(projection, replication, projection_service
         return {
             "projection_epoch": snapshot["projection_epoch"],
             "projection_seq": snapshot["projection_seq"],
+            "sources": snapshot["sources"],
+            "scope_statuses": snapshot.get("scope_statuses") or [],
             "runtime_overlays": snapshot["runtime_overlays"],
         }
 

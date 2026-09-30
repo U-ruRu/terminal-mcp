@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import aiosqlite
 
 from terminal_mcp.core.orchestration import utc_text
-from terminal_mcp.fleet.protocol import validate_protocol_id
+from terminal_mcp.fleet.protocol import MAX_RECENT_TERMINAL_COMMANDS, validate_protocol_id
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
@@ -777,6 +777,52 @@ class FleetProjectionStore:
                 await db.rollback()
                 raise
 
+    async def _prune_recent_terminal_commands(
+        self,
+        db,
+        *,
+        source_node_id: str,
+        generation: str,
+        source_seq: int,
+        stamp: str,
+    ) -> int:
+        rows = await (
+            await db.execute(
+                "SELECT entity_id,entity_revision,source_seq "
+                "FROM projection_entities "
+                "WHERE source_node_id=? AND entity_type='command' "
+                "AND json_extract(payload_json,'$.status') "
+                "IN ('completed','failed','cancelled') "
+                "ORDER BY source_seq DESC,entity_id DESC LIMIT -1 OFFSET ?",
+                (source_node_id, MAX_RECENT_TERMINAL_COMMANDS),
+            )
+        ).fetchall()
+        removed = 0
+        for entity_id, revision, prior_source_seq in rows:
+            event_id = (
+                f"retention:{source_node_id}:{generation}:{entity_id}:"
+                f"{prior_source_seq}:{source_seq}"
+            )
+            changed = await self._apply_projection_mutation(
+                db,
+                event_id=event_id,
+                source_node_id=source_node_id,
+                generation=generation,
+                source_seq=max(1, int(source_seq)),
+                event_type="projection.remove",
+                entity_type="command",
+                entity_id=str(entity_id),
+                entity_revision=max(int(revision) + 1, int(source_seq), 1),
+                payload_version=2,
+                payload={},
+                authority_node_id=None,
+                authority_epoch=None,
+                created_at=stamp,
+                stamp=stamp,
+            )
+            removed += int(changed)
+        return removed
+
     async def apply_materialized_source_page(
         self,
         page: dict,
@@ -829,6 +875,13 @@ class FleetProjectionStore:
                         stamp=stamp,
                     )
                 page_cursor = int(page.get("next_cursor") or cursor[1])
+                await self._prune_recent_terminal_commands(
+                    db,
+                    source_node_id=source_node_id,
+                    generation=generation,
+                    source_seq=page_cursor,
+                    stamp=stamp,
+                )
                 await db.execute(
                     "UPDATE projection_sources SET source_seq=MAX(source_seq,?),"
                     "freshness='stale',updated_at=? WHERE source_node_id=?",
@@ -1094,6 +1147,8 @@ class FleetProjectionStore:
         *,
         owner_node_id: str,
         projection_epoch: int,
+        sources: list[dict] | None = None,
+        scope_statuses: list[dict] | None = None,
     ) -> None:
         if self.role != "follower":
             raise FleetProjectionError("only follower can apply owner overlays")
@@ -1108,6 +1163,36 @@ class FleetProjectionStore:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 await db.execute("DELETE FROM projection_runtime_overlay")
+                if sources is not None:
+                    await db.execute("DELETE FROM projection_sources")
+                    for item in sources:
+                        await db.execute(
+                            "INSERT INTO projection_sources("
+                            "source_node_id,source_stream_generation,source_seq,"
+                            "freshness,updated_at) VALUES(?,?,?,?,?)",
+                            (
+                                item["source_node_id"],
+                                item["source_stream_generation"],
+                                int(item["source_seq"]),
+                                item["freshness"],
+                                item.get("updated_at") or utc_text(),
+                            ),
+                        )
+                if scope_statuses is not None:
+                    await db.execute("DELETE FROM projection_scope_status")
+                    for item in scope_statuses:
+                        await db.execute(
+                            "INSERT INTO projection_scope_status("
+                            "source_node_id,scope,status,reason,updated_at) "
+                            "VALUES(?,?,?,?,?)",
+                            (
+                                item["source_node_id"],
+                                item["scope"],
+                                item["status"],
+                                item.get("reason"),
+                                item.get("updated_at") or utc_text(),
+                            ),
+                        )
                 for item in overlays:
                     await db.execute(
                         "INSERT INTO projection_runtime_overlay("
