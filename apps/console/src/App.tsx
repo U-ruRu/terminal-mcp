@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell'
 import type { BrowserDiagnosticJournal } from './diagnostics/journal'
 import type { FleetReadModel } from './fleet/readModel'
 import type { FleetInstanceView } from './fleet/types'
+import type { PersistentMutationResult } from './api/models'
 import { Activity, type ActivityLoader } from './routes/Activity'
 import { Connections } from './routes/Connections'
 import { Overview } from './routes/Overview'
@@ -11,6 +12,7 @@ import { ServerAgents } from './routes/ServerAgents'
 import { ServerChooser } from './routes/ServerChooser'
 import { Settings } from './routes/Settings'
 import { ServerSection } from './routes/ServerSection'
+import { ServerSlots } from './routes/ServerSlots'
 import { ServerTasks, type ServerTaskLoader } from './routes/ServerTasks'
 import { ServerWorkspace } from './routes/ServerWorkspace'
 
@@ -19,16 +21,18 @@ export type AppProps = {
   instances: FleetInstanceView[]
   loadActivity?: ActivityLoader
   loadTask?: ServerTaskLoader
+  mutatePersistent?: (instanceId: string, path: string, body: Record<string, unknown>) => Promise<PersistentMutationResult>
   diagnostics?: BrowserDiagnosticJournal
 }
 
-export function App({ model, instances, loadActivity, loadTask, diagnostics }: AppProps) {
+export function App({ model, instances, loadActivity, loadTask, mutatePersistent, diagnostics }: AppProps) {
   return (
     <AppShell servers={model.servers}>
       <Routes>
         <Route path="/" element={<Overview model={model} />} />
         <Route path="/servers" element={<Overview model={model} />} />
         <Route path="/agents" element={<ServerChooser model={model} section="agents" />} />
+        <Route path="/slots" element={<ServerChooser model={model} section="slots" />} />
         <Route path="/tasks" element={<ServerChooser model={model} section="tasks" />} />
         <Route path="/context" element={<ServerChooser model={model} section="context" />} />
         <Route path="/health" element={<ServerChooser model={model} section="health" />} />
@@ -38,6 +42,8 @@ export function App({ model, instances, loadActivity, loadTask, diagnostics }: A
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />
+        <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} />} />
+        <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} />} />
         <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" diagnostics={diagnostics} />} />
         <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" diagnostics={diagnostics} />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />

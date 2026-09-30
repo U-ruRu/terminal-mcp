@@ -507,4 +507,5 @@ class ConsoleSnapshotResponse(BaseModel):
     tasks: dict[str, object]
     contexts: dict[str, object]
     communications: list[dict[str, object]] = Field(default_factory=list)
+    persistent: dict[str, object] | None = None
     error: str | None = None

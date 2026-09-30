@@ -375,6 +375,12 @@ def build_console_events_router(settings, auth, pairing_store, service, event_st
                     return
 
                 if page["events"]:
+                    # Never emit data after a paired device has been revoked, even inside
+                    # the normal periodic auth-check window. Revocation is a hard read fence.
+                    if not await pairing_store.device_active(record.device_id, record.client_id):
+                        await websocket.close(code=4401, reason="revoked_device")
+                        return
+                    last_auth_check = time.monotonic()
                     for event in page["events"]:
                         await websocket.send_json({"type": "event", "event": event})
                         cursor = event["seq"]

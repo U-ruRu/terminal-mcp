@@ -121,6 +121,11 @@ export class RealtimeConsoleEngine {
     this.setState(markOffline(this.state))
   }
 
+  async refreshNow(): Promise<void> {
+    if (!this.running) return
+    await this.refreshSnapshot()
+  }
+
   async retryNow(): Promise<void> {
     if (!this.running) return this.start()
     this.clearReconnectTimer()

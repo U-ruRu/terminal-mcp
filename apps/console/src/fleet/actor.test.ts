@@ -150,3 +150,10 @@ test('actors use independent credential namespaces with shared storage', async (
   expect(bodies[1]).toContain('refresh-beta')
   expect(bodies[1]).not.toContain('refresh-alpha')
 })
+
+test('persistent mutations fail closed unless the instance is live and authenticated', async () => {
+  const actor = new BrowserFleetInstanceActor(makeProfile('alpha'), { storage: new MemoryStorage() })
+  await expect(actor.persistentMutation('/actions/persistent/slots/play', {})).rejects.toThrow(
+    'instance_not_live:alpha',
+  )
+})

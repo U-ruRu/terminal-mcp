@@ -487,7 +487,9 @@ def test_open_websocket_closes_after_device_revocation(tmp_path):
         ) as websocket:
             assert asyncio.run(app.state.pairing_store.revoke_device(paired["device_id"]))
             with pytest.raises(WebSocketDisconnect) as closed:
-                websocket.receive_json()
+                while True:
+                    frame = websocket.receive_json()
+                    assert frame["type"] == "heartbeat"
             assert closed.value.code == 4401
 
 

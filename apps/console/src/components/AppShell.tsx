@@ -6,7 +6,7 @@ import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 
 type NavigationItem = {
-  key: 'fleet' | 'servers' | 'connections' | 'agents' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
+  key: 'fleet' | 'servers' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
   labelKey: MessageKey
   globalPath: string
   serverPath?: (instanceId: string) => string
@@ -21,6 +21,12 @@ const navigation: NavigationItem[] = [
     labelKey: 'nav.agents',
     globalPath: '/agents',
     serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents',
+  },
+  {
+    key: 'slots',
+    labelKey: 'nav.slots',
+    globalPath: '/slots',
+    serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots',
   },
   {
     key: 'tasks',
@@ -66,6 +72,7 @@ function activeKey(pathname: string): NavigationItem['key'] {
   if (pathname === '/settings') return 'settings'
   if (pathname === '/connections') return 'connections'
   if (pathname === '/agents' || pathname.endsWith('/agents')) return 'agents'
+  if (pathname === '/slots' || pathname.includes('/slots')) return 'slots'
   if (pathname === '/tasks' || pathname.includes('/tasks')) return 'tasks'
   if (pathname === '/context' || pathname.endsWith('/context')) return 'context'
   if (pathname === '/health' || pathname.endsWith('/health')) return 'health'
@@ -83,13 +90,15 @@ type ContextNavigation = {
   to: string
   labelKey: 'nav.backToFleet' | 'nav.backToServer' | 'nav.backToTasks'
   ariaKey: 'nav.goBackToFleet' | 'nav.goBackToServer' | 'nav.goBackToTasks'
-  titleKey: 'title.server' | 'title.serverTasks' | 'title.taskDetail' | 'title.activity'
+  titleKey: 'title.server' | 'title.serverSlots' | 'title.slotDetail' | 'title.serverTasks' | 'title.taskDetail' | 'title.activity'
 }
 
 function contextNavigation(pathname: string, search: string): ContextNavigation | null {
   const parts = pathname.split('/').filter(Boolean)
   if (parts[0] === 'servers' && parts[1]) {
     const serverPath = '/servers/' + encodeURIComponent(parts[1])
+    if (parts[2] === 'slots' && parts.length >= 4) return { to: serverPath + '/slots', labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.slotDetail' }
+    if (parts[2] === 'slots') return { to: serverPath, labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.serverSlots' }
     if (parts[2] === 'tasks' && parts.length >= 5) return { to: serverPath + '/tasks', labelKey: 'nav.backToTasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
     if (parts[2] === 'tasks') return { to: serverPath, labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
     return { to: '/', labelKey: 'nav.backToFleet', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }

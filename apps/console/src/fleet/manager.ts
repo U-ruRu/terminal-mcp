@@ -1,4 +1,4 @@
-import type { ActivityFeedReadModel, TaskReadModel } from '../api/models'
+import type { ActivityFeedReadModel, PersistentMutationResult, TaskReadModel } from '../api/models'
 
 import type {
   FleetActivityOptions,
@@ -145,6 +145,16 @@ export class FleetConnectionManager {
     const actor = this.actors.get(instanceId)
     if (!actor) throw new Error('profile_not_found:' + instanceId)
     return actor.task(namespace, taskId)
+  }
+
+  async persistentMutation(
+    instanceId: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<PersistentMutationResult> {
+    const actor = this.actors.get(instanceId)
+    if (!actor) throw new Error('profile_not_found:' + instanceId)
+    return actor.persistentMutation(path, body)
   }
 
   async retry(instanceId: string): Promise<void> {

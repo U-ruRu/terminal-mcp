@@ -14,6 +14,14 @@ export function agentRoute(instanceId: string, agentId: string): string {
   return `${agentsRoute(instanceId)}/${part(agentId)}`
 }
 
+export function slotsRoute(instanceId: string): string {
+  return `${serverRoute(instanceId)}/slots`
+}
+
+export function slotRoute(instanceId: string, logicalAgentId: string): string {
+  return `${slotsRoute(instanceId)}/${part(logicalAgentId)}`
+}
+
 export function tasksRoute(instanceId: string): string {
   return `${serverRoute(instanceId)}/tasks`
 }

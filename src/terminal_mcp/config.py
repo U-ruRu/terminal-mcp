@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     persistent_session_duration_sec: int = 23 * 60
     persistent_session_warning_after_sec: int = 20 * 60
     persistent_session_alert_after_sec: int = 22 * 60
+    legacy_agent_admission_enabled: bool | None = None
 
     @model_validator(mode="after")
     def validate_persistent_session_thresholds(self):
@@ -110,6 +111,11 @@ class Settings(BaseSettings):
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode
         return explicit or self.auth_mode
+
+    def legacy_admission_allowed(self) -> bool:
+        if self.legacy_agent_admission_enabled is not None:
+            return bool(self.legacy_agent_admission_enabled)
+        return not (self.persistent_agents_enabled and self.mode_for("mcp") != "none")
 
     def browser_allowed_origins(self) -> tuple[str, ...]:
         from terminal_mcp.http.browser_security import canonical_origin

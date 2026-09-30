@@ -359,3 +359,59 @@ test('snapshot remains readable when an older server omits host resources', asyn
     uptime: { status: 'unavailable' },
   })
 })
+
+test('persistent snapshot and mutation keep authority fields typed and POST exact mutation body', async () => {
+  const persistentSnapshot = {
+    ...snapshot,
+    persistent: {
+      enabled: true,
+      available: true,
+      server_now: '2026-09-30T12:00:00Z',
+      policy: {
+        duration_seconds: 1380,
+        warning_after_seconds: 1200,
+        alert_after_seconds: 1320,
+        manual_rearm: true,
+        admission_mode: 'bearer',
+        legacy_admission_enabled: false,
+      },
+      slots: [{
+        slot: {
+          logical_agent_id: 'la_alpha', display_name: 'Alpha', state: 'suspended', authority_node_id: 'secondary',
+          authority_epoch: 3, slot_revision: 7, selector_generation: 2, auth_generation: 1,
+          created_at: '2026-09-30T11:00:00Z', updated_at: '2026-09-30T11:30:00Z',
+        },
+        selector: { selector: 'A1B2', generation: 2 },
+        work_session: null,
+        server_now: '2026-09-30T12:00:00Z',
+        claims: [], audit: [], attachments: [],
+      }],
+    },
+  }
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const path = new URL(input.toString()).pathname
+    if (path === '/actions/console/snapshot') return jsonResponse(persistentSnapshot)
+    if (path === '/actions/persistent/slots/play') return jsonResponse({ ok: true, slot: { logical_agent_id: 'la_alpha' } })
+    return jsonResponse({ error: 'missing' }, 404)
+  })
+  const client = new ConsoleClient('https://terminal.example', () => 'paired-access', fetcher)
+  const model = await client.snapshot()
+  expect(model.persistent).toMatchObject({
+    enabled: true,
+    available: true,
+    policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1320, legacyAdmissionEnabled: false },
+    slots: [{ logicalAgentId: 'la_alpha', selector: 'A1B2', slotRevision: 7, authorityEpoch: 3 }],
+  })
+  const result = await client.persistentMutation('/actions/persistent/slots/play', {
+    logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: 'idem-12345678',
+  })
+  expect(result.ok).toBe(true)
+  expect(fetcher).toHaveBeenLastCalledWith(
+    new URL('https://terminal.example/actions/persistent/slots/play'),
+    expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer paired-access' }),
+      body: JSON.stringify({ logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: 'idem-12345678' }),
+    }),
+  )
+})
