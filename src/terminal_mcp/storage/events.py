@@ -392,6 +392,136 @@ async def install_event_journal(db) -> None:
             );
         END;
 
+        CREATE TRIGGER IF NOT EXISTS tr_event_node_attachment_created
+        AFTER INSERT ON logical_agent_node_attachments
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'node_attachment.created','node_attachment',NEW.node_attachment_id,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'work_session_id',NEW.work_session_id,
+                    'session_epoch',NEW.session_epoch,
+                    'node_instance_id',NEW.node_instance_id,
+                    'authority_epoch',NEW.authority_epoch,
+                    'hard_expires_at',NEW.hard_expires_at,
+                    'revoked_at',NEW.revoked_at
+                ),
+                NEW.attached_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_node_attachment_changed
+        AFTER UPDATE ON logical_agent_node_attachments
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'node_attachment.changed','node_attachment',NEW.node_attachment_id,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'work_session_id',NEW.work_session_id,
+                    'session_epoch',NEW.session_epoch,
+                    'node_instance_id',NEW.node_instance_id,
+                    'authority_epoch',NEW.authority_epoch,
+                    'hard_expires_at',NEW.hard_expires_at,
+                    'revoked_at',NEW.revoked_at
+                ),
+                COALESCE(NEW.revoked_at,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_attachment_presence_created
+        AFTER INSERT ON persistent_attachment_presence
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'attachment_presence.changed','attachment_presence',NEW.node_attachment_id,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'work_session_id',NEW.work_session_id,
+                    'session_epoch',NEW.session_epoch,
+                    'node_instance_id',NEW.node_instance_id,
+                    'task_summary',NEW.task_summary,
+                    'intent',NEW.intent,
+                    'work_scope_json',NEW.work_scope_json,
+                    'details_json',NEW.details_json,
+                    'current_step',NEW.current_step,
+                    'intent_updated_at',NEW.intent_updated_at,
+                    'last_activity_at',NEW.last_activity_at
+                ),
+                NEW.last_activity_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_attachment_presence_changed
+        AFTER UPDATE ON persistent_attachment_presence
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'attachment_presence.changed','attachment_presence',NEW.node_attachment_id,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'work_session_id',NEW.work_session_id,
+                    'session_epoch',NEW.session_epoch,
+                    'node_instance_id',NEW.node_instance_id,
+                    'task_summary',NEW.task_summary,
+                    'intent',NEW.intent,
+                    'work_scope_json',NEW.work_scope_json,
+                    'details_json',NEW.details_json,
+                    'current_step',NEW.current_step,
+                    'intent_updated_at',NEW.intent_updated_at,
+                    'last_activity_at',NEW.last_activity_at
+                ),
+                NEW.last_activity_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_message_obligation_created
+        AFTER INSERT ON persistent_message_obligations
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'message_obligation.created','message_obligation',NEW.message_ref,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'sender_agent_id',NEW.sender_agent_id,
+                    'text',NEW.text,
+                    'require_reply',NEW.require_reply,
+                    'alert',NEW.alert,
+                    'gate_revision',NEW.gate_revision,
+                    'resolved_at',NEW.resolved_at,
+                    'resolution',NEW.resolution
+                ),
+                NEW.created_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_message_obligation_changed
+        AFTER UPDATE ON persistent_message_obligations
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'message_obligation.changed','message_obligation',NEW.message_ref,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'sender_agent_id',NEW.sender_agent_id,
+                    'text',NEW.text,
+                    'require_reply',NEW.require_reply,
+                    'alert',NEW.alert,
+                    'gate_revision',NEW.gate_revision,
+                    'resolved_at',NEW.resolved_at,
+                    'resolution',NEW.resolution
+                ),
+                COALESCE(NEW.resolved_at,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+        END;
+
         CREATE TRIGGER IF NOT EXISTS tr_event_persistent_claim_created
         AFTER INSERT ON work_claims
         WHEN NEW.owner_kind='logical_agent'

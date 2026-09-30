@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import aiosqlite
@@ -16,6 +17,9 @@ from terminal_mcp.storage.events import EventJournalStore
 _CANONICAL_ENTITY_TYPES = {
     "logical_agent",
     "work_session",
+    "node_attachment",
+    "attachment_presence",
+    "message_obligation",
     "work_claim",
     "task",
     "command",
@@ -69,6 +73,16 @@ class FleetSourceService:
             return None
         seq = int(raw["seq"])
         payload = dict(raw.get("payload") or {})
+        if entity_type == "attachment_presence":
+            for encoded_key, decoded_key in (
+                ("work_scope_json", "work_scope"),
+                ("details_json", "details"),
+            ):
+                encoded = payload.pop(encoded_key, "[]")
+                try:
+                    payload[decoded_key] = json.loads(encoded)
+                except (TypeError, ValueError):
+                    payload[decoded_key] = []
         native_revision = payload.get("slot_revision") if entity_type == "logical_agent" else None
         try:
             entity_revision = int(native_revision) if native_revision is not None else seq
@@ -165,6 +179,9 @@ class FleetSourceService:
             "complete_entity_types": [
                 "logical_agent",
                 "work_session",
+                "node_attachment",
+                "attachment_presence",
+                "message_obligation",
                 "work_claim",
                 "task",
                 "command",
@@ -187,6 +204,31 @@ class FleetSourceService:
                     "authority_epoch,started_at,hard_expires_at,auth_generation,state,"
                     "origin_instance_id,ended_at,end_reason "
                     "FROM logical_agent_work_sessions ORDER BY logical_agent_id,session_epoch"
+                )
+            ).fetchall()
+            attachments = await (
+                await db.execute(
+                    "SELECT node_attachment_id,logical_agent_id,work_session_id,session_epoch,"
+                    "node_instance_id,authority_epoch,attached_at,hard_expires_at,revoked_at "
+                    "FROM logical_agent_node_attachments "
+                    "ORDER BY logical_agent_id,session_epoch,node_instance_id"
+                )
+            ).fetchall()
+            presence = await (
+                await db.execute(
+                    "SELECT p.node_attachment_id,p.logical_agent_id,p.work_session_id,"
+                    "p.session_epoch,p.node_instance_id,p.task_summary,p.intent,"
+                    "p.work_scope_json,p.details_json,p.current_step,p.intent_updated_at,"
+                    "p.last_activity_at "
+                    "FROM persistent_attachment_presence p "
+                    "ORDER BY p.logical_agent_id,p.session_epoch,p.node_instance_id"
+                )
+            ).fetchall()
+            obligations = await (
+                await db.execute(
+                    "SELECT message_ref,logical_agent_id,sender_agent_id,text,require_reply,"
+                    "alert,gate_revision,created_at,resolved_at,resolution "
+                    "FROM persistent_message_obligations ORDER BY created_at,message_ref"
                 )
             ).fetchall()
             claims = await (
@@ -259,6 +301,68 @@ class FleetSourceService:
                     },
                     authority_node_id=row[3],
                     authority_epoch=int(row[4]),
+                )
+            )
+        for row in attachments:
+            entities.append(
+                self._snapshot_entity(
+                    "node_attachment",
+                    row[0],
+                    max(1, barrier),
+                    {
+                        "node_attachment_id": row[0],
+                        "logical_agent_id": row[1],
+                        "work_session_id": row[2],
+                        "session_epoch": int(row[3]),
+                        "node_instance_id": row[4],
+                        "authority_epoch": int(row[5]),
+                        "attached_at": row[6],
+                        "hard_expires_at": row[7],
+                        "revoked_at": row[8],
+                    },
+                    authority_epoch=int(row[5]),
+                )
+            )
+        for row in presence:
+            entities.append(
+                self._snapshot_entity(
+                    "attachment_presence",
+                    row[0],
+                    max(1, barrier),
+                    {
+                        "node_attachment_id": row[0],
+                        "logical_agent_id": row[1],
+                        "work_session_id": row[2],
+                        "session_epoch": int(row[3]),
+                        "node_instance_id": row[4],
+                        "task_summary": row[5],
+                        "intent": row[6],
+                        "work_scope": json.loads(row[7]),
+                        "details": json.loads(row[8]),
+                        "current_step": int(row[9]),
+                        "intent_updated_at": row[10],
+                        "last_activity_at": row[11],
+                    },
+                )
+            )
+        for row in obligations:
+            entities.append(
+                self._snapshot_entity(
+                    "message_obligation",
+                    row[0],
+                    max(1, int(row[6])),
+                    {
+                        "message_ref": row[0],
+                        "logical_agent_id": row[1],
+                        "sender_agent_id": row[2],
+                        "text": row[3],
+                        "require_reply": bool(row[4]),
+                        "alert": bool(row[5]),
+                        "gate_revision": int(row[6]),
+                        "created_at": row[7],
+                        "resolved_at": row[8],
+                        "resolution": row[9],
+                    },
                 )
             )
         for row in claims:

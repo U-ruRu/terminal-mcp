@@ -232,3 +232,82 @@ def test_fleet_v1_source_settings_are_default_off_and_validate_identity(tmp_path
     )
     assert enabled.effective_fleet_node_id() == "node-a"
     assert enabled.effective_fleet_node_meta_path() == tmp_path / "node-meta.sqlite3"
+
+
+@pytest.mark.asyncio
+async def test_source_projects_persistent_attachment_presence_and_obligation(tmp_path):
+    runtime_path = tmp_path / "terminal.sqlite3"
+    repo = SqliteRepository(runtime_path, tmp_path / "output.sqlite3")
+    await repo.initialize()
+    store = PersistentAgentStore(runtime_path)
+    await store.create_slot(
+        "logical-1", "Agent One", "A1B2", authority_node_id="node-a"
+    )
+    armed, _ = await store.arm_slot(
+        "logical-1", 120, expected_revision=1
+    )
+    slot, session = await store.start_session(
+        selector="A1B2",
+        work_session_id="ws-1",
+        expected_revision=armed.slot_revision,
+        principal_id="client-1",
+        auth_generation=1,
+        authority_node_id="node-a",
+        origin_instance_id="node-a",
+    )
+    attachment = await store.record_node_attachment(
+        node_attachment_id="att-1",
+        logical_agent_id=slot.logical_agent_id,
+        work_session_id=session.work_session_id,
+        session_epoch=session.session_epoch,
+        node_instance_id="node-b",
+        authority_epoch=session.authority_epoch,
+        hard_expires_at=session.hard_expires_at,
+    )
+    await store.record_attachment_presence(
+        logical_agent_id=slot.logical_agent_id,
+        work_session_id=session.work_session_id,
+        session_epoch=session.session_epoch,
+        node_instance_id="node-b",
+        task_summary="Fleet projection",
+        intent="Project current scoped intent",
+        work_scope=["src/terminal_mcp/fleet"],
+        details=["source", "projection"],
+        current_step=1,
+    )
+    await store.create_message_obligation(
+        message_ref="node-a:msg:1",
+        logical_agent_id=slot.logical_agent_id,
+        sender_agent_id="manager",
+        text="reply required",
+        require_reply=True,
+        alert=True,
+    )
+    journal = EventJournalStore(runtime_path)
+    meta = FleetNodeMetaStore(
+        tmp_path / "fleet-node-meta.sqlite3",
+        fleet_id="fleet-a",
+        node_id="node-a",
+    )
+    await meta.initialize()
+    source = FleetSourceService(runtime_path, journal, meta)
+
+    snapshot = await source.snapshot()
+    by_type = {}
+    for entity in snapshot["entities"]:
+        by_type.setdefault(entity["entity_type"], []).append(entity)
+    assert by_type["node_attachment"][0]["entity_id"] == attachment["node_attachment_id"]
+    presence = by_type["attachment_presence"][0]
+    assert presence["payload"]["work_session_id"] == session.work_session_id
+    assert presence["payload"]["session_epoch"] == session.session_epoch
+    assert presence["payload"]["intent"] == "Project current scoped intent"
+    assert presence["payload"]["details"] == ["source", "projection"]
+    obligation = by_type["message_obligation"][0]
+    assert obligation["payload"]["require_reply"] is True
+    assert obligation["payload"]["alert"] is True
+
+    page = await source.events(since=0, limit=100)
+    projected_types = {item["entity_type"] for item in page["events"]}
+    assert "node_attachment" in projected_types
+    assert "attachment_presence" in projected_types
+    assert "message_obligation" in projected_types
