@@ -13,6 +13,7 @@ def _settings(tmp_path, **overrides):
         auth_database_path=tmp_path / "auth.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
+        env_file_path=tmp_path / "terminal-mcp.env",
         log_path=tmp_path / "terminal-mcp.log",
         metrics_port=0,
         cwd=tmp_path,
@@ -113,6 +114,7 @@ def test_console_snapshot_projects_persistent_slot_policy_and_audit(tmp_path):
             "manual_rearm": True,
             "admission_mode": "oauth",
             "legacy_admission_enabled": False,
+            "policy_control_supported": True,
         }
         assert len(persistent["slots"]) == 1
         slot = persistent["slots"][0]
@@ -174,3 +176,91 @@ def test_explicit_legacy_close_reports_actual_persistent_capability(tmp_path):
     )
     assert result["code"] == "legacy_admission_disabled"
     assert result["persistent_agents_enabled"] is False
+
+
+def test_persistent_policy_control_updates_next_arm_and_persists_env(tmp_path):
+    app = create_app(_settings(tmp_path, persistent_agents_enabled=True))
+    headers = {"Authorization": "Bearer console-token"}
+    with TestClient(app) as client:
+        updated = client.post(
+            "/actions/persistent/policy",
+            headers=headers,
+            json={
+                "duration_seconds": 180,
+                "warning_after_seconds": 60,
+                "alert_after_seconds": 120,
+                "legacy_admission_enabled": True,
+            },
+        ).json()
+        assert updated == {
+            "ok": True,
+            "policy": {
+                "duration_seconds": 180,
+                "warning_after_seconds": 60,
+                "alert_after_seconds": 120,
+                "legacy_admission_enabled": True,
+            },
+        }
+        snapshot = client.get("/actions/console/snapshot", headers=headers).json()["persistent"]
+        assert snapshot["policy"]["duration_seconds"] == 180
+        assert snapshot["policy"]["warning_after_seconds"] == 60
+        assert snapshot["policy"]["alert_after_seconds"] == 120
+        assert snapshot["policy"]["legacy_admission_enabled"] is True
+        assert snapshot["policy"]["policy_control_supported"] is True
+
+        created = client.post(
+            "/actions/persistent/slots/create",
+            headers=headers,
+            json={"display_name": "Policy slot"},
+        ).json()
+        played = client.post(
+            "/actions/persistent/slots/play",
+            headers=headers,
+            json={
+                "logical_agent_id": created["slot"]["logical_agent_id"],
+                "expected_revision": created["slot"]["slot_revision"],
+                "idempotency_key": "policy-play-0001",
+            },
+        ).json()
+        assert played["arm"]["captured_duration_seconds"] == 180
+
+    persisted = (tmp_path / "terminal-mcp.env").read_text()
+    assert 'TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC="180"' in persisted
+    assert 'TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC="60"' in persisted
+    assert 'TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC="120"' in persisted
+    assert 'TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED="true"' in persisted
+
+
+def test_persistent_timing_policy_rejects_armed_slot_but_legacy_switch_remains_live(tmp_path):
+    app = create_app(_settings(tmp_path, persistent_agents_enabled=True))
+    headers = {"Authorization": "Bearer console-token"}
+    with TestClient(app) as client:
+        created = client.post(
+            "/actions/persistent/slots/create", headers=headers, json={"display_name": "Busy slot"}
+        ).json()
+        played = client.post(
+            "/actions/persistent/slots/play",
+            headers=headers,
+            json={
+                "logical_agent_id": created["slot"]["logical_agent_id"],
+                "expected_revision": created["slot"]["slot_revision"],
+                "idempotency_key": "policy-play-0002",
+            },
+        ).json()
+        assert played["slot"]["state"] == "armed"
+
+        blocked = client.post(
+            "/actions/persistent/policy",
+            headers=headers,
+            json={"duration_seconds": 180, "warning_after_seconds": 60, "alert_after_seconds": 120},
+        ).json()
+        assert blocked["ok"] is False
+        assert blocked["code"] == "policy_in_use"
+        assert blocked["blockers"][0]["logical_agent_id"] == created["slot"]["logical_agent_id"]
+
+        legacy = client.post(
+            "/actions/persistent/policy", headers=headers, json={"legacy_admission_enabled": True}
+        ).json()
+        assert legacy["ok"] is True
+        assert legacy["policy"]["legacy_admission_enabled"] is True
+        assert app.state.service.legacy_agent_admission_enabled is True

@@ -252,3 +252,24 @@ h2 { font-size: clamp(1.6rem, 4vw, 2.4rem); }
 .slot-audit li { display: grid; gap: var(--space-1); overflow-wrap: anywhere; }
 @media (max-width: 700px) { .slot-grid, .slot-details-grid { grid-template-columns: 1fr; } .slot-create { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .slot-card, .slot-time { animation: none !important; transition: none !important; } }
+
+.policy-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.8rem;
+}
+.policy-controls-grid label,
+.policy-toggle {
+  display: grid;
+  gap: 0.35rem;
+}
+.policy-controls-grid input { width: 100%; }
+.policy-toggle {
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  margin-top: 1rem;
+}
+.policy-toggle small {
+  display: block;
+  margin-top: 0.2rem;
+}

@@ -21,6 +21,7 @@ from terminal_mcp.core.persistent_execution import (
 )
 from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
+from terminal_mcp.core.persistent_policy import PersistentPolicyController
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.control_storage import FleetControlStore
@@ -234,6 +235,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     service.persistent = PersistentBackend(service, persistent_lifecycle, persistent_fleet)
     service.persistent_lifecycle = persistent_lifecycle
+    persistent_policy_controller = PersistentPolicyController(
+        settings, service, persistent_lifecycle
+    )
     auth = AuthService(settings, oauth_store, credentials)
     mcp = build_mcp(
         service,
@@ -322,6 +326,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.fleet_projection_service = fleet_projection_service
     app.state.persistent_backend = service.persistent
     app.state.persistent_lifecycle = persistent_lifecycle
+    app.state.persistent_policy_controller = persistent_policy_controller
     app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
     if fleet_replication:
@@ -358,7 +363,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
     if settings.persistent_agents_enabled:
-        app.include_router(build_persistent_router(service))
+        app.include_router(build_persistent_router(service, persistent_policy_controller))
     app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))

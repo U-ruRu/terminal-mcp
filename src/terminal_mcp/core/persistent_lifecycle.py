@@ -78,6 +78,7 @@ class PersistentLifecycleCoordinator:
         self.session_duration_seconds = int(session_duration_seconds)
         self.execution_fence = execution_fence or NoopExecutionFence()
         self._operation_locks: dict[str, asyncio.Lock] = {}
+        self._policy_lock = asyncio.Lock()
         self._reconcile_task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
 
@@ -91,6 +92,11 @@ class PersistentLifecycleCoordinator:
     @asynccontextmanager
     async def operation_guard(self, logical_agent_id: str):
         async with self._lock(logical_agent_id):
+            yield
+
+    @asynccontextmanager
+    async def policy_guard(self):
+        async with self._policy_lock:
             yield
 
     async def start(self, interval_seconds: float = 1.0) -> None:
@@ -272,11 +278,12 @@ class PersistentLifecycleCoordinator:
         self._admission(admission)
         await self._home_slot(logical_agent_id)
         try:
-            slot, arm = await self.store.arm_slot(
-                logical_agent_id,
-                self.session_duration_seconds,
-                expected_revision=expected_revision,
-            )
+            async with self.policy_guard():
+                slot, arm = await self.store.arm_slot(
+                    logical_agent_id,
+                    self.session_duration_seconds,
+                    expected_revision=expected_revision,
+                )
         except PersistentStoreError as exc:
             self._raise_store(exc)
         return {

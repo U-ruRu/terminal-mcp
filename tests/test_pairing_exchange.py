@@ -14,6 +14,7 @@ def settings(tmp_path, **updates):
         database_path=tmp_path / "db.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
+        env_file_path=tmp_path / "terminal-mcp.env",
         log_path=tmp_path / "terminal-mcp.log",
         metrics_port=0,
         cwd=tmp_path,
@@ -159,6 +160,15 @@ def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
         assert played.status_code == 200
         played_body = played.json()
         assert played_body["ok"] is True
+
+        policy = client.post(
+            "/actions/persistent/policy",
+            headers=paired_headers,
+            json={"legacy_admission_enabled": True},
+        )
+        assert policy.status_code == 200
+        assert policy.json()["ok"] is True
+        assert policy.json()["policy"]["legacy_admission_enabled"] is True
 
         # Claim controls are on the Console allowlist too. Empty bodies fail
         # request validation (422), which proves auth passed without mutating state.
