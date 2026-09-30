@@ -2,6 +2,7 @@ import asyncio
 import os
 import pwd
 import signal
+import threading
 import time
 from datetime import UTC, datetime
 
@@ -37,11 +38,18 @@ class LinuxTerminalAdapter:
         self.output_transports = {}
         self.finalization_pending = {}
         self.reconciler_task = None
+        self.claimed_commands = set()
+        self.claimed_commands_lock = threading.Lock()
+        self.pidless_first_seen = {}
+        self.initial_pidless_reconciled = False
         self.stopping = False
         self.queue = ()  # compatibility surface; SQLite is the queue source of truth.
 
     async def start(self):
         self.stopping = False
+        if not self.initial_pidless_reconciled:
+            await self._reconcile_processless_running(force_pidless=True)
+            self.initial_pidless_reconciled = True
         for queue_id in range(1, self.queue_workers + 1):
             worker = self.workers.get(queue_id)
             if worker is None or worker.done():
@@ -72,6 +80,9 @@ class LinuxTerminalAdapter:
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
         self.workers.clear()
+        with self.claimed_commands_lock:
+            self.claimed_commands.clear()
+        self.pidless_first_seen.clear()
         for transport in self.output_transports.values():
             transport.close()
         self.output_transports.clear()
@@ -184,8 +195,22 @@ class LinuxTerminalAdapter:
     async def finalize_running(self, command, status, exit_code=None, error=None):
         return await self._finish_with_retry(command, status, exit_code, error)
 
-    async def _reconcile_processless_running(self):
-        for command in await self.repo.list_running():
+    def _mark_claimed(self, cmd_hash):
+        with self.claimed_commands_lock:
+            self.claimed_commands.add(cmd_hash)
+
+    def _release_claimed(self, cmd_hash):
+        with self.claimed_commands_lock:
+            self.claimed_commands.discard(cmd_hash)
+
+    def _owns_pidless_running(self, command):
+        with self.claimed_commands_lock:
+            return command.cmd_hash in self.claimed_commands
+
+    async def _reconcile_processless_running(self, *, force_pidless=False):
+        running = await self.repo.list_running()
+        running_hashes = {command.cmd_hash for command in running}
+        for command in running:
             cmd_hash = command.cmd_hash
             process = self.processes.get(cmd_hash)
             if process is not None and process.returncode is None:
@@ -195,23 +220,37 @@ class LinuxTerminalAdapter:
 
             pending = self.finalization_pending.get(cmd_hash)
             if pending is not None:
-                await self._finish_with_retry(
+                if await self._finish_with_retry(
                     command,
                     pending["status"],
                     pending["exit_code"],
                     pending["error"],
-                )
+                ):
+                    self.pidless_first_seen.pop(cmd_hash, None)
                 continue
 
-            if command.pid is None or self._pid_exists(command.pid):
-                continue
+            if command.pid is None:
+                if self._owns_pidless_running(command):
+                    self.pidless_first_seen.pop(cmd_hash, None)
+                    continue
+                first_seen = self.pidless_first_seen.setdefault(cmd_hash, time.monotonic())
+                claim_grace = max(1.0, self.queue_reconcile_sec * 2)
+                if not force_pidless and time.monotonic() - first_seen < claim_grace:
+                    continue
+                reconcile_error = "runtime.reconcile: process was never attached"
+            else:
+                self.pidless_first_seen.pop(cmd_hash, None)
+                if self._pid_exists(command.pid):
+                    continue
+                reconcile_error = "runtime.reconcile: process no longer exists"
 
             if await self._finish_with_retry(
                 command,
                 "failed",
                 command.exit_code,
-                "runtime.reconcile: process no longer exists",
+                reconcile_error,
             ):
+                self.pidless_first_seen.pop(cmd_hash, None)
                 self._emit_runtime_event(
                     "runtime_stale_reconciled",
                     level="WARNING",
@@ -219,6 +258,10 @@ class LinuxTerminalAdapter:
                     command_hash=cmd_hash,
                     queue_id=command.queue_id,
                 )
+
+        for cmd_hash in list(self.pidless_first_seen):
+            if cmd_hash not in running_hashes:
+                self.pidless_first_seen.pop(cmd_hash, None)
 
     async def _reconciler(self):
         while not self.stopping:
@@ -240,6 +283,8 @@ class LinuxTerminalAdapter:
             command = None
             try:
                 command = await self.repo.claim_next(queue_id)
+                if command is not None:
+                    self._mark_claimed(command.cmd_hash)
                 if command is None:
                     await self._wait_for_work(queue_id)
                     continue
@@ -262,6 +307,9 @@ class LinuxTerminalAdapter:
                         f"run.worker: {type(exc).__name__}",
                     )
                 await asyncio.sleep(min(0.1, self.queue_reconcile_sec))
+            finally:
+                if command is not None:
+                    self._release_claimed(command.cmd_hash)
 
     def _drop_privileges(self):
         account = pwd.getpwnam(self.user)
@@ -720,7 +768,11 @@ class LinuxTerminalAdapter:
         for command in durable_running:
             if command.cmd_hash in live or command.cmd_hash in self.execution_done:
                 continue
-            if command.cmd_hash in self.finalization_pending or command.pid is None:
+            if command.cmd_hash in self.finalization_pending:
+                continue
+            if command.pid is None:
+                if not self._owns_pidless_running(command):
+                    stale.append(command.cmd_hash)
                 continue
             if self._pid_exists(command.pid):
                 unowned.append(command.cmd_hash)

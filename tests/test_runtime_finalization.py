@@ -165,3 +165,99 @@ async def test_health_shows_actual_live_process_when_older_durable_row_is_stale(
     assert health["queues"][0]["running"] == live.cmd_hash
     assert health["running_commands"] == [live.cmd_hash]
     assert stale.cmd_hash in health["stale_running_commands"]
+
+
+@pytest.mark.asyncio
+async def test_start_reconciles_inherited_pidless_running_before_workers(tmp_path):
+    repo, terminal, _service = await create_runtime(tmp_path)
+    command = await repo.create("printf inherited", status="running", queue_id=1)
+
+    await terminal.start()
+
+    current = await repo.get(command.cmd_hash)
+    assert current.status == "failed"
+    assert current.pid is None
+    assert current.error == "runtime.reconcile: process was never attached"
+    health = await terminal.health()
+    assert command.cmd_hash not in health["running_commands"]
+    assert command.cmd_hash not in health["stale_running_commands"]
+    assert health["degraded"] is False
+    assert health["ok"] is True
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_health_reports_unowned_pidless_running_as_stale(tmp_path):
+    repo, terminal, _service = await create_runtime(tmp_path)
+    command = await repo.create("printf orphan", status="running", queue_id=2)
+
+    health = await terminal.health()
+
+    assert command.cmd_hash not in health["running_commands"]
+    assert command.cmd_hash in health["stale_running_commands"]
+    assert health["queues"][1]["running"] is None
+    assert health["queues"][1]["durable_running"] == command.cmd_hash
+    assert health["degraded"] is True
+    assert health["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_claim_commit_window_stays_truthful_until_local_ownership_is_known(
+    tmp_path, monkeypatch
+):
+    repo, terminal, _service = await create_runtime(tmp_path)
+    await terminal.start()
+
+    original_claim = repo.claim_next
+    original_execute = terminal._execute
+    claim_committed = asyncio.Event()
+    release_claim = asyncio.Event()
+    execute_entered = asyncio.Event()
+    release_execute = asyncio.Event()
+
+    async def delayed_claim(queue_id):
+        command = await original_claim(queue_id)
+        if command is not None:
+            claim_committed.set()
+            await release_claim.wait()
+        return command
+
+    async def delayed_execute(command, **kwargs):
+        execute_entered.set()
+        await release_execute.wait()
+        return await original_execute(command, **kwargs)
+
+    monkeypatch.setattr(repo, "claim_next", delayed_claim)
+    monkeypatch.setattr(terminal, "_execute", delayed_execute)
+
+    command = await repo.create("true", queue_id=1)
+    terminal.queue_events[1].set()
+    await asyncio.wait_for(claim_committed.wait(), 1.0)
+
+    await terminal._reconcile_processless_running()
+    uncertain = await terminal.health()
+    current = await repo.get(command.cmd_hash)
+    assert current.status == "running"
+    assert current.pid is None
+    assert command.cmd_hash in uncertain["stale_running_commands"]
+    assert uncertain["degraded"] is True
+
+    release_claim.set()
+    await asyncio.wait_for(execute_entered.wait(), 1.0)
+    await terminal._reconcile_processless_running()
+    owned = await terminal.health()
+    current = await repo.get(command.cmd_hash)
+    assert current.status == "running"
+    assert current.pid is None
+    assert command.cmd_hash not in owned["stale_running_commands"]
+    assert owned["degraded"] is False
+    assert owned["ok"] is True
+
+    release_execute.set()
+
+    async def completed():
+        current = await repo.get(command.cmd_hash)
+        return current if current and current.status == "completed" else None
+
+    await wait_for(completed)
+    await terminal.stop()
