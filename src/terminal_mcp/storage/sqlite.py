@@ -290,6 +290,15 @@ class SqliteRepository:
                     UNIQUE(logical_agent_id,work_session_id,session_epoch,node_instance_id),
                     FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
                 );
+                CREATE TABLE IF NOT EXISTS persistent_attachment_presence(
+                    node_attachment_id TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL,
+                    work_session_id TEXT NOT NULL, session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+                    node_instance_id TEXT NOT NULL, task_summary TEXT NOT NULL DEFAULT '',
+                    intent TEXT NOT NULL DEFAULT '', work_scope_json TEXT NOT NULL DEFAULT '[]',
+                    details_json TEXT NOT NULL DEFAULT '[]', current_step INTEGER NOT NULL DEFAULT 1 CHECK(current_step > 0),
+                    intent_updated_at TEXT NOT NULL, last_activity_at TEXT NOT NULL,
+                    FOREIGN KEY(node_attachment_id) REFERENCES logical_agent_node_attachments(node_attachment_id) ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS persistent_command_permits(
                     command_hash TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL, work_session_id TEXT NOT NULL,
                     session_epoch INTEGER NOT NULL CHECK(session_epoch > 0), authority_node_id TEXT NOT NULL,
@@ -574,6 +583,16 @@ class SqliteRepository:
             "CREATE INDEX IF NOT EXISTS ix_persistent_audit_agent "
             "ON persistent_agent_audit(logical_agent_id,id DESC)"
         )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS persistent_attachment_presence("
+            "node_attachment_id TEXT PRIMARY KEY,logical_agent_id TEXT NOT NULL,"
+            "work_session_id TEXT NOT NULL,session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),"
+            "node_instance_id TEXT NOT NULL,task_summary TEXT NOT NULL DEFAULT '',"
+            "intent TEXT NOT NULL DEFAULT '',work_scope_json TEXT NOT NULL DEFAULT '[]',"
+            "details_json TEXT NOT NULL DEFAULT '[]',current_step INTEGER NOT NULL DEFAULT 1 CHECK(current_step > 0),"
+            "intent_updated_at TEXT NOT NULL,last_activity_at TEXT NOT NULL,"
+            "FOREIGN KEY(node_attachment_id) REFERENCES logical_agent_node_attachments(node_attachment_id) ON DELETE CASCADE)"
+        )
         await add_columns(
             "persistent_command_permits",
             [
@@ -631,6 +650,10 @@ class SqliteRepository:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_persistent_attachments_session "
             "ON logical_agent_node_attachments(logical_agent_id,work_session_id,session_epoch,revoked_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_presence_session "
+            "ON persistent_attachment_presence(logical_agent_id,work_session_id,session_epoch,node_instance_id)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_persistent_permits_session "

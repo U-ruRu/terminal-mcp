@@ -1549,6 +1549,150 @@ class PersistentAgentStore:
         )
         return [dict(zip(keys, row, strict=True)) for row in rows]
 
+    async def record_attachment_presence(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        node_instance_id: str,
+        task_summary: str,
+        intent: str,
+        work_scope: list[str] | tuple[str, ...],
+        details: list[str] | tuple[str, ...],
+        current_step: int,
+        intent_updated_at: str | None = None,
+        last_activity_at: str | None = None,
+    ) -> dict:
+        if current_step < 1:
+            raise PersistentStoreError("invalid_task_context")
+        details = list(details)
+        work_scope = list(work_scope)
+        if details and current_step > len(details):
+            raise PersistentStoreError("invalid_task_context")
+        activity_stamp = last_activity_at or utc_text()
+        intent_stamp = intent_updated_at or activity_stamp
+        async with self._connect("persistent_attachment_presence_record") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT a.node_attachment_id,a.authority_epoch,a.revoked_at,"
+                        "s.state,s.authority_epoch,s.hard_expires_at "
+                        "FROM logical_agent_node_attachments a "
+                        "JOIN logical_agent_work_sessions s "
+                        "ON s.logical_agent_id=a.logical_agent_id "
+                        "AND s.work_session_id=a.work_session_id "
+                        "AND s.session_epoch=a.session_epoch "
+                        "WHERE a.logical_agent_id=? AND a.work_session_id=? "
+                        "AND a.session_epoch=? AND a.node_instance_id=?",
+                        (logical_agent_id, work_session_id, session_epoch, node_instance_id),
+                    )
+                ).fetchone()
+                if row is None or row[2] is not None:
+                    raise PersistentStoreError("attachment_not_active")
+                if row[3] != "active" or int(row[1]) != int(row[4]):
+                    raise PersistentStoreError("session_not_active")
+                if parse_utc(activity_stamp) >= parse_utc(row[5]):
+                    raise PersistentStoreError("session_expired")
+                await db.execute(
+                    "INSERT INTO persistent_attachment_presence("
+                    "node_attachment_id,logical_agent_id,work_session_id,session_epoch,node_instance_id,"
+                    "task_summary,intent,work_scope_json,details_json,current_step,"
+                    "intent_updated_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(node_attachment_id) DO UPDATE SET "
+                    "task_summary=excluded.task_summary,intent=excluded.intent,"
+                    "work_scope_json=excluded.work_scope_json,details_json=excluded.details_json,"
+                    "current_step=excluded.current_step,intent_updated_at=excluded.intent_updated_at,"
+                    "last_activity_at=excluded.last_activity_at",
+                    (
+                        row[0],
+                        logical_agent_id,
+                        work_session_id,
+                        session_epoch,
+                        node_instance_id,
+                        task_summary,
+                        intent,
+                        json.dumps(work_scope, separators=(",", ":"), ensure_ascii=False),
+                        json.dumps(details, separators=(",", ":"), ensure_ascii=False),
+                        current_step,
+                        intent_stamp,
+                        activity_stamp,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return {
+            "node_attachment_id": row[0],
+            "logical_agent_id": logical_agent_id,
+            "work_session_id": work_session_id,
+            "session_epoch": int(session_epoch),
+            "node_instance_id": node_instance_id,
+            "task_summary": task_summary,
+            "intent": intent,
+            "work_scope": work_scope,
+            "details": details,
+            "current_step": int(current_step),
+            "intent_updated_at": intent_stamp,
+            "last_activity_at": activity_stamp,
+        }
+
+    async def attachment_presences_for_session(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        active_only: bool = True,
+    ) -> list[dict]:
+        clause = (
+            " AND a.revoked_at IS NULL AND s.state='active'"
+            if active_only
+            else ""
+        )
+        async with self._connect("persistent_attachment_presence_list") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT p.node_attachment_id,p.logical_agent_id,p.work_session_id,"
+                    "p.session_epoch,"
+                    "p.node_instance_id,p.task_summary,p.intent,p.work_scope_json,p.details_json,"
+                    "p.current_step,p.intent_updated_at,p.last_activity_at,a.revoked_at,s.state "
+                    "FROM persistent_attachment_presence p "
+                    "JOIN logical_agent_node_attachments a "
+                    "ON a.node_attachment_id=p.node_attachment_id "
+                    "JOIN logical_agent_work_sessions s "
+                    "ON s.logical_agent_id=p.logical_agent_id "
+                    "AND s.work_session_id=p.work_session_id AND s.session_epoch=p.session_epoch "
+                    "WHERE p.logical_agent_id=? AND p.work_session_id=? AND p.session_epoch=?"
+                    + clause
+                    + " ORDER BY p.node_instance_id",
+                    (logical_agent_id, work_session_id, session_epoch),
+                )
+            ).fetchall()
+        result = []
+        for row in rows:
+            result.append(
+                {
+                    "node_attachment_id": row[0],
+                    "logical_agent_id": row[1],
+                    "work_session_id": row[2],
+                    "session_epoch": int(row[3]),
+                    "node_instance_id": row[4],
+                    "task_summary": row[5],
+                    "intent": row[6],
+                    "work_scope": json.loads(row[7]),
+                    "details": json.loads(row[8]),
+                    "current_step": int(row[9]),
+                    "intent_updated_at": row[10],
+                    "last_activity_at": row[11],
+                    "revoked_at": row[12],
+                    "session_state": row[13],
+                }
+            )
+        return result
+
     async def revoke_node_attachment(
         self, node_attachment_id: str, *, now: str | None = None
     ) -> bool:

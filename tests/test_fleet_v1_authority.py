@@ -171,6 +171,64 @@ async def test_materialize_is_idempotent_and_never_creates_second_session(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_persistent_attachment_presence_is_session_scoped_and_fenced(tmp_path):
+    _, store, life, bridge, _, started, ctx, _ = await authority_fixture(tmp_path)
+    logical_agent_id = started["logical_agent_id"]
+    ws = started["work_session"]
+    await bridge.materialize_session(
+        logical_agent_id=logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+        requesting_instance_id="remote",
+    )
+
+    first = await bridge.update_attachment_presence(
+        logical_agent_id=logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+        requesting_instance_id="remote",
+        task_summary="Fleet work",
+        intent="Implement authority",
+        work_scope=["src/terminal_mcp"],
+        details=["inspect", "implement", "verify"],
+        current_step=2,
+    )
+    assert first["node_instance_id"] == "remote"
+    assert first["work_session_id"] == ws["work_session_id"]
+    assert first["session_epoch"] == ws["session_epoch"]
+    assert first["current_step"] == 2
+
+    visible = await store.attachment_presences_for_session(
+        logical_agent_id, ws["work_session_id"], ws["session_epoch"]
+    )
+    assert [item["intent"] for item in visible] == ["Implement authority"]
+
+    ended = await life.session_end(
+        logical_agent_id,
+        ws["work_session_id"],
+        ws["session_epoch"],
+        admission=ctx,
+    )
+    assert ended["work_session"]["state"] == "ended"
+    assert await store.attachment_presences_for_session(
+        logical_agent_id, ws["work_session_id"], ws["session_epoch"]
+    ) == []
+
+    with pytest.raises(PersistentStoreError, match="session_not_active"):
+        await bridge.update_attachment_presence(
+            logical_agent_id=logical_agent_id,
+            work_session_id=ws["work_session_id"],
+            session_epoch=ws["session_epoch"],
+            requesting_instance_id="remote",
+            task_summary="stale",
+            intent="must not revive",
+            work_scope=[],
+            details=[],
+            current_step=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_request_dedup_and_message_gate_share_one_home_obligation(tmp_path):
     _, store, _, bridge, _, started, ctx, _ = await authority_fixture(tmp_path)
     ws = started["work_session"]

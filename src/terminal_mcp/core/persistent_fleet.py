@@ -205,6 +205,51 @@ class PersistentFleetBridge:
             "obligations": await self.store.open_message_obligations(logical_agent_id),
         }
 
+    async def update_attachment_presence(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        requesting_instance_id: str,
+        task_summary: str,
+        intent: str,
+        work_scope: list[str] | tuple[str, ...],
+        details: list[str] | tuple[str, ...],
+        current_step: int,
+        intent_updated_at: str | None = None,
+        last_activity_at: str | None = None,
+    ) -> dict:
+        if requesting_instance_id not in self.config.peers_by_id:
+            raise PersistentStoreError("authority_unavailable")
+        await self._guard_local_authority(logical_agent_id)
+        session = await self.store.assert_session_authority(
+            logical_agent_id, work_session_id, session_epoch
+        )
+        if session.authority_node_id != self.config.instance_id:
+            route = await self.route_info(logical_agent_id) or {
+                "authority_node_id": session.authority_node_id,
+                "authority_epoch": session.authority_epoch,
+                "routing_revision": 0,
+            }
+            raise PersistentStoreError(
+                "wrong_authority",
+                blockers=[self._wrong_authority_blocker(route)],
+            )
+        return await self.store.record_attachment_presence(
+            logical_agent_id=logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+            node_instance_id=requesting_instance_id,
+            task_summary=task_summary,
+            intent=intent,
+            work_scope=work_scope,
+            details=details,
+            current_step=current_step,
+            intent_updated_at=intent_updated_at,
+            last_activity_at=last_activity_at,
+        )
+
     async def detach_session(
         self,
         *,
