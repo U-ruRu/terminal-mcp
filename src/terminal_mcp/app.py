@@ -24,6 +24,8 @@ from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinato
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.replication import FleetReplicationService
+from terminal_mcp.fleet.source import FleetSourceService
+from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
 from terminal_mcp.fleet.storage import FleetIdentityStore
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
@@ -31,6 +33,7 @@ from terminal_mcp.http.browser_security import BrowserSecurityMiddleware
 from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
 from terminal_mcp.http.fleet import build_fleet_router
+from terminal_mcp.http.fleet_v1 import build_fleet_v1_source_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.persistent import build_persistent_router
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
@@ -128,6 +131,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet_replication,
         legacy_agent_admission_enabled=settings.legacy_admission_allowed(),
     )
+    fleet_node_meta = None
+    fleet_source = None
+    if settings.fleet_v1_source_enabled:
+        if fleet_replication is None:
+            raise ValueError("fleet v1 source requires configured fleet peer authentication")
+        fleet_node_meta = FleetNodeMetaStore(
+            settings.effective_fleet_node_meta_path(),
+            fleet_id=settings.fleet_id,
+            node_id=settings.effective_fleet_node_id(),
+        )
+        fleet_node_meta.configure_observability(events, metrics)
+        fleet_source = FleetSourceService(
+            settings.database_path,
+            service.event_store,
+            fleet_node_meta,
+        )
+
     persistent_store = PersistentAgentStore(settings.database_path)
     persistent_store.configure_observability(events, metrics)
     persistent_local_fence = PersistentExecutionFence(repo, terminal, service.task_store)
@@ -171,6 +191,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await metrics.start()
         events.emit("application_started", outcome="success")
         await repo.initialize()
+        if fleet_node_meta:
+            await fleet_node_meta.initialize()
         await service.reconcile_agent_sessions()
         await oauth_store.initialize()
         await auth_foundation.initialize()
@@ -209,12 +231,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.events = events
     app.state.event_store = service.event_store
     app.state.fleet_replication = fleet_replication
+    app.state.fleet_node_meta = fleet_node_meta
+    app.state.fleet_source = fleet_source
     app.state.persistent_backend = service.persistent
     app.state.persistent_lifecycle = persistent_lifecycle
     app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
     if fleet_replication:
         app.include_router(build_fleet_router(fleet_replication))
+        if fleet_source:
+            app.include_router(build_fleet_v1_source_router(fleet_source, fleet_replication))
         if persistent_fleet:
             app.include_router(build_persistent_fleet_router(fleet_replication, persistent_fleet))
     app.include_router(build_pairing_router(settings, auth, pairing_store))

@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     fleet_peers_json: str = "[]"
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
+    fleet_v1_source_enabled: bool = False
+    fleet_id: str = ""
+    fleet_node_id: str = ""
+    fleet_node_meta_path: Path | None = None
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
     persistent_agents_enabled: bool = False
@@ -107,6 +111,29 @@ class Settings(BaseSettings):
                 "persistent_session_alert_after_sec must be above warning and below duration"
             )
         return self
+
+    @model_validator(mode="after")
+    def validate_fleet_v1_source(self):
+        if not self.fleet_v1_source_enabled:
+            return self
+        if not self.fleet_id.strip():
+            raise ValueError("fleet_id is required when fleet_v1_source_enabled is true")
+        if not (self.fleet_node_id.strip() or self.fleet_instance_id.strip()):
+            raise ValueError(
+                "fleet_node_id or fleet_instance_id is required when "
+                "fleet_v1_source_enabled is true"
+            )
+        if not self.fleet_instance_id.strip() or not self.fleet_signing_private_key.strip():
+            raise ValueError(
+                "fleet v1 source currently requires configured fleet peer authentication"
+            )
+        return self
+
+    def effective_fleet_node_id(self) -> str:
+        return self.fleet_node_id.strip() or self.fleet_instance_id.strip()
+
+    def effective_fleet_node_meta_path(self) -> Path:
+        return self.fleet_node_meta_path or self.database_path.with_name("fleet-node-meta.sqlite3")
 
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode

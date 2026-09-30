@@ -306,6 +306,152 @@ async def install_event_journal(db) -> None:
         END;
         """
     )
+    await db.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS tr_event_logical_agent_created
+        AFTER INSERT ON logical_agents
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'logical_agent.created','logical_agent',NEW.logical_agent_id,NULL,
+                json_object(
+                    'display_name',NEW.display_name,
+                    'state',NEW.state,
+                    'authority_node_id',NEW.authority_node_id,
+                    'authority_epoch',NEW.authority_epoch,
+                    'slot_revision',NEW.slot_revision,
+                    'selector_generation',NEW.selector_generation,
+                    'auth_generation',NEW.auth_generation,
+                    'deleted_at',NEW.deleted_at
+                ),
+                NEW.created_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_logical_agent_changed
+        AFTER UPDATE ON logical_agents
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'logical_agent.changed','logical_agent',NEW.logical_agent_id,NULL,
+                json_object(
+                    'display_name',NEW.display_name,
+                    'state',NEW.state,
+                    'authority_node_id',NEW.authority_node_id,
+                    'authority_epoch',NEW.authority_epoch,
+                    'slot_revision',NEW.slot_revision,
+                    'selector_generation',NEW.selector_generation,
+                    'auth_generation',NEW.auth_generation,
+                    'deleted_at',NEW.deleted_at
+                ),
+                NEW.updated_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_work_session_created
+        AFTER INSERT ON logical_agent_work_sessions
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'work_session.created','work_session',NEW.work_session_id,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'session_epoch',NEW.session_epoch,
+                    'authority_node_id',NEW.authority_node_id,
+                    'authority_epoch',NEW.authority_epoch,
+                    'hard_expires_at',NEW.hard_expires_at,
+                    'state',NEW.state,
+                    'origin_instance_id',NEW.origin_instance_id
+                ),
+                NEW.started_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_work_session_changed
+        AFTER UPDATE ON logical_agent_work_sessions
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'work_session.changed','work_session',NEW.work_session_id,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'session_epoch',NEW.session_epoch,
+                    'authority_node_id',NEW.authority_node_id,
+                    'authority_epoch',NEW.authority_epoch,
+                    'hard_expires_at',NEW.hard_expires_at,
+                    'state',NEW.state,
+                    'origin_instance_id',NEW.origin_instance_id,
+                    'ended_at',NEW.ended_at,
+                    'end_reason',NEW.end_reason
+                ),
+                COALESCE(NEW.ended_at,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_persistent_claim_created
+        AFTER INSERT ON work_claims
+        WHEN NEW.owner_kind='logical_agent'
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'work_claim.created','work_claim',CAST(NEW.id AS TEXT),NULL,
+                json_object(
+                    'namespace',NEW.namespace,
+                    'task_id',NEW.task_id,
+                    'owner_kind',NEW.owner_kind,
+                    'owner_id',NEW.owner_id,
+                    'claimed_at',NEW.claimed_at,
+                    'released_at',NEW.released_at
+                ),
+                NEW.claimed_at
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_persistent_claim_released
+        AFTER UPDATE OF released_at,owner_id ON work_claims
+        WHEN NEW.owner_kind='logical_agent'
+          AND (OLD.released_at IS NOT NEW.released_at OR OLD.owner_id IS NOT NEW.owner_id)
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'work_claim.changed','work_claim',CAST(NEW.id AS TEXT),NULL,
+                json_object(
+                    'namespace',NEW.namespace,
+                    'task_id',NEW.task_id,
+                    'owner_kind',NEW.owner_kind,
+                    'owner_id',NEW.owner_id,
+                    'claimed_at',NEW.claimed_at,
+                    'released_at',NEW.released_at
+                ),
+                COALESCE(NEW.released_at,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tr_event_command_attribution
+        AFTER INSERT ON command_agent_attribution
+        WHEN NEW.logical_agent_id IS NOT NULL
+        BEGIN
+            INSERT INTO instance_events(
+                event_type,entity_type,entity_id,actor_id,payload_json,created_at
+            ) VALUES(
+                'command.attribution','command',NEW.command_hash,NULL,
+                json_object(
+                    'logical_agent_id',NEW.logical_agent_id,
+                    'work_session_id',NEW.work_session_id,
+                    'session_epoch',NEW.session_epoch,
+                    'command_type',NEW.command_type
+                ),
+                NEW.created_at
+            );
+        END;
+        """
+    )
 
 
 class EventJournalStore:
