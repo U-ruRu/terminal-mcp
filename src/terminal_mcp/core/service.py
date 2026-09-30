@@ -623,6 +623,15 @@ class TerminalService:
                     }
 
                 if command.status != "running":
+                    if command.status == "cancelled" and execution_started:
+                        return {
+                            "ok": True,
+                            "cmd_hash": cmd_hash,
+                            "error": None,
+                            "cancelled_from": "running",
+                            "execution_started": True,
+                            **context,
+                        }
                     return {
                         "ok": False,
                         "cmd_hash": cmd_hash,

@@ -959,6 +959,52 @@ class SqliteRepository:
             await db.commit()
         return cur.rowcount == 1
 
+    async def cancel_stale_running(self, cmd_hash, expected_pid, exit_code=None):
+        """Atomically repair a running row that has no runtime-owned process."""
+        finished_at = utc_text()
+        async with self._connect("cancel_stale_running", command_hash=cmd_hash) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (
+                await db.execute(
+                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?",
+                    (cmd_hash,),
+                )
+            ).fetchone()
+            if row is None:
+                await db.commit()
+                return None, False
+
+            command = Command(*row)
+            if command.status != "running" or command.pid != expected_pid:
+                await db.commit()
+                return command, False
+
+            cur = await db.execute(
+                "UPDATE commands SET status='cancelled',"
+                "exit_code=COALESCE(?,exit_code),error=NULL,finished_at=? "
+                "WHERE hash=? AND status='running' "
+                "AND ((pid IS NULL AND ? IS NULL) OR pid=?)",
+                (exit_code, finished_at, cmd_hash, expected_pid, expected_pid),
+            )
+            if cur.rowcount != 1:
+                await db.rollback()
+                row = await (
+                    await db.execute(
+                        f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?",
+                        (cmd_hash,),
+                    )
+                ).fetchone()
+                return (Command(*row) if row is not None else None), False
+
+            row = await (
+                await db.execute(
+                    f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?",
+                    (cmd_hash,),
+                )
+            ).fetchone()
+            await db.commit()
+        return Command(*row), True
+
     async def cancel_if_queued(self, cmd_hash):
         """Linearize queued cancellation against worker claim in one write transaction.
 

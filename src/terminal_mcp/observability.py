@@ -24,6 +24,7 @@ _MINIMAL = {
     "runtime_finalization_pending",
     "runtime_finalization_recovered",
     "runtime_stale_reconciled",
+    "runtime_stale_cancel_repaired",
     "sqlite_busy",
     "sqlite_error",
     "plugin_exception",

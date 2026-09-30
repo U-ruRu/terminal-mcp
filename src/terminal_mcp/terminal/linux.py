@@ -590,9 +590,51 @@ class LinuxTerminalAdapter:
             "duration_ms": round((time.monotonic() - started) * 1000),
         }
 
+    def _clear_finalization_pending(self, cmd_hash):
+        removed = self.finalization_pending.pop(cmd_hash, None)
+        if removed is not None:
+            self._update_finalization_metric()
+        return removed
+
+    async def _cancel_without_owned_process(self, command):
+        if command.pid is not None and self._pid_exists(command.pid):
+            return False, "cancel.unowned_process: durable process exists without local ownership"
+
+        pending = self.finalization_pending.get(command.cmd_hash)
+        pending_exit_code = pending.get("exit_code") if pending else None
+        observed, repaired = await self.repo.cancel_stale_running(
+            command.cmd_hash,
+            command.pid,
+            pending_exit_code if pending_exit_code is not None else command.exit_code,
+        )
+        if observed is None:
+            return False, "cancel.lookup: command not found"
+
+        if repaired or observed.status == "cancelled":
+            had_pending = self._clear_finalization_pending(command.cmd_hash) is not None
+            self.cancel_requested.discard(command.cmd_hash)
+            if command.queue_id in self.queue_events:
+                self.queue_events[command.queue_id].set()
+            if repaired:
+                self._emit_runtime_event(
+                    "runtime_stale_cancel_repaired",
+                    level="WARNING",
+                    outcome="recovered",
+                    command_hash=command.cmd_hash,
+                    queue_id=command.queue_id,
+                    had_finalization_pending=had_pending,
+                    pid_was_recorded=command.pid is not None,
+                )
+            return True, None
+
+        if observed.status != "running":
+            return False, f"cancel.state: command is already {observed.status}"
+        if observed.pid != command.pid:
+            return False, "cancel.race: command ownership changed"
+        return False, "cancel.stale_repair: durable state did not change"
+
     async def cancel(self, command, timeout_seconds=10):
-        started = time.monotonic()
-        deadline = started + timeout_seconds
+        deadline = time.monotonic() + timeout_seconds
         if command.status == "queued":
             if await self.repo.cancel_queued(command.cmd_hash):
                 if command.queue_id in self.queue_events:
@@ -617,30 +659,11 @@ class LinuxTerminalAdapter:
                 else f"cancel.state: command is already {command.status}"
             )
 
-        self.cancel_requested.add(command.cmd_hash)
         process = self.processes.get(command.cmd_hash)
-        while process is None and time.monotonic() < deadline:
-            refreshed = await self.repo.get(command.cmd_hash)
-            if refreshed is None:
-                self.cancel_requested.discard(command.cmd_hash)
-                return False, "cancel.lookup: command not found"
-            if refreshed.status == "cancelled":
-                self.cancel_requested.discard(command.cmd_hash)
-                return True, None
-            if refreshed.status not in {"queued", "running"}:
-                self.cancel_requested.discard(command.cmd_hash)
-                return False, f"cancel.state: command is already {refreshed.status}"
-            process = self.processes.get(command.cmd_hash)
-            if process is None:
-                await asyncio.sleep(0.01)
-
         if process is None:
-            changed = await self.repo.finish_running(command.cmd_hash, "cancelled")
-            self.cancel_requested.discard(command.cmd_hash)
-            return (
-                (True, None) if changed else (False, "cancel.wait_process: command changed state")
-            )
+            return await self._cancel_without_owned_process(command)
 
+        self.cancel_requested.add(command.cmd_hash)
         if process.returncode is None:
             os.killpg(process.pid, signal.SIGTERM)
             try:
@@ -658,7 +681,12 @@ class LinuxTerminalAdapter:
                         f"{round(timeout_seconds * 1000)} ms"
                     )
 
-        await self.repo.finish_running(command.cmd_hash, "cancelled", process.returncode, None)
+        finalized = await self._finish_with_retry(
+            command, "cancelled", process.returncode, None
+        )
+        if not finalized:
+            return False, "cancel.finalize: durable state pending"
+
         execution_done = self.execution_done.get(command.cmd_hash)
         if execution_done is not None:
             try:
