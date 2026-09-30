@@ -83,11 +83,16 @@ class Settings(BaseSettings):
     fleet_request_timeout_sec: float = 3.0
     fleet_v1_source_enabled: bool = False
     fleet_v1_authority_enabled: bool = False
+    fleet_v1_projection_enabled: bool = False
+    fleet_v1_public_enabled: bool = False
     fleet_id: str = ""
     fleet_node_id: str = ""
     fleet_node_meta_path: Path | None = None
     fleet_control_node_id: str = ""
     fleet_control_path: Path | None = None
+    fleet_projection_path: Path | None = None
+    fleet_projection_owner_node_id: str = ""
+    fleet_projection_follower_node_id: str = ""
     fleet_permit_ttl_ms: int = 10_000
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
@@ -147,6 +152,27 @@ class Settings(BaseSettings):
             raise ValueError("fleet_permit_ttl_ms must be between 1 and 60000")
         return self
 
+    @model_validator(mode="after")
+    def validate_fleet_v1_projection(self):
+        if self.fleet_v1_public_enabled and not self.fleet_v1_projection_enabled:
+            raise ValueError("fleet v1 public requires fleet_v1_projection_enabled")
+        if not self.fleet_v1_projection_enabled:
+            return self
+        if not self.fleet_v1_source_enabled:
+            raise ValueError("fleet v1 projection requires fleet_v1_source_enabled")
+        owner = self.fleet_projection_owner_node_id.strip()
+        if not owner:
+            raise ValueError(
+                "fleet_projection_owner_node_id is required when projection is enabled"
+            )
+        local = self.effective_fleet_node_id()
+        follower = self.fleet_projection_follower_node_id.strip()
+        if local not in {owner, follower}:
+            raise ValueError(
+                "local fleet node must be configured projection owner or follower"
+            )
+        return self
+
     def effective_fleet_node_id(self) -> str:
         return self.fleet_node_id.strip() or self.fleet_instance_id.strip()
 
@@ -155,6 +181,19 @@ class Settings(BaseSettings):
 
     def effective_fleet_control_path(self) -> Path:
         return self.fleet_control_path or self.database_path.with_name("fleet-control.sqlite3")
+
+    def effective_fleet_projection_path(self) -> Path:
+        return self.fleet_projection_path or self.database_path.with_name(
+            "fleet-projection.sqlite3"
+        )
+
+    def effective_fleet_projection_role(self) -> str:
+        local = self.effective_fleet_node_id()
+        if local == self.fleet_projection_owner_node_id.strip():
+            return "owner"
+        if local == self.fleet_projection_follower_node_id.strip():
+            return "follower"
+        raise ValueError("local node is not part of configured projection topology")
 
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode

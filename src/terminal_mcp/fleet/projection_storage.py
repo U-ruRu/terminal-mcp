@@ -28,6 +28,7 @@ class FleetProjectionStore:
         node_id: str,
         owner_node_id: str,
         role: str = "owner",
+        max_event_rows: int = 10_000,
     ):
         if role not in {"owner", "follower"}:
             raise ValueError("projection role must be owner or follower")
@@ -35,7 +36,10 @@ class FleetProjectionStore:
         self.fleet_id = validate_protocol_id(fleet_id, "fleet_id")
         self.node_id = validate_protocol_id(node_id, "node_id")
         self.owner_node_id = validate_protocol_id(owner_node_id, "owner_node_id")
+        if int(max_event_rows) < 1:
+            raise ValueError("max_event_rows must be positive")
         self.role = role
+        self.max_event_rows = int(max_event_rows)
         self.sqlite_diagnostics = SqliteDiagnostics("fleet_projection")
 
     def configure_observability(self, events, metrics) -> None:
@@ -183,6 +187,14 @@ class FleetProjectionStore:
             "projection_seq": int(row[5]),
             "updated_at": row[6],
         }
+
+    async def _prune_events(self, db) -> None:
+        await db.execute(
+            "DELETE FROM projection_events WHERE projection_seq IN ("
+            "SELECT projection_seq FROM projection_events "
+            "ORDER BY projection_seq DESC LIMIT -1 OFFSET ?)",
+            (self.max_event_rows,),
+        )
 
     async def _next_seq(self, db, stamp: str) -> tuple[int, int]:
         row = await (
@@ -386,6 +398,7 @@ class FleetProjectionStore:
                     "freshness='fresh',updated_at=excluded.updated_at",
                     (source_node_id, generation, last_seq, stamp),
                 )
+                await self._prune_events(db)
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -511,22 +524,36 @@ class FleetProjectionStore:
         }
 
     async def events(self, *, since: int = 0, limit: int = 100) -> dict:
+        since = max(0, int(since))
         limit = max(1, min(int(limit), 1000))
         meta = await self.meta()
         async with self._connect("fleet_projection_events") as db:
-            rows = await (
+            bounds = await (
                 await db.execute(
-                    "SELECT projection_epoch,projection_seq,event_id,source_node_id,"
-                    "source_stream_generation,source_seq,event_type,entity_type,entity_id,"
-                    "entity_revision,payload_version,payload_json,created_at "
-                    "FROM projection_events WHERE projection_seq>? "
-                    "ORDER BY projection_seq LIMIT ?",
-                    (int(since), limit),
+                    "SELECT MIN(projection_seq),MAX(projection_seq) FROM projection_events"
                 )
-            ).fetchall()
+            ).fetchone()
+            oldest = int(bounds[0]) if bounds and bounds[0] is not None else None
+            newest = int(bounds[1]) if bounds and bounds[1] is not None else None
+            reset_required = oldest is not None and since < oldest - 1
+            rows = []
+            if not reset_required:
+                rows = await (
+                    await db.execute(
+                        "SELECT projection_epoch,projection_seq,event_id,source_node_id,"
+                        "source_stream_generation,source_seq,event_type,entity_type,entity_id,"
+                        "entity_revision,payload_version,payload_json,created_at "
+                        "FROM projection_events WHERE projection_seq>? "
+                        "ORDER BY projection_seq LIMIT ?",
+                        (since, limit),
+                    )
+                ).fetchall()
         return {
             "projection_epoch": meta["projection_epoch"],
             "projection_seq": meta["projection_seq"],
+            "oldest_projection_seq": oldest,
+            "newest_projection_seq": newest,
+            "reset_required": reset_required,
             "events": [
                 {
                     "projection_epoch": int(row[0]),
@@ -793,13 +820,21 @@ class FleetProjectionStore:
                         "WHERE singleton=1",
                         (expected - 1, stamp),
                     )
+                await self._prune_events(db)
                 await db.commit()
             except Exception:
                 await db.rollback()
                 raise
         return await self.meta()
 
-    async def promote(self, *, expected_epoch: int) -> dict:
+    async def promote(
+        self,
+        *,
+        expected_epoch: int,
+        control_authorized: bool = False,
+    ) -> dict:
+        if not control_authorized:
+            raise FleetProjectionError("projection promotion requires control authority")
         if self.role != "follower":
             raise FleetProjectionError("only follower can be promoted")
         stamp = utc_text()

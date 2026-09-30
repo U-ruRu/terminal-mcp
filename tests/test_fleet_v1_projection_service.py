@@ -10,6 +10,7 @@ class LocalSource:
     def __init__(self):
         self.high_water = 1
         self.state = "active"
+        self.fail_health = False
 
     async def manifest(self):
         return {
@@ -69,6 +70,8 @@ class LocalSource:
         }
 
     async def runtime_health(self):
+        if self.fail_health:
+            raise RuntimeError("runtime unavailable")
         return {
             "finalization_pending_commands": ["cmd-pending"],
             "stale_running_commands": ["cmd-stale"],
@@ -122,3 +125,107 @@ async def test_owner_syncs_source_and_keeps_runtime_overlay_volatile(tmp_path):
     assert updated["projection_seq"] == initial_seq + 1
     logical = next(item for item in updated["entities"] if item["entity_type"] == "logical_agent")
     assert logical["payload"]["state"] == "suspended"
+
+    durable_seq = updated["projection_seq"]
+    source.fail_health = True
+    await service.sync_once()
+    degraded = await store.snapshot()
+    assert degraded["projection_seq"] == durable_seq
+    assert degraded["sources"][0]["freshness"] == "unavailable"
+    assert degraded["runtime_overlays"][0]["freshness"] == "stale"
+    logical = next(
+        item for item in degraded["entities"] if item["entity_type"] == "logical_agent"
+    )
+    assert logical["payload"]["state"] == "suspended"
+
+
+class ManyResponse:
+    def __init__(self, body):
+        self.body = body
+        self.status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.body
+
+
+class ManySourceClient:
+    def __init__(self):
+        self.requests = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get(self, url, *, headers, params=None):
+        del headers, params
+        self.requests += 1
+        node = url.split("//", 1)[1].split(".", 1)[0]
+        if url.endswith("/manifest"):
+            return ManyResponse(
+                {
+                    "fleet_id": "fleet-a",
+                    "node_id": node,
+                    "source_stream_generation": "gen-a",
+                    "high_water_source_seq": 0,
+                }
+            )
+        if url.endswith("/snapshot"):
+            return ManyResponse(
+                {
+                    "fleet_id": "fleet-a",
+                    "node_id": node,
+                    "source_stream_generation": "gen-a",
+                    "barrier_source_seq": 0,
+                    "complete_entity_types": [],
+                    "entities": [],
+                }
+            )
+        if url.endswith("/runtime-health"):
+            return ManyResponse(
+                {
+                    "finalization_pending_commands": [],
+                    "stale_running_commands": [],
+                    "unowned_running_commands": [],
+                    "queues": [],
+                }
+            )
+        raise AssertionError(url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_count", [50, 200])
+async def test_owner_source_fanout_is_linear_in_sources(tmp_path, source_count):
+    from terminal_mcp.fleet.config import FleetPeer
+
+    peers = tuple(
+        FleetPeer(
+            f"node-{index}",
+            f"https://node-{index}.example",
+            "public",
+            "token",
+        )
+        for index in range(source_count)
+    )
+    client = ManySourceClient()
+    store = FleetProjectionStore(
+        tmp_path / "projection.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-a",
+        owner_node_id="projection-a",
+    )
+    await store.initialize()
+    service = FleetProjectionService(
+        FleetConfig("projection-a", "key", peers, 1.0, 1.0),
+        store,
+        owner_node_id="projection-a",
+        client_factory=lambda: client,
+    )
+    await service.sync_once()
+    assert client.requests == source_count * 3
+    state = await store.snapshot()
+    assert len(state["sources"]) == source_count

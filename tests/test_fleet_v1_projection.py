@@ -143,7 +143,7 @@ async def test_projection_reset_and_follower_promotion_are_explicit(tmp_path):
     await follower.initialize()
     with pytest.raises(FleetProjectionError, match="cannot independently consume"):
         await follower.apply_snapshot(snapshot())
-    promoted = await follower.promote(expected_epoch=1)
+    promoted = await follower.promote(expected_epoch=1, control_authorized=True)
     assert promoted["projection_epoch"] == 2
     assert promoted["role"] == "owner"
     assert promoted["owner_node_id"] == "projection-b"
@@ -212,7 +212,9 @@ async def test_follower_applies_exact_owner_prefix_and_fences_old_epoch(tmp_path
             owner_node_id="projection-a",
         )
 
-    promoted = await follower.promote(expected_epoch=applied["projection_epoch"])
+    promoted = await follower.promote(
+        expected_epoch=applied["projection_epoch"], control_authorized=True
+    )
     assert promoted["projection_epoch"] == applied["projection_epoch"] + 1
     follower.role = "follower"
     follower.owner_node_id = "projection-a"
@@ -221,3 +223,46 @@ async def test_follower_applies_exact_owner_prefix_and_fences_old_epoch(tmp_path
             owner_events,
             owner_node_id="projection-a",
         )
+
+
+@pytest.mark.asyncio
+async def test_projection_event_retention_forces_slow_cursor_resnapshot(tmp_path):
+    store = FleetProjectionStore(
+        tmp_path / "projection.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-a",
+        owner_node_id="projection-a",
+        max_event_rows=2,
+    )
+    await store.initialize()
+    await store.apply_snapshot(snapshot(barrier=1))
+    base = (await store.meta())["projection_seq"]
+    for index in range(2, 5):
+        await store.apply_source_page(
+            page(
+                source_seq=index,
+                revision=index,
+                event_id=f"event-{index}",
+            )
+        )
+    current = await store.meta()
+    expired = await store.events(since=base)
+    assert expired["reset_required"] is True
+    assert expired["events"] == []
+    fresh = await store.events(since=current["projection_seq"] - 2)
+    assert fresh["reset_required"] is False
+    assert len(fresh["events"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_projection_promotion_requires_control_authority(tmp_path):
+    follower = FleetProjectionStore(
+        tmp_path / "follower.sqlite3",
+        fleet_id="fleet-a",
+        node_id="projection-b",
+        owner_node_id="projection-a",
+        role="follower",
+    )
+    await follower.initialize()
+    with pytest.raises(FleetProjectionError, match="control authority"):
+        await follower.promote(expected_epoch=1)

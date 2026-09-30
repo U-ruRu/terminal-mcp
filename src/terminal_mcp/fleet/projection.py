@@ -30,6 +30,7 @@ class FleetProjectionService:
         )
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
+        self._local_source_node_id: str | None = None
 
     def _default_client(self):
         return httpx.AsyncClient(timeout=self.config.request_timeout_seconds)
@@ -77,7 +78,18 @@ class FleetProjectionService:
 
     async def _sync_owner(self) -> None:
         if self.local_source is not None:
-            await self._sync_local_source()
+            try:
+                await self._sync_local_source()
+            except Exception:
+                source_node_id = self._local_source_node_id or self.config.instance_id
+                current = await self.store.source_state(source_node_id)
+                if current is not None:
+                    await self.store.mark_source(
+                        source_node_id,
+                        current["source_stream_generation"],
+                        "unavailable",
+                    )
+                    await self.store.clear_runtime_overlay(source_node_id)
         async with self.client_factory() as client:
             for peer in self.config.peers:
                 await self._sync_remote_source(client, peer)
@@ -115,6 +127,7 @@ class FleetProjectionService:
 
     async def _sync_local_source(self) -> None:
         manifest = await self.local_source.manifest()
+        self._local_source_node_id = str(manifest["node_id"])
 
         async def snapshot_getter():
             return await self.local_source.snapshot()
@@ -145,6 +158,8 @@ class FleetProjectionService:
             )
             manifest_response.raise_for_status()
             manifest = manifest_response.json()
+            if str(manifest.get("node_id") or "") != peer.instance_id:
+                raise FleetProjectionError("source peer identity mismatch")
 
             async def snapshot_getter():
                 response = await client.get(
@@ -201,6 +216,12 @@ class FleetProjectionService:
             )
             manifest_response.raise_for_status()
             remote = manifest_response.json()
+            if (
+                str(remote.get("node_id") or "") != peer.instance_id
+                or str(remote.get("owner_node_id") or "") != peer.instance_id
+                or remote.get("role") != "owner"
+            ):
+                raise FleetProjectionError("projection owner identity mismatch")
             local = await self.store.meta()
             if (
                 int(remote["projection_epoch"]) != local["projection_epoch"]

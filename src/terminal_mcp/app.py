@@ -24,6 +24,8 @@ from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinato
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.control_storage import FleetControlStore
+from terminal_mcp.fleet.projection import FleetProjectionService
+from terminal_mcp.fleet.projection_storage import FleetProjectionStore
 from terminal_mcp.fleet.protocol import AUTHORITY_CAPABILITIES, SOURCE_CAPABILITIES
 from terminal_mcp.fleet.replication import FleetReplicationService
 from terminal_mcp.fleet.source import FleetSourceService
@@ -34,8 +36,12 @@ from terminal_mcp.http.admin import build_admin_router
 from terminal_mcp.http.browser_security import BrowserSecurityMiddleware
 from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
+from terminal_mcp.http.console_fleet import build_console_fleet_router
 from terminal_mcp.http.fleet import build_fleet_router
-from terminal_mcp.http.fleet_v1 import build_fleet_v1_source_router
+from terminal_mcp.http.fleet_v1 import (
+    build_fleet_v1_projection_router,
+    build_fleet_v1_source_router,
+)
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.persistent import build_persistent_router
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
@@ -70,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     auth_foundation = AuthFoundationStore(settings.auth_database_path)
     pairing_store = PairingStore(settings.database_path)
     ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
+    fleet_ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     credentials = CredentialManager(settings)
     runtime = RuntimeConfigProvider(settings.runtime_config_path)
     metrics = Metrics(runtime, settings.metrics_host, settings.metrics_port)
@@ -149,6 +156,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.database_path,
             service.event_store,
             fleet_node_meta,
+            runtime_health_provider=terminal.health,
+        )
+
+    fleet_projection = None
+    fleet_projection_service = None
+    if settings.fleet_v1_projection_enabled:
+        if fleet_config is None or fleet_source is None:
+            raise ValueError("fleet v1 projection requires configured source and fleet peers")
+        projection_role = settings.effective_fleet_projection_role()
+        fleet_projection = FleetProjectionStore(
+            settings.effective_fleet_projection_path(),
+            fleet_id=settings.fleet_id,
+            node_id=settings.effective_fleet_node_id(),
+            owner_node_id=settings.fleet_projection_owner_node_id,
+            role=projection_role,
+        )
+        fleet_projection.configure_observability(events, metrics)
+        fleet_projection_service = FleetProjectionService(
+            fleet_config,
+            fleet_projection,
+            local_source=fleet_source if projection_role == "owner" else None,
+            owner_node_id=settings.fleet_projection_owner_node_id,
         )
 
     fleet_control = None
@@ -219,6 +248,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await repo.initialize()
         if fleet_node_meta:
             await fleet_node_meta.initialize()
+        if fleet_projection:
+            await fleet_projection.initialize()
         if fleet_control:
             await fleet_control.initialize()
             local_capabilities = set(AUTHORITY_CAPABILITIES)
@@ -240,6 +271,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if fleet_replication:
             await fleet_replication.start()
         await terminal.start()
+        if fleet_projection_service:
+            await fleet_projection_service.start()
         if persistent_fleet:
             await persistent_fleet.start()
         await persistent_lifecycle.start()
@@ -250,6 +283,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await persistent_lifecycle.stop()
             if persistent_fleet:
                 await persistent_fleet.stop()
+            if fleet_projection_service:
+                await fleet_projection_service.stop()
             await terminal.stop()
             if fleet_replication:
                 await fleet_replication.stop()
@@ -265,6 +300,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.auth_foundation = auth_foundation
     app.state.pairing_store = pairing_store
     app.state.ws_ticket_store = ws_ticket_store
+    app.state.fleet_ws_ticket_store = fleet_ws_ticket_store
     app.state.credentials = credentials
     app.state.runtime_config = runtime
     app.state.metrics = metrics
@@ -274,6 +310,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.fleet_node_meta = fleet_node_meta
     app.state.fleet_source = fleet_source
     app.state.fleet_control = fleet_control
+    app.state.fleet_projection = fleet_projection
+    app.state.fleet_projection_service = fleet_projection_service
     app.state.persistent_backend = service.persistent
     app.state.persistent_lifecycle = persistent_lifecycle
     app.state.persistent_fleet = persistent_fleet
@@ -282,6 +320,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(build_fleet_router(fleet_replication))
         if fleet_source:
             app.include_router(build_fleet_v1_source_router(fleet_source, fleet_replication))
+        if fleet_projection:
+            app.include_router(
+                build_fleet_v1_projection_router(fleet_projection, fleet_replication)
+            )
         if persistent_fleet:
             app.include_router(build_persistent_fleet_router(fleet_replication, persistent_fleet))
     app.include_router(build_pairing_router(settings, auth, pairing_store))
@@ -295,6 +337,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ws_ticket_store,
         )
     )
+    if settings.fleet_v1_public_enabled and fleet_projection:
+        app.include_router(
+            build_console_fleet_router(
+                settings,
+                auth,
+                pairing_store,
+                fleet_projection,
+                fleet_ws_ticket_store,
+            )
+        )
     app.include_router(build_oauth_router(settings, auth, oauth_store))
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
     if settings.persistent_agents_enabled:
