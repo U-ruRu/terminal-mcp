@@ -1030,6 +1030,447 @@ class PersistentAgentStore:
             logical_agent_id, operation, idempotency_key, fingerprint, result
         )
 
+    async def fleet_request_reserve(
+        self,
+        issuer_node_id: str,
+        operation: str,
+        request_id: str,
+        fingerprint: str,
+        retain_until: str,
+        *,
+        now: str | None = None,
+    ) -> dict | None:
+        stamp = now or utc_text()
+        async with self._connect("fleet_request_reserve") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT request_fingerprint,state,result_json FROM fleet_request_dedup "
+                        "WHERE issuer_node_id=? AND operation=? AND request_id=?",
+                        (issuer_node_id, operation, request_id),
+                    )
+                ).fetchone()
+                if row is not None:
+                    if row[0] != fingerprint:
+                        raise PersistentStoreError("idempotency_conflict")
+                    if row[1] == "pending":
+                        raise PersistentStoreError("idempotency_in_progress")
+                    if row[1] != "complete" or row[2] is None:
+                        raise PersistentStoreError("idempotency_conflict")
+                    await db.commit()
+                    return json.loads(row[2])
+                await db.execute(
+                    "INSERT INTO fleet_request_dedup("
+                    "issuer_node_id,operation,request_id,request_fingerprint,state,"
+                    "result_json,retain_until,created_at) VALUES(?,?,?,?, 'pending',NULL,?,?)",
+                    (
+                        issuer_node_id,
+                        operation,
+                        request_id,
+                        fingerprint,
+                        retain_until,
+                        stamp,
+                    ),
+                )
+                await db.commit()
+                return None
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def fleet_request_complete(
+        self,
+        issuer_node_id: str,
+        operation: str,
+        request_id: str,
+        fingerprint: str,
+        result: dict,
+    ) -> dict:
+        payload = json.dumps(result, sort_keys=True, separators=(",", ":"), default=str)
+        async with self._connect("fleet_request_complete") as db:
+            cur = await db.execute(
+                "UPDATE fleet_request_dedup SET state='complete',result_json=? "
+                "WHERE issuer_node_id=? AND operation=? AND request_id=? "
+                "AND request_fingerprint=? AND state='pending'",
+                (payload, issuer_node_id, operation, request_id, fingerprint),
+            )
+            await db.commit()
+        if cur.rowcount != 1:
+            async with self._connect("fleet_request_complete_replay") as db:
+                row = await (
+                    await db.execute(
+                        "SELECT request_fingerprint,state,result_json FROM fleet_request_dedup "
+                        "WHERE issuer_node_id=? AND operation=? AND request_id=?",
+                        (issuer_node_id, operation, request_id),
+                    )
+                ).fetchone()
+            if (
+                row is None
+                or row[0] != fingerprint
+                or row[1] != "complete"
+                or row[2] is None
+            ):
+                raise PersistentStoreError("idempotency_conflict")
+            return json.loads(row[2])
+        return result
+
+    async def fleet_request_abort(
+        self,
+        issuer_node_id: str,
+        operation: str,
+        request_id: str,
+        fingerprint: str,
+    ) -> bool:
+        async with self._connect("fleet_request_abort") as db:
+            cur = await db.execute(
+                "DELETE FROM fleet_request_dedup "
+                "WHERE issuer_node_id=? AND operation=? AND request_id=? "
+                "AND request_fingerprint=? AND state='pending'",
+                (issuer_node_id, operation, request_id, fingerprint),
+            )
+            await db.commit()
+        return cur.rowcount == 1
+
+    async def fleet_gate(self, logical_agent_id: str) -> dict:
+        async with self._connect("fleet_gate_get") as db:
+            row = await (
+                await db.execute(
+                    "SELECT gate_revision,blocked,reason,updated_at "
+                    "FROM persistent_fleet_gates WHERE logical_agent_id=?",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+            if row is None:
+                slot = await (
+                    await db.execute(
+                        "SELECT 1 FROM logical_agents WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if slot is None:
+                    raise PersistentStoreError("slot_not_found")
+                stamp = utc_text()
+                await db.execute(
+                    "INSERT INTO persistent_fleet_gates("
+                    "logical_agent_id,gate_revision,blocked,reason,updated_at) "
+                    "VALUES(?,1,0,NULL,?)",
+                    (logical_agent_id, stamp),
+                )
+                await db.commit()
+                return {
+                    "logical_agent_id": logical_agent_id,
+                    "gate_revision": 1,
+                    "blocked": False,
+                    "reason": None,
+                    "updated_at": stamp,
+                }
+        return {
+            "logical_agent_id": logical_agent_id,
+            "gate_revision": int(row[0]),
+            "blocked": bool(row[1]),
+            "reason": row[2],
+            "updated_at": row[3],
+        }
+
+    async def fleet_gate_bump(
+        self,
+        logical_agent_id: str,
+        *,
+        blocked: bool,
+        reason: str | None,
+        now: str | None = None,
+    ) -> dict:
+        stamp = now or utc_text()
+        async with self._connect("fleet_gate_bump") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                slot = await (
+                    await db.execute(
+                        "SELECT 1 FROM logical_agents WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if slot is None:
+                    raise PersistentStoreError("slot_not_found")
+                row = await (
+                    await db.execute(
+                        "SELECT gate_revision FROM persistent_fleet_gates "
+                        "WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                revision = (int(row[0]) if row else 0) + 1
+                await db.execute(
+                    "INSERT INTO persistent_fleet_gates("
+                    "logical_agent_id,gate_revision,blocked,reason,updated_at) "
+                    "VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(logical_agent_id) DO UPDATE SET "
+                    "gate_revision=excluded.gate_revision,blocked=excluded.blocked,"
+                    "reason=excluded.reason,updated_at=excluded.updated_at",
+                    (logical_agent_id, revision, int(blocked), reason, stamp),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return {
+            "logical_agent_id": logical_agent_id,
+            "gate_revision": revision,
+            "blocked": bool(blocked),
+            "reason": reason,
+            "updated_at": stamp,
+        }
+
+    async def create_message_obligation(
+        self,
+        *,
+        message_ref: str,
+        logical_agent_id: str,
+        sender_agent_id: str,
+        text: str,
+        require_reply: bool,
+        alert: bool,
+        now: str | None = None,
+    ) -> dict:
+        stamp = now or utc_text()
+        async with self._connect("persistent_message_create") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = await (
+                    await db.execute(
+                        "SELECT logical_agent_id,sender_agent_id,text,require_reply,alert,"
+                        "gate_revision,created_at,resolved_at,resolution "
+                        "FROM persistent_message_obligations WHERE message_ref=?",
+                        (message_ref,),
+                    )
+                ).fetchone()
+                if existing is not None:
+                    await db.commit()
+                    return {
+                        "message_ref": message_ref,
+                        "logical_agent_id": existing[0],
+                        "sender_agent_id": existing[1],
+                        "text": existing[2],
+                        "require_reply": bool(existing[3]),
+                        "alert": bool(existing[4]),
+                        "gate_revision": int(existing[5]),
+                        "created_at": existing[6],
+                        "resolved_at": existing[7],
+                        "resolution": existing[8],
+                        "created": False,
+                    }
+                slot = await (
+                    await db.execute(
+                        "SELECT 1 FROM logical_agents WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                if slot is None:
+                    raise PersistentStoreError("slot_not_found")
+                gate = await (
+                    await db.execute(
+                        "SELECT gate_revision FROM persistent_fleet_gates "
+                        "WHERE logical_agent_id=?",
+                        (logical_agent_id,),
+                    )
+                ).fetchone()
+                revision = int(gate[0]) if gate else 1
+                gated = bool(require_reply or alert)
+                if gated:
+                    revision += 1 if gate else 0
+                    await db.execute(
+                        "INSERT INTO persistent_fleet_gates("
+                        "logical_agent_id,gate_revision,blocked,reason,updated_at) "
+                        "VALUES(?,?,?,?,?) "
+                        "ON CONFLICT(logical_agent_id) DO UPDATE SET "
+                        "gate_revision=excluded.gate_revision,blocked=1,"
+                        "reason=excluded.reason,updated_at=excluded.updated_at",
+                        (
+                            logical_agent_id,
+                            revision,
+                            1,
+                            "message_obligation",
+                            stamp,
+                        ),
+                    )
+                elif gate is None:
+                    await db.execute(
+                        "INSERT INTO persistent_fleet_gates("
+                        "logical_agent_id,gate_revision,blocked,reason,updated_at) "
+                        "VALUES(?,1,0,NULL,?)",
+                        (logical_agent_id, stamp),
+                    )
+                await db.execute(
+                    "INSERT INTO persistent_message_obligations("
+                    "message_ref,logical_agent_id,sender_agent_id,text,require_reply,alert,"
+                    "gate_revision,created_at,resolved_at,resolution) "
+                    "VALUES(?,?,?,?,?,?,?,?,NULL,NULL)",
+                    (
+                        message_ref,
+                        logical_agent_id,
+                        sender_agent_id,
+                        text,
+                        int(require_reply),
+                        int(alert),
+                        revision,
+                        stamp,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return {
+            "message_ref": message_ref,
+            "logical_agent_id": logical_agent_id,
+            "sender_agent_id": sender_agent_id,
+            "text": text,
+            "require_reply": bool(require_reply),
+            "alert": bool(alert),
+            "gate_revision": revision,
+            "created_at": stamp,
+            "resolved_at": None,
+            "resolution": None,
+            "created": True,
+        }
+
+    async def open_message_obligations(self, logical_agent_id: str) -> list[dict]:
+        async with self._connect("persistent_message_open") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT message_ref,sender_agent_id,text,require_reply,alert,"
+                    "gate_revision,created_at FROM persistent_message_obligations "
+                    "WHERE logical_agent_id=? AND resolved_at IS NULL "
+                    "ORDER BY created_at,message_ref",
+                    (logical_agent_id,),
+                )
+            ).fetchall()
+        keys = (
+            "message_ref",
+            "sender_agent_id",
+            "text",
+            "require_reply",
+            "alert",
+            "gate_revision",
+            "created_at",
+        )
+        result = []
+        for row in rows:
+            item = dict(zip(keys, row, strict=True))
+            item["require_reply"] = bool(item["require_reply"])
+            item["alert"] = bool(item["alert"])
+            item["gate_revision"] = int(item["gate_revision"])
+            result.append(item)
+        return result
+
+    async def merge_message_receipt(
+        self,
+        message_ref: str,
+        node_instance_id: str,
+        *,
+        seen_at: str | None = None,
+        read_at: str | None = None,
+        replied_at: str | None = None,
+        reply_message_ref: str | None = None,
+    ) -> dict:
+        async with self._connect("persistent_message_receipt") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                obligation = await (
+                    await db.execute(
+                        "SELECT logical_agent_id,require_reply,alert,resolved_at "
+                        "FROM persistent_message_obligations WHERE message_ref=?",
+                        (message_ref,),
+                    )
+                ).fetchone()
+                if obligation is None:
+                    raise PersistentStoreError("message_not_found")
+                row = await (
+                    await db.execute(
+                        "SELECT seen_at,read_at,replied_at,reply_message_ref "
+                        "FROM persistent_message_receipts "
+                        "WHERE message_ref=? AND node_instance_id=?",
+                        (message_ref, node_instance_id),
+                    )
+                ).fetchone()
+
+                def earliest(current, incoming):
+                    if current is None:
+                        return incoming
+                    if incoming is None:
+                        return current
+                    return min(current, incoming)
+
+                current = row or (None, None, None, None)
+                merged = (
+                    earliest(current[0], seen_at),
+                    earliest(current[1], read_at),
+                    earliest(current[2], replied_at),
+                    current[3] or reply_message_ref,
+                )
+                await db.execute(
+                    "INSERT INTO persistent_message_receipts("
+                    "message_ref,node_instance_id,seen_at,read_at,replied_at,reply_message_ref) "
+                    "VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(message_ref,node_instance_id) DO UPDATE SET "
+                    "seen_at=excluded.seen_at,read_at=excluded.read_at,"
+                    "replied_at=excluded.replied_at,reply_message_ref=excluded.reply_message_ref",
+                    (message_ref, node_instance_id, *merged),
+                )
+                should_resolve = bool(replied_at) and bool(obligation[1] or obligation[2])
+                if should_resolve and obligation[3] is None:
+                    await db.execute(
+                        "UPDATE persistent_message_obligations "
+                        "SET resolved_at=?,resolution='reply' "
+                        "WHERE message_ref=? AND resolved_at IS NULL",
+                        (replied_at, message_ref),
+                    )
+                    remaining = await (
+                        await db.execute(
+                            "SELECT COUNT(*) FROM persistent_message_obligations "
+                            "WHERE logical_agent_id=? AND resolved_at IS NULL "
+                            "AND (require_reply=1 OR alert=1)",
+                            (obligation[0],),
+                        )
+                    ).fetchone()
+                    gate = await (
+                        await db.execute(
+                            "SELECT gate_revision FROM persistent_fleet_gates "
+                            "WHERE logical_agent_id=?",
+                            (obligation[0],),
+                        )
+                    ).fetchone()
+                    revision = (int(gate[0]) if gate else 1) + 1
+                    blocked = int(int(remaining[0]) > 0)
+                    await db.execute(
+                        "INSERT INTO persistent_fleet_gates("
+                        "logical_agent_id,gate_revision,blocked,reason,updated_at) "
+                        "VALUES(?,?,?,?,?) "
+                        "ON CONFLICT(logical_agent_id) DO UPDATE SET "
+                        "gate_revision=excluded.gate_revision,blocked=excluded.blocked,"
+                        "reason=excluded.reason,updated_at=excluded.updated_at",
+                        (
+                            obligation[0],
+                            revision,
+                            blocked,
+                            "message_obligation" if blocked else None,
+                            replied_at,
+                        ),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return {
+            "message_ref": message_ref,
+            "node_instance_id": node_instance_id,
+            "seen_at": merged[0],
+            "read_at": merged[1],
+            "replied_at": merged[2],
+            "reply_message_ref": merged[3],
+        }
+
     async def record_node_attachment(
         self,
         *,
@@ -1134,7 +1575,8 @@ class PersistentAgentStore:
                 "INSERT OR REPLACE INTO persistent_command_permits("
                 "command_hash,logical_agent_id,work_session_id,session_epoch,authority_node_id,"
                 "authority_epoch,node_attachment_id,node_instance_id,scope,hard_expires_at,permit_expires_at,"
-                "signature,created_at,revoked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+                "signature,created_at,revoked_at,gate_revision,operation,ttl_ms,slot_revision,principal_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)",
                 (
                     command_hash,
                     permit["logical_agent_id"],
@@ -1149,6 +1591,11 @@ class PersistentAgentStore:
                     permit["permit_expires_at"],
                     permit["signature"],
                     permit["issued_at"],
+                    int(permit.get("gate_revision", 1)),
+                    str(permit.get("operation") or permit["scope"]),
+                    int(permit.get("ttl_ms", 10000)),
+                    int(permit["slot_revision"]) if permit.get("slot_revision") is not None else None,
+                    permit.get("principal_id"),
                 ),
             )
             await db.commit()

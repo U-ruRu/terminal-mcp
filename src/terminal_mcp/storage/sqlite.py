@@ -22,7 +22,7 @@ from terminal_mcp.storage.output import (
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -295,7 +295,41 @@ class SqliteRepository:
                     session_epoch INTEGER NOT NULL CHECK(session_epoch > 0), authority_node_id TEXT NOT NULL,
                     authority_epoch INTEGER NOT NULL CHECK(authority_epoch > 0), node_attachment_id TEXT NOT NULL,
                     node_instance_id TEXT NOT NULL, scope TEXT NOT NULL, hard_expires_at TEXT NOT NULL,
-                    permit_expires_at TEXT NOT NULL, signature TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT
+                    permit_expires_at TEXT NOT NULL, signature TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT,
+                    gate_revision INTEGER NOT NULL DEFAULT 1 CHECK(gate_revision > 0),
+                    operation TEXT NOT NULL DEFAULT 'run',
+                    ttl_ms INTEGER NOT NULL DEFAULT 10000 CHECK(ttl_ms > 0),
+                    slot_revision INTEGER,
+                    principal_id TEXT
+                );
+                CREATE TABLE IF NOT EXISTS fleet_request_dedup(
+                    issuer_node_id TEXT NOT NULL, operation TEXT NOT NULL, request_id TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('pending','complete')),
+                    result_json TEXT, retain_until TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(issuer_node_id,operation,request_id)
+                );
+                CREATE TABLE IF NOT EXISTS persistent_fleet_gates(
+                    logical_agent_id TEXT PRIMARY KEY,
+                    gate_revision INTEGER NOT NULL DEFAULT 1 CHECK(gate_revision > 0),
+                    blocked INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0,1)),
+                    reason TEXT, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS persistent_message_obligations(
+                    message_ref TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL,
+                    sender_agent_id TEXT NOT NULL, text TEXT NOT NULL,
+                    require_reply INTEGER NOT NULL DEFAULT 0 CHECK(require_reply IN (0,1)),
+                    alert INTEGER NOT NULL DEFAULT 0 CHECK(alert IN (0,1)),
+                    gate_revision INTEGER NOT NULL CHECK(gate_revision > 0),
+                    created_at TEXT NOT NULL, resolved_at TEXT, resolution TEXT,
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                );
+                CREATE TABLE IF NOT EXISTS persistent_message_receipts(
+                    message_ref TEXT NOT NULL, node_instance_id TEXT NOT NULL,
+                    seen_at TEXT, read_at TEXT, replied_at TEXT, reply_message_ref TEXT,
+                    PRIMARY KEY(message_ref,node_instance_id),
+                    FOREIGN KEY(message_ref) REFERENCES persistent_message_obligations(message_ref) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS ix_agent_sessions_last_activity ON agent_sessions(last_activity_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_agent_task_events_agent ON agent_task_events(agent_id, id DESC);
@@ -539,6 +573,60 @@ class SqliteRepository:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_persistent_audit_agent "
             "ON persistent_agent_audit(logical_agent_id,id DESC)"
+        )
+        await add_columns(
+            "persistent_command_permits",
+            [
+                ("gate_revision", "INTEGER NOT NULL DEFAULT 1"),
+                ("operation", "TEXT NOT NULL DEFAULT 'run'"),
+                ("ttl_ms", "INTEGER NOT NULL DEFAULT 10000"),
+                ("slot_revision", "INTEGER"),
+                ("principal_id", "TEXT"),
+            ],
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS fleet_request_dedup("
+            "issuer_node_id TEXT NOT NULL,operation TEXT NOT NULL,request_id TEXT NOT NULL,"
+            "request_fingerprint TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','complete')),"
+            "result_json TEXT,retain_until TEXT NOT NULL,created_at TEXT NOT NULL,"
+            "PRIMARY KEY(issuer_node_id,operation,request_id))"
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS persistent_fleet_gates("
+            "logical_agent_id TEXT PRIMARY KEY,"
+            "gate_revision INTEGER NOT NULL DEFAULT 1 CHECK(gate_revision > 0),"
+            "blocked INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0,1)),"
+            "reason TEXT,updated_at TEXT NOT NULL,"
+            "FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT)"
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS persistent_message_obligations("
+            "message_ref TEXT PRIMARY KEY,logical_agent_id TEXT NOT NULL,"
+            "sender_agent_id TEXT NOT NULL,text TEXT NOT NULL,"
+            "require_reply INTEGER NOT NULL DEFAULT 0 CHECK(require_reply IN (0,1)),"
+            "alert INTEGER NOT NULL DEFAULT 0 CHECK(alert IN (0,1)),"
+            "gate_revision INTEGER NOT NULL CHECK(gate_revision > 0),"
+            "created_at TEXT NOT NULL,resolved_at TEXT,resolution TEXT,"
+            "FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT)"
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS persistent_message_receipts("
+            "message_ref TEXT NOT NULL,node_instance_id TEXT NOT NULL,"
+            "seen_at TEXT,read_at TEXT,replied_at TEXT,reply_message_ref TEXT,"
+            "PRIMARY KEY(message_ref,node_instance_id),"
+            "FOREIGN KEY(message_ref) REFERENCES persistent_message_obligations(message_ref) ON DELETE CASCADE)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_fleet_request_dedup_retain "
+            "ON fleet_request_dedup(retain_until,state)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_obligations_agent "
+            "ON persistent_message_obligations(logical_agent_id,resolved_at,created_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_persistent_receipts_message "
+            "ON persistent_message_receipts(message_ref,read_at,replied_at)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS ix_persistent_attachments_session "
@@ -918,8 +1006,9 @@ class SqliteRepository:
                             "INSERT INTO persistent_command_permits("
                             "command_hash,logical_agent_id,work_session_id,session_epoch,authority_node_id,"
                             "authority_epoch,node_attachment_id,node_instance_id,scope,hard_expires_at,"
-                            "permit_expires_at,signature,created_at,revoked_at) "
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+                            "permit_expires_at,signature,created_at,revoked_at,gate_revision,operation,"
+                            "ttl_ms,slot_revision,principal_id) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)",
                             (
                                 h,
                                 logical_agent_id,
@@ -934,6 +1023,15 @@ class SqliteRepository:
                                 persistent_permit["permit_expires_at"],
                                 persistent_permit["signature"],
                                 persistent_permit["issued_at"],
+                                int(persistent_permit.get("gate_revision", 1)),
+                                str(persistent_permit.get("operation") or persistent_permit["scope"]),
+                                int(persistent_permit.get("ttl_ms", 10000)),
+                                (
+                                    int(persistent_permit["slot_revision"])
+                                    if persistent_permit.get("slot_revision") is not None
+                                    else None
+                                ),
+                                persistent_permit.get("principal_id"),
                             ),
                         )
                     await db.commit()

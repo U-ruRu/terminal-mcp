@@ -31,6 +31,8 @@ def build_persistent_fleet_router(replication, bridge) -> APIRouter:
                 requesting_instance_id=peer.instance_id,
                 scope=str(payload.get("scope") or ""),
                 principal_id=str(payload.get("principal_id") or ""),
+                operation=str(payload.get("operation") or payload.get("scope") or ""),
+                request_id=str(payload.get("request_id") or "") or None,
             )
         except PersistentStoreError as exc:
             status = (
