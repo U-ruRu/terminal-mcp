@@ -461,6 +461,23 @@ class FleetSourceQueryPlane:
             async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
                 db.row_factory = aiosqlite.Row
                 row = await (await db.execute(sql, list(values))).fetchone()
+                if row is None and scope == "commands":
+                    row = await (
+                        await db.execute(
+                            """
+                            SELECT c.hash AS k1,c.status,c.exit_code,c.queue_id,c.started_at,
+                                   c.finished_at,c.enqueued_at,c.claimed_at,c.error,
+                                   a.logical_agent_id,a.work_session_id,a.session_epoch,
+                                   s.truncated,s.pruned_at
+                            FROM commands c
+                            LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash
+                            LEFT JOIN command_output_state s ON s.command_hash=c.hash
+                            WHERE c.hash=?
+                            LIMIT 1
+                            """,
+                            [entity_id],
+                        )
+                    ).fetchone()
         except aiosqlite.Error:
             self._sqlite_error(f"current:{scope}")
             raise
