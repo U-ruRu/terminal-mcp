@@ -24,6 +24,7 @@ _CANONICAL_ENTITY_TYPES = {
     "work_claim",
     "task",
     "command",
+    "context",
 }
 
 
@@ -206,6 +207,7 @@ class FleetSourceService:
         snapshot_id: str | None = None,
         cursor: str | None = None,
         limit: int = 100,
+        barrier_source_seq: int | None = None,
     ) -> dict[str, Any]:
         meta, high_water, rotated = await self._current_meta()
         if source_stream_generation and source_stream_generation != meta.source_stream_generation:
@@ -216,18 +218,59 @@ class FleetSourceService:
                 "reset_required": True,
                 "reset_reason": "source_stream_generation_changed",
             }
+        requested_barrier = high_water if barrier_source_seq is None else int(barrier_source_seq)
+        if requested_barrier < 0 or requested_barrier > high_water:
+            raise ValueError("invalid recovery barrier_source_seq")
         page = await self.query_plane.recovery_page(
             scope=scope,
             generation=meta.source_stream_generation,
-            barrier=high_water,
+            barrier=requested_barrier,
             high_water=high_water,
             snapshot_id=snapshot_id,
             cursor=cursor,
             limit=limit,
         )
+        page["fleet_id"] = meta.fleet_id
+        page["node_id"] = meta.node_id
         page["generation_rotated"] = rotated
         page["reset_required"] = False
         return page
+
+    async def current_entity(
+        self,
+        scope: str,
+        entity_id: str,
+        *,
+        source_stream_generation: str | None = None,
+    ) -> dict[str, Any]:
+        meta, high_water, rotated = await self._current_meta()
+        if source_stream_generation and source_stream_generation != meta.source_stream_generation:
+            return {
+                "fleet_id": meta.fleet_id,
+                "node_id": meta.node_id,
+                "source_stream_generation": meta.source_stream_generation,
+                "scope": scope,
+                "entity_id": entity_id,
+                "entity": None,
+                "reset_required": True,
+                "reset_reason": "source_stream_generation_changed",
+            }
+        entity = await self.query_plane.current_entity(
+            scope=scope,
+            entity_id=entity_id,
+            barrier=high_water,
+        )
+        return {
+            "fleet_id": meta.fleet_id,
+            "node_id": meta.node_id,
+            "source_stream_generation": meta.source_stream_generation,
+            "scope": scope,
+            "entity_id": entity_id,
+            "entity": entity,
+            "materialized_at_source_seq": high_water,
+            "generation_rotated": rotated,
+            "reset_required": False,
+        }
 
     async def query(self, resource: str, **kwargs) -> dict[str, Any]:
         return await self.query_plane.query(resource, **kwargs)

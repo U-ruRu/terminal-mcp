@@ -73,6 +73,7 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         snapshot_id: str | None = Query(default=None),
         cursor: str | None = Query(default=None),
         limit: int = Query(default=100, ge=1, le=100),
+        barrier_source_seq: int | None = Query(default=None, ge=0),
     ):
         authenticate(x_terminal_mcp_peer, authorization)
         try:
@@ -82,6 +83,28 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
                 snapshot_id=snapshot_id,
                 cursor=cursor,
                 limit=limit,
+                barrier_source_seq=barrier_source_seq,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get(
+        "/internal/fleet/v1/source/current/{scope}/entity",
+        include_in_schema=False,
+    )
+    async def current_entity(
+        scope: str,
+        entity_id: str = Query(min_length=1, max_length=260),
+        source_stream_generation: str | None = Query(default=None),
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await source.current_entity(
+                scope,
+                entity_id,
+                source_stream_generation=source_stream_generation,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -178,7 +201,7 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
     return router
 
 
-def build_fleet_v1_projection_router(projection, replication) -> APIRouter:
+def build_fleet_v1_projection_router(projection, replication, projection_service=None) -> APIRouter:
     router = APIRouter()
 
     def authenticate(peer_id: str, authorization: str):
@@ -193,7 +216,11 @@ def build_fleet_v1_projection_router(projection, replication) -> APIRouter:
         authorization: str = Header(default=""),
     ):
         authenticate(x_terminal_mcp_peer, authorization)
-        return await projection.meta()
+        result = await projection.meta()
+        result["capabilities"] = (
+            projection_service.capabilities if projection_service else []
+        )
+        return result
 
     @router.get("/internal/fleet/v1/projection/snapshot", include_in_schema=False)
     async def snapshot(

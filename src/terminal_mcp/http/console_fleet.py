@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
@@ -16,12 +16,32 @@ class FleetActivityRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
 
 
+class FleetQueryRequest(BaseModel):
+    source_node_ids: list[str] | None = None
+    cursor: str | None = None
+    limit: int = Field(default=100, ge=1, le=100)
+    q: str | None = Field(default=None, max_length=200)
+    filters: dict[str, str | int | bool] = Field(default_factory=dict)
+    as_of: str | None = None
+    through_seq: int | None = Field(default=None, ge=0)
+    include_count: bool = False
+    include_facets: bool = False
+
+
+class FleetNamespaceRequest(BaseModel):
+    source_node_ids: list[str] | None = None
+    cursor: str | None = None
+    limit: int = Field(default=100, ge=1, le=100)
+    q: str | None = Field(default=None, max_length=200)
+
+
 def build_console_fleet_router(
     settings,
     auth,
     pairing_store,
     projection,
     ticket_store,
+    projection_service=None,
 ) -> APIRouter:
     router = APIRouter()
     allowed_origins = frozenset(settings.browser_allowed_origins())
@@ -56,7 +76,11 @@ def build_console_fleet_router(
                 "projection_seq": meta["projection_seq"],
                 "role": meta["role"],
                 "owner_node_id": meta["owner_node_id"],
+                "capabilities": (
+                    projection_service.capabilities if projection_service else []
+                ),
                 "sources": snapshot["sources"],
+                "scope_statuses": snapshot.get("scope_statuses") or [],
             },
             headers={"Cache-Control": "no-store"},
         )
@@ -80,6 +104,98 @@ def build_console_fleet_router(
             await projection.events(since=body.since, limit=body.limit),
             headers={"Cache-Control": "no-store"},
         )
+
+    @router.post("/console/fleet/v1/query/{resource}", include_in_schema=False)
+    async def query_plane(request: Request, resource: str, body: FleetQueryRequest):
+        denied = await authorize(request)
+        if isinstance(denied, JSONResponse):
+            return denied
+        if projection_service is None:
+            return JSONResponse(
+                {"error": "query_v2_unavailable"},
+                status_code=404,
+                headers={"Cache-Control": "no-store"},
+            )
+        result = await projection_service.query(
+            resource,
+            source_node_ids=body.source_node_ids,
+            cursor=body.cursor,
+            limit=body.limit,
+            q=body.q,
+            filters=body.filters,
+            as_of=body.as_of,
+            through_seq=body.through_seq,
+            include_count=body.include_count,
+            include_facets=body.include_facets,
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @router.get("/console/fleet/v1/detail/{resource}", include_in_schema=False)
+    async def query_detail(
+        request: Request,
+        resource: str,
+        entity_id: str = Query(min_length=1, max_length=260),
+        source_node_id: str | None = Query(default=None, max_length=128),
+    ):
+        denied = await authorize(request)
+        if isinstance(denied, JSONResponse):
+            return denied
+        if projection_service is None:
+            return JSONResponse(
+                {"error": "query_v2_unavailable"},
+                status_code=404,
+                headers={"Cache-Control": "no-store"},
+            )
+        result = await projection_service.detail(
+            resource,
+            entity_id,
+            source_node_ids=[source_node_id] if source_node_id else None,
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @router.post("/console/fleet/v1/namespaces", include_in_schema=False)
+    async def query_namespaces(request: Request, body: FleetNamespaceRequest):
+        denied = await authorize(request)
+        if isinstance(denied, JSONResponse):
+            return denied
+        if projection_service is None:
+            return JSONResponse(
+                {"error": "query_v2_unavailable"},
+                status_code=404,
+                headers={"Cache-Control": "no-store"},
+            )
+        result = await projection_service.namespaces(
+            source_node_ids=body.source_node_ids,
+            cursor=body.cursor,
+            limit=body.limit,
+            q=body.q,
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @router.get("/console/fleet/v1/task-graph", include_in_schema=False)
+    async def query_task_graph(
+        request: Request,
+        namespace: str = Query(min_length=1, max_length=120),
+        task_id: str = Query(min_length=1, max_length=120),
+        depth: int = Query(default=2, ge=0, le=8),
+        source_node_id: str | None = Query(default=None, max_length=128),
+    ):
+        denied = await authorize(request)
+        if isinstance(denied, JSONResponse):
+            return denied
+        if projection_service is None:
+            return JSONResponse(
+                {"error": "query_v2_unavailable"},
+                status_code=404,
+                headers={"Cache-Control": "no-store"},
+            )
+        result = await projection_service.task_graph(
+            namespace=namespace,
+            task_id=task_id,
+            depth=depth,
+            source_node_ids=[source_node_id] if source_node_id else None,
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @router.post("/console/fleet/v1/ws-ticket", include_in_schema=False)
     async def issue_ticket(request: Request):
