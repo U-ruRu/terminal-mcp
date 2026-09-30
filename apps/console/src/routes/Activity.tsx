@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import type { ActivityFeedReadModel } from '../api/models'
@@ -63,6 +63,33 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const initialBefore = Math.max(1, realtimeHighWater + 1)
   const firstEventSeq = feed.events[0]?.seq
   const lastEventSeq = feed.events.at(-1)?.seq
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current
+    if (!node) return
+
+    const fitChatToViewport = () => {
+      if (window.innerWidth > 700) {
+        node.style.removeProperty('max-height')
+        return
+      }
+      const top = node.getBoundingClientRect().top
+      const bottomNavigation = document.querySelector<HTMLElement>('.mobile-bottom-navigation')
+      const navigationTop = bottomNavigation?.getBoundingClientRect().top ?? 0
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+      const visibleBottom = navigationTop > 0 ? Math.min(navigationTop, viewportHeight) : viewportHeight
+      const available = Math.max(260, Math.min(760, Math.floor(visibleBottom - top - 8)))
+      node.style.maxHeight = `${available}px`
+    }
+
+    fitChatToViewport()
+    window.addEventListener('resize', fitChatToViewport)
+    window.visualViewport?.addEventListener('resize', fitChatToViewport)
+    return () => {
+      window.removeEventListener('resize', fitChatToViewport)
+      window.visualViewport?.removeEventListener('resize', fitChatToViewport)
+    }
+  }, [selectedId])
 
   useEffect(() => {
     if (!selectedId || !loadActivity || feed.initialized) return

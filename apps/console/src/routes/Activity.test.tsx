@@ -105,3 +105,26 @@ test('filters duplicate public names by exact agent session identity', async () 
   expect(await screen.findByText(/first-session/)).toBeInTheDocument()
   expect(screen.getByText(/second-session/)).toBeInTheDocument()
 })
+
+test('mobile chat viewport ends above the fixed bottom navigation', async () => {
+  const width = window.innerWidth
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains('activity-chat')) return { top: 300, bottom: 700, left: 0, right: 390, width: 390, height: 400, x: 0, y: 300, toJSON: () => ({}) } as DOMRect
+    if (this.classList.contains('mobile-bottom-navigation')) return { top: 700, bottom: 760, left: 0, right: 390, width: 390, height: 60, x: 0, y: 700, toJSON: () => ({}) } as DOMRect
+    return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+  })
+  const load = activityLoader()
+
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
+      <nav className="mobile-bottom-navigation" />
+    </MemoryRouter></I18nProvider>,
+  )
+
+  await screen.findByText('Ship it')
+  expect(document.querySelector('.activity-chat')).toHaveStyle({ maxHeight: '392px' })
+  rect.mockRestore()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+})

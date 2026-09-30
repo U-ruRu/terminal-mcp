@@ -93,7 +93,12 @@ export function ServerTasks({
 
       <div className="task-list" aria-label={t('tasks.serverTasks')}>
         {tasks.map((task) => (
-          <article className="panel" key={task.key}>
+          <Link
+            className="panel task-card-link"
+            key={task.key}
+            to={taskRoute(instanceId, task.namespace, task.taskId)}
+            aria-label={`${task.taskId} · ${task.title}`}
+          >
             <div className="section-heading">
               <div>
                 <strong>{task.taskId} · {task.title}</strong>
@@ -102,8 +107,8 @@ export function ServerTasks({
               <span className="chip">{task.operationalStatus}</span>
             </div>
             <p>{task.nextAction || t('tasks.noNextAction')}</p>
-            <Link className="text-link" to={taskRoute(instanceId, task.namespace, task.taskId)}>{t('tasks.openDetail')}</Link>
-          </article>
+            <span className="text-link">{t('tasks.openDetail')}</span>
+          </Link>
         ))}
         {tasks.length === 0 && (
           <article className="panel"><p className="muted">{t('tasks.noTasks')}</p></article>
