@@ -303,6 +303,51 @@ class TaskCoordinator:
             result["agent_id"] = item["agent_id"]
         return result
 
+    def _decorate_prefetched(
+        self,
+        task,
+        claims,
+        dependencies,
+        sessions_by_agent,
+        *,
+        now=None,
+        reveal_agent_ids=False,
+    ):
+        result = self._external_task(task)
+        current = now or utc_now()
+        if self.agent_store is not None:
+            claims = [
+                claim
+                for claim in claims
+                if claim.get("owner_kind", "legacy_session") == "logical_agent"
+                or session_is_live(
+                    sessions_by_agent.get(claim.get("owner_id") or claim["agent_id"]),
+                    now=current,
+                    idle_ttl_seconds=self.session_ttl_seconds,
+                    max_session_seconds=self.max_session_seconds,
+                )
+            ]
+        views = [
+            self._claim_view(
+                item,
+                "owner" if index == 0 else "participant",
+                reveal_agent_id=reveal_agent_ids,
+            )
+            for index, item in enumerate(claims)
+        ]
+        blocking_dependencies = [dep for dep in dependencies if not dep["satisfied"]]
+        result["claims"] = views
+        result["owner"] = views[0] if views else None
+        result["participants"] = views[1:]
+        result["active"] = bool(claims)
+        result["blocking_dependencies"] = blocking_dependencies
+        result["operational_status"] = self._operational_status(
+            result, claims, blocking_dependencies
+        )
+        result.pop("description", None)
+        result.pop("resource_context", None)
+        return result
+
     async def _decorate(self, task, *, details=False, reveal_agent_ids=False):
         result = self._external_task(task)
         namespace, task_id = result["namespace"], result["task_id"]
@@ -478,16 +523,6 @@ class TaskCoordinator:
             }
 
         offset = max(0, int(cursor or 0))
-        all_rows = await self.store.list_tasks(
-            namespace=namespace,
-            lane=lane,
-            state=state,
-            tags=normalized_tags,
-            show_done=show_done,
-            show_archived=show_archived,
-            limit=None,
-            offset=0,
-        )
         vocabulary_rows = await self.store.list_tasks(
             namespace=namespace,
             lane=lane,
@@ -498,9 +533,29 @@ class TaskCoordinator:
             limit=None,
             offset=0,
         )
+        required_tags = set(normalized_tags or [])
+        all_rows = (
+            [item for item in vocabulary_rows if required_tags.issubset(set(item.get("tags", [])))]
+            if required_tags
+            else vocabulary_rows
+        )
         tag_counts = Counter(tag for item in vocabulary_rows for tag in item.get("tags", []))
+        runtime_state = await self.store.runtime_state_snapshot()
+        sessions_by_agent = {}
+        if self.agent_store is not None:
+            sessions_by_agent = {
+                session["agent_id"]: session for session in await self.agent_store.active_sessions()
+            }
+        now = utc_now()
         compact = [
-            await self._decorate(item, details=False, reveal_agent_ids=reveal_agent_ids)
+            self._decorate_prefetched(
+                item,
+                runtime_state["claims"].get((item["namespace"], item["task_id"]), []),
+                runtime_state["dependencies"].get((item["namespace"], item["task_id"]), []),
+                sessions_by_agent,
+                now=now,
+                reveal_agent_ids=reveal_agent_ids,
+            )
             for item in all_rows
         ]
         if operational_status is not None:
@@ -550,7 +605,7 @@ class TaskCoordinator:
                 0,
                 int((utc_now() - parse_utc(oldest_claimable_ready_since)).total_seconds()),
             )
-        page = compact[offset : offset + max(1, min(int(limit), 200))]
+        page = compact[offset : offset + max(1, min(int(limit), 1000))]
         if show_details:
             tasks = []
             for item in page:

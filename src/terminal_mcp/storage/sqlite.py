@@ -73,6 +73,7 @@ class SqliteRepository:
         command_hash=None,
         execution_outcome=None,
         durable_finalization_outcome=None,
+        ensure_wal=False,
     ):
         started = time.monotonic()
         async with observed_connection(
@@ -82,7 +83,7 @@ class SqliteRepository:
             diagnostics=self.sqlite_diagnostics,
             operation=operation,
             pragmas=(
-                "PRAGMA journal_mode=WAL",
+                *(("PRAGMA journal_mode=WAL",) if ensure_wal else ()),
                 "PRAGMA synchronous=NORMAL",
                 "PRAGMA busy_timeout=1000",
                 "PRAGMA foreign_keys=ON",
@@ -115,7 +116,7 @@ class SqliteRepository:
     async def initialize(self):
         secure_database_path(self.path)
         await self.output.initialize()
-        async with self._connect("initialize") as db:
+        async with self._connect("initialize", ensure_wal=True) as db:
             current_version = int((await (await db.execute("PRAGMA user_version")).fetchone())[0])
             if current_version > SCHEMA_VERSION:
                 raise RuntimeError(

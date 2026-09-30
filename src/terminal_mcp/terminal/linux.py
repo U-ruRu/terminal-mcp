@@ -139,9 +139,19 @@ class LinuxTerminalAdapter:
             return True
         return True
 
+    @staticmethod
+    def _storage_retry_delay(exc, attempt):
+        name = (getattr(exc, "sqlite_errorname", None) or "").upper()
+        if name.startswith("SQLITE_IOERR"):
+            return min(2.0, 0.25 * (2 ** (attempt - 1)))
+        if name.startswith("SQLITE_BUSY") or name.startswith("SQLITE_LOCKED"):
+            return min(1.0, 0.1 * (2 ** (attempt - 1)))
+        return 0.05 * (2 ** (attempt - 1))
+
     async def _finish_with_retry(self, command, status, exit_code=None, error=None, attempts=3):
         pending_before = command.cmd_hash in self.finalization_pending
         for attempt in range(1, attempts + 1):
+            retry_exc = None
             try:
                 changed = await self.repo.finish_running(
                     command.cmd_hash, status, exit_code, error
@@ -168,6 +178,7 @@ class LinuxTerminalAdapter:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                retry_exc = exc
                 already_pending = command.cmd_hash in self.finalization_pending
                 self.finalization_pending[command.cmd_hash] = {
                     "status": status,
@@ -189,7 +200,7 @@ class LinuxTerminalAdapter:
                         exception_class=type(exc).__name__,
                     )
             if attempt < attempts:
-                await asyncio.sleep(0.05 * (2 ** (attempt - 1)))
+                await asyncio.sleep(self._storage_retry_delay(retry_exc, attempt))
         return False
 
     async def finalize_running(self, command, status, exit_code=None, error=None):

@@ -3,6 +3,7 @@ import pytest
 from terminal_mcp.core.orchestration import public_agent_name
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.tasks import ClaimOwner
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
 
@@ -700,5 +701,89 @@ async def test_archive_hides_task_releases_claims_and_keeps_dependency_blocked(t
         assert "archived" not in stats["by_state"]
         assert stats["by_state"]["ready"] == 2
         assert stats["by_lane"].get("general") == 1
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_task_list_batches_runtime_state_reads(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent = (await register(service, "batched-list"))["self"]["agent_id"]
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="batch",
+            task_id="DEP",
+            title="Dependency",
+        )
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="batch",
+            task_id="CHILD",
+            title="Child",
+            dependencies=[{"namespace": "batch", "task_id": "DEP"}],
+        )
+
+        store = service.task_coordinator.store
+        original_connect = store._connect
+        connections = 0
+
+        def counted_connect():
+            nonlocal connections
+            connections += 1
+            return original_connect()
+
+        store._connect = counted_connect
+        listing = await service.tasks(
+            namespace="batch",
+            show_done=True,
+            show_archived=True,
+            limit=200,
+        )
+
+        assert listing["ok"] is True
+        assert connections == 2
+        cards = {item["task_id"]: item for item in listing["tasks"]}
+        assert cards["CHILD"]["operational_status"] == "blocked"
+        assert cards["CHILD"]["blocking_dependencies"] == [
+            {
+                "namespace": "batch",
+                "task_id": "DEP",
+                "created_at": cards["CHILD"]["blocking_dependencies"][0]["created_at"],
+                "state": "ready",
+                "archived": False,
+                "satisfied": False,
+            }
+        ]
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_batched_task_list_preserves_logical_agent_claim_liveness(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent = (await register(service, "persistent-claim-list"))["self"]["agent_id"]
+        await service.task(
+            agent,
+            action="create",
+            isolation_hint="none",
+            namespace="batch",
+            task_id="PERSISTENT",
+            title="Persistent owned task",
+        )
+        await service.task_coordinator.store.claim_owner(
+            "batch",
+            "PERSISTENT",
+            ClaimOwner.logical_agent("logical-test"),
+            claim_intent="persistent owner",
+        )
+        listing = await service.tasks(namespace="batch")
+        assert listing["tasks"][0]["operational_status"] == "in_progress"
+        assert listing["tasks"][0]["owner"]["agent_name"] == "logical-test"
     finally:
         await terminal.stop()

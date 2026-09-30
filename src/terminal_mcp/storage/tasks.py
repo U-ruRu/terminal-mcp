@@ -344,6 +344,53 @@ class TaskStore:
             return tasks[offset:]
         return tasks[offset : offset + max(1, min(int(limit), 1000))]
 
+    async def runtime_state_snapshot(self):
+        # Batch claims and dependency state for task list projection.
+        async with self._connect() as db:
+            claim_rows = await (
+                await db.execute(
+                    "SELECT id,namespace,task_id,agent_id,owner_kind,owner_id,claimed_at,claim_intent "
+                    "FROM work_claims WHERE released_at IS NULL ORDER BY claimed_at,id"
+                )
+            ).fetchall()
+            dependency_rows = await (
+                await db.execute(
+                    "SELECT d.namespace,d.task_id,d.dependency_namespace,d.dependency_task_id,"
+                    "d.created_at,w.state,w.archived_at "
+                    "FROM work_dependencies d "
+                    "LEFT JOIN work_items w ON w.namespace=d.dependency_namespace "
+                    "AND w.task_id=d.dependency_task_id "
+                    "ORDER BY d.namespace,d.task_id,d.dependency_namespace,d.dependency_task_id"
+                )
+            ).fetchall()
+
+        claims = {}
+        for row in claim_rows:
+            claims.setdefault((row[1], row[2]), []).append(
+                {
+                    "id": row[0],
+                    "agent_id": row[3],
+                    "owner_kind": row[4],
+                    "owner_id": row[5],
+                    "claimed_at": row[6],
+                    "claim_intent": row[7],
+                }
+            )
+        dependencies = {}
+        for row in dependency_rows:
+            state = row[5] if row[5] is not None else "missing"
+            dependencies.setdefault((row[0], row[1]), []).append(
+                {
+                    "namespace": row[2],
+                    "task_id": row[3],
+                    "created_at": row[4],
+                    "state": state,
+                    "archived": bool(row[6]) if row[5] is not None else False,
+                    "satisfied": state == "done",
+                }
+            )
+        return {"claims": claims, "dependencies": dependencies}
+
     async def update_task(
         self,
         namespace: str,

@@ -261,3 +261,16 @@ async def test_claim_commit_window_stays_truthful_until_local_ownership_is_known
 
     await wait_for(completed)
     await terminal.stop()
+
+
+def test_sqlite_finalization_retry_uses_slower_ioerr_backoff():
+    class IoErr(Exception):
+        sqlite_errorname = "SQLITE_IOERR_LOCK"
+
+    class Busy(Exception):
+        sqlite_errorname = "SQLITE_BUSY"
+
+    assert LinuxTerminalAdapter._storage_retry_delay(IoErr(), 1) == 0.25
+    assert LinuxTerminalAdapter._storage_retry_delay(IoErr(), 3) == 1.0
+    assert LinuxTerminalAdapter._storage_retry_delay(Busy(), 1) == 0.1
+    assert LinuxTerminalAdapter._storage_retry_delay(Exception(), 1) == 0.05

@@ -872,7 +872,7 @@ class TerminalService:
             show_done=True,
             show_archived=True,
             show_details=False,
-            limit=200,
+            limit=1000,
             cursor=0,
             reveal_agent_ids=True,
         )
@@ -883,7 +883,7 @@ class TerminalService:
                 show_done=True,
                 show_archived=True,
                 show_details=False,
-                limit=200,
+                limit=1000,
                 cursor=next_cursor,
                 reveal_agent_ids=True,
             )
