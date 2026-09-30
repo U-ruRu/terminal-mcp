@@ -139,7 +139,7 @@ async def test_v4_lines_migrate_and_duplicate_index_is_removed(tmp_path):
         assert "lines" not in tables
         assert "ix_lines_hash_seq" not in indexes
         assert "idx_lines_hash_seq" not in indexes
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
     with sqlite3.connect(output) as db:
         indexes = {
             row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
@@ -171,9 +171,7 @@ async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
             "work_scope": ["test"],
         }
         proposed = await service.agent_start(**plan)
-        started = await service.agent_start(
-            agent_id=proposed["proposed_agent_id"], **plan
-        )
+        started = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
         agent_id = started["self"]["agent_id"]
         aged_start = utc_now() - timedelta(seconds=61)
         with sqlite3.connect(repo.path) as db:
@@ -276,9 +274,7 @@ async def test_session_alert_can_be_disabled(tmp_path):
             "work_scope": ["test"],
         }
         proposed = await service.agent_start(**plan)
-        started = await service.agent_start(
-            agent_id=proposed["proposed_agent_id"], **plan
-        )
+        started = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
         agent_id = started["self"]["agent_id"]
         with sqlite3.connect(repo.path) as db:
             db.execute(

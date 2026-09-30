@@ -82,9 +82,13 @@ class Settings(BaseSettings):
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
     fleet_v1_source_enabled: bool = False
+    fleet_v1_authority_enabled: bool = False
     fleet_id: str = ""
     fleet_node_id: str = ""
     fleet_node_meta_path: Path | None = None
+    fleet_control_node_id: str = ""
+    fleet_control_path: Path | None = None
+    fleet_permit_ttl_ms: int = 10_000
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
     persistent_agents_enabled: bool = False
@@ -129,11 +133,28 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_fleet_v1_authority(self):
+        if not self.fleet_v1_authority_enabled:
+            return self
+        if not self.persistent_agents_enabled:
+            raise ValueError("fleet v1 authority requires persistent_agents_enabled")
+        if not self.fleet_v1_source_enabled:
+            raise ValueError("fleet v1 authority requires fleet_v1_source_enabled")
+        if not self.fleet_control_node_id.strip():
+            raise ValueError("fleet_control_node_id is required when fleet v1 authority is enabled")
+        if self.fleet_permit_ttl_ms <= 0 or self.fleet_permit_ttl_ms > 60_000:
+            raise ValueError("fleet_permit_ttl_ms must be between 1 and 60000")
+        return self
+
     def effective_fleet_node_id(self) -> str:
         return self.fleet_node_id.strip() or self.fleet_instance_id.strip()
 
     def effective_fleet_node_meta_path(self) -> Path:
         return self.fleet_node_meta_path or self.database_path.with_name("fleet-node-meta.sqlite3")
+
+    def effective_fleet_control_path(self) -> Path:
+        return self.fleet_control_path or self.database_path.with_name("fleet-control.sqlite3")
 
     def mode_for(self, interface: str) -> str:
         explicit = self.mcp_auth_mode if interface == "mcp" else self.actions_auth_mode

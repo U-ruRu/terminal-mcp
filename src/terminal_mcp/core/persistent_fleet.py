@@ -116,6 +116,284 @@ class PersistentFleetBridge:
             "X-Terminal-MCP-Peer": self.config.instance_id,
         }
 
+    async def route_info(self, logical_agent_id: str) -> dict | None:
+        if self.control_store is None:
+            return None
+        return await self.control_store.route(logical_agent_id)
+
+    async def publish_authority(
+        self,
+        logical_agent_id: str,
+        authority_node_id: str,
+        authority_epoch: int,
+    ) -> dict | None:
+        if self.control_store is None:
+            return None
+        return await self.control_store.publish_route(
+            logical_agent_id,
+            authority_node_id,
+            authority_epoch,
+        )
+
+    @staticmethod
+    def _wrong_authority_blocker(route: dict) -> dict:
+        return {
+            "authority_node_id": route["authority_node_id"],
+            "authority_epoch": int(route["authority_epoch"]),
+            "routing_revision": int(route.get("routing_revision") or 0),
+        }
+
+    async def _guard_local_authority(self, logical_agent_id: str) -> dict | None:
+        route = await self.route_info(logical_agent_id)
+        if route is None:
+            return None
+        if route["state"] == "recovery_required":
+            raise PersistentStoreError(
+                "recovery_required",
+                blockers=[self._wrong_authority_blocker(route)],
+            )
+        if route["authority_node_id"] != self.config.instance_id:
+            raise PersistentStoreError(
+                "wrong_authority",
+                blockers=[self._wrong_authority_blocker(route)],
+            )
+        return route
+
+    async def materialize_session(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        requesting_instance_id: str,
+    ) -> dict:
+        if requesting_instance_id not in self.config.peers_by_id:
+            raise PersistentStoreError("authority_unavailable")
+        await self._guard_local_authority(logical_agent_id)
+        session = await self.store.assert_session_authority(
+            logical_agent_id,
+            work_session_id,
+            session_epoch,
+        )
+        if session.authority_node_id != self.config.instance_id:
+            route = {
+                "authority_node_id": session.authority_node_id,
+                "authority_epoch": session.authority_epoch,
+                "routing_revision": 0,
+            }
+            raise PersistentStoreError(
+                "wrong_authority",
+                blockers=[self._wrong_authority_blocker(route)],
+            )
+        attachment = await self.store.record_node_attachment(
+            node_attachment_id="att_" + secrets.token_urlsafe(12),
+            logical_agent_id=logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+            node_instance_id=requesting_instance_id,
+            authority_epoch=session.authority_epoch,
+            hard_expires_at=session.hard_expires_at,
+        )
+        route = await self.publish_authority(
+            logical_agent_id,
+            session.authority_node_id,
+            session.authority_epoch,
+        )
+        return {
+            "attachment": attachment,
+            "route": route,
+            "obligations": await self.store.open_message_obligations(logical_agent_id),
+        }
+
+    async def detach_session(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        requesting_instance_id: str,
+    ) -> dict:
+        if requesting_instance_id not in self.config.peers_by_id:
+            raise PersistentStoreError("authority_unavailable")
+        await self._guard_local_authority(logical_agent_id)
+        attachments = await self.store.attachments_for_session(
+            logical_agent_id,
+            work_session_id,
+            session_epoch,
+            active_only=True,
+        )
+        detached = False
+        for attachment in attachments:
+            if attachment["node_instance_id"] != requesting_instance_id:
+                continue
+            detached = (
+                await self.store.revoke_node_attachment(attachment["node_attachment_id"])
+                or detached
+            )
+        return {
+            "logical_agent_id": logical_agent_id,
+            "work_session_id": work_session_id,
+            "session_epoch": int(session_epoch),
+            "node_instance_id": requesting_instance_id,
+            "detached": detached,
+        }
+
+    async def create_obligation(
+        self,
+        *,
+        logical_agent_id: str,
+        sender_agent_id: str,
+        text: str,
+        require_reply: bool = False,
+        alert: bool = False,
+        message_ref: str | None = None,
+    ) -> dict:
+        await self._guard_local_authority(logical_agent_id)
+        slot = await self.store.get_slot(logical_agent_id)
+        if slot is None:
+            raise PersistentStoreError("slot_not_found")
+        if slot.authority_node_id != self.config.instance_id:
+            route = await self.route_info(logical_agent_id) or {
+                "authority_node_id": slot.authority_node_id,
+                "authority_epoch": slot.authority_epoch,
+                "routing_revision": 0,
+            }
+            raise PersistentStoreError(
+                "wrong_authority",
+                blockers=[self._wrong_authority_blocker(route)],
+            )
+        message_ref = message_ref or (f"{self.config.instance_id}:msg:{secrets.token_urlsafe(12)}")
+        obligation = await self.store.create_message_obligation(
+            message_ref=message_ref,
+            logical_agent_id=logical_agent_id,
+            sender_agent_id=sender_agent_id,
+            text=text,
+            require_reply=require_reply,
+            alert=alert,
+        )
+        session = await self.store.active_session_for_slot(logical_agent_id)
+        attachments = []
+        if session is not None and session.state == "active":
+            attachments = await self.store.attachments_for_session(
+                logical_agent_id,
+                session.work_session_id,
+                session.session_epoch,
+                active_only=True,
+            )
+        payload = {
+            "home_node_id": self.config.instance_id,
+            "logical_agent_id": logical_agent_id,
+            "message_ref": message_ref,
+            "sender_agent_id": sender_agent_id,
+            "text": text,
+            "require_reply": bool(require_reply),
+            "alert": bool(alert),
+            "gate_revision": int(obligation["gate_revision"]),
+            "created_at": obligation["created_at"],
+            "work_session_id": session.work_session_id if session else None,
+            "session_epoch": session.session_epoch if session else None,
+        }
+        delivered_nodes: list[str] = []
+        if attachments:
+            async with self.client_factory() as client:
+                for attachment in attachments:
+                    peer = self.config.peers_by_id.get(attachment["node_instance_id"])
+                    if peer is None:
+                        continue
+                    try:
+                        response = await client.post(
+                            f"{peer.origin}/internal/fleet/persistent/obligation-delivery",
+                            headers=self._headers(peer),
+                            json=payload,
+                        )
+                        response.raise_for_status()
+                    except Exception:
+                        continue
+                    delivered_nodes.append(peer.instance_id)
+        return {
+            **obligation,
+            "delivered_nodes": delivered_nodes,
+        }
+
+    async def receive_obligation_delivery(
+        self,
+        payload: dict,
+        *,
+        authenticated_home_node_id: str,
+    ) -> dict:
+        if authenticated_home_node_id not in self.config.peers_by_id:
+            raise PersistentStoreError("authority_unavailable")
+        home_node_id = str(payload.get("home_node_id") or "")
+        if home_node_id != authenticated_home_node_id:
+            raise PersistentStoreError("wrong_authority")
+        message_ref = str(payload.get("message_ref") or "")
+        logical_agent_id = str(payload.get("logical_agent_id") or "")
+        if not message_ref or not logical_agent_id:
+            raise PersistentStoreError("invalid_message")
+        item = {
+            "home_node_id": home_node_id,
+            "logical_agent_id": logical_agent_id,
+            "message_ref": message_ref,
+            "sender_agent_id": str(payload.get("sender_agent_id") or ""),
+            "text": str(payload.get("text") or ""),
+            "require_reply": bool(payload.get("require_reply")),
+            "alert": bool(payload.get("alert")),
+            "gate_revision": int(payload.get("gate_revision") or 1),
+            "created_at": str(payload.get("created_at") or ""),
+            "work_session_id": payload.get("work_session_id"),
+            "session_epoch": payload.get("session_epoch"),
+        }
+        existing = self._remote_obligations.get(message_ref)
+        if existing is None or item["gate_revision"] >= int(existing["gate_revision"]):
+            self._remote_obligations[message_ref] = item
+        return self._remote_obligations[message_ref]
+
+    def cached_obligations(self, logical_agent_id: str) -> list[dict]:
+        return sorted(
+            [
+                dict(item)
+                for item in self._remote_obligations.values()
+                if item["logical_agent_id"] == logical_agent_id
+            ],
+            key=lambda item: (item["created_at"], item["message_ref"]),
+        )
+
+    async def receive_obligation_receipt(
+        self,
+        *,
+        message_ref: str,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        attachment_node_id: str,
+        seen_at: str | None = None,
+        read_at: str | None = None,
+        replied_at: str | None = None,
+        reply_message_ref: str | None = None,
+    ) -> dict:
+        await self._guard_local_authority(logical_agent_id)
+        attachments = await self.store.attachments_for_session(
+            logical_agent_id,
+            work_session_id,
+            session_epoch,
+            active_only=True,
+        )
+        if not any(item["node_instance_id"] == attachment_node_id for item in attachments):
+            raise PersistentStoreError("attachment_not_active")
+        receipt = await self.store.merge_message_receipt(
+            message_ref,
+            attachment_node_id,
+            seen_at=seen_at,
+            read_at=read_at,
+            replied_at=replied_at,
+            reply_message_ref=reply_message_ref,
+        )
+        return {
+            "receipt": receipt,
+            "gate": await self.store.fleet_gate(logical_agent_id),
+            "open_obligations": await self.store.open_message_obligations(logical_agent_id),
+        }
+
     async def start(self) -> None:
         if self._task is not None:
             return
@@ -157,6 +435,7 @@ class PersistentFleetBridge:
         if requesting_instance_id not in self.config.peers_by_id:
             raise PersistentStoreError("authority_unavailable")
         operation = str(operation or scope).strip() or scope
+        await self._guard_local_authority(logical_agent_id)
         session = await self.store.assert_session_authority(
             logical_agent_id, work_session_id, session_epoch
         )
@@ -172,6 +451,11 @@ class PersistentFleetBridge:
             )
         if session.auth_principal_id and session.auth_principal_id != principal_id:
             raise PersistentStoreError("persistent_auth_required")
+        await self.publish_authority(
+            logical_agent_id,
+            session.authority_node_id,
+            session.authority_epoch,
+        )
         slot = await self.store.get_slot(logical_agent_id)
         if (
             slot is None
@@ -282,8 +566,27 @@ class PersistentFleetBridge:
             "request_id": request_id,
             "principal_id": principal_id,
         }
+        peers_by_id = self.config.peers_by_id
+        route = await self.route_info(logical_agent_id)
+        candidates = list(self.config.peers)
+        if route is not None:
+            routed = peers_by_id.get(route["authority_node_id"])
+            if routed is not None:
+                candidates = [
+                    routed,
+                    *[p for p in candidates if p.instance_id != routed.instance_id],
+                ]
+
+        attempted: set[str] = set()
+        wrong_authority_retry = False
         async with self.client_factory() as client:
-            for peer in self.config.peers:
+            index = 0
+            while index < len(candidates):
+                peer = candidates[index]
+                index += 1
+                if peer.instance_id in attempted:
+                    continue
+                attempted.add(peer.instance_id)
                 try:
                     response = await client.post(
                         f"{peer.origin}/internal/fleet/persistent/permit",
@@ -292,6 +595,30 @@ class PersistentFleetBridge:
                     )
                     if response.status_code == 404:
                         continue
+                    if response.status_code == 409 and not wrong_authority_retry:
+                        body = response.json()
+                        detail = body.get("detail") if isinstance(body, dict) else None
+                        code = detail.get("code") if isinstance(detail, dict) else detail
+                        blockers = detail.get("blockers") or [] if isinstance(detail, dict) else []
+                        if code == "wrong_authority" and blockers:
+                            hint = blockers[0]
+                            hinted_id = str(hint.get("authority_node_id") or "")
+                            hinted_epoch = int(hint.get("authority_epoch") or 0)
+                            hinted_peer = peers_by_id.get(hinted_id)
+                            if hinted_peer is not None and hinted_epoch > 0:
+                                if self.control_store is not None:
+                                    try:
+                                        await self.control_store.publish_route(
+                                            logical_agent_id,
+                                            hinted_id,
+                                            hinted_epoch,
+                                        )
+                                    except Exception:
+                                        pass
+                                if hinted_peer.instance_id not in attempted:
+                                    candidates.insert(index, hinted_peer)
+                                wrong_authority_retry = True
+                                continue
                     response.raise_for_status()
                     permit = PersistentCommandPermit.from_dict(response.json()["permit"])
                     ttl_ms = int(permit.ttl_ms)

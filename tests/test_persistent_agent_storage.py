@@ -20,7 +20,7 @@ async def stores(tmp_path):
 async def test_v15_persistent_slot_schema_and_repository_round_trip(tmp_path):
     repo, persistent, _ = await stores(tmp_path)
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 16
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 17
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
         "logical_agents",
@@ -121,9 +121,9 @@ async def test_persistent_claim_owner_is_not_legacy_session_liveness(tmp_path):
     assert await tasks.release_claims(agent_id="logical-1") == 0
     claims = await tasks.active_claims("ns", "T-1")
     assert any(item["owner_kind"] == "logical_agent" for item in claims)
-    assert await tasks.release_owner_claim(
-        "ns", "T-1", ClaimOwner.logical_agent("logical-1")
-    ) is True
+    assert (
+        await tasks.release_owner_claim("ns", "T-1", ClaimOwner.logical_agent("logical-1")) is True
+    )
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_session_provenance_round_trips_without_changing_legacy_shapes(tmp
 async def test_schema_forward_guard_refuses_newer_database(tmp_path):
     database = tmp_path / "future.sqlite3"
     with sqlite3.connect(database) as db:
-        db.execute("PRAGMA user_version=17")
+        db.execute("PRAGMA user_version=18")
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     with pytest.raises(RuntimeError, match="newer than supported"):
         await repo.initialize()

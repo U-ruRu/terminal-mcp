@@ -23,6 +23,8 @@ from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.fleet.config import build_fleet_config
+from terminal_mcp.fleet.control_storage import FleetControlStore
+from terminal_mcp.fleet.protocol import AUTHORITY_CAPABILITIES, SOURCE_CAPABILITIES
 from terminal_mcp.fleet.replication import FleetReplicationService
 from terminal_mcp.fleet.source import FleetSourceService
 from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
@@ -149,11 +151,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             fleet_node_meta,
         )
 
+    fleet_control = None
+    if settings.fleet_v1_authority_enabled:
+        if fleet_config is None:
+            raise ValueError("fleet v1 authority requires configured fleet peer authentication")
+        fleet_control = FleetControlStore(
+            settings.effective_fleet_control_path(),
+            fleet_id=settings.fleet_id,
+            node_id=settings.effective_fleet_node_id(),
+            control_node_id=settings.fleet_control_node_id,
+        )
+        fleet_control.configure_observability(events, metrics)
+
     persistent_store = PersistentAgentStore(settings.database_path)
     persistent_store.configure_observability(events, metrics)
     persistent_local_fence = PersistentExecutionFence(repo, terminal, service.task_store)
     persistent_fleet = (
-        PersistentFleetBridge(fleet_config, persistent_store, repo, terminal, service.task_store)
+        PersistentFleetBridge(
+            fleet_config,
+            persistent_store,
+            repo,
+            terminal,
+            service.task_store,
+            permit_ttl_ms=settings.fleet_permit_ttl_ms,
+            control_store=fleet_control,
+            control_node_id=(
+                settings.fleet_control_node_id if settings.fleet_v1_authority_enabled else None
+            ),
+        )
         if fleet_config and settings.persistent_agents_enabled
         else None
     )
@@ -194,6 +219,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await repo.initialize()
         if fleet_node_meta:
             await fleet_node_meta.initialize()
+        if fleet_control:
+            await fleet_control.initialize()
+            local_capabilities = set(AUTHORITY_CAPABILITIES)
+            if fleet_source:
+                local_capabilities.update(SOURCE_CAPABILITIES)
+            await fleet_control.register_member(
+                fleet_config.instance_id,
+                local_capabilities,
+            )
+            for peer in fleet_config.peers:
+                await fleet_control.register_member(
+                    peer.instance_id,
+                    (),
+                )
         await service.reconcile_agent_sessions()
         await oauth_store.initialize()
         await auth_foundation.initialize()
@@ -234,6 +273,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.fleet_replication = fleet_replication
     app.state.fleet_node_meta = fleet_node_meta
     app.state.fleet_source = fleet_source
+    app.state.fleet_control = fleet_control
     app.state.persistent_backend = service.persistent
     app.state.persistent_lifecycle = persistent_lifecycle
     app.state.persistent_fleet = persistent_fleet

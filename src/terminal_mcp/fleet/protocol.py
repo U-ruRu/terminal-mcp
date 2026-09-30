@@ -16,6 +16,15 @@ SOURCE_CAPABILITIES = frozenset(
     }
 )
 
+AUTHORITY_CAPABILITIES = frozenset(
+    {
+        "fleet.authority.v1",
+        "fleet.authority.monotonic-permit.v1",
+        "fleet.authority.message-gate.v1",
+        "fleet.authority.transfer.v1",
+    }
+)
+
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 

@@ -1105,12 +1105,7 @@ class PersistentAgentStore:
                         (issuer_node_id, operation, request_id),
                     )
                 ).fetchone()
-            if (
-                row is None
-                or row[0] != fingerprint
-                or row[1] != "complete"
-                or row[2] is None
-            ):
+            if row is None or row[0] != fingerprint or row[1] != "complete" or row[2] is None:
                 raise PersistentStoreError("idempotency_conflict")
             return json.loads(row[2])
         return result
@@ -1195,8 +1190,7 @@ class PersistentAgentStore:
                     raise PersistentStoreError("slot_not_found")
                 row = await (
                     await db.execute(
-                        "SELECT gate_revision FROM persistent_fleet_gates "
-                        "WHERE logical_agent_id=?",
+                        "SELECT gate_revision FROM persistent_fleet_gates WHERE logical_agent_id=?",
                         (logical_agent_id,),
                     )
                 ).fetchone()
@@ -1270,8 +1264,7 @@ class PersistentAgentStore:
                     raise PersistentStoreError("slot_not_found")
                 gate = await (
                     await db.execute(
-                        "SELECT gate_revision FROM persistent_fleet_gates "
-                        "WHERE logical_agent_id=?",
+                        "SELECT gate_revision FROM persistent_fleet_gates WHERE logical_agent_id=?",
                         (logical_agent_id,),
                     )
                 ).fetchone()
@@ -1575,7 +1568,8 @@ class PersistentAgentStore:
                 "INSERT OR REPLACE INTO persistent_command_permits("
                 "command_hash,logical_agent_id,work_session_id,session_epoch,authority_node_id,"
                 "authority_epoch,node_attachment_id,node_instance_id,scope,hard_expires_at,permit_expires_at,"
-                "signature,created_at,revoked_at,gate_revision,operation,ttl_ms,slot_revision,principal_id) "
+                "signature,created_at,revoked_at,gate_revision,operation,ttl_ms,"
+                "slot_revision,principal_id) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)",
                 (
                     command_hash,
@@ -1594,7 +1588,9 @@ class PersistentAgentStore:
                     int(permit.get("gate_revision", 1)),
                     str(permit.get("operation") or permit["scope"]),
                     int(permit.get("ttl_ms", 10000)),
-                    int(permit["slot_revision"]) if permit.get("slot_revision") is not None else None,
+                    int(permit["slot_revision"])
+                    if permit.get("slot_revision") is not None
+                    else None,
                     permit.get("principal_id"),
                 ),
             )

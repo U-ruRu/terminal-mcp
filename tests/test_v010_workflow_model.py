@@ -1633,7 +1633,7 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {
             "archived_at",
@@ -1683,8 +1683,6 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
 
 
 @pytest.mark.asyncio
-
-
 @pytest.mark.asyncio
 async def test_dependency_blockers_project_operational_status_and_claimability(tmp_path):
     _, terminal, service = await runtime(tmp_path)

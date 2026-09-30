@@ -16,7 +16,7 @@ async def store(tmp_path):
 async def test_context_schema_and_crud_are_durable(tmp_path):
     repo, context = await store(tmp_path)
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
         columns = {row[1] for row in db.execute("PRAGMA table_info(instance_context)")}
     assert {"id", "summary", "content", "is_primary"} <= columns
 
@@ -88,5 +88,5 @@ async def test_existing_v10_database_migrates_to_context_schema(tmp_path):
     created = await context.create("Migrated", "Context survives v10 migration.", True)
     assert created["id"] == 1
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []

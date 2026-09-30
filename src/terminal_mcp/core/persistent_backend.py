@@ -272,6 +272,12 @@ class PersistentBackend:
                         work_session_id=result["work_session_id"],
                         session_epoch=result["session_epoch"],
                     )
+                    if self.fleet_bridge is not None:
+                        await self.fleet_bridge.publish_authority(
+                            logical_agent_id,
+                            result["work_session"]["authority_node_id"],
+                            result["work_session"]["authority_epoch"],
+                        )
                 return result
         except ValueError as exc:
             return {"ok": False, "code": "slot_not_found", "error": str(exc)}
@@ -346,8 +352,15 @@ class PersistentBackend:
                 session, permit = await self._execution_authority(
                     logical_agent_id, work_session_id, session_epoch, scope="run"
                 )
-                if permit is not None and task_scope != "none":
-                    raise PersistentLifecycleError("policy_incompatible")
+                if permit is not None:
+                    bridge = getattr(self, "fleet_bridge", None)
+                    if bridge is not None:
+                        try:
+                            bridge.ensure_permit_valid(permit)
+                        except PersistentStoreError as exc:
+                            raise PersistentLifecycleError(exc.code, blockers=exc.blockers) from exc
+                    if task_scope != "none":
+                        raise PersistentLifecycleError("policy_incompatible")
                 available = await self._task_refs(logical_agent_id)
                 selected, options = self._select_task_refs(available, task_scope)
                 if selected is None:
