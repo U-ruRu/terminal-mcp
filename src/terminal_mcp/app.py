@@ -182,6 +182,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             fleet_projection,
             local_source=fleet_source if projection_role == "owner" else None,
             owner_node_id=settings.fleet_projection_owner_node_id,
+            metrics=metrics,
+            events=events,
         )
 
     fleet_control = None
@@ -335,7 +337,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.include_router(build_fleet_v1_source_router(fleet_source, fleet_replication))
         if fleet_projection:
             app.include_router(
-                build_fleet_v1_projection_router(fleet_projection, fleet_replication)
+                build_fleet_v1_projection_router(
+                    fleet_projection, fleet_replication, fleet_projection_service
+                )
             )
         if persistent_fleet:
             app.include_router(build_persistent_fleet_router(fleet_replication, persistent_fleet))
@@ -358,6 +362,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pairing_store,
                 fleet_projection,
                 fleet_ws_ticket_store,
+                fleet_projection_service,
             )
         )
     app.include_router(build_oauth_router(settings, auth, oauth_store))

@@ -14,6 +14,7 @@ SOURCE_CAPABILITIES = frozenset(
         "fleet.source.snapshot-barrier.v1",
         "fleet.source.generation-reset.v1",
         "fleet.source.current-recovery.v2",
+        "fleet.source.current-entity.v2",
         "fleet.source.query.v2",
         "fleet.source.sampled-resources.v2",
     }

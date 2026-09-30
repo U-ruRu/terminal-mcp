@@ -129,6 +129,39 @@ class FleetProjectionStore:
                         freshness TEXT NOT NULL DEFAULT 'fresh'
                             CHECK(freshness IN ('fresh','stale','unavailable'))
                     );
+                    CREATE TABLE IF NOT EXISTS projection_recovery_scopes(
+                        source_node_id TEXT NOT NULL,
+                        recovery_id TEXT NOT NULL,
+                        scope TEXT NOT NULL,
+                        entity_type TEXT NOT NULL,
+                        source_stream_generation TEXT NOT NULL,
+                        snapshot_id TEXT NOT NULL,
+                        barrier_source_seq INTEGER NOT NULL CHECK(barrier_source_seq>=0),
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(source_node_id,scope)
+                    );
+                    CREATE TABLE IF NOT EXISTS projection_recovery_entities(
+                        source_node_id TEXT NOT NULL,
+                        recovery_id TEXT NOT NULL,
+                        scope TEXT NOT NULL,
+                        entity_type TEXT NOT NULL,
+                        entity_id TEXT NOT NULL,
+                        entity_revision INTEGER NOT NULL CHECK(entity_revision>0),
+                        payload_version INTEGER NOT NULL DEFAULT 1,
+                        payload_json TEXT NOT NULL,
+                        authority_node_id TEXT,
+                        authority_epoch INTEGER,
+                        PRIMARY KEY(source_node_id,recovery_id,scope,entity_type,entity_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS projection_scope_status(
+                        source_node_id TEXT NOT NULL,
+                        scope TEXT NOT NULL,
+                        status TEXT NOT NULL
+                            CHECK(status IN ('LIVE','CATCHING_UP','DEGRADED','OFFLINE_AUTH')),
+                        reason TEXT,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(source_node_id,scope)
+                    );
                     CREATE INDEX IF NOT EXISTS ix_projection_events_epoch_seq
                         ON projection_events(projection_epoch,projection_seq);
                     CREATE INDEX IF NOT EXISTS ix_projection_entities_type
@@ -210,6 +243,92 @@ class FleetProjectionStore:
             (seq, stamp),
         )
         return int(row[0]), seq
+
+    async def _apply_projection_mutation(
+        self,
+        db,
+        *,
+        event_id: str,
+        source_node_id: str,
+        generation: str,
+        source_seq: int,
+        event_type: str,
+        entity_type: str,
+        entity_id: str,
+        entity_revision: int,
+        payload_version: int,
+        payload: dict,
+        authority_node_id,
+        authority_epoch,
+        created_at: str,
+        stamp: str,
+    ) -> bool:
+        duplicate = await (
+            await db.execute("SELECT 1 FROM projection_events WHERE event_id=?", (event_id,))
+        ).fetchone()
+        if duplicate is not None:
+            return False
+        epoch, projection_seq = await self._next_seq(db, stamp)
+        journal_seq = max(1, int(source_seq))
+        await db.execute(
+            "INSERT INTO projection_events("
+            "projection_epoch,projection_seq,event_id,source_node_id,"
+            "source_stream_generation,source_seq,event_type,entity_type,entity_id,"
+            "entity_revision,payload_version,payload_json,created_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                epoch,
+                projection_seq,
+                event_id,
+                source_node_id,
+                generation,
+                journal_seq,
+                event_type,
+                entity_type,
+                entity_id,
+                max(1, int(entity_revision)),
+                max(1, int(payload_version)),
+                json.dumps(payload or {}, separators=(",", ":")),
+                created_at,
+            ),
+        )
+        if event_type == "projection.remove":
+            await db.execute(
+                "DELETE FROM projection_entities "
+                "WHERE source_node_id=? AND entity_type=? AND entity_id=?",
+                (source_node_id, entity_type, entity_id),
+            )
+            return True
+        await db.execute(
+            "INSERT INTO projection_entities("
+            "source_node_id,entity_type,entity_id,entity_revision,payload_version,"
+            "payload_json,authority_node_id,authority_epoch,"
+            "source_stream_generation,source_seq,projection_seq,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(source_node_id,entity_type,entity_id) DO UPDATE SET "
+            "entity_revision=excluded.entity_revision,"
+            "payload_version=excluded.payload_version,payload_json=excluded.payload_json,"
+            "authority_node_id=excluded.authority_node_id,"
+            "authority_epoch=excluded.authority_epoch,"
+            "source_stream_generation=excluded.source_stream_generation,"
+            "source_seq=excluded.source_seq,projection_seq=excluded.projection_seq,"
+            "updated_at=excluded.updated_at",
+            (
+                source_node_id,
+                entity_type,
+                entity_id,
+                max(1, int(entity_revision)),
+                max(1, int(payload_version)),
+                json.dumps(payload or {}, separators=(",", ":")),
+                authority_node_id,
+                authority_epoch,
+                generation,
+                int(source_seq),
+                projection_seq,
+                stamp,
+            ),
+        )
+        return True
 
     async def apply_snapshot(self, snapshot: dict) -> dict:
         if self.role != "owner":
@@ -405,6 +524,385 @@ class FleetProjectionStore:
                 raise
         return await self.meta()
 
+    async def begin_current_recovery(
+        self,
+        source_node_id: str,
+        generation: str,
+        recovery_id: str,
+        scopes: list[str],
+    ) -> None:
+        if self.role != "owner":
+            raise FleetProjectionError("follower cannot independently consume sources")
+        stamp = utc_text()
+        async with self._connect("fleet_projection_recovery_begin") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "DELETE FROM projection_recovery_entities WHERE source_node_id=?",
+                    (source_node_id,),
+                )
+                await db.execute(
+                    "DELETE FROM projection_recovery_scopes WHERE source_node_id=?",
+                    (source_node_id,),
+                )
+                await db.execute(
+                    "INSERT INTO projection_sources("
+                    "source_node_id,source_stream_generation,source_seq,freshness,updated_at"
+                    ") VALUES(?,?,0,'reset_required',?) "
+                    "ON CONFLICT(source_node_id) DO UPDATE SET "
+                    "source_stream_generation=excluded.source_stream_generation,"
+                    "source_seq=CASE WHEN projection_sources.source_stream_generation="
+                    "excluded.source_stream_generation THEN projection_sources.source_seq "
+                    "ELSE 0 END,"
+                    "freshness='reset_required',updated_at=excluded.updated_at",
+                    (source_node_id, generation, stamp),
+                )
+                for scope in scopes:
+                    await db.execute(
+                        "INSERT INTO projection_scope_status("
+                        "source_node_id,scope,status,reason,updated_at) "
+                        "VALUES(?,?,'CATCHING_UP',?,?) "
+                        "ON CONFLICT(source_node_id,scope) DO UPDATE SET "
+                        "status='CATCHING_UP',reason=excluded.reason,updated_at=excluded.updated_at",
+                        (source_node_id, scope, f"recovery:{recovery_id}", stamp),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def stage_current_recovery_page(
+        self,
+        source_node_id: str,
+        recovery_id: str,
+        page: dict,
+    ) -> dict:
+        if self.role != "owner":
+            raise FleetProjectionError("follower cannot independently consume sources")
+        if page.get("fleet_id") != self.fleet_id:
+            raise FleetProjectionError("recovery fleet_id mismatch")
+        if str(page.get("node_id") or "") != source_node_id:
+            raise FleetProjectionError("recovery source identity mismatch")
+        generation = validate_protocol_id(
+            page["source_stream_generation"], "source_stream_generation"
+        )
+        scope = str(page["scope"])
+        snapshot_id = str(page["snapshot_id"])
+        barrier = int(page["barrier_source_seq"])
+        entities = list(page.get("entities") or [])
+        entity_types = {str(item["entity_type"]) for item in entities}
+        if len(entity_types) > 1:
+            raise FleetProjectionError("recovery page mixes entity types")
+        entity_type = next(iter(entity_types), str(page.get("entity_type") or scope.rstrip("s")))
+        stamp = utc_text()
+        mutations = 0
+        async with self._connect("fleet_projection_recovery_page") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = await (
+                    await db.execute(
+                        "SELECT recovery_id,source_stream_generation,snapshot_id,"
+                        "barrier_source_seq,entity_type FROM projection_recovery_scopes "
+                        "WHERE source_node_id=? AND scope=?",
+                        (source_node_id, scope),
+                    )
+                ).fetchone()
+                if existing is None:
+                    await db.execute(
+                        "INSERT INTO projection_recovery_scopes("
+                        "source_node_id,recovery_id,scope,entity_type,source_stream_generation,"
+                        "snapshot_id,barrier_source_seq,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                        (
+                            source_node_id,
+                            recovery_id,
+                            scope,
+                            entity_type,
+                            generation,
+                            snapshot_id,
+                            barrier,
+                            stamp,
+                        ),
+                    )
+                elif tuple(existing[:4]) != (
+                    recovery_id,
+                    generation,
+                    snapshot_id,
+                    barrier,
+                ):
+                    raise FleetProjectionError("recovery page identity changed")
+                for item in entities:
+                    await db.execute(
+                        "INSERT INTO projection_recovery_entities("
+                        "source_node_id,recovery_id,scope,entity_type,entity_id,entity_revision,"
+                        "payload_version,payload_json,authority_node_id,authority_epoch"
+                        ") VALUES(?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(source_node_id,recovery_id,scope,entity_type,entity_id) "
+                        "DO UPDATE SET entity_revision=excluded.entity_revision,"
+                        "payload_version=excluded.payload_version,payload_json=excluded.payload_json,"
+                        "authority_node_id=excluded.authority_node_id,"
+                        "authority_epoch=excluded.authority_epoch",
+                        (
+                            source_node_id,
+                            recovery_id,
+                            scope,
+                            str(item["entity_type"]),
+                            str(item["entity_id"]),
+                            int(item["entity_revision"]),
+                            int(item.get("payload_version") or 1),
+                            json.dumps(item.get("payload") or {}, separators=(",", ":")),
+                            item.get("authority_node_id"),
+                            item.get("authority_epoch"),
+                        ),
+                    )
+                if page.get("page_complete"):
+                    upserts = await db.execute(
+                        "SELECT r.entity_type,r.entity_id,r.entity_revision,r.payload_version,"
+                        "r.payload_json,r.authority_node_id,r.authority_epoch "
+                        "FROM projection_recovery_entities r "
+                        "LEFT JOIN projection_entities e ON "
+                        "e.source_node_id=r.source_node_id AND e.entity_type=r.entity_type "
+                        "AND e.entity_id=r.entity_id "
+                        "WHERE r.source_node_id=? AND r.recovery_id=? AND r.scope=? AND "
+                        "(e.entity_id IS NULL OR e.entity_revision!=r.entity_revision OR "
+                        "e.payload_version!=r.payload_version OR e.payload_json!=r.payload_json OR "
+                        "COALESCE(e.authority_node_id,'')!=COALESCE(r.authority_node_id,'') OR "
+                        "COALESCE(e.authority_epoch,0)!=COALESCE(r.authority_epoch,0)) "
+                        "ORDER BY r.entity_id",
+                        (source_node_id, recovery_id, scope),
+                    )
+                    while True:
+                        rows = await upserts.fetchmany(250)
+                        if not rows:
+                            break
+                        for row in rows:
+                            event_id = (
+                                f"recovery:{recovery_id}:{scope}:upsert:{row[1]}"
+                            )
+                            changed = await self._apply_projection_mutation(
+                                db,
+                                event_id=event_id,
+                                source_node_id=source_node_id,
+                                generation=generation,
+                                source_seq=barrier,
+                                event_type="projection.upsert",
+                                entity_type=row[0],
+                                entity_id=row[1],
+                                entity_revision=int(row[2]),
+                                payload_version=int(row[3]),
+                                payload=json.loads(row[4]),
+                                authority_node_id=row[5],
+                                authority_epoch=row[6],
+                                created_at=stamp,
+                                stamp=stamp,
+                            )
+                            mutations += int(changed)
+                    removals = await db.execute(
+                        "SELECT e.entity_type,e.entity_id,e.entity_revision "
+                        "FROM projection_entities e "
+                        "LEFT JOIN projection_recovery_entities r ON "
+                        "r.source_node_id=e.source_node_id AND r.recovery_id=? AND "
+                        "r.scope=? AND r.entity_type=e.entity_type AND r.entity_id=e.entity_id "
+                        "WHERE e.source_node_id=? AND e.entity_type=? AND r.entity_id IS NULL "
+                        "ORDER BY e.entity_id",
+                        (recovery_id, scope, source_node_id, entity_type),
+                    )
+                    while True:
+                        rows = await removals.fetchmany(250)
+                        if not rows:
+                            break
+                        for row in rows:
+                            event_id = (
+                                f"recovery:{recovery_id}:{scope}:remove:{row[1]}"
+                            )
+                            changed = await self._apply_projection_mutation(
+                                db,
+                                event_id=event_id,
+                                source_node_id=source_node_id,
+                                generation=generation,
+                                source_seq=barrier,
+                                event_type="projection.remove",
+                                entity_type=row[0],
+                                entity_id=row[1],
+                                entity_revision=max(int(row[2]) + 1, barrier, 1),
+                                payload_version=2,
+                                payload={},
+                                authority_node_id=None,
+                                authority_epoch=None,
+                                created_at=stamp,
+                                stamp=stamp,
+                            )
+                            mutations += int(changed)
+                    await db.execute(
+                        "DELETE FROM projection_recovery_entities "
+                        "WHERE source_node_id=? AND recovery_id=? AND scope=?",
+                        (source_node_id, recovery_id, scope),
+                    )
+                    await db.execute(
+                        "DELETE FROM projection_recovery_scopes "
+                        "WHERE source_node_id=? AND scope=?",
+                        (source_node_id, scope),
+                    )
+                await self._prune_events(db)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return {"mutations": mutations, "scope": scope, "complete": bool(page.get("page_complete"))}
+
+    async def complete_current_recovery(
+        self,
+        source_node_id: str,
+        generation: str,
+        barrier_source_seq: int,
+    ) -> None:
+        stamp = utc_text()
+        async with self._connect("fleet_projection_recovery_complete") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "UPDATE projection_sources SET source_stream_generation=?,source_seq=?,"
+                    "freshness='stale',updated_at=? WHERE source_node_id=?",
+                    (generation, int(barrier_source_seq), stamp, source_node_id),
+                )
+                await db.execute(
+                    "DELETE FROM projection_recovery_entities WHERE source_node_id=?",
+                    (source_node_id,),
+                )
+                await db.execute(
+                    "DELETE FROM projection_recovery_scopes WHERE source_node_id=?",
+                    (source_node_id,),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def apply_materialized_source_page(
+        self,
+        page: dict,
+        mutations: list[dict],
+    ) -> dict:
+        if self.role != "owner":
+            raise FleetProjectionError("follower cannot independently consume sources")
+        if page.get("fleet_id") != self.fleet_id:
+            raise FleetProjectionError("source fleet_id mismatch")
+        source_node_id = validate_protocol_id(page["node_id"], "source node_id")
+        generation = validate_protocol_id(
+            page["source_stream_generation"], "source_stream_generation"
+        )
+        if page.get("reset_required"):
+            await self.mark_source(source_node_id, generation, "reset_required")
+            raise FleetProjectionError("source reset required")
+        stamp = utc_text()
+        async with self._connect("fleet_projection_apply_materialized_page") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await (
+                    await db.execute(
+                        "SELECT source_stream_generation,source_seq FROM projection_sources "
+                        "WHERE source_node_id=?",
+                        (source_node_id,),
+                    )
+                ).fetchone()
+                if cursor is None:
+                    raise FleetProjectionError(
+                        "source recovery required before delta materialization"
+                    )
+                if cursor[0] != generation:
+                    raise FleetProjectionError("source generation changed; recovery required")
+                for item in sorted(mutations, key=lambda value: int(value["source_seq"])):
+                    await self._apply_projection_mutation(
+                        db,
+                        event_id=str(item["event_id"]),
+                        source_node_id=source_node_id,
+                        generation=generation,
+                        source_seq=int(item["source_seq"]),
+                        event_type=str(item["event_type"]),
+                        entity_type=str(item["entity_type"]),
+                        entity_id=str(item["entity_id"]),
+                        entity_revision=int(item["entity_revision"]),
+                        payload_version=int(item.get("payload_version") or 2),
+                        payload=item.get("payload") or {},
+                        authority_node_id=item.get("authority_node_id"),
+                        authority_epoch=item.get("authority_epoch"),
+                        created_at=str(item.get("created_at") or stamp),
+                        stamp=stamp,
+                    )
+                page_cursor = int(page.get("next_cursor") or cursor[1])
+                await db.execute(
+                    "UPDATE projection_sources SET source_seq=MAX(source_seq,?),"
+                    "freshness='stale',updated_at=? WHERE source_node_id=?",
+                    (page_cursor, stamp, source_node_id),
+                )
+                await self._prune_events(db)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.meta()
+
+    async def mark_scope_status(
+        self,
+        source_node_id: str,
+        scopes: list[str],
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        if status not in {"LIVE", "CATCHING_UP", "DEGRADED", "OFFLINE_AUTH"}:
+            raise ValueError("invalid projection scope status")
+        stamp = utc_text()
+        async with self._connect("fleet_projection_scope_status") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                for scope in scopes:
+                    await db.execute(
+                        "INSERT INTO projection_scope_status("
+                        "source_node_id,scope,status,reason,updated_at) VALUES(?,?,?,?,?) "
+                        "ON CONFLICT(source_node_id,scope) DO UPDATE SET "
+                        "status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at",
+                        (source_node_id, scope, status, reason, stamp),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def mark_source_live(
+        self, source_node_id: str, generation: str, scopes: list[str]
+    ) -> None:
+        stamp = utc_text()
+        async with self._connect("fleet_projection_source_live") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "UPDATE projection_sources SET freshness='fresh',updated_at=? "
+                    "WHERE source_node_id=? AND source_stream_generation=?",
+                    (stamp, source_node_id, generation),
+                )
+                for scope in scopes:
+                    await db.execute(
+                        "INSERT INTO projection_scope_status("
+                        "source_node_id,scope,status,reason,updated_at) VALUES(?,?,'LIVE',NULL,?) "
+                        "ON CONFLICT(source_node_id,scope) DO UPDATE SET "
+                        "status='LIVE',reason=NULL,updated_at=excluded.updated_at",
+                        (source_node_id, scope, stamp),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def source_scopes(self, source_node_id: str) -> list[str]:
+        async with self._connect("fleet_projection_source_scopes") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT scope FROM projection_scope_status "
+                    "WHERE source_node_id=? ORDER BY scope",
+                    (source_node_id,),
+                )
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     async def source_state(self, source_node_id: str) -> dict | None:
         async with self._connect("fleet_projection_source_state") as db:
             row = await (
@@ -483,6 +981,12 @@ class FleetProjectionStore:
                     "FROM projection_runtime_overlay ORDER BY source_node_id"
                 )
             ).fetchall()
+            scope_statuses = await (
+                await db.execute(
+                    "SELECT source_node_id,scope,status,reason,updated_at "
+                    "FROM projection_scope_status ORDER BY source_node_id,scope"
+                )
+            ).fetchall()
         return {
             **meta,
             "sources": [
@@ -511,6 +1015,16 @@ class FleetProjectionStore:
                     "updated_at": row[11],
                 }
                 for row in entities
+            ],
+            "scope_statuses": [
+                {
+                    "source_node_id": row[0],
+                    "scope": row[1],
+                    "status": row[2],
+                    "reason": row[3],
+                    "updated_at": row[4],
+                }
+                for row in scope_statuses
             ],
             "runtime_overlays": [
                 {
@@ -640,6 +1154,7 @@ class FleetProjectionStore:
                 await db.execute("DELETE FROM projection_entities")
                 await db.execute("DELETE FROM projection_sources")
                 await db.execute("DELETE FROM projection_runtime_overlay")
+                await db.execute("DELETE FROM projection_scope_status")
                 for item in snapshot.get("sources") or []:
                     await db.execute(
                         "INSERT INTO projection_sources("
@@ -671,6 +1186,18 @@ class FleetProjectionStore:
                             item["source_stream_generation"],
                             int(item["source_seq"]),
                             int(item["projection_seq"]),
+                            item.get("updated_at") or stamp,
+                        ),
+                    )
+                for item in snapshot.get("scope_statuses") or []:
+                    await db.execute(
+                        "INSERT INTO projection_scope_status("
+                        "source_node_id,scope,status,reason,updated_at) VALUES(?,?,?,?,?)",
+                        (
+                            item["source_node_id"],
+                            item["scope"],
+                            item["status"],
+                            item.get("reason"),
                             item.get("updated_at") or stamp,
                         ),
                     )
@@ -765,7 +1292,17 @@ class FleetProjectionStore:
                             ),
                         )
                     ).fetchone()
-                    if current_entity is None or int(item["entity_revision"]) >= int(
+                    if item.get("event_type") == "projection.remove":
+                        await db.execute(
+                            "DELETE FROM projection_entities "
+                            "WHERE source_node_id=? AND entity_type=? AND entity_id=?",
+                            (
+                                item["source_node_id"],
+                                item["entity_type"],
+                                item["entity_id"],
+                            ),
+                        )
+                    elif current_entity is None or int(item["entity_revision"]) >= int(
                         current_entity[0]
                     ):
                         await db.execute(

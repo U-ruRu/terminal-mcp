@@ -436,6 +436,66 @@ class FleetSourceQueryPlane:
             "replay_after_source_seq": int(barrier),
         }
 
+    async def current_entity(self, *, scope, entity_id, barrier):
+        started = time.monotonic()
+        spec = CURRENT_SCOPES.get(scope)
+        if spec is None:
+            raise ValueError(f"unknown current recovery scope: {scope}")
+        if len(spec.keys) == 1:
+            values = (entity_id,)
+        elif scope == "tasks" and "/" in entity_id:
+            values = tuple(entity_id.split("/", 1))
+        else:
+            decoded = _dec(entity_id, len(spec.keys))
+            if decoded is None:
+                raise ValueError("current entity key is required")
+            values = decoded
+        if len(values) != len(spec.keys):
+            raise ValueError("current entity key shape changed")
+        marks = ",".join("?" for _ in spec.keys)
+        sql = (
+            f"SELECT * FROM ({spec.sql}) scoped "
+            f"WHERE ({','.join(spec.keys)})=({marks}) LIMIT 1"
+        )
+        try:
+            async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
+                db.row_factory = aiosqlite.Row
+                row = await (await db.execute(sql, list(values))).fetchone()
+                if row is None and scope == "commands":
+                    row = await (
+                        await db.execute(
+                            """
+                            SELECT c.hash AS k1,c.status,c.exit_code,c.queue_id,c.started_at,
+                                   c.finished_at,c.enqueued_at,c.claimed_at,c.error,
+                                   a.logical_agent_id,a.work_session_id,a.session_epoch,
+                                   s.truncated,s.pruned_at
+                            FROM commands c
+                            LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash
+                            LEFT JOIN command_output_state s ON s.command_hash=c.hash
+                            WHERE c.hash=?
+                            LIMIT 1
+                            """,
+                            [entity_id],
+                        )
+                    ).fetchone()
+        except aiosqlite.Error:
+            self._sqlite_error(f"current:{scope}")
+            raise
+        entity = self._current_entity(scope, spec, row, barrier) if row else None
+        size = (
+            len(json.dumps(entity, ensure_ascii=False, separators=(",", ":")).encode())
+            if entity
+            else 0
+        )
+        self._observe(
+            f"current:{scope}",
+            started,
+            rows=1 if entity else 0,
+            size=size,
+            reason="materialize",
+        )
+        return entity
+
     def _current_entity(self, scope, spec, row, barrier):
         data = dict(row)
         keys = tuple(data.pop(name) for name in spec.keys)
