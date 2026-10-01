@@ -126,3 +126,33 @@ test('fresh sampled resource overlay is normalized and ages out', () => {
   const stale = buildProjectedFleetInstances(fresh, [{ sourceNodeId: 'node-a', profile }], 'live', now + 11_000)
   expect(stale[0].runtime.realtime?.snapshot?.instance.resources.status).toBe('unavailable')
 })
+
+
+test('confirmed write overlay masks stale projected slot until projection catches up', () => {
+  const value = cache([entity('logical_agent', 'logical-1', {
+    logical_agent_id: 'logical-1', display_name: 'Oscar', state: 'suspended',
+    authority_node_id: 'node-a', authority_epoch: 2, slot_revision: 7,
+    selector_generation: 3, auth_generation: 4,
+    created_at: '2026-09-30T18:00:00Z', updated_at: '2026-09-30T19:00:00Z',
+  })])
+  value.confirmedWrites = [{
+    requestId: 'idem-play',
+    sourceNodeId: 'node-a',
+    entityType: 'logical_agent',
+    entityId: 'logical-1',
+    authorityEpoch: 2,
+    entityRevision: 8,
+    payloadPatch: { state: 'armed', slot_revision: 8 },
+    createdAt: 1,
+    state: 'confirmed_pending_projection',
+  }]
+  const instances = buildProjectedFleetInstances(
+    value,
+    [{ sourceNodeId: 'node-a', profile }],
+    'live',
+  )
+  expect(instances[0].runtime.realtime?.snapshot?.persistent?.slots[0]).toMatchObject({
+    state: 'armed',
+    slotRevision: 8,
+  })
+})

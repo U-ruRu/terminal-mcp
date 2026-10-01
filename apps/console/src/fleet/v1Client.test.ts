@@ -76,3 +76,52 @@ test('fleet v1 client never treats a selector or profile id as authorization', a
   const client = new FleetV1Client('https://ABCD.example', () => 'oauth-secret', fetcher)
   await client.probe()
 })
+
+test('fleet v1 query plane preserves source provenance and partial completeness', async () => {
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer token-a')
+    if (url.pathname.endsWith('/query/tasks')) {
+      expect(init?.method).toBe('POST')
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        source_node_ids: ['source-a'],
+        q: 'M45',
+        include_count: true,
+      })
+      return response({
+        operation: 'query',
+        resource: 'tasks',
+        sources: [
+          { source_node_id: 'source-a', ok: true, status: 'LIVE', data: { items: [{ task_id: 'T-1' }] } },
+          { source_node_id: 'source-b', ok: false, status: 'DEGRADED', error: 'TimeoutError' },
+        ],
+        partial: true,
+        complete: false,
+      })
+    }
+    if (url.pathname.endsWith('/detail/tasks')) {
+      expect(url.searchParams.get('entity_id')).toBe('terminal/T-1')
+      expect(url.searchParams.get('source_node_id')).toBe('source-a')
+      return response({
+        operation: 'detail',
+        resource: 'tasks',
+        sources: [{ source_node_id: 'source-a', ok: true, status: 'LIVE', data: { task_id: 'T-1' } }],
+        partial: false,
+        complete: true,
+      })
+    }
+    return response({ error: 'missing' }, 404)
+  })
+  const client = new FleetV1Client('https://node-a.example', () => 'token-a', fetcher)
+  const queried = await client.query<{ items: Array<{ task_id: string }> }>('tasks', {
+    sourceNodeIds: ['source-a'],
+    q: 'M45',
+    includeCount: true,
+  })
+  expect(queried.partial).toBe(true)
+  expect(queried.sources[0].sourceNodeId).toBe('source-a')
+  expect(queried.sources[1].status).toBe('DEGRADED')
+
+  const detail = await client.detail<{ task_id: string }>('tasks', 'terminal/T-1', 'source-a')
+  expect(detail.sources[0].data?.task_id).toBe('T-1')
+})

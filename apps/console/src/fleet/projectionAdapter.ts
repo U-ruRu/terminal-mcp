@@ -36,8 +36,38 @@ function state(value: unknown): TaskReadModel['state'] {
   return ['ready', 'blocked', 'deferred', 'done'].includes(item)
     ? item as TaskReadModel['state'] : 'ready'
 }
-const rows = (cache: FleetCacheView, source: string, type: string) =>
-  cache.entities.filter((item) => item.sourceNodeId === source && item.entityType === type)
+const rows = (cache: FleetCacheView, source: string, type: string) => {
+  const values = new Map(
+    cache.entities
+      .filter((item) => item.sourceNodeId === source && item.entityType === type)
+      .map((item) => [item.entityId, { ...item, payload: { ...item.payload } }]),
+  )
+  const writes = (cache.confirmedWrites ?? [])
+    .filter((item) => item.sourceNodeId === source && item.entityType === type)
+    .sort((a, b) => a.createdAt - b.createdAt || a.requestId.localeCompare(b.requestId))
+  for (const write of writes) {
+    if (write.remove) {
+      values.delete(write.entityId)
+      continue
+    }
+    const current = values.get(write.entityId)
+    values.set(write.entityId, {
+      sourceNodeId: source,
+      entityType: type,
+      entityId: write.entityId,
+      entityRevision: Math.max(current?.entityRevision ?? 0, write.entityRevision),
+      payloadVersion: current?.payloadVersion ?? 2,
+      payload: { ...(current?.payload ?? {}), ...write.payloadPatch },
+      authorityNodeId: current?.authorityNodeId,
+      authorityEpoch: write.authorityEpoch ?? current?.authorityEpoch,
+      sourceStreamGeneration: current?.sourceStreamGeneration ?? '',
+      sourceSeq: current?.sourceSeq ?? 0,
+      projectionSeq: current?.projectionSeq ?? cache.appliedProjectionSeq,
+      updatedAt: current?.updatedAt ?? new Date(write.createdAt).toISOString(),
+    })
+  }
+  return [...values.values()]
+}
 
 function latestSession(
   sessions: FleetProjectionEntity[],

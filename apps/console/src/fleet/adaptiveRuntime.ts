@@ -9,6 +9,8 @@ import type {
   FleetCacheView,
   FleetProjectionEventPage,
   FleetProjectionSnapshot,
+  FleetQueryRequest,
+  FleetRelayResult,
 } from './v1Types'
 
 export type FleetIngressEndpoint = {
@@ -16,6 +18,22 @@ export type FleetIngressEndpoint = {
   probe(): Promise<FleetIngressProbe>
   snapshot(): Promise<FleetProjectionSnapshot>
   events(since: number, limit?: number): Promise<FleetProjectionEventPage>
+  query?<T = Record<string, unknown>>(
+    resource: string,
+    input?: FleetQueryRequest,
+  ): Promise<FleetRelayResult<T>>
+  detail?<T = Record<string, unknown>>(
+    resource: string,
+    entityId: string,
+    sourceNodeId?: string,
+  ): Promise<FleetRelayResult<T>>
+  namespaces?(input?: Omit<FleetQueryRequest, 'filters'>): Promise<FleetRelayResult<Record<string, unknown>>>
+  taskGraph?(
+    namespace: string,
+    taskId: string,
+    depth?: number,
+    sourceNodeId?: string,
+  ): Promise<FleetRelayResult<Record<string, unknown>>>
 }
 
 export type FleetAdaptiveRuntimeState = {
@@ -39,6 +57,8 @@ export class FleetAdaptiveReadRuntime {
   private readonly endpoints = new Map<string, FleetIngressEndpoint>()
   private state!: FleetAdaptiveRuntimeState
   private active: FleetIngressEndpoint | null = null
+  private recovery: Promise<void> | null = null
+  private readonly queryFlights = new Map<string, Promise<unknown>>()
 
   constructor(
     private readonly cache: FleetProjectionCache,
@@ -107,22 +127,67 @@ export class FleetAdaptiveReadRuntime {
 
   async syncOnce(): Promise<void> {
     if (!this.active) return
-    const cached = await this.cache.restore()
     try {
-      const page = await this.active.events(cached.appliedProjectionSeq)
-      if (
-        page.resetRequired ||
-        page.projectionEpoch !== cached.projectionEpoch
-      ) {
-        await this.replaceFromSnapshot(this.active)
-      } else {
-        await this.cache.applyEvents(page)
-      }
+      await this.catchUp(this.active)
       this.setState(this.view('live', await this.cache.restore()))
     } catch (error) {
       this.selector.transientFailure(this.active.candidateId, this.now())
       this.setState(this.view('degraded', await this.cache.restore(), errorCode(error)))
     }
+  }
+
+  query<T = Record<string, unknown>>(
+    resource: string,
+    input: FleetQueryRequest = {},
+  ): Promise<FleetRelayResult<T>> {
+    return this.singleFlight(
+      'query:' + resource + ':' + stableKey(input),
+      (endpoint) => {
+        if (!endpoint.query) throw new Error('fleet_query_capability_unavailable')
+        return endpoint.query<T>(resource, input)
+      },
+    )
+  }
+
+  detail<T = Record<string, unknown>>(
+    resource: string,
+    entityId: string,
+    sourceNodeId?: string,
+  ): Promise<FleetRelayResult<T>> {
+    return this.singleFlight(
+      'detail:' + resource + ':' + entityId + ':' + (sourceNodeId ?? ''),
+      (endpoint) => {
+        if (!endpoint.detail) throw new Error('fleet_query_capability_unavailable')
+        return endpoint.detail<T>(resource, entityId, sourceNodeId)
+      },
+    )
+  }
+
+  namespaces(
+    input: Omit<FleetQueryRequest, 'filters'> = {},
+  ): Promise<FleetRelayResult<Record<string, unknown>>> {
+    return this.singleFlight(
+      'namespaces:' + stableKey(input),
+      (endpoint) => {
+        if (!endpoint.namespaces) throw new Error('fleet_query_capability_unavailable')
+        return endpoint.namespaces(input)
+      },
+    )
+  }
+
+  taskGraph(
+    namespace: string,
+    taskId: string,
+    depth = 2,
+    sourceNodeId?: string,
+  ): Promise<FleetRelayResult<Record<string, unknown>>> {
+    return this.singleFlight(
+      ['graph', namespace, taskId, depth, sourceNodeId ?? ''].join(':'),
+      (endpoint) => {
+        if (!endpoint.taskGraph) throw new Error('fleet_query_capability_unavailable')
+        return endpoint.taskGraph(namespace, taskId, depth, sourceNodeId)
+      },
+    )
   }
 
   async hardFailActive(): Promise<boolean> {
@@ -159,15 +224,9 @@ export class FleetAdaptiveReadRuntime {
     decision: FleetHandoverDecision,
   ): Promise<void> {
     if (decision.requiresSnapshot) {
-      await this.replaceFromSnapshot(endpoint)
+      await this.recover(endpoint)
     } else {
-      const cached = await this.cache.restore()
-      const page = await endpoint.events(cached.appliedProjectionSeq)
-      if (page.resetRequired || page.projectionEpoch !== cached.projectionEpoch) {
-        await this.replaceFromSnapshot(endpoint)
-      } else {
-        await this.cache.applyEvents(page)
-      }
+      await this.catchUp(endpoint)
     }
 
     const cached = await this.cache.restore()
@@ -182,6 +241,50 @@ export class FleetAdaptiveReadRuntime {
     this.setState(
       this.view('live', await this.cache.restore(), undefined, decision.reason),
     )
+  }
+
+  private async catchUp(endpoint: FleetIngressEndpoint): Promise<void> {
+    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      const cached = await this.cache.restore()
+      const before = cached.appliedProjectionSeq
+      const page = await endpoint.events(before)
+      if (page.resetRequired || page.projectionEpoch !== cached.projectionEpoch) {
+        await this.recover(endpoint)
+        return
+      }
+      if (page.events.length > 0) await this.cache.applyEvents(page)
+      const after = (await this.cache.restore()).appliedProjectionSeq
+      if (after >= page.projectionSeq) return
+      if (page.events.length === 0 || after <= before) {
+        throw new Error('fleet_projection_catchup_stalled')
+      }
+    }
+    throw new Error('fleet_projection_catchup_limit')
+  }
+
+  private recover(endpoint: FleetIngressEndpoint): Promise<void> {
+    if (this.recovery) return this.recovery
+    const recovery = this.replaceFromSnapshot(endpoint)
+      .finally(() => {
+        if (this.recovery === recovery) this.recovery = null
+      })
+    this.recovery = recovery
+    return recovery
+  }
+
+  private singleFlight<T>(
+    key: string,
+    operation: (endpoint: FleetIngressEndpoint) => Promise<T>,
+  ): Promise<T> {
+    const existing = this.queryFlights.get(key) as Promise<T> | undefined
+    if (existing) return existing
+    if (!this.active) return Promise.reject(new Error('fleet_query_unavailable_offline'))
+    const promise = operation(this.active)
+      .finally(() => {
+        if (this.queryFlights.get(key) === promise) this.queryFlights.delete(key)
+      })
+    this.queryFlights.set(key, promise)
+    return promise
   }
 
   private async replaceFromSnapshot(endpoint: FleetIngressEndpoint): Promise<void> {
@@ -223,4 +326,12 @@ export class FleetAdaptiveReadRuntime {
 function errorCode(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
   return 'fleet_runtime_error'
+}
+
+
+function stableKey(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map(stableKey).join(',') + ']'
+  const item = value as Record<string, unknown>
+  return '{' + Object.keys(item).sort().map((key) => JSON.stringify(key) + ':' + stableKey(item[key])).join(',') + '}'
 }

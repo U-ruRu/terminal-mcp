@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { FleetCacheError, MemoryFleetProjectionCache } from './cache'
-import type { FleetProjectionEventPage, FleetProjectionSnapshot } from './v1Types'
+import type { FleetConfirmedWrite, FleetProjectionEventPage, FleetProjectionSnapshot } from './v1Types'
 
 function snapshot(epoch = 4, seq = 10): FleetProjectionSnapshot {
   return {
@@ -150,4 +150,73 @@ test('materialized projection.remove deletes entity instead of caching empty pay
   const next = await cache.applyEvents(removed)
   expect(next.appliedProjectionSeq).toBe(11)
   expect(next.entities).toEqual([])
+})
+
+
+test('authority-confirmed write survives until equal-or-newer projection truth arrives', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  const base = snapshot()
+  base.entities = [{
+    ...base.entities[0],
+    entityType: 'logical_agent',
+    entityId: 'logical-1',
+    entityRevision: 7,
+    authorityEpoch: 3,
+    payload: { logical_agent_id: 'logical-1', state: 'suspended', slot_revision: 7, authority_epoch: 3 },
+  }]
+  await cache.applySnapshot(base)
+  const write: FleetConfirmedWrite = {
+    requestId: 'idem-1',
+    sourceNodeId: 'node-a',
+    entityType: 'logical_agent',
+    entityId: 'logical-1',
+    authorityEpoch: 3,
+    entityRevision: 8,
+    payloadPatch: { state: 'armed', slot_revision: 8, authority_epoch: 3 },
+    createdAt: 1,
+    state: 'confirmed_pending_projection',
+  }
+  expect((await cache.putConfirmedWrites([write])).confirmedWrites).toHaveLength(1)
+
+  const stale = page(11, 'ignored')
+  stale.events[0] = {
+    ...stale.events[0],
+    entityType: 'logical_agent',
+    entityId: 'logical-1',
+    entityRevision: 7,
+    authorityEpoch: 3,
+    payload: { state: 'suspended', slot_revision: 7, authority_epoch: 3 },
+  }
+  expect((await cache.applyEvents(stale)).confirmedWrites).toHaveLength(1)
+
+  const caughtUp = page(12, 'ignored')
+  caughtUp.events[0] = {
+    ...caughtUp.events[0],
+    entityType: 'logical_agent',
+    entityId: 'logical-1',
+    entityRevision: 8,
+    authorityEpoch: 3,
+    payload: { state: 'armed', slot_revision: 8, authority_epoch: 3 },
+  }
+  expect((await cache.applyEvents(caughtUp)).confirmedWrites).toEqual([])
+})
+
+test('new authority epoch supersedes a pending confirmed write', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  await cache.applySnapshot(snapshot())
+  await cache.putConfirmedWrites([{
+    requestId: 'idem-epoch',
+    sourceNodeId: 'node-a',
+    entityType: 'command',
+    entityId: 'cmd-1',
+    authorityEpoch: 2,
+    entityRevision: 99,
+    payloadPatch: { status: 'running' },
+    createdAt: 1,
+    state: 'confirmed_pending_projection',
+  }])
+  const newer = page(11, 'failed')
+  newer.events[0].authorityEpoch = 3
+  newer.events[0].entityRevision = 1
+  expect((await cache.applyEvents(newer)).confirmedWrites).toEqual([])
 })

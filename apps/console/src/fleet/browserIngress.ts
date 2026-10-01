@@ -2,6 +2,7 @@ import type { FetchLike } from '../api/client'
 import type { ConnectionProfile, ProfileRestoreResult } from '../connections/types'
 import type { FleetIngressEndpoint } from './adaptiveRuntime'
 import type { FleetIngressProbe } from './selector'
+import type { FleetQueryRequest } from './v1Types'
 import { FleetV1Client } from './v1Client'
 
 const FLEET_PROTOCOL_MAJOR = 1
@@ -80,6 +81,26 @@ export class BrowserFleetIngressEndpoint implements FleetIngressEndpoint {
   async events(since: number, limit?: number) {
     await this.ensureAccess()
     return this.client.events(since, limit)
+  }
+
+  async query<T = Record<string, unknown>>(resource: string, input: FleetQueryRequest = {}) {
+    await this.ensureAccess()
+    return this.client.query<T>(resource, input)
+  }
+
+  async detail<T = Record<string, unknown>>(resource: string, entityId: string, sourceNodeId?: string) {
+    await this.ensureAccess()
+    return this.client.detail<T>(resource, entityId, sourceNodeId)
+  }
+
+  async namespaces(input: Omit<FleetQueryRequest, 'filters'> = {}) {
+    await this.ensureAccess()
+    return this.client.namespaces(input)
+  }
+
+  async taskGraph(namespace: string, taskId: string, depth = 2, sourceNodeId?: string) {
+    await this.ensureAccess()
+    return this.client.taskGraph(namespace, taskId, depth, sourceNodeId)
   }
 
   private async ensureAccess(): Promise<void> {

@@ -28,6 +28,27 @@ export type FleetRuntimeOverlay = {
   freshness: 'fresh' | 'stale' | 'unavailable'
 }
 
+export type FleetScopeStatus = {
+  sourceNodeId: string
+  scope: string
+  status: 'LIVE' | 'CATCHING_UP' | 'DEGRADED' | 'OFFLINE_AUTH'
+  reason?: string
+  updatedAt: string
+}
+
+export type FleetConfirmedWrite = {
+  requestId: string
+  sourceNodeId: string
+  entityType: string
+  entityId: string
+  authorityEpoch?: number
+  entityRevision: number
+  payloadPatch: Record<string, unknown>
+  remove?: boolean
+  createdAt: number
+  state: 'confirmed_pending_projection'
+}
+
 export type FleetProjectionSnapshot = {
   fleetId: string
   nodeId: string
@@ -37,6 +58,7 @@ export type FleetProjectionSnapshot = {
   projectionSeq: number
   updatedAt: string
   sources: FleetProjectionSource[]
+  scopeStatuses?: FleetScopeStatus[]
   entities: FleetProjectionEntity[]
   runtimeOverlays: FleetRuntimeOverlay[]
 }
@@ -96,10 +118,40 @@ export type FleetDurableCacheState = {
   sources: FleetProjectionSource[]
   activity: FleetCachedActivity[]
   gatewayQuality: FleetGatewayQuality[]
+  scopeStatuses?: FleetScopeStatus[]
+  confirmedWrites?: FleetConfirmedWrite[]
   updatedAt: number
 }
 
 export type FleetCacheView = FleetDurableCacheState & { runtimeOverlays: FleetRuntimeOverlay[] }
+
+export type FleetQueryRequest = {
+  sourceNodeIds?: string[]
+  cursor?: string
+  limit?: number
+  q?: string
+  filters?: Record<string, string | number | boolean>
+  asOf?: string
+  throughSeq?: number
+  includeCount?: boolean
+  includeFacets?: boolean
+}
+
+export type FleetRelaySource<T = unknown> = {
+  sourceNodeId: string
+  ok: boolean
+  status: 'LIVE' | 'CATCHING_UP' | 'DEGRADED' | 'OFFLINE_AUTH'
+  data?: T
+  error?: string
+}
+
+export type FleetRelayResult<T = unknown> = {
+  operation: string
+  resource?: string
+  sources: FleetRelaySource<T>[]
+  partial: boolean
+  complete: boolean
+}
 
 export function entityCacheKey(
   item: Pick<FleetProjectionEntity, 'sourceNodeId' | 'entityType' | 'entityId'>,

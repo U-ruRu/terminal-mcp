@@ -2,6 +2,9 @@ import { ConsoleHttpError, type FetchLike } from '../api/client'
 import type {
   FleetProjectionEntity,
   FleetProjectionEvent,
+  FleetQueryRequest,
+  FleetRelayResult,
+  FleetScopeStatus,
   FleetProjectionEventPage,
   FleetProjectionSnapshot,
   FleetProjectionSource,
@@ -79,6 +82,60 @@ function overlay(value: unknown): FleetRuntimeOverlay {
     freshness: freshness as FleetRuntimeOverlay['freshness'],
   }
 }
+function scopeStatus(value: unknown): FleetScopeStatus {
+  const item = record(value, 'scope_status')
+  const status = stringValue(item.status, 'scope_status')
+  if (!['LIVE', 'CATCHING_UP', 'DEGRADED', 'OFFLINE_AUTH'].includes(status)) {
+    throw new Error('invalid_scope_status')
+  }
+  return {
+    sourceNodeId: stringValue(item.source_node_id, 'source_node_id'),
+    scope: stringValue(item.scope, 'scope'),
+    status: status as FleetScopeStatus['status'],
+    reason: optionalString(item.reason),
+    updatedAt: stringValue(item.updated_at, 'updated_at'),
+  }
+}
+
+function relay<T>(value: unknown): FleetRelayResult<T> {
+  const item = record(value, 'relay')
+  const sources = Array.isArray(item.sources) ? item.sources.map((raw) => {
+    const sourceItem = record(raw, 'relay_source')
+    const status = stringValue(sourceItem.status, 'relay_status')
+    if (!['LIVE', 'CATCHING_UP', 'DEGRADED', 'OFFLINE_AUTH'].includes(status)) {
+      throw new Error('invalid_relay_status')
+    }
+    return {
+      sourceNodeId: stringValue(sourceItem.source_node_id, 'source_node_id'),
+      ok: sourceItem.ok === true,
+      status: status as 'LIVE' | 'CATCHING_UP' | 'DEGRADED' | 'OFFLINE_AUTH',
+      data: sourceItem.data as T | undefined,
+      error: optionalString(sourceItem.error),
+    }
+  }) : []
+  return {
+    operation: stringValue(item.operation, 'operation'),
+    resource: optionalString(item.resource),
+    sources,
+    partial: item.partial === true,
+    complete: item.complete === true,
+  }
+}
+
+function queryBody(input: FleetQueryRequest = {}): Record<string, unknown> {
+  return {
+    source_node_ids: input.sourceNodeIds,
+    cursor: input.cursor,
+    limit: input.limit ?? 100,
+    q: input.q,
+    filters: input.filters ?? {},
+    as_of: input.asOf,
+    through_seq: input.throughSeq,
+    include_count: input.includeCount ?? false,
+    include_facets: input.includeFacets ?? false,
+  }
+}
+
 function event(value: unknown): FleetProjectionEvent {
   const item = record(value, 'event')
   return {
@@ -133,6 +190,7 @@ export function decodeFleetV1Snapshot(value: unknown): FleetProjectionSnapshot {
     projectionSeq: integer(item.projection_seq, 'projection_seq'),
     updatedAt: stringValue(item.updated_at, 'updated_at'),
     sources: Array.isArray(item.sources) ? item.sources.map(source) : [],
+    scopeStatuses: Array.isArray(item.scope_statuses) ? item.scope_statuses.map(scopeStatus) : [],
     entities: Array.isArray(item.entities) ? item.entities.map(entity) : [],
     runtimeOverlays: Array.isArray(item.runtime_overlays) ? item.runtime_overlays.map(overlay) : [],
   }
@@ -183,6 +241,56 @@ export class FleetV1Client {
       method: 'POST',
       body: JSON.stringify({ since, limit }),
     }).then(decodeFleetV1Events)
+  }
+
+  query<T = Record<string, unknown>>(
+    resource: string,
+    input: FleetQueryRequest = {},
+  ): Promise<FleetRelayResult<T>> {
+    return this.request('/console/fleet/v1/query/' + encodeURIComponent(resource), {
+      method: 'POST',
+      body: JSON.stringify(queryBody(input)),
+    }).then((value) => relay<T>(value))
+  }
+
+  detail<T = Record<string, unknown>>(
+    resource: string,
+    entityId: string,
+    sourceNodeId?: string,
+  ): Promise<FleetRelayResult<T>> {
+    const params = new URLSearchParams({ entity_id: entityId })
+    if (sourceNodeId) params.set('source_node_id', sourceNodeId)
+    return this.get(
+      '/console/fleet/v1/detail/' + encodeURIComponent(resource) + '?' + params.toString(),
+    ).then((value) => relay<T>(value))
+  }
+
+  namespaces(input: Omit<FleetQueryRequest, 'filters'> = {}): Promise<FleetRelayResult<Record<string, unknown>>> {
+    return this.request('/console/fleet/v1/namespaces', {
+      method: 'POST',
+      body: JSON.stringify({
+        source_node_ids: input.sourceNodeIds,
+        cursor: input.cursor,
+        limit: input.limit ?? 100,
+        q: input.q,
+      }),
+    }).then((value) => relay<Record<string, unknown>>(value))
+  }
+
+  taskGraph(
+    namespace: string,
+    taskId: string,
+    depth = 2,
+    sourceNodeId?: string,
+  ): Promise<FleetRelayResult<Record<string, unknown>>> {
+    const params = new URLSearchParams({
+      namespace,
+      task_id: taskId,
+      depth: String(depth),
+    })
+    if (sourceNodeId) params.set('source_node_id', sourceNodeId)
+    return this.get('/console/fleet/v1/task-graph?' + params.toString())
+      .then((value) => relay<Record<string, unknown>>(value))
   }
 
   private get(path: string): Promise<unknown> {

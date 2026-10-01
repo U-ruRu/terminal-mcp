@@ -150,3 +150,67 @@ test('runtime rejects a successful probe from another fleet before handover', as
   expect(await runtime.start([bad])).toBe(false)
   expect(bad.snapshot).not.toHaveBeenCalled()
 })
+
+test('steady catch-up drains multiple event pages without snapshot recovery', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  const runtime = new FleetAdaptiveReadRuntime(cache)
+  const a = endpoint('a', 3, 10)
+  await runtime.start([a])
+  a.snapshot = vi.fn(async () => snapshot('a', 3, 12))
+  a.events = vi.fn(async (since): Promise<FleetProjectionEventPage> => {
+    const seq = since + 1
+    return {
+      projectionEpoch: 3,
+      projectionSeq: 12,
+      resetRequired: false,
+      events: seq <= 12 ? [{
+        projectionEpoch: 3,
+        projectionSeq: seq,
+        eventId: 'event-' + seq,
+        sourceNodeId: 'home',
+        sourceStreamGeneration: 'g',
+        sourceSeq: seq,
+        eventType: 'command.changed',
+        entityType: 'command',
+        entityId: 'cmd-' + seq,
+        entityRevision: seq,
+        payloadVersion: 2,
+        payload: { status: 'running' },
+        createdAt: 'now',
+      }] : [],
+    }
+  })
+  await runtime.syncOnce()
+  expect(a.events).toHaveBeenCalledTimes(2)
+  expect(a.events).toHaveBeenNthCalledWith(1, 10)
+  expect(a.events).toHaveBeenNthCalledWith(2, 11)
+  expect(a.snapshot).not.toHaveBeenCalled()
+  expect(runtime.getState().projectionSeq).toBe(12)
+})
+
+test('query plane coalesces identical in-flight requests and fails closed offline', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  const runtime = new FleetAdaptiveReadRuntime(cache)
+  const a = endpoint('a')
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  a.query = vi.fn(async () => {
+    await gate
+    return {
+      operation: 'query',
+      resource: 'tasks',
+      sources: [{ sourceNodeId: 'home', ok: true, status: 'LIVE' as const, data: { items: [] } }],
+      partial: false,
+      complete: true,
+    }
+  }) as FleetIngressEndpoint['query']
+  await runtime.start([a])
+  const first = runtime.query('tasks', { q: 'needle' })
+  const second = runtime.query('tasks', { q: 'needle' })
+  expect(a.query).toHaveBeenCalledTimes(1)
+  release()
+  expect(await first).toEqual(await second)
+
+  const offline = new FleetAdaptiveReadRuntime(new MemoryFleetProjectionCache())
+  await expect(offline.query('tasks')).rejects.toThrow('fleet_query_unavailable_offline')
+})

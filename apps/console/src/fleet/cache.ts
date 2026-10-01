@@ -1,6 +1,7 @@
 import type {
   FleetCacheView,
   FleetCachedActivity,
+  FleetConfirmedWrite,
   FleetDurableCacheState,
   FleetGatewayQuality,
   FleetProjectionEntity,
@@ -11,8 +12,9 @@ import type {
 } from './v1Types'
 import { entityCacheKey } from './v1Types'
 
-const DB_VERSION = 1
+const DB_VERSION = 2
 const DEFAULT_ACTIVITY_LIMIT = 500
+const MAX_CONFIRMED_WRITES = 256
 
 type StateRecord = {
   key: 'state'
@@ -39,6 +41,7 @@ export interface FleetProjectionCache {
   replaceRuntimeOverlays(overlays: FleetRuntimeOverlay[]): Promise<FleetCacheView>
   setPreferredIngress(candidateId?: string): Promise<FleetCacheView>
   putGatewayQuality(quality: FleetGatewayQuality): Promise<FleetCacheView>
+  putConfirmedWrites(writes: FleetConfirmedWrite[]): Promise<FleetCacheView>
   clear(): Promise<void>
 }
 
@@ -51,6 +54,8 @@ function emptyState(now = Date.now()): FleetDurableCacheState {
     sources: [],
     activity: [],
     gatewayQuality: [],
+    scopeStatuses: [],
+    confirmedWrites: [],
     updatedAt: now,
   }
 }
@@ -86,6 +91,56 @@ function applyEntityEvent(
   })
 }
 
+function authorityEpoch(value: FleetProjectionEntity | FleetProjectionEvent): number | undefined {
+  if (value.authorityEpoch !== undefined) return value.authorityEpoch
+  const raw = value.payload.authority_epoch
+  return Number.isInteger(raw) ? Number(raw) : undefined
+}
+
+function writeCaughtUp(
+  write: FleetConfirmedWrite,
+  entity: FleetProjectionEntity | FleetProjectionEvent,
+): boolean {
+  if (
+    write.sourceNodeId !== entity.sourceNodeId ||
+    write.entityType !== entity.entityType ||
+    write.entityId !== entity.entityId
+  ) return false
+  const observedEpoch = authorityEpoch(entity)
+  if (write.authorityEpoch !== undefined && observedEpoch !== undefined) {
+    if (observedEpoch > write.authorityEpoch) return true
+    if (observedEpoch < write.authorityEpoch) return false
+  }
+  return entity.entityRevision >= write.entityRevision
+}
+
+function reconcileWrites(
+  writes: FleetConfirmedWrite[],
+  entities: FleetProjectionEntity[],
+): FleetConfirmedWrite[] {
+  return writes.filter((write) => {
+    const matching = entities.filter(
+      (entity) =>
+        entity.sourceNodeId === write.sourceNodeId &&
+        entity.entityType === write.entityType &&
+        entity.entityId === write.entityId,
+    )
+    if (write.remove && matching.length === 0) return false
+    return !matching.some((entity) => writeCaughtUp(write, entity))
+  })
+}
+
+function mergeConfirmedWrites(
+  current: FleetConfirmedWrite[],
+  incoming: FleetConfirmedWrite[],
+): FleetConfirmedWrite[] {
+  const values = new Map(current.map((item) => [item.requestId, structuredClone(item)]))
+  for (const item of incoming) values.set(item.requestId, structuredClone(item))
+  return [...values.values()]
+    .sort((a, b) => a.createdAt - b.createdAt || a.requestId.localeCompare(b.requestId))
+    .slice(-MAX_CONFIRMED_WRITES)
+}
+
 export function reduceSnapshot(
   prior: FleetDurableCacheState,
   snapshot: FleetProjectionSnapshot,
@@ -101,6 +156,8 @@ export function reduceSnapshot(
     sources: snapshot.sources.map((item) => ({ ...item })),
     activity: prior.projectionEpoch === snapshot.projectionEpoch ? [...prior.activity] : [],
     gatewayQuality: prior.gatewayQuality.map((item) => ({ ...item })),
+    scopeStatuses: (snapshot.scopeStatuses ?? []).map((item) => ({ ...item })),
+    confirmedWrites: reconcileWrites(prior.confirmedWrites ?? [], snapshot.entities),
     updatedAt: now,
   }
 }
@@ -145,6 +202,9 @@ export function reduceEvents(
       .sort((a, b) => a.projectionSeq - b.projectionSeq)
       .slice(-Math.max(1, activityLimit)),
     appliedProjectionSeq: cursor,
+    confirmedWrites: (prior.confirmedWrites ?? []).filter(
+      (write) => !page.events.some((event) => writeCaughtUp(write, event)),
+    ),
     updatedAt: now,
   }
 }
@@ -177,14 +237,21 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
   async restore(): Promise<FleetCacheView> {
     const db = await this.open()
     try {
-      const tx = db.transaction(['state', 'entities', 'sources', 'activity', 'gateway'], 'readonly')
+      const tx = db.transaction(
+        ['state', 'entities', 'sources', 'activity', 'gateway', 'scopeStatuses', 'pendingWrites'],
+        'readonly',
+      )
       const done = transactionDone(tx)
-      const [stateRecord, entityRows, sourceRows, activityRows, gatewayRows] = await Promise.all([
+      const [
+        stateRecord, entityRows, sourceRows, activityRows, gatewayRows, scopeRows, pendingRows,
+      ] = await Promise.all([
         request(tx.objectStore('state').get('state')) as Promise<StateRecord | undefined>,
         request(tx.objectStore('entities').getAll()) as Promise<EntityRecord[]>,
         request(tx.objectStore('sources').getAll()) as Promise<FleetDurableCacheState['sources']>,
         request(tx.objectStore('activity').getAll()) as Promise<FleetCachedActivity[]>,
         request(tx.objectStore('gateway').getAll()) as Promise<FleetGatewayQuality[]>,
+        request(tx.objectStore('scopeStatuses').getAll()) as Promise<FleetDurableCacheState['scopeStatuses']>,
+        request(tx.objectStore('pendingWrites').getAll()) as Promise<FleetConfirmedWrite[]>,
       ])
       await done
       const durable: FleetDurableCacheState = stateRecord
@@ -202,6 +269,10 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
             sources: sourceRows,
             activity: activityRows.sort((a, b) => a.projectionSeq - b.projectionSeq),
             gatewayQuality: gatewayRows,
+            scopeStatuses: scopeRows,
+            confirmedWrites: pendingRows.sort(
+              (a, b) => a.createdAt - b.createdAt || a.requestId.localeCompare(b.requestId),
+            ),
             updatedAt: stateRecord.updatedAt,
           }
         : emptyState(this.now())
@@ -216,15 +287,24 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
     const next = reduceSnapshot(prior, snapshot, this.now())
     const db = await this.open()
     try {
-      const tx = db.transaction(['state', 'entities', 'sources', 'activity'], 'readwrite')
+      const tx = db.transaction(
+        ['state', 'entities', 'sources', 'activity', 'scopeStatuses', 'pendingWrites'],
+        'readwrite',
+      )
       const done = transactionDone(tx)
       tx.objectStore('entities').clear()
       tx.objectStore('sources').clear()
+      tx.objectStore('scopeStatuses').clear()
+      tx.objectStore('pendingWrites').clear()
       if (prior.projectionEpoch !== snapshot.projectionEpoch) tx.objectStore('activity').clear()
       for (const item of next.entities) {
         tx.objectStore('entities').put({ ...item, key: entityCacheKey(item) } satisfies EntityRecord)
       }
       for (const item of next.sources) tx.objectStore('sources').put(item)
+      for (const item of next.scopeStatuses ?? []) {
+        tx.objectStore('scopeStatuses').put({ ...item, key: item.sourceNodeId + ' ' + item.scope })
+      }
+      for (const item of next.confirmedWrites ?? []) tx.objectStore('pendingWrites').put(item)
       tx.objectStore('state').put(this.stateRecord(next))
       await done
       this.runtimeOverlays = structuredClone(snapshot.runtimeOverlays)
@@ -239,14 +319,35 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
     const next = reduceEvents(prior, page, this.activityLimit, this.now())
     const db = await this.open()
     try {
-      const tx = db.transaction(['state', 'entities', 'activity'], 'readwrite')
+      const tx = db.transaction(['state', 'entities', 'activity', 'pendingWrites'], 'readwrite')
       const done = transactionDone(tx)
       const entities = tx.objectStore('entities')
-      entities.clear()
-      for (const item of next.entities) entities.put({ ...item, key: entityCacheKey(item) } satisfies EntityRecord)
+      const nextEntities = new Map(next.entities.map((item) => [entityCacheKey(item), item]))
+      const touched = new Set<string>()
+      for (const event of page.events) {
+        if (event.projectionSeq <= prior.appliedProjectionSeq) continue
+        const key = entityCacheKey(event)
+        if (touched.has(key)) continue
+        touched.add(key)
+        const item = nextEntities.get(key)
+        if (item) entities.put({ ...item, key } satisfies EntityRecord)
+        else entities.delete(key)
+      }
+
       const activity = tx.objectStore('activity')
-      activity.clear()
-      for (const item of next.activity) activity.put(item)
+      const keptActivity = new Set(next.activity.map((item) => item.projectionSeq))
+      for (const item of prior.activity) {
+        if (!keptActivity.has(item.projectionSeq)) activity.delete(item.projectionSeq)
+      }
+      for (const item of next.activity) {
+        if (!prior.activity.some((priorItem) => priorItem.projectionSeq === item.projectionSeq)) {
+          activity.put(item)
+        }
+      }
+
+      const pending = tx.objectStore('pendingWrites')
+      pending.clear()
+      for (const item of next.confirmedWrites ?? []) pending.put(item)
       tx.objectStore('state').put(this.stateRecord(next))
       await done
     } finally {
@@ -281,6 +382,25 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
       const tx = db.transaction('gateway', 'readwrite')
       const done = transactionDone(tx)
       tx.objectStore('gateway').put({ ...quality })
+      await done
+    } finally {
+      db.close()
+    }
+    return this.restore()
+  }
+
+  async putConfirmedWrites(writes: FleetConfirmedWrite[]): Promise<FleetCacheView> {
+    if (writes.length === 0) return this.restore()
+    const prior = await this.restore()
+    const confirmedWrites = mergeConfirmedWrites(prior.confirmedWrites ?? [], writes)
+    const db = await this.open()
+    try {
+      const tx = db.transaction(['state', 'pendingWrites'], 'readwrite')
+      const done = transactionDone(tx)
+      const pending = tx.objectStore('pendingWrites')
+      pending.clear()
+      for (const item of confirmedWrites) pending.put(item)
+      tx.objectStore('state').put(this.stateRecord({ ...prior, updatedAt: this.now() }))
       await done
     } finally {
       db.close()
@@ -324,6 +444,8 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
       if (!db.objectStoreNames.contains('sources')) db.createObjectStore('sources', { keyPath: 'sourceNodeId' })
       if (!db.objectStoreNames.contains('activity')) db.createObjectStore('activity', { keyPath: 'projectionSeq' })
       if (!db.objectStoreNames.contains('gateway')) db.createObjectStore('gateway', { keyPath: 'candidateId' })
+      if (!db.objectStoreNames.contains('scopeStatuses')) db.createObjectStore('scopeStatuses', { keyPath: 'key' })
+      if (!db.objectStoreNames.contains('pendingWrites')) db.createObjectStore('pendingWrites', { keyPath: 'requestId' })
     }
     return request(opening)
   }
@@ -361,6 +483,14 @@ export class MemoryFleetProjectionCache implements FleetProjectionCache {
     const byId = new Map(this.durable.gatewayQuality.map((item) => [item.candidateId, item]))
     byId.set(quality.candidateId, structuredClone(quality))
     this.durable = { ...this.durable, gatewayQuality: [...byId.values()], updatedAt: this.now() }
+    return this.restore()
+  }
+  async putConfirmedWrites(writes: FleetConfirmedWrite[]): Promise<FleetCacheView> {
+    this.durable = {
+      ...this.durable,
+      confirmedWrites: mergeConfirmedWrites(this.durable.confirmedWrites ?? [], writes),
+      updatedAt: this.now(),
+    }
     return this.restore()
   }
   async clear(): Promise<void> {

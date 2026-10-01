@@ -13,6 +13,7 @@ import { browserFleetActorFactory } from './actor'
 import { browserFleetIngressEndpoints, type BrowserFleetIngressEndpoint } from './browserIngress'
 import { BrowserFleetProjectionCache } from './cache'
 import { BrowserDirectAuthorityClient } from './directAuthority'
+import { confirmedWritesFromPersistentMutation } from './confirmedWrites'
 import { fleetV1ClientEnabled } from './flags'
 import { FleetConnectionManager } from './manager'
 import { defaultFleetVisibilitySource } from './nativeVisibility'
@@ -298,7 +299,22 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
         }}
         mutatePersistent={async (instanceId, path, body) => {
           const result = await directAuthority.persistentMutation(instanceId, path, body)
-          if (result.ok && fleetRuntimeRef.current) void fleetRuntimeRef.current.syncOnce()
+          if (result.ok && fleetRuntimeRef.current && cache) {
+            const sourceNodeId = sourceForProfile.get(instanceId)
+            if (sourceNodeId) {
+              const writes = confirmedWritesFromPersistentMutation(
+                sourceNodeId,
+                path,
+                body,
+                result,
+              )
+              if (writes.length > 0) {
+                const next = await cache.putConfirmedWrites(writes)
+                setAdaptiveState((current) => current ? { ...current, cache: next } : current)
+              }
+            }
+            void fleetRuntimeRef.current.syncOnce()
+          }
           return result
         }}
       />
