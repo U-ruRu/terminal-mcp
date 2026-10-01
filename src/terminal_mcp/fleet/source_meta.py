@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ class FleetNodeMetaStore:
         self.fleet_id = validate_protocol_id(fleet_id, "fleet_id")
         self.node_id = validate_protocol_id(node_id, "node_id")
         self.sqlite_diagnostics = SqliteDiagnostics("fleet_node_meta")
+        self._observe_lock = asyncio.Lock()
 
     def configure_observability(self, events, metrics) -> None:
         self.sqlite_diagnostics.configure(events, metrics)
@@ -121,31 +123,45 @@ class FleetNodeMetaStore:
         high_water = int(high_water)
         if high_water < 0:
             raise ValueError("high_water must be non-negative")
-        stamp = utc_text()
-        rotated = False
-        async with self._connect("fleet_node_meta_observe") as db:
-            await db.execute("BEGIN IMMEDIATE")
-            row = await (
+        async with self._observe_lock:
+            async with self._connect("fleet_node_meta_observe") as db:
+                row = await (
+                    await db.execute(
+                        "SELECT fleet_id,node_id,source_stream_generation,"
+                        "served_high_water,updated_at "
+                        "FROM source_meta WHERE singleton=1"
+                    )
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("fleet_node_meta is not initialized")
+                current = SourceMeta(row[0], row[1], str(row[2]), int(row[3]), row[4])
+                if high_water == current.served_high_water:
+                    return current, False
+
+                await db.execute("BEGIN IMMEDIATE")
+                row = await (
+                    await db.execute(
+                        "SELECT source_stream_generation,served_high_water "
+                        "FROM source_meta WHERE singleton=1"
+                    )
+                ).fetchone()
+                if row is None:
+                    await db.rollback()
+                    raise RuntimeError("fleet_node_meta is not initialized")
+                generation, served = str(row[0]), int(row[1])
+                rotated = False
+                if high_water < served:
+                    generation = self._new_generation()
+                    served = high_water
+                    rotated = True
+                else:
+                    served = max(served, high_water)
+                stamp = utc_text()
                 await db.execute(
-                    "SELECT source_stream_generation,served_high_water "
-                    "FROM source_meta WHERE singleton=1"
+                    "UPDATE source_meta SET source_stream_generation=?,served_high_water=?,"
+                    "updated_at=? "
+                    "WHERE singleton=1",
+                    (generation, served, stamp),
                 )
-            ).fetchone()
-            if row is None:
-                await db.rollback()
-                raise RuntimeError("fleet_node_meta is not initialized")
-            generation, served = str(row[0]), int(row[1])
-            if high_water < served:
-                generation = self._new_generation()
-                served = high_water
-                rotated = True
-            else:
-                served = max(served, high_water)
-            await db.execute(
-                "UPDATE source_meta SET source_stream_generation=?,served_high_water=?,"
-                "updated_at=? "
-                "WHERE singleton=1",
-                (generation, served, stamp),
-            )
-            await db.commit()
-        return await self.get(), rotated
+                await db.commit()
+                return SourceMeta(self.fleet_id, self.node_id, generation, served, stamp), rotated

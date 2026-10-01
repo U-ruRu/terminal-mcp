@@ -61,6 +61,26 @@ async def test_node_meta_persists_and_rotates_generation_on_runtime_regression(t
 
 
 @pytest.mark.asyncio
+async def test_node_meta_concurrent_stable_observations_do_not_contend(tmp_path):
+    import asyncio
+
+    path = tmp_path / "fleet-node-meta.sqlite3"
+    store = FleetNodeMetaStore(path, fleet_id="fleet-a", node_id="node-a")
+    await store.initialize()
+    advanced, rotated = await store.observe_journal(23)
+    assert rotated is False
+
+    results = await asyncio.gather(*(store.observe_journal(23) for _ in range(100)))
+
+    assert all(not item[1] for item in results)
+    assert all(item[0].served_high_water == 23 for item in results)
+    assert all(
+        item[0].source_stream_generation == advanced.source_stream_generation
+        for item in results
+    )
+
+
+@pytest.mark.asyncio
 async def test_source_wraps_persistent_events_and_complete_snapshot(tmp_path):
     runtime_path = tmp_path / "terminal.sqlite3"
     repo = SqliteRepository(runtime_path, tmp_path / "output.sqlite3")
