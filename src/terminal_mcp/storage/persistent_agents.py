@@ -351,6 +351,7 @@ class PersistentAgentStore:
         *,
         expected_revision: int,
         now: str | None = None,
+        cancel_pending_rearm: bool = True,
     ) -> tuple[PersistentSlot, ArmGeneration]:
         if duration_seconds < 1:
             raise ValueError("duration_seconds must be positive")
@@ -373,6 +374,12 @@ class PersistentAgentStore:
                 if row[0] in {"active", "stopping", "deleting"}:
                     raise PersistentStoreError(
                         "session_already_active" if row[0] == "active" else "session_stopping"
+                    )
+                if cancel_pending_rearm:
+                    await db.execute(
+                        "UPDATE logical_agent_rearms SET cancelled_at=COALESCE(cancelled_at,?) "
+                        "WHERE logical_agent_id=? AND cancelled_at IS NULL AND rearmed_at IS NULL",
+                        (stamp, logical_agent_id),
                     )
                 generation_row = await (
                     await db.execute(
@@ -664,6 +671,7 @@ class PersistentAgentStore:
         *,
         reason: str,
         terminal_state: str = "ended",
+        rearm_delay_seconds: int | None = None,
         now: str | None = None,
     ) -> tuple[PersistentSlot, WorkSessionRecord]:
         if terminal_state not in {"ended", "expired", "suspended", "failed"}:
@@ -706,6 +714,29 @@ class PersistentAgentStore:
                     "AND state IN ('active','stopping','armed')",
                     (stamp, logical_agent_id),
                 )
+                if rearm_delay_seconds is not None:
+                    if rearm_delay_seconds < 1:
+                        raise ValueError("rearm_delay_seconds must be positive")
+                    ended = await (
+                        await db.execute(
+                            "SELECT ended_at FROM logical_agent_work_sessions "
+                            "WHERE work_session_id=?",
+                            (work_session_id,),
+                        )
+                    ).fetchone()
+                    ended_at = ended[0] if ended and ended[0] else stamp
+                    rearm_at = utc_text(
+                        parse_utc(ended_at) + timedelta(seconds=int(rearm_delay_seconds))
+                    )
+                    await db.execute(
+                        "INSERT INTO logical_agent_rearms("
+                        "logical_agent_id,work_session_id,rearm_at,created_at,cancelled_at,rearmed_at"
+                        ") VALUES(?,?,?,?,NULL,NULL) "
+                        "ON CONFLICT(logical_agent_id) DO UPDATE SET "
+                        "work_session_id=excluded.work_session_id,rearm_at=excluded.rearm_at,"
+                        "created_at=excluded.created_at,cancelled_at=NULL,rearmed_at=NULL",
+                        (logical_agent_id, work_session_id, rearm_at, stamp),
+                    )
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -740,6 +771,11 @@ class PersistentAgentStore:
                 await db.execute(
                     "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
                     "WHERE logical_agent_id=? AND consumed_at IS NULL AND revoked_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                await db.execute(
+                    "UPDATE logical_agent_rearms SET cancelled_at=COALESCE(cancelled_at,?) "
+                    "WHERE logical_agent_id=? AND cancelled_at IS NULL AND rearmed_at IS NULL",
                     (stamp, logical_agent_id),
                 )
                 if row[0] != "suspended":
@@ -833,6 +869,70 @@ class PersistentAgentStore:
                 await db.rollback()
                 raise
 
+    async def due_rearms(self, *, now: str | None = None) -> list[dict]:
+        stamp = now or utc_text()
+        async with self._connect("persistent_rearm_due") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT logical_agent_id,work_session_id,rearm_at,created_at "
+                    "FROM logical_agent_rearms WHERE cancelled_at IS NULL AND rearmed_at IS NULL "
+                    "AND rearm_at<=? ORDER BY rearm_at,logical_agent_id",
+                    (stamp,),
+                )
+            ).fetchall()
+        return [
+            {
+                "logical_agent_id": row[0],
+                "work_session_id": row[1],
+                "rearm_at": row[2],
+                "created_at": row[3],
+            }
+            for row in rows
+        ]
+
+    async def pending_rearm(self, logical_agent_id: str) -> dict | None:
+        async with self._connect("persistent_rearm_get") as db:
+            row = await (
+                await db.execute(
+                    "SELECT logical_agent_id,work_session_id,rearm_at,created_at "
+                    "FROM logical_agent_rearms WHERE logical_agent_id=? "
+                    "AND cancelled_at IS NULL AND rearmed_at IS NULL",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "logical_agent_id": row[0],
+            "work_session_id": row[1],
+            "rearm_at": row[2],
+            "created_at": row[3],
+        }
+
+    async def complete_rearm(
+        self, logical_agent_id: str, work_session_id: str, *, now: str | None = None
+    ) -> bool:
+        stamp = now or utc_text()
+        async with self._connect("persistent_rearm_complete") as db:
+            cur = await db.execute(
+                "UPDATE logical_agent_rearms SET rearmed_at=? WHERE logical_agent_id=? "
+                "AND work_session_id=? AND cancelled_at IS NULL AND rearmed_at IS NULL",
+                (stamp, logical_agent_id, work_session_id),
+            )
+            await db.commit()
+        return cur.rowcount == 1
+
+    async def cancel_rearm(self, logical_agent_id: str, *, now: str | None = None) -> bool:
+        stamp = now or utc_text()
+        async with self._connect("persistent_rearm_cancel") as db:
+            cur = await db.execute(
+                "UPDATE logical_agent_rearms SET cancelled_at=COALESCE(cancelled_at,?) "
+                "WHERE logical_agent_id=? AND cancelled_at IS NULL AND rearmed_at IS NULL",
+                (stamp, logical_agent_id),
+            )
+            await db.commit()
+        return cur.rowcount == 1
+
     async def delete_slot(
         self,
         logical_agent_id: str,
@@ -876,6 +976,11 @@ class PersistentAgentStore:
                 await db.execute(
                     "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
                     "WHERE logical_agent_id=? AND revoked_at IS NULL",
+                    (stamp, logical_agent_id),
+                )
+                await db.execute(
+                    "UPDATE logical_agent_rearms SET cancelled_at=COALESCE(cancelled_at,?) "
+                    "WHERE logical_agent_id=? AND cancelled_at IS NULL AND rearmed_at IS NULL",
                     (stamp, logical_agent_id),
                 )
                 await db.execute(

@@ -44,7 +44,7 @@ class Fence:
         return list(self.claim_blockers)
 
 
-async def setup(tmp_path, *, enabled=True, duration=120, fence=None):
+async def setup(tmp_path, *, enabled=True, duration=120, rearm=180, fence=None):
     repo = SqliteRepository(tmp_path / "main.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
     store = PersistentAgentStore(repo.path)
@@ -53,6 +53,7 @@ async def setup(tmp_path, *, enabled=True, duration=120, fence=None):
         enabled=enabled,
         authority_node_id="node-a",
         session_duration_seconds=duration,
+        rearm_delay_seconds=rearm,
         execution_fence=fence,
     )
     return repo, store, TaskStore(repo.path), lifecycle
@@ -191,7 +192,88 @@ async def test_hard_duration_reconciliation_does_not_release_claims(tmp_path):
     session = await store.get_work_session(started["work_session"]["work_session_id"])
     assert session.state == "expired"
     assert (await store.get_slot(logical_agent_id)).state == "suspended"
+    pending = await store.pending_rearm(logical_agent_id)
+    assert pending is not None
+    assert (
+        parse_utc(pending["rearm_at"]) - parse_utc(session.ended_at)
+    ).total_seconds() == 180
     assert len(await tasks.claims_for_owner(ClaimOwner.logical_agent(logical_agent_id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_end_schedules_durable_auto_rearm_without_starting_session(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=30, rearm=5)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    session = started["work_session"]
+    ended = await lifecycle.session_end(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=admission(),
+    )
+    assert ended["slot"]["state"] == "suspended"
+    pending = await store.pending_rearm(logical_agent_id)
+    assert pending is not None
+    assert (
+        parse_utc(pending["rearm_at"]) - parse_utc(ended["work_session"]["ended_at"])
+    ).total_seconds() == 5
+
+    before = parse_utc(pending["rearm_at"]) - timedelta(seconds=1)
+    assert await lifecycle.reconcile_rearms(now=before) == []
+    assert (await store.get_slot(logical_agent_id)).state == "suspended"
+
+    restarted = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=30,
+        rearm_delay_seconds=5,
+    )
+    after = parse_utc(pending["rearm_at"]) + timedelta(seconds=1)
+    reconciled = await restarted.reconcile_rearms(now=after)
+    assert len(reconciled) == 1
+    assert reconciled[0]["auto_rearmed"] is True
+    assert (await store.get_slot(logical_agent_id)).state == "armed"
+    assert await store.active_session_for_slot(logical_agent_id) is None
+    assert await restarted.reconcile_rearms(now=after) == []
+
+
+@pytest.mark.asyncio
+async def test_manual_suspend_cancels_pending_auto_rearm(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=30, rearm=5)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    ended = await lifecycle.session_end(
+        logical_agent_id,
+        started["work_session_id"],
+        started["session_epoch"],
+        admission=admission(),
+    )
+    pending = await store.pending_rearm(logical_agent_id)
+    assert pending is not None
+    suspended = await lifecycle.suspend(
+        logical_agent_id,
+        expected_revision=ended["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    assert suspended["slot"]["state"] == "suspended"
+    assert await store.pending_rearm(logical_agent_id) is None
+    after = parse_utc(pending["rearm_at"]) + timedelta(seconds=1)
+    assert await lifecycle.reconcile_rearms(now=after) == []
+    assert (await store.get_slot(logical_agent_id)).state == "suspended"
 
 
 @pytest.mark.asyncio

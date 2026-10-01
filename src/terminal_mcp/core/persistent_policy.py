@@ -18,6 +18,7 @@ class PersistentPolicyController:
     _DURATION_KEY = "TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC"
     _WARNING_KEY = "TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC"
     _ALERT_KEY = "TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC"
+    _REARM_KEY = "TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC"
     _LEGACY_KEY = "TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED"
 
     def __init__(self, settings, service, lifecycle):
@@ -31,6 +32,7 @@ class PersistentPolicyController:
             "duration_seconds": int(self.settings.persistent_session_duration_sec),
             "warning_after_seconds": int(self.settings.persistent_session_warning_after_sec),
             "alert_after_seconds": int(self.settings.persistent_session_alert_after_sec),
+            "rearm_after_seconds": int(self.settings.persistent_session_rearm_after_sec),
             "legacy_admission_enabled": bool(self.service.legacy_agent_admission_enabled),
         }
 
@@ -40,12 +42,14 @@ class PersistentPolicyController:
         duration_seconds: int | None = None,
         warning_after_seconds: int | None = None,
         alert_after_seconds: int | None = None,
+        rearm_after_seconds: int | None = None,
         legacy_admission_enabled: bool | None = None,
     ) -> dict:
         if (
             duration_seconds is None
             and warning_after_seconds is None
             and alert_after_seconds is None
+            and rearm_after_seconds is None
             and legacy_admission_enabled is None
         ):
             raise PersistentPolicyError("policy_update_empty")
@@ -65,17 +69,25 @@ class PersistentPolicyController:
                 if alert_after_seconds is None
                 else int(alert_after_seconds)
             )
+            rearm = (
+                current["rearm_after_seconds"]
+                if rearm_after_seconds is None
+                else int(rearm_after_seconds)
+            )
             legacy = (
                 current["legacy_admission_enabled"]
                 if legacy_admission_enabled is None
                 else bool(legacy_admission_enabled)
             )
             self._validate_thresholds(duration, warning, alert)
+            if rearm <= 0:
+                raise PersistentPolicyError("policy_invalid_rearm")
 
             timing_changed = (
                 duration != current["duration_seconds"]
                 or warning != current["warning_after_seconds"]
                 or alert != current["alert_after_seconds"]
+                or rearm != current["rearm_after_seconds"]
             )
             if timing_changed:
                 slots = await self.service.persistent.slot_list()
@@ -100,6 +112,7 @@ class PersistentPolicyController:
                         self._DURATION_KEY: str(duration),
                         self._WARNING_KEY: str(warning),
                         self._ALERT_KEY: str(alert),
+                        self._REARM_KEY: str(rearm),
                     }
                 )
             if legacy != current["legacy_admission_enabled"]:
@@ -117,7 +130,9 @@ class PersistentPolicyController:
                 self.settings.persistent_session_duration_sec = duration
                 self.settings.persistent_session_warning_after_sec = warning
                 self.settings.persistent_session_alert_after_sec = alert
+                self.settings.persistent_session_rearm_after_sec = rearm
                 self.lifecycle.session_duration_seconds = duration
+                self.lifecycle.rearm_delay_seconds = rearm
             if legacy != current["legacy_admission_enabled"]:
                 self.settings.legacy_agent_admission_enabled = legacy
                 self.service.legacy_agent_admission_enabled = legacy

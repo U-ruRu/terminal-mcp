@@ -244,6 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else (settings.fleet_instance_id.strip() or socket.gethostname())
         ),
         session_duration_seconds=settings.persistent_session_duration_sec,
+        rearm_delay_seconds=settings.persistent_session_rearm_after_sec,
         execution_fence=persistent_fence,
     )
     service.persistent = PersistentBackend(

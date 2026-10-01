@@ -467,6 +467,7 @@ function persistentProjection(value: unknown, path: string): PersistentConsoleRe
       durationSeconds: integer(policy.duration_seconds ?? 0, path + '.policy.duration_seconds'),
       warningAfterSeconds: integer(policy.warning_after_seconds ?? 0, path + '.policy.warning_after_seconds'),
       alertAfterSeconds: integer(policy.alert_after_seconds ?? 0, path + '.policy.alert_after_seconds'),
+      rearmAfterSeconds: integer(policy.rearm_after_seconds ?? 180, path + '.policy.rearm_after_seconds'),
       manualRearm: boolean(policy.manual_rearm ?? false, path + '.policy.manual_rearm'),
       admissionMode: string(policy.admission_mode ?? 'none', path + '.policy.admission_mode'),
       legacyAdmissionEnabled: boolean(policy.legacy_admission_enabled ?? true, path + '.policy.legacy_admission_enabled'),

@@ -131,3 +131,54 @@ def test_bearer_persistent_lifecycle_idempotency_and_cancel_fence(tmp_path):
         ).fetchone()[0]
     assert principal != "alpha-token"
     assert "alpha-token" not in principal
+
+def test_delete_is_idempotent_and_tombstones_selector_without_resurrection(tmp_path):
+    app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
+    headers = {"Authorization": "Bearer alpha-token"}
+    with TestClient(app) as client:
+        created = client.post(
+            "/actions/persistent/slots/create",
+            json={"display_name": "Delete me"},
+            headers=headers,
+        ).json()
+        logical_agent_id = created["slot"]["logical_agent_id"]
+        selector = created["selector"]["selector"]
+        payload = {
+            "logical_agent_id": logical_agent_id,
+            "expected_revision": created["slot"]["slot_revision"],
+            "idempotency_key": "delete-idem-0001",
+        }
+        deleted = client.post(
+            "/actions/persistent/slots/delete", json=payload, headers=headers
+        ).json()
+        replay = client.post(
+            "/actions/persistent/slots/delete", json=payload, headers=headers
+        ).json()
+        assert deleted["ok"] is True
+        assert deleted["slot"]["state"] == "deleted"
+        assert replay == deleted
+
+        listed = client.post(
+            "/actions/persistent/slots/list", json={}, headers=headers
+        ).json()
+        assert all(
+            item["slot"]["logical_agent_id"] != logical_agent_id
+            for item in listed["slots"]
+        )
+
+    with sqlite3.connect(tmp_path / "db.sqlite3") as db:
+        row = db.execute(
+            "SELECT state,deleted_at,tombstone_reason FROM logical_agents "
+            "WHERE logical_agent_id=?",
+            (logical_agent_id,),
+        ).fetchone()
+        selector_row = db.execute(
+            "SELECT retired_at,tombstoned_at FROM logical_agent_selectors "
+            "WHERE logical_agent_id=? AND selector=?",
+            (logical_agent_id, selector),
+        ).fetchone()
+    assert row[0] == "deleted"
+    assert row[1]
+    assert row[2] == "operator_delete"
+    assert selector_row[0]
+    assert selector_row[1]
