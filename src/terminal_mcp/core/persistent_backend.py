@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 
 from terminal_mcp.core.orchestration import normalize_preview, utc_text
@@ -203,7 +204,13 @@ class PersistentBackend:
         except ValueError as exc:
             raise PersistentStoreError("access_denied") from exc
 
-    async def _local_access_session(self, access: dict, *, require_active: bool = True):
+    async def _local_access_session(
+        self,
+        access: dict,
+        *,
+        require_active: bool = True,
+        allow_stopping: bool = False,
+    ):
         logical_agent_id = access["logical_agent_id"]
         if access["authority_node_id"] != self.lifecycle.authority_node_id:
             raise PersistentStoreError("authority_unavailable")
@@ -213,7 +220,9 @@ class PersistentBackend:
                 raise PersistentStoreError("session_not_found")
             return None
         if session.state != "active":
-            raise PersistentStoreError("session_stopping")
+            if not (allow_stopping and session.state == "stopping"):
+                raise PersistentStoreError("session_stopping")
+            return session
         try:
             await self.lifecycle.authorize_session(
                 logical_agent_id, session.work_session_id, session.session_epoch
@@ -535,23 +544,16 @@ class PersistentBackend:
                     "interrupt" if interrupt else "end",
                     {"access_code": access_code},
                 )
-            session = await self._local_access_session(access)
-            if interrupt:
-                commands = await self.repo.persistent_commands(
-                    access["logical_agent_id"],
-                    work_session_id=session.work_session_id,
-                    session_epoch=session.session_epoch,
+            async with self.lifecycle.operation_guard(access["logical_agent_id"]):
+                session = await self._local_access_session(access, allow_stopping=True)
+                stop = (
+                    self.lifecycle.session_interrupt
+                    if interrupt
+                    else self.lifecycle.session_end
                 )
-                for command in commands:
-                    await self.cancel(
-                        command.cmd_hash,
-                        logical_agent_id=access["logical_agent_id"],
-                        work_session_id=session.work_session_id,
-                        session_epoch=session.session_epoch,
-                    )
-            result = await self.lifecycle.session_end(
-                access["logical_agent_id"], session.work_session_id, session.session_epoch
-            )
+                result = await stop(
+                    access["logical_agent_id"], session.work_session_id, session.session_epoch
+                )
             if access["slot_kind"] == "legacy" and not result.get("stopping"):
                 await self._cleanup_legacy_access(access)
             return {
@@ -958,6 +960,75 @@ class PersistentBackend:
             return self._error(exc)
         except Exception as exc:
             return {"ok": False, "code": "run_failed", "error": str(exc)}
+
+    async def recovery(
+        self,
+        cmd: str,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+    ):
+        if not cmd:
+            return {"ok": False, "code": "invalid_command", "error": "command is required"}
+        command = None
+        try:
+            async with self.lifecycle.operation_guard(logical_agent_id):
+                session, permit = await self._execution_authority(
+                    logical_agent_id, work_session_id, session_epoch, scope="recovery"
+                )
+                if permit is not None and self.fleet_bridge is not None:
+                    self.fleet_bridge.ensure_permit_valid(permit)
+                for _ in range(32):
+                    try:
+                        command = await self.repo.create(
+                            cmd,
+                            status="running",
+                            cmd_hash=secrets.token_hex(4),
+                            agent_id=logical_agent_id,
+                            command_type="persistent_recovery",
+                            command_preview=normalize_preview(
+                                cmd, self.service.agent_policy.command_preview_chars
+                            ),
+                            queue_id=None,
+                            logical_agent_id=logical_agent_id,
+                            work_session_id=work_session_id,
+                            session_epoch=session_epoch,
+                            persistent_permit=permit.as_dict() if permit is not None else None,
+                        )
+                        break
+                    except Exception as exc:
+                        if exc.__class__.__name__ != "IntegrityError":
+                            raise
+                if command is None:
+                    raise RuntimeError("unable to allocate unique command hash")
+            duration_ms = await self.terminal.recovery(command, timeout_seconds=20)
+            current = await self.repo.get(command.cmd_hash) or command
+            total = await self.repo.count_lines(command.cmd_hash)
+            start = max(total - 500, 0)
+            lines = await self.repo.read_command_lines(command.cmd_hash, 500, start)
+            output_status = await self.repo.output_status(command.cmd_hash)
+            return {
+                "ok": current.error is None and current.status in {"completed", "failed"},
+                "cmd_hash": command.cmd_hash,
+                "lines": self.service._render(lines, scoped=True),
+                "overall_lines_count": total,
+                "displayed_lines_count": len(lines),
+                "exit_code": current.exit_code,
+                "error": current.error,
+                "duration_ms": duration_ms,
+                **output_status,
+            }
+        except asyncio.CancelledError:
+            raise
+        except PersistentLifecycleError as exc:
+            return self._error(exc)
+        except Exception as exc:
+            if command is not None:
+                await self.terminal.finalize_running(
+                    command, "failed", command.exit_code, f"recovery.execute: {exc}"
+                )
+            return {"ok": False, "code": "recovery_failed", "error": str(exc)}
 
     async def cancel(
         self,

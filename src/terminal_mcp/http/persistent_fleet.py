@@ -503,6 +503,26 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
             raise_store_error(exc)
         return {"ok": True, **result}
 
+    @router.post("/internal/fleet/persistent/drain", include_in_schema=False)
+    async def drain(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("authority_node_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="authority instance mismatch")
+        try:
+            blockers = await bridge.receive_drain(
+                logical_agent_id=str(payload.get("logical_agent_id") or ""),
+                work_session_id=str(payload.get("work_session_id") or ""),
+                session_epoch=int(payload.get("session_epoch") or 0),
+                hard_expires_at=str(payload.get("hard_expires_at") or ""),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": not blockers, "blockers": blockers}
+
     @router.post("/internal/fleet/persistent/revoke", include_in_schema=False)
     async def revoke(
         payload: dict,

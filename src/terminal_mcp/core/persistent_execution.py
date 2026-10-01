@@ -66,6 +66,30 @@ class PersistentExecutionFence:
                 blockers.append(blocker)
         return blockers
 
+    async def blockers_for_session(
+        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+    ) -> list[dict]:
+        commands = await self.repo.persistent_commands(
+            logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+            statuses=("queued", "running"),
+        )
+        blockers = []
+        for command in commands:
+            if command.status == "queued":
+                kind = "queued_command"
+            elif command.cmd_hash in self.terminal.processes:
+                kind = "running_command"
+            elif command.pid and self.terminal._pid_exists(command.pid):
+                kind = "detached_command"
+            elif command.pid is None and self.terminal._owns_pidless_running(command):
+                kind = "starting_command"
+            else:
+                kind = "running_command"
+            blockers.append(self._blocker(command, kind))
+        return blockers
+
     async def blockers_for_slot(self, logical_agent_id: str) -> list[dict]:
         commands = await self.repo.persistent_commands(
             logical_agent_id, statuses=("queued", "running")
@@ -118,6 +142,19 @@ class CompositePersistentExecutionFence:
             ),
             self.remote_fence.revoke_session(
                 logical_agent_id, work_session_id, session_epoch, reason=reason
+            ),
+        )
+        return [*local, *remote]
+
+    async def blockers_for_session(
+        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+    ) -> list[dict]:
+        local, remote = await __import__("asyncio").gather(
+            self.local_fence.blockers_for_session(
+                logical_agent_id, work_session_id, session_epoch
+            ),
+            self.remote_fence.blockers_for_session(
+                logical_agent_id, work_session_id, session_epoch
             ),
         )
         return [*local, *remote]

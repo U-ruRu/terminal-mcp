@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -5,8 +6,14 @@ from pydantic import ValidationError
 
 from terminal_mcp.config import Settings
 from terminal_mcp.core.orchestration import utc_now, utc_text
+from terminal_mcp.core.persistent_admission import (
+    VerifiedAdmissionContext,
+    bind_admission_context,
+    reset_admission_context,
+)
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.persistent_execution import PersistentExecutionFence
+from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore, PersistentStoreError
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -199,7 +206,14 @@ async def test_generic_cancel_cannot_bypass_persistent_work_session_fence(tmp_pa
 
 
 def test_persistent_session_thresholds_are_ordered():
+    isolated_fleet = {
+        "fleet_v1_source_enabled": False,
+        "fleet_v1_authority_enabled": False,
+        "fleet_v1_projection_enabled": False,
+        "fleet_v1_public_enabled": False,
+    }
     valid = Settings(
+        **isolated_fleet,
         _env_file=None,
         persistent_agents_enabled=True,
         persistent_session_duration_sec=120,
@@ -211,6 +225,7 @@ def test_persistent_session_thresholds_are_ordered():
 
     with pytest.raises(ValidationError, match="warning_after_sec"):
         Settings(
+            **isolated_fleet,
             _env_file=None,
             persistent_agents_enabled=True,
             persistent_session_duration_sec=120,
@@ -218,6 +233,7 @@ def test_persistent_session_thresholds_are_ordered():
             persistent_session_alert_after_sec=110,
         )
     disabled = Settings(
+        **isolated_fleet,
         _env_file=None,
         persistent_agents_enabled=False,
         persistent_session_duration_sec=1,
@@ -228,6 +244,7 @@ def test_persistent_session_thresholds_are_ordered():
 
     with pytest.raises(ValidationError, match="alert_after_sec"):
         Settings(
+            **isolated_fleet,
             _env_file=None,
             persistent_agents_enabled=True,
             persistent_session_duration_sec=120,
@@ -237,6 +254,7 @@ def test_persistent_session_thresholds_are_ordered():
 
     with pytest.raises(ValidationError, match="rearm_after_sec"):
         Settings(
+            **isolated_fleet,
             _env_file=None,
             persistent_agents_enabled=True,
             persistent_session_duration_sec=120,
@@ -304,3 +322,198 @@ async def test_remote_persistent_run_rejects_task_scope_without_distributed_clai
         task_scope="all",
     )
     assert result == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+
+
+@pytest.mark.asyncio
+async def test_persistent_fence_observes_session_blockers_without_cancelling(tmp_path):
+    repo = SqliteRepository(tmp_path / "drain.sqlite3", tmp_path / "drain-output.sqlite3")
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    queued = await repo.create(
+        "printf queued",
+        queue_id=1,
+        agent_id="logical-1",
+        logical_agent_id="logical-1",
+        work_session_id="ws-1",
+        session_epoch=1,
+        command_type="persistent_run",
+    )
+    running = await repo.create(
+        "printf running",
+        status="running",
+        queue_id=1,
+        agent_id="logical-1",
+        logical_agent_id="logical-1",
+        work_session_id="ws-1",
+        session_epoch=1,
+        command_type="persistent_run",
+    )
+    terminal._mark_claimed(running.cmd_hash)
+    fence = PersistentExecutionFence(repo, terminal, None)
+
+    blockers = await fence.blockers_for_session("logical-1", "ws-1", 1)
+    assert {item["command_hash"] for item in blockers} == {queued.cmd_hash, running.cmd_hash}
+    assert {item["kind"] for item in blockers} == {"queued_command", "starting_command"}
+    assert (await repo.get(queued.cmd_hash)).status == "queued"
+    assert (await repo.get(running.cmd_hash)).status == "running"
+    assert terminal.cancel_requested == set()
+    terminal._release_claimed(running.cmd_hash)
+
+
+def _persistent_admission():
+    return VerifiedAdmissionContext(
+        principal_id="client-1",
+        credential_id="oauth:client-1",
+        scopes=frozenset({"terminal:read", "terminal:execute"}),
+        auth_generation=1,
+        transport="mcp",
+        auth_mode="oauth",
+    )
+
+
+@pytest.mark.asyncio
+async def test_persistent_recovery_has_exact_session_attribution_and_is_fenced(tmp_path):
+    repo = SqliteRepository(tmp_path / "recovery.sqlite3", tmp_path / "recovery-output.sqlite3")
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    service = TerminalService(repo, terminal, 5000, persistent_agents_enabled=True)
+    store = PersistentAgentStore(repo.path)
+    fence = PersistentExecutionFence(repo, terminal, service.task_store)
+    lifecycle = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=90,
+        execution_fence=fence,
+    )
+    backend = PersistentBackend(service, lifecycle)
+    ctx = _persistent_admission()
+    created = await lifecycle.create_slot("Alpha", admission=ctx)
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=ctx)
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=ctx,
+    )
+    session = started["work_session"]
+
+    token = bind_admission_context(ctx)
+    try:
+        result = await backend.recovery(
+            "printf recovery-ok",
+            logical_agent_id=logical_agent_id,
+            work_session_id=session["work_session_id"],
+            session_epoch=session["session_epoch"],
+        )
+    finally:
+        reset_admission_context(token)
+    assert result["ok"] is True
+    assert any("recovery-ok" in line for line in result["lines"])
+    attribution = await repo.persistent_attribution(result["cmd_hash"])
+    assert attribution == {
+        "logical_agent_id": logical_agent_id,
+        "work_session_id": session["work_session_id"],
+        "session_epoch": session["session_epoch"],
+    }
+    await lifecycle.session_end(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=ctx,
+    )
+    token = bind_admission_context(ctx)
+    try:
+        fenced = await backend.recovery(
+            "printf must-not-run",
+            logical_agent_id=logical_agent_id,
+            work_session_id=session["work_session_id"],
+            session_epoch=session["session_epoch"],
+        )
+    finally:
+        reset_admission_context(token)
+    assert fenced["ok"] is False
+    assert fenced["code"] == "session_not_active"
+
+
+@pytest.mark.asyncio
+async def test_access_end_serializes_with_run_materialization(tmp_path):
+    repo = SqliteRepository(tmp_path / "stop-race.sqlite3", tmp_path / "stop-race-output.sqlite3")
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    service = TerminalService(repo, terminal, 5000, persistent_agents_enabled=True)
+    store = PersistentAgentStore(repo.path)
+    fence = PersistentExecutionFence(repo, terminal, service.task_store)
+    lifecycle = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=90,
+        execution_fence=fence,
+    )
+    backend = PersistentBackend(service, lifecycle)
+    ctx = _persistent_admission()
+    created = await lifecycle.create_slot("Alpha", admission=ctx)
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=ctx)
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=ctx,
+    )
+    session = started["work_session"]
+
+    async def resolve_access(_code):
+        return {
+            "logical_agent_id": logical_agent_id,
+            "authority_node_id": "node-a",
+            "slot_kind": "persistent",
+            "public_name": "Alpha",
+        }
+
+    backend._resolve_access = resolve_access
+    authorized = asyncio.Event()
+    release_create = asyncio.Event()
+    original_create = repo.create
+
+    async def create_after_barrier(*args, **kwargs):
+        authorized.set()
+        await release_create.wait()
+        return await original_create(*args, **kwargs)
+
+    repo.create = create_after_barrier
+    original_submit = terminal.submit
+
+    async def hold_queued(_command):
+        return None
+
+    terminal.submit = hold_queued
+    token = bind_admission_context(ctx)
+    try:
+        run_task = asyncio.create_task(
+            backend.run(
+                "printf race-ok",
+                logical_agent_id=logical_agent_id,
+                work_session_id=session["work_session_id"],
+                session_epoch=session["session_epoch"],
+                queue_id=1,
+                task_scope="none",
+            )
+        )
+        await authorized.wait()
+        end_task = asyncio.create_task(backend.access_session_stop("ABCD"))
+        await asyncio.sleep(0)
+        assert not end_task.done()
+        release_create.set()
+        run_result = await run_task
+        end_result = await end_task
+    finally:
+        reset_admission_context(token)
+        repo.create = original_create
+        terminal.submit = original_submit
+
+    assert run_result["ok"] is True
+    assert end_result["ok"] is True
+    assert end_result["stopping"] is True
+    assert {item["command_hash"] for item in end_result["blockers"]} == {run_result["cmd_hash"]}
+    assert (await store.get_work_session(session["work_session_id"])).state == "stopping"

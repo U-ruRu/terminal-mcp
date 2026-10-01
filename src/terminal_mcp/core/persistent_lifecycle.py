@@ -34,6 +34,10 @@ class ExecutionFence(Protocol):
         reason: str,
     ) -> list[dict]: ...
 
+    async def blockers_for_session(
+        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+    ) -> list[dict]: ...
+
     async def blockers_for_slot(self, logical_agent_id: str) -> list[dict]: ...
 
     async def blockers_for_claim(
@@ -43,6 +47,11 @@ class ExecutionFence(Protocol):
 
 class NoopExecutionFence:
     async def revoke_session(self, *args, **kwargs) -> list[dict]:
+        return []
+
+    async def blockers_for_session(
+        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+    ) -> list[dict]:
         return []
 
     async def blockers_for_slot(self, logical_agent_id: str) -> list[dict]:
@@ -363,6 +372,7 @@ class PersistentLifecycleCoordinator:
         *,
         reason: str,
         terminal_state: str,
+        cancel_commands: bool = True,
     ) -> dict:
         try:
             await self.store.begin_session_stop(
@@ -373,12 +383,19 @@ class PersistentLifecycleCoordinator:
             )
         except PersistentStoreError as exc:
             self._raise_store(exc)
-        blockers = await self.execution_fence.revoke_session(
-            logical_agent_id,
-            session.work_session_id,
-            session.session_epoch,
-            reason=reason,
-        )
+        if cancel_commands:
+            blockers = await self.execution_fence.revoke_session(
+                logical_agent_id,
+                session.work_session_id,
+                session.session_epoch,
+                reason=reason,
+            )
+        else:
+            blockers = await self.execution_fence.blockers_for_session(
+                logical_agent_id,
+                session.work_session_id,
+                session.session_epoch,
+            )
         if blockers:
             result = await self._slot_result(logical_agent_id)
             return {"ok": True, "stopping": True, "blockers": blockers, **result}
@@ -405,6 +422,37 @@ class PersistentLifecycleCoordinator:
             "server_now": utc_text(),
         }
 
+    async def _authorize_stop_session(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        admission: VerifiedAdmissionContext | None = None,
+    ):
+        verified = self._admission(admission)
+        session = await self.store.get_work_session(work_session_id)
+        if (
+            session is None
+            or session.logical_agent_id != logical_agent_id
+            or session.session_epoch != session_epoch
+        ):
+            raise PersistentLifecycleError("session_not_found")
+        if session.authority_node_id != self.authority_node_id:
+            raise PersistentLifecycleError("authority_unavailable")
+        if session.auth_principal_id and session.auth_principal_id != verified.principal_id:
+            raise PersistentLifecycleError("persistent_auth_required")
+        if session.state == "active":
+            await self.authorize_session(
+                logical_agent_id,
+                work_session_id,
+                session_epoch,
+                admission=verified,
+            )
+        elif session.state != "stopping":
+            raise PersistentLifecycleError("session_not_active")
+        return session
+
     async def session_end(
         self,
         logical_agent_id: str,
@@ -413,15 +461,40 @@ class PersistentLifecycleCoordinator:
         *,
         admission: VerifiedAdmissionContext | None = None,
     ) -> dict:
-        await self.authorize_session(
+        session = await self._authorize_stop_session(
             logical_agent_id,
             work_session_id,
             session_epoch,
             admission=admission,
         )
-        session = await self.store.get_work_session(work_session_id)
         return await self._stop_active_session(
-            logical_agent_id, session, reason="session_end", terminal_state="ended"
+            logical_agent_id,
+            session,
+            reason="session_end",
+            terminal_state="ended",
+            cancel_commands=False,
+        )
+
+    async def session_interrupt(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        admission: VerifiedAdmissionContext | None = None,
+    ) -> dict:
+        session = await self._authorize_stop_session(
+            logical_agent_id,
+            work_session_id,
+            session_epoch,
+            admission=admission,
+        )
+        return await self._stop_active_session(
+            logical_agent_id,
+            session,
+            reason="session_interrupt",
+            terminal_state="ended",
+            cancel_commands=True,
         )
 
     async def suspend(
@@ -575,23 +648,30 @@ class PersistentLifecycleCoordinator:
             session = await self.store.active_session_for_slot(slot.logical_agent_id)
             if not session or session.state not in {"active", "stopping"}:
                 continue
-            if session.state == "active" and current < parse_utc(session.hard_expires_at):
+            hard_expired = current >= parse_utc(session.hard_expires_at)
+            if session.state == "active" and not hard_expired:
                 continue
             async with self.operation_guard(slot.logical_agent_id):
                 refreshed = await self.store.active_session_for_slot(slot.logical_agent_id)
-                if not refreshed:
+                if not refreshed or refreshed.state not in {"active", "stopping"}:
                     continue
-                if refreshed.state == "active" and current < parse_utc(refreshed.hard_expires_at):
+                hard_expired = current >= parse_utc(refreshed.hard_expires_at)
+                if refreshed.state == "active" and not hard_expired:
                     continue
+                if hard_expired:
+                    reason = "hard_duration"
+                    terminal_state = "expired"
+                    cancel_commands = True
+                else:
+                    reason = refreshed.end_reason or "stopping"
+                    terminal_state = "suspended" if reason == "suspend" else "ended"
+                    cancel_commands = reason != "session_end"
                 result = await self._stop_active_session(
                     slot.logical_agent_id,
                     refreshed,
-                    reason=(
-                        "hard_duration"
-                        if refreshed.state == "active"
-                        else (refreshed.end_reason or "stopping")
-                    ),
-                    terminal_state="expired" if refreshed.state == "active" else "ended",
+                    reason=reason,
+                    terminal_state=terminal_state,
+                    cancel_commands=cancel_commands,
                 )
                 reconciled.append(result)
         return reconciled

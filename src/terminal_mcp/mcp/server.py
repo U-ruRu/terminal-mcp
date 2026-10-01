@@ -1086,7 +1086,12 @@ def build_mcp(
                 work_session_id=identity["work_session_id"],
                 session_epoch=identity["session_epoch"],
             )
-        result = await service.recovery(request.command, agent_id=None)
+        result = await backend.recovery(
+            request.command,
+            logical_agent_id=identity["logical_agent_id"],
+            work_session_id=identity["work_session_id"],
+            session_epoch=identity["session_epoch"],
+        )
         result["public_name"] = identity["public_name"]
         result["session_ref"] = identity["session_ref"]
         return result
