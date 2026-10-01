@@ -221,10 +221,23 @@ async def test_source_http_surface_reuses_fleet_peer_authentication():
         assert events.json()["source_stream_generation"] == "gen-a"
 
 
-def test_fleet_v1_source_settings_are_default_off_and_validate_identity(tmp_path):
+def test_fleet_v1_source_settings_are_default_off_and_validate_identity(tmp_path, monkeypatch):
     from pydantic import ValidationError
 
     from terminal_mcp.config import Settings
+
+    for key in (
+        "TERMINAL_MCP_FLEET_V1_SOURCE_ENABLED",
+        "TERMINAL_MCP_FLEET_V1_AUTHORITY_ENABLED",
+        "TERMINAL_MCP_FLEET_V1_PROJECTION_ENABLED",
+        "TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED",
+        "TERMINAL_MCP_FLEET_ID",
+        "TERMINAL_MCP_FLEET_INSTANCE_ID",
+        "TERMINAL_MCP_FLEET_NODE_ID",
+        "TERMINAL_MCP_FLEET_SIGNING_PRIVATE_KEY",
+        "TERMINAL_MCP_FLEET_PEERS_JSON",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
     defaults = Settings(_env_file=None, database_path=tmp_path / "runtime.sqlite3")
     assert defaults.fleet_v1_source_enabled is False
