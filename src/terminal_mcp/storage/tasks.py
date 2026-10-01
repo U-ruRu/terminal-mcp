@@ -107,6 +107,30 @@ class TaskStore:
         return normalized
 
     @staticmethod
+    def _normalize_refs(refs):
+        if refs is None:
+            return []
+        if not isinstance(refs, list):
+            raise ValueError("refs must be a list")
+        if len(refs) > 64:
+            raise ValueError("refs maximum is 64")
+        result = []
+        seen = set()
+        for index, value in enumerate(refs):
+            if not isinstance(value, str):
+                raise ValueError(f"ref[{index}] must be a string")
+            if not value:
+                raise ValueError(f"ref[{index}] must not be empty")
+            if value != value.strip():
+                raise ValueError(f"ref[{index}] must not have leading/trailing whitespace")
+            if len(value) > 512:
+                raise ValueError(f"ref[{index}] maximum length is 512 characters")
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
+    @staticmethod
     def _task(row):
         if row is None:
             return None
@@ -134,6 +158,9 @@ class TaskStore:
             "created_at": row[20],
             "updated_at": row[21],
             "isolation_hint": row[22],
+            "input_refs": TaskStore._loads(row[23], []),
+            "output_refs": TaskStore._loads(row[24], []),
+            "output_state_id": row[25],
         }
 
     async def create_task(
@@ -153,6 +180,8 @@ class TaskStore:
         cooperative: bool = False,
         checkpoint: Any = None,
         candidate_ref: str | None = None,
+        input_refs: Any = None,
+        output_refs: Any = None,
         result: Any = None,
         tags: Any = None,
         now: str | None = None,
@@ -190,6 +219,27 @@ class TaskStore:
                     now,
                 ),
             )
+            input_refs = self._normalize_refs(input_refs)
+            if output_refs is None and candidate_ref:
+                output_refs = [candidate_ref]
+            output_refs = self._normalize_refs(output_refs)
+            cursor = await db.execute(
+                "INSERT INTO work_output_states(namespace,task_id,output_refs_json,created_at) "
+                "VALUES(?,?,?,?)",
+                (namespace, task_id, self._json(output_refs), now),
+            )
+            output_state_id = int(cursor.lastrowid)
+            await db.execute(
+                "UPDATE work_items SET input_refs_json=?,output_refs_json=?,output_state_id=? "
+                "WHERE namespace=? AND task_id=?",
+                (
+                    self._json(input_refs),
+                    self._json(output_refs),
+                    output_state_id,
+                    namespace,
+                    task_id,
+                ),
+            )
             await db.commit()
         return await self.get_task(namespace, task_id)
 
@@ -210,6 +260,8 @@ class TaskStore:
         cooperative: bool = False,
         checkpoint: Any = None,
         candidate_ref: str | None = None,
+        input_refs: Any = None,
+        output_refs: Any = None,
         result: Any = None,
         tags: Any = None,
         dependencies=None,
@@ -255,6 +307,25 @@ class TaskStore:
                         now,
                     ),
                 )
+                input_refs = self._normalize_refs(input_refs)
+                output_refs = self._normalize_refs(output_refs)
+                cursor = await db.execute(
+                    "INSERT INTO work_output_states(namespace,task_id,output_refs_json,created_at) "
+                    "VALUES(?,?,?,?)",
+                    (namespace, task_id, self._json(output_refs), now),
+                )
+                output_state_id = int(cursor.lastrowid)
+                await db.execute(
+                    "UPDATE work_items SET input_refs_json=?,output_refs_json=?,output_state_id=? "
+                    "WHERE namespace=? AND task_id=?",
+                    (
+                        self._json(input_refs),
+                        self._json(output_refs),
+                        output_state_id,
+                        namespace,
+                        task_id,
+                    ),
+                )
                 if dependencies is not None:
                     await db.executemany(
                         "INSERT INTO work_dependencies(namespace,task_id,dependency_namespace,dependency_task_id,created_at) "
@@ -272,7 +343,14 @@ class TaskStore:
                         task_id,
                         "created",
                         event_agent_id,
-                        self._json(event_payload or {}),
+                        self._json(
+                            {
+                                **(event_payload or {}),
+                                "input_refs": input_refs,
+                                "output_refs": output_refs,
+                                "output_state_id": output_state_id,
+                            }
+                        ),
                         now,
                     ),
                 )
@@ -300,7 +378,7 @@ class TaskStore:
             row = await (
                 await db.execute(
                     "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
-                    "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint "
+                    "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint,input_refs_json,output_refs_json,output_state_id "
                     "FROM work_items WHERE namespace=? AND task_id=?",
                     (namespace, task_id),
                 )
@@ -343,7 +421,7 @@ class TaskStore:
         query = (
             "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
             "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,"
-            "state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint "
+            "state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint,input_refs_json,output_refs_json,output_state_id "
             f"FROM work_items{clause} "
             "ORDER BY priority DESC,"
             "CASE WHEN state='ready' THEN 0 ELSE 1 END,"
@@ -428,6 +506,8 @@ class TaskStore:
             "cooperative",
             "checkpoint",
             "candidate_ref",
+            "input_refs",
+            "output_refs",
             "result",
             "tags",
             "archived_at",
@@ -438,6 +518,20 @@ class TaskStore:
             raise ValueError(f"unsupported task fields: {sorted(unknown)}")
         if not changes:
             return await self.get_task(namespace, task_id)
+        if "input_refs" in changes:
+            changes["input_refs"] = self._normalize_refs(changes["input_refs"])
+        if "output_refs" in changes:
+            changes["output_refs"] = self._normalize_refs(changes["output_refs"])
+        if "input_refs" in changes or "output_refs" in changes:
+            return await self.update_task_mutation(
+                namespace,
+                task_id,
+                expected_revision=expected_revision,
+                event_type="updated",
+                event_payload={"fields": sorted(changes)},
+                now=now,
+                **changes,
+            )
         if "lane" in changes:
             self._validate_lane(changes["lane"])
         if "state" in changes:
@@ -448,15 +542,25 @@ class TaskStore:
             "checkpoint": "checkpoint_json",
             "result": "result_json",
             "tags": "tags_json",
+            "input_refs": "input_refs_json",
+            "output_refs": "output_refs_json",
         }
         assignments = []
         params: list[Any] = []
         for key, value in changes.items():
             column = columns.get(key, key)
-            if key in {"resource", "reviews", "checkpoint", "result", "tags"}:
+            if key in {
+                "resource",
+                "reviews",
+                "checkpoint",
+                "result",
+                "tags",
+                "input_refs",
+                "output_refs",
+            }:
                 if key == "result":
                     value = self._json(value) if value is not None else None
-                elif key == "tags":
+                elif key in {"tags", "input_refs", "output_refs"}:
                     value = self._json(value or [])
                 else:
                     value = self._json(
@@ -533,6 +637,8 @@ class TaskStore:
             "cooperative",
             "checkpoint",
             "candidate_ref",
+            "input_refs",
+            "output_refs",
             "result",
             "tags",
             "archived_at",
@@ -545,6 +651,10 @@ class TaskStore:
             self._validate_lane(changes["lane"])
         if "state" in changes:
             self._validate_state(changes["state"])
+        if "input_refs" in changes:
+            changes["input_refs"] = self._normalize_refs(changes["input_refs"])
+        if "output_refs" in changes:
+            changes["output_refs"] = self._normalize_refs(changes["output_refs"])
         normalized = self._normalize_dependencies(namespace, dependencies)
         columns = {
             "resource": "resource_json",
@@ -552,15 +662,25 @@ class TaskStore:
             "checkpoint": "checkpoint_json",
             "result": "result_json",
             "tags": "tags_json",
+            "input_refs": "input_refs_json",
+            "output_refs": "output_refs_json",
         }
         assignments = []
         params: list[Any] = []
         for key, value in changes.items():
             column = columns.get(key, key)
-            if key in {"resource", "reviews", "checkpoint", "result", "tags"}:
+            if key in {
+                "resource",
+                "reviews",
+                "checkpoint",
+                "result",
+                "tags",
+                "input_refs",
+                "output_refs",
+            }:
                 if key == "result":
                     value = self._json(value) if value is not None else None
-                elif key == "tags":
+                elif key in {"tags", "input_refs", "output_refs"}:
                     value = self._json(value or [])
                 else:
                     value = self._json(
@@ -578,12 +698,32 @@ class TaskStore:
             try:
                 exists = await (
                     await db.execute(
-                        "SELECT revision,state FROM work_items WHERE namespace=? AND task_id=?",
+                        "SELECT revision,state,input_refs_json,output_refs_json,output_state_id "
+                        "FROM work_items WHERE namespace=? AND task_id=?",
                         (namespace, task_id),
                     )
                 ).fetchone()
                 if exists is None:
                     raise KeyError(f"unknown task: {namespace}/{task_id}")
+                previous_input_refs = self._loads(exists[2], [])
+                previous_output_refs = self._loads(exists[3], [])
+                previous_output_state_id = exists[4]
+                input_refs_changed = (
+                    "input_refs" in changes and changes["input_refs"] != previous_input_refs
+                )
+                output_refs_changed = (
+                    "output_refs" in changes and changes["output_refs"] != previous_output_refs
+                )
+                new_output_state_id = previous_output_state_id
+                if output_refs_changed:
+                    cursor = await db.execute(
+                        "INSERT INTO work_output_states(namespace,task_id,output_refs_json,created_at) "
+                        "VALUES(?,?,?,?)",
+                        (namespace, task_id, self._json(changes["output_refs"]), now),
+                    )
+                    new_output_state_id = int(cursor.lastrowid)
+                    assignments.append("output_state_id=?")
+                    params.append(new_output_state_id)
                 if assignments:
                     if "state" in changes and changes["state"] != exists[1]:
                         assignments.extend(["state_changed_at=?", "ready_since=?"])
@@ -636,6 +776,39 @@ class TaskStore:
                         now,
                     ),
                 )
+                if input_refs_changed:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "input_refs_updated",
+                            event_agent_id,
+                            self._json({"input_refs": changes["input_refs"]}),
+                            now,
+                        ),
+                    )
+                if output_refs_changed:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "output_refs_updated",
+                            event_agent_id,
+                            self._json(
+                                {
+                                    "previous_output_state_id": previous_output_state_id,
+                                    "new_output_state_id": new_output_state_id,
+                                    "previous_output_refs": previous_output_refs,
+                                    "new_output_refs": changes["output_refs"],
+                                }
+                            ),
+                            now,
+                        ),
+                    )
                 if dependencies is not None:
                     await db.execute(
                         "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
@@ -1361,40 +1534,159 @@ class TaskStore:
                 await db.rollback()
                 raise
 
-    async def reviews(self, namespace: str, task_id: str, *, candidate_ref: str | None = None):
-        params: list[Any] = [namespace, task_id]
-        candidate_clause = ""
-        if candidate_ref is not None:
-            candidate_clause = " AND candidate_ref=?"
-            params.append(candidate_ref)
+    async def output_states(self, namespace: str, task_id: str):
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT candidate_ref,dimension,verdict,agent_id,evidence_json,warnings_json,reviewed_at "
+                    "SELECT output_state_id,output_refs_json,created_at "
+                    "FROM work_output_states WHERE namespace=? AND task_id=? "
+                    "ORDER BY output_state_id",
+                    (namespace, task_id),
+                )
+            ).fetchall()
+        return [
+            {
+                "output_state_id": int(row[0]),
+                "output_refs": self._loads(row[1], []),
+                "created_at": row[2],
+            }
+            for row in rows
+        ]
+
+    async def reviews(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        output_state_id: int | None = None,
+        candidate_ref: str | None = None,
+    ):
+        params: list[Any] = [namespace, task_id]
+        clauses = []
+        if output_state_id is not None:
+            clauses.append("output_state_id=?")
+            params.append(int(output_state_id))
+        elif candidate_ref is not None:
+            clauses.append("candidate_ref=?")
+            params.append(candidate_ref)
+        extra = (" AND " + " AND ".join(clauses)) if clauses else ""
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT output_state_id,output_refs_json,dimension,verdict,agent_id,"
+                    "evidence_json,warnings_json,reviewed_at,candidate_ref "
                     "FROM work_reviews WHERE namespace=? AND task_id=?"
-                    f"{candidate_clause} ORDER BY reviewed_at,dimension",
+                    f"{extra} ORDER BY reviewed_at,dimension",
                     params,
                 )
             ).fetchall()
         return [
             {
-                "candidate_ref": row[0] or None,
-                "dimension": row[1],
-                "verdict": row[2],
-                "agent_id": row[3],
-                "evidence": self._loads(row[4], {}),
-                "warnings": self._loads(row[5], []),
-                "reviewed_at": row[6],
+                "output_state_id": int(row[0]) if row[0] is not None else None,
+                "output_refs": self._loads(row[1], []),
+                "dimension": row[2],
+                "verdict": row[3],
+                "agent_id": row[4],
+                "evidence": self._loads(row[5], {}),
+                "warnings": self._loads(row[6], []),
+                "reviewed_at": row[7],
+                "candidate_ref": row[8] or None,
             }
             for row in rows
         ]
+
+    async def upsert_reviews(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        output_state_id: int | None = None,
+        output_refs=None,
+        candidate_ref: str | None = None,
+        dimensions,
+        verdict: str,
+        agent_id: str,
+        evidence: Any = None,
+        warnings: Any = None,
+        now: str | None = None,
+    ):
+        dimensions = list(dict.fromkeys(dimensions or []))
+        if not dimensions:
+            raise ValueError("at least one review dimension is required")
+        for dimension in dimensions:
+            if dimension not in REVIEW_DIMENSIONS:
+                raise ValueError(f"unsupported review dimension: {dimension}")
+        now = now or utc_text()
+
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                current = await (
+                    await db.execute(
+                        "SELECT output_state_id,output_refs_json FROM work_items "
+                        "WHERE namespace=? AND task_id=?",
+                        (namespace, task_id),
+                    )
+                ).fetchone()
+                if current is None:
+                    raise KeyError(f"unknown task: {namespace}/{task_id}")
+                current_state_id = current[0]
+                current_output_refs = self._loads(current[1], [])
+                if current_state_id is None:
+                    raise ValueError("task has no output state")
+                if output_state_id is None:
+                    output_state_id = int(current_state_id)
+                elif int(output_state_id) != int(current_state_id):
+                    raise ValueError("task output state changed before review was recorded")
+                if output_refs is None:
+                    output_refs = current_output_refs
+                else:
+                    output_refs = self._normalize_refs(output_refs)
+                    if output_refs != current_output_refs:
+                        raise ValueError("task output refs changed before review was recorded")
+                stored_candidate = candidate_ref or f"@output-state:{int(output_state_id)}"
+                await db.executemany(
+                    "INSERT INTO work_reviews(namespace,task_id,candidate_ref,dimension,verdict,"
+                    "agent_id,evidence_json,warnings_json,reviewed_at,output_state_id,output_refs_json) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(namespace,task_id,output_state_id,dimension) DO UPDATE SET "
+                    "verdict=excluded.verdict,agent_id=excluded.agent_id,"
+                    "evidence_json=excluded.evidence_json,warnings_json=excluded.warnings_json,"
+                    "reviewed_at=excluded.reviewed_at,output_refs_json=excluded.output_refs_json,"
+                    "candidate_ref=excluded.candidate_ref",
+                    [
+                        (
+                            namespace,
+                            task_id,
+                            stored_candidate,
+                            dimension,
+                            verdict,
+                            agent_id,
+                            self._json(evidence or {}),
+                            self._json(warnings or []),
+                            now,
+                            int(output_state_id),
+                            self._json(output_refs),
+                        )
+                        for dimension in dimensions
+                    ],
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        rows = await self.reviews(namespace, task_id, output_state_id=int(output_state_id))
+        by_dimension = {row["dimension"]: row for row in rows}
+        return [by_dimension[dimension] for dimension in dimensions]
 
     async def upsert_review(
         self,
         namespace: str,
         task_id: str,
         *,
-        candidate_ref: str | None,
+        output_state_id: int | None = None,
+        output_refs=None,
+        candidate_ref: str | None = None,
         dimension: str,
         verdict: str,
         agent_id: str,
@@ -1402,31 +1694,20 @@ class TaskStore:
         warnings: Any = None,
         now: str | None = None,
     ):
-        if dimension not in REVIEW_DIMENSIONS:
-            raise ValueError(f"unsupported review dimension: {dimension}")
-        now = now or utc_text()
-        stored_candidate = candidate_ref or ""
-        async with self._connect() as db:
-            await db.execute(
-                "INSERT INTO work_reviews(namespace,task_id,candidate_ref,dimension,verdict,agent_id,evidence_json,warnings_json,reviewed_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(namespace,task_id,candidate_ref,dimension) DO UPDATE SET "
-                "verdict=excluded.verdict,agent_id=excluded.agent_id,evidence_json=excluded.evidence_json,"
-                "warnings_json=excluded.warnings_json,reviewed_at=excluded.reviewed_at",
-                (
-                    namespace,
-                    task_id,
-                    stored_candidate,
-                    dimension,
-                    verdict,
-                    agent_id,
-                    self._json(evidence or {}),
-                    self._json(warnings or []),
-                    now,
-                ),
-            )
-            await db.commit()
-        rows = await self.reviews(namespace, task_id, candidate_ref=stored_candidate)
-        return next(row for row in rows if row["dimension"] == dimension)
+        rows = await self.upsert_reviews(
+            namespace,
+            task_id,
+            output_state_id=output_state_id,
+            output_refs=output_refs,
+            candidate_ref=candidate_ref,
+            dimensions=[dimension],
+            verdict=verdict,
+            agent_id=agent_id,
+            evidence=evidence,
+            warnings=warnings,
+            now=now,
+        )
+        return rows[0]
 
     async def persistent_task_commands(
         self, namespace: str, task_id: str, logical_agent_id: str

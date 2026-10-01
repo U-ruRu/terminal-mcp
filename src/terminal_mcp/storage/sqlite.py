@@ -22,7 +22,7 @@ from terminal_mcp.storage.output import (
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -570,6 +570,8 @@ class SqliteRepository:
         await add_columns("work_items", [("isolation_hint", "TEXT NOT NULL DEFAULT 'none'")])
         # Schema v18: task execution state is explicit and independent from claims.
         await self._migrate_work_items_explicit_state(db)
+        # Schema v19: task input/output refs and output-state-bound review history.
+        await self._migrate_task_refs(db)
         await db.execute(
             "UPDATE work_items SET state_changed_at=COALESCE(state_changed_at,updated_at)"
         )
@@ -744,6 +746,167 @@ class SqliteRepository:
         await db.execute(
             "CREATE INDEX ix_work_items_lane "
             "ON work_items(namespace,lane,state,priority DESC,ready_since,updated_at)"
+        )
+
+    async def _migrate_task_refs(self, db):
+        item_columns = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(work_items)")).fetchall()
+        }
+        for name, definition in (
+            ("input_refs_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("output_refs_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("output_state_id", "INTEGER"),
+        ):
+            if name not in item_columns:
+                await db.execute(f"ALTER TABLE work_items ADD COLUMN {name} {definition}")
+
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS work_output_states("
+            "output_state_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "namespace TEXT NOT NULL,task_id TEXT NOT NULL,"
+            "output_refs_json TEXT NOT NULL DEFAULT '[]',created_at TEXT NOT NULL,"
+            "FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_output_states_task "
+            "ON work_output_states(namespace,task_id,output_state_id)"
+        )
+
+        review_columns = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(work_reviews)")).fetchall()
+        }
+        if "output_state_id" not in review_columns:
+            await db.execute("ALTER TABLE work_reviews ADD COLUMN output_state_id INTEGER")
+        if "output_refs_json" not in review_columns:
+            await db.execute(
+                "ALTER TABLE work_reviews ADD COLUMN output_refs_json TEXT NOT NULL DEFAULT '[]'"
+            )
+
+        tasks = await (
+            await db.execute(
+                "SELECT namespace,task_id,candidate_ref,created_at,"
+                "input_refs_json,output_refs_json,output_state_id FROM work_items"
+            )
+        ).fetchall()
+        for (
+            namespace,
+            task_id,
+            candidate_ref,
+            created_at,
+            _input_json,
+            _output_json,
+            state_id,
+        ) in tasks:
+            current_refs = [candidate_ref] if candidate_ref else []
+            current_json = json.dumps(current_refs, separators=(",", ":"), ensure_ascii=False)
+
+            if state_id is None:
+                cursor = await db.execute(
+                    "INSERT INTO work_output_states(namespace,task_id,output_refs_json,created_at) "
+                    "VALUES(?,?,?,?)",
+                    (namespace, task_id, current_json, created_at),
+                )
+                state_id = int(cursor.lastrowid)
+                await db.execute(
+                    "UPDATE work_items SET input_refs_json=COALESCE(input_refs_json,'[]'),"
+                    "output_refs_json=?,output_state_id=? WHERE namespace=? AND task_id=?",
+                    (current_json, state_id, namespace, task_id),
+                )
+            else:
+                state = await (
+                    await db.execute(
+                        "SELECT output_refs_json FROM work_output_states WHERE output_state_id=? "
+                        "AND namespace=? AND task_id=?",
+                        (state_id, namespace, task_id),
+                    )
+                ).fetchone()
+                if state is not None:
+                    current_json = state[0]
+
+            legacy_reviews = await (
+                await db.execute(
+                    "SELECT DISTINCT candidate_ref FROM work_reviews "
+                    "WHERE namespace=? AND task_id=? AND output_state_id IS NULL",
+                    (namespace, task_id),
+                )
+            ).fetchall()
+            for (legacy_candidate,) in legacy_reviews:
+                legacy_candidate = legacy_candidate or ""
+                if legacy_candidate == (candidate_ref or ""):
+                    review_state_id = state_id
+                    review_refs_json = current_json
+                else:
+                    legacy_refs = [legacy_candidate] if legacy_candidate else []
+                    review_refs_json = json.dumps(
+                        legacy_refs, separators=(",", ":"), ensure_ascii=False
+                    )
+                    first_review = await (
+                        await db.execute(
+                            "SELECT MIN(reviewed_at) FROM work_reviews "
+                            "WHERE namespace=? AND task_id=? AND candidate_ref=?",
+                            (namespace, task_id, legacy_candidate),
+                        )
+                    ).fetchone()
+                    state_created_at = (first_review or [None])[0] or created_at
+                    cursor = await db.execute(
+                        "INSERT INTO work_output_states(namespace,task_id,output_refs_json,created_at) "
+                        "VALUES(?,?,?,?)",
+                        (namespace, task_id, review_refs_json, state_created_at),
+                    )
+                    review_state_id = int(cursor.lastrowid)
+                await db.execute(
+                    "UPDATE work_reviews SET output_state_id=?,output_refs_json=? "
+                    "WHERE namespace=? AND task_id=? AND candidate_ref=? "
+                    "AND output_state_id IS NULL",
+                    (
+                        review_state_id,
+                        review_refs_json,
+                        namespace,
+                        task_id,
+                        legacy_candidate,
+                    ),
+                )
+
+        review_info = await (await db.execute("PRAGMA table_info(work_reviews)")).fetchall()
+        review_pk = [row[1] for row in review_info if int(row[5]) > 0]
+        expected_pk = ["namespace", "task_id", "output_state_id", "dimension"]
+        if review_pk != expected_pk:
+            await db.execute("DROP TABLE IF EXISTS work_reviews_v19")
+            await db.execute(
+                "CREATE TABLE work_reviews_v19("
+                "namespace TEXT NOT NULL,task_id TEXT NOT NULL,"
+                "output_state_id INTEGER NOT NULL,"
+                "output_refs_json TEXT NOT NULL DEFAULT '[]',"
+                "candidate_ref TEXT NOT NULL DEFAULT '',"
+                "dimension TEXT NOT NULL CHECK(dimension IN ('A','C','R')),"
+                "verdict TEXT NOT NULL,agent_id TEXT NOT NULL,"
+                "evidence_json TEXT NOT NULL DEFAULT '{}',"
+                "warnings_json TEXT NOT NULL DEFAULT '[]',reviewed_at TEXT NOT NULL,"
+                "PRIMARY KEY(namespace,task_id,output_state_id,dimension),"
+                "FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) "
+                "ON DELETE CASCADE,"
+                "FOREIGN KEY(output_state_id) REFERENCES work_output_states(output_state_id) "
+                "ON DELETE CASCADE)"
+            )
+            await db.execute(
+                "INSERT INTO work_reviews_v19("
+                "namespace,task_id,output_state_id,output_refs_json,candidate_ref,dimension,"
+                "verdict,agent_id,evidence_json,warnings_json,reviewed_at"
+                ") SELECT namespace,task_id,output_state_id,output_refs_json,candidate_ref,"
+                "dimension,verdict,agent_id,evidence_json,warnings_json,reviewed_at "
+                "FROM work_reviews WHERE output_state_id IS NOT NULL"
+            )
+            await db.execute("DROP TABLE work_reviews")
+            await db.execute("ALTER TABLE work_reviews_v19 RENAME TO work_reviews")
+
+        await db.execute("DROP INDEX IF EXISTS ux_work_reviews_output_state_dimension")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_reviews_task "
+            "ON work_reviews(namespace,task_id,output_state_id,dimension)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_work_reviews_output_state "
+            "ON work_reviews(namespace,task_id,output_state_id,reviewed_at)"
         )
 
     async def _migrate_work_items_archive_lifecycle(self, db):
