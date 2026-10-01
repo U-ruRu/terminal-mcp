@@ -132,7 +132,7 @@ Agent-facing OAuth advertises `terminal:read` and the ChatGPT compatibility scop
 `origin(TERMINAL_MCP_PUBLIC_BASE_URL)` is always allowed for browser Console requests. Additional static Console origins are configured as an exact comma-separated allowlist:
 
 ```env
-TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://console.example.invalid,https://ops.example.invalid"
+TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost,https://ops.example.invalid"
 ```
 
 Only explicit `http`/`https` origins are accepted; wildcard, path, query and fragment values fail closed. CORS/Origin enforcement covers `/connect`, `/pairing/exchange`, `/oauth/token`, `/actions/*` and `/console/*`. Non-browser clients without an `Origin` header remain supported.

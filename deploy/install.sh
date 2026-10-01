@@ -13,6 +13,12 @@ SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
 HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
 HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
 PUBLIC_INGRESS_TIMEOUT_SEC=${TERMINAL_MCP_PUBLIC_INGRESS_TIMEOUT_SEC:-10}
+CANONICAL_CONSOLE_ORIGINS=${TERMINAL_MCP_CANONICAL_CONSOLE_ORIGINS:-https://localhost}
+CADDYFILE=${TERMINAL_MCP_CADDYFILE:-/etc/caddy/Caddyfile}
+CADDY_BIN=${TERMINAL_MCP_CADDY_BIN:-caddy}
+CADDY_SERVICE=${TERMINAL_MCP_CADDY_SERVICE:-caddy}
+CADDY_MANAGE_MODE=${TERMINAL_MCP_CADDY_MANAGE_MODE:-auto}
+CADDY_UPSTREAM=${TERMINAL_MCP_CADDY_UPSTREAM:-127.0.0.1:8080}
 SOURCE=$(cd "$(dirname "$0")/.." && pwd)
 SQLITE_VERSION=3.53.4
 SQLITE_SOURCE_ID=3530400
@@ -26,7 +32,7 @@ write_env(){
 TERMINAL_MCP_HOST="127.0.0.1"
 TERMINAL_MCP_PORT="8080"
 TERMINAL_MCP_PUBLIC_BASE_URL="${TERMINAL_MCP_PUBLIC_BASE_URL:-https://server-a.example.invalid}"
-TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"
+TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-$CANONICAL_CONSOLE_ORIGINS}"
 TERMINAL_MCP_ENV_FILE_PATH="$ENV_FILE"
 TERMINAL_MCP_DATABASE_PATH="$DATA/terminal-mcp.sqlite3"
 TERMINAL_MCP_AUTH_DATABASE_PATH="$DATA/auth.sqlite3"
@@ -75,10 +81,40 @@ ENV
   fi
   chmod 600 "$ENV_FILE"
 }
+ensure_console_origins(){
+  python3 - "$ENV_FILE" "$CANONICAL_CONSOLE_ORIGINS" <<'PYORIGINS'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+required = [item.strip() for item in sys.argv[2].split(",") if item.strip()]
+lines = path.read_text().splitlines()
+prefix = "TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="
+found = False
+
+for index, line in enumerate(lines):
+    if not line.startswith(prefix):
+        continue
+    found = True
+    raw = line[len(prefix):].strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        raw = raw[1:-1]
+    existing = [item.strip() for item in raw.split(",") if item.strip()]
+    merged = list(dict.fromkeys(existing + required))
+    lines[index] = prefix + '"' + ",".join(merged) + '"'
+    break
+
+if not found:
+    lines.append(prefix + '"' + ",".join(required) + '"')
+
+path.write_text("\n".join(lines) + "\n")
+PYORIGINS
+}
+
 ensure_env_defaults(){
   [ -f "$ENV_FILE" ] || return 0
   ensure_env(){ key=$1; value=$2; grep -q "^${key}=" "$ENV_FILE" || printf '%s="%s"\n' "$key" "$value" >>"$ENV_FILE"; }
-  ensure_env TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS "${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"
+  ensure_console_origins
   ensure_env TERMINAL_MCP_OUTPUT_CACHE_PATH "$CACHE/output.sqlite3"
   ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"
   ensure_env TERMINAL_MCP_OAUTH_REQUIRED_SCOPES "${TERMINAL_MCP_OAUTH_REQUIRED_SCOPES:-terminal:read terminal:execute}"
@@ -101,6 +137,152 @@ ensure_env_defaults(){
     ensure_env TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED "${TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED}"
   fi
   chmod 600 "$ENV_FILE"
+}
+
+read_env_value(){
+  local key=$1
+  sed -n "s/^${key}=\"\(.*\)\"$/\1/p" "$ENV_FILE" | tail -n 1
+}
+
+first_console_origin(){
+  local origins
+  origins=$(read_env_value TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS)
+  printf '%s' "${origins%%,*}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+public_status(){
+  local method=$1
+  local url=$2
+  shift 2
+  curl --max-time "$PUBLIC_INGRESS_TIMEOUT_SEC" -sS -o /dev/null -w '%{http_code}' -X "$method" "$@" "$url" || true
+}
+
+check_public_console_ingress(){
+  local public_base_url console_origin connect_status ticket_status
+  local headers preflight_status allow_origin route method status
+
+  [ -f "$ENV_FILE" ] || { echo "Missing env file: $ENV_FILE" >&2; return 1; }
+  public_base_url=$(read_env_value TERMINAL_MCP_PUBLIC_BASE_URL)
+  console_origin=$(first_console_origin)
+  [ -n "$public_base_url" ] || { echo "TERMINAL_MCP_PUBLIC_BASE_URL is not configured" >&2; return 1; }
+  [ -n "$console_origin" ] || { echo "TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS is empty" >&2; return 1; }
+
+  connect_status=$(public_status GET "${public_base_url%/}/connect")
+  if [ "$connect_status" != "200" ]; then
+    echo "Public Console ingress check failed: /connect returned ${connect_status:-request_error}, expected 200" >&2
+    return 1
+  fi
+
+  headers=$(mktemp)
+  preflight_status=$(
+    curl --max-time "$PUBLIC_INGRESS_TIMEOUT_SEC" -sS -D "$headers" -o /dev/null -w '%{http_code}' \
+      -X OPTIONS \
+      -H "Origin: $console_origin" \
+      -H 'Access-Control-Request-Method: GET' \
+      -H 'Access-Control-Request-Headers: authorization,content-type' \
+      "${public_base_url%/}/actions/console/snapshot" || true
+  )
+  allow_origin=$(
+    awk 'tolower($1) == "access-control-allow-origin:" {
+      $1=""; sub(/^[[:space:]]+/, ""); sub(/\r$/, ""); print; exit
+    }' "$headers"
+  )
+  rm -f "$headers"
+  if { [ "$preflight_status" != "200" ] && [ "$preflight_status" != "204" ]; } ||
+     [ "$allow_origin" != "$console_origin" ]; then
+    echo "Public Console CORS preflight failed: status=${preflight_status:-request_error} allow-origin=${allow_origin:-missing} expected=$console_origin" >&2
+    return 1
+  fi
+
+  ticket_status=$(public_status POST "${public_base_url%/}/console/ws-ticket" -H "Origin: $console_origin")
+  if [ "$ticket_status" != "401" ]; then
+    echo "Public Console route check failed: /console/ws-ticket returned ${ticket_status:-request_error}, expected 401" >&2
+    return 1
+  fi
+
+  while IFS='|' read -r method route json_body; do
+    [ -n "$route" ] || continue
+    if [ -n "$json_body" ]; then
+      status=$(
+        public_status "$method" "${public_base_url%/}${route}" \
+          -H "Origin: $console_origin" \
+          -H 'Content-Type: application/json' \
+          --data "$json_body"
+      )
+    else
+      status=$(public_status "$method" "${public_base_url%/}${route}" -H "Origin: $console_origin")
+    fi
+    if [ "$status" != "401" ]; then
+      echo "Public Fleet v1 Console route check failed: $method $route returned ${status:-request_error}, expected 401" >&2
+      return 1
+    fi
+  done <<'ROUTES'
+GET|/console/fleet/v1/probe|
+GET|/console/fleet/v1/snapshot|
+POST|/console/fleet/v1/activity|{}
+POST|/console/fleet/v1/query/tasks|{}
+GET|/console/fleet/v1/detail/tasks?entity_id=ingress-probe|
+POST|/console/fleet/v1/namespaces|{}
+GET|/console/fleet/v1/task-graph?namespace=ingress-probe&task_id=ingress-probe|
+POST|/console/fleet/v1/ws-ticket|
+ROUTES
+}
+
+configure_console_caddy(){
+  local public_base_url candidate stamp backup
+
+  case "$CADDY_MANAGE_MODE" in
+    off) return 0 ;;
+    auto|required) ;;
+    *) echo "TERMINAL_MCP_CADDY_MANAGE_MODE must be auto|required|off" >&2; return 1 ;;
+  esac
+
+  if [ ! -f "$CADDYFILE" ] || ! command -v "$CADDY_BIN" >/dev/null 2>&1; then
+    if [ "$CADDY_MANAGE_MODE" = "required" ]; then
+      echo "Caddy management required but Caddyfile/binary is unavailable" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  public_base_url=$(read_env_value TERMINAL_MCP_PUBLIC_BASE_URL)
+  [ -n "$public_base_url" ] || { echo "TERMINAL_MCP_PUBLIC_BASE_URL is not configured" >&2; return 1; }
+  candidate=$(mktemp "$(dirname "$CADDYFILE")/.terminal-mcp-caddy.XXXXXX")
+  if ! python3 "$SOURCE/deploy/console_ingress.py" \
+      --input "$CADDYFILE" \
+      --output "$candidate" \
+      --public-base-url "$public_base_url" \
+      --upstream "$CADDY_UPSTREAM"; then
+    rm -f "$candidate"
+    return 1
+  fi
+
+  if cmp -s "$CADDYFILE" "$candidate"; then
+    rm -f "$candidate"
+    return 0
+  fi
+
+  if ! "$CADDY_BIN" validate --config "$candidate" --adapter caddyfile >/dev/null; then
+    echo "Candidate Caddy configuration failed validation; current config left unchanged" >&2
+    rm -f "$candidate"
+    return 1
+  fi
+
+  mkdir -p "$BACKUPS"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  backup="$BACKUPS/caddy-$stamp.Caddyfile"
+  cp -p "$CADDYFILE" "$backup"
+  chmod 600 "$backup"
+  cat "$candidate" >"$CADDYFILE"
+  rm -f "$candidate"
+
+  if ! "$SYSTEMCTL" reload "$CADDY_SERVICE"; then
+    echo "Caddy reload failed; restoring $backup" >&2
+    cat "$backup" >"$CADDYFILE"
+    "$CADDY_BIN" validate --config "$CADDYFILE" --adapter caddyfile >/dev/null || true
+    "$SYSTEMCTL" reload "$CADDY_SERVICE" || true
+    return 1
+  fi
 }
 
 check_public_fleet_ingress(){
@@ -350,8 +532,11 @@ activate(){
   ln -sfn "$new" "$ROOT/current"; $SYSTEMCTL daemon-reload; $SYSTEMCTL restart terminal-mcp
   for _ in $(seq 1 "$HEALTH_TIMEOUT_SEC"); do
     if curl -fsS "$HEALTH_URL" >/dev/null; then
-      install_cli_link
-      return 0
+      if check_public_fleet_ingress && check_public_console_ingress; then
+        install_cli_link
+        return 0
+      fi
+      break
     fi
     sleep 1
   done
@@ -372,8 +557,9 @@ find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0
 [ ! -e "$DATA/terminal-mcp.sqlite3" ] || chmod 0600 "$DATA/terminal-mcp.sqlite3"
 [ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
 case "$CMD" in
- install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
- update) ensure_env_defaults; stage; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; activate "$STAGED_RELEASE" ;;
- doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress ;;
- *) echo 'Usage: install.sh {install|update|doctor}'; exit 1 ;;
+ install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; configure_console_caddy; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
+ update) ensure_env_defaults; stage; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
+ ingress) ensure_env_defaults; configure_console_caddy ;;
+ doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress; check_public_console_ingress ;;
+ *) echo 'Usage: install.sh {install|update|ingress|doctor}'; exit 1 ;;
 esac
