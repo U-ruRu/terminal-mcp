@@ -21,6 +21,8 @@ def make_settings(tmp_path):
         auth_mode="bearer",
         bearer_tokens="api-token",
         metrics_port=0,
+        persistent_agents_enabled=False,
+        legacy_agent_admission_enabled=True,
     )
 
 

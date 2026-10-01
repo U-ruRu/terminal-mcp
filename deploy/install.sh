@@ -129,6 +129,7 @@ ensure_env_defaults(){
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_AFTER_SEC:-1380}"
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC:-60}"
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE "${TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE:-Ваша сессия закончилась. У пользователя для вас новая задача. Завершите сессию и немедленно вернитесь в чат к пользователю, чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу.}"
+  ensure_env TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED "${TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED:-true}"
   ensure_env TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED "${TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED:-true}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC:-1380}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC:-1200}"
@@ -291,7 +292,12 @@ check_public_fleet_ingress(){
     sed -n 's/^TERMINAL_MCP_PUBLIC_BASE_URL="\(.*\)"$/\1/p' "$ENV_FILE" | tail -n 1
   )
   [ -n "$public_base_url" ] || { echo "TERMINAL_MCP_PUBLIC_BASE_URL is not configured" >&2; return 1; }
-  ingress_url="${public_base_url%/}/internal/fleet/identities"
+  legacy_replication_enabled=$(read_env_value TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED)
+  case "${legacy_replication_enabled,,}" in
+    false|0|no|off) ingress_path=/internal/fleet/v1/source/manifest ;;
+    *) ingress_path=/internal/fleet/identities ;;
+  esac
+  ingress_url="${public_base_url%/}${ingress_path}"
   ingress_status=$(
     curl --max-time "$PUBLIC_INGRESS_TIMEOUT_SEC" -sS -o /dev/null -w '%{http_code}' "$ingress_url" || true
   )

@@ -116,7 +116,9 @@ def test_oauth_access_ttl_defaults_to_30_days_everywhere():
     assert 'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="2592000"' in env_example
 
 
-def _run_doctor_with_ingress_status(tmp_path, ingress_status: str):
+def _run_doctor_with_ingress_status(
+    tmp_path, ingress_status: str, *, legacy_replication_enabled: str = "true"
+):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     curl_log = tmp_path / "curl.log"
@@ -130,7 +132,8 @@ def _run_doctor_with_ingress_status(tmp_path, ingress_status: str):
         "  previous=$arg\n"
         "done\n"
         "case \"$*\" in\n"
-        "  */internal/fleet/identities*) printf '%s' \"$FAKE_INGRESS_STATUS\" ;;\n"
+        "  */internal/fleet/identities*|*/internal/fleet/v1/source/manifest*) "
+        "printf '%s' \"$FAKE_INGRESS_STATUS\" ;;\n"
         "  *'/actions/console/snapshot'*)\n"
         "    [ -z \"$header_file\" ] || "
         "printf 'HTTP/1.1 204 No Content\\r\\n"
@@ -152,6 +155,7 @@ def _run_doctor_with_ingress_status(tmp_path, ingress_status: str):
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://server-a.example.invalid"\n'
         'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"\n'
         'TERMINAL_MCP_QUEUE_WORKERS="4"\n'
+        f'TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED="{legacy_replication_enabled}"\n'
     )
     env = {
         **os.environ,
@@ -183,6 +187,16 @@ def test_doctor_requires_public_fleet_ingress(tmp_path):
 
     assert result.returncode == 0
     assert "https://server-a.example.invalid/internal/fleet/identities" in curl_log
+
+
+def test_doctor_switches_to_v1_probe_after_legacy_mesh_retirement(tmp_path):
+    result, curl_log = _run_doctor_with_ingress_status(
+        tmp_path, "401", legacy_replication_enabled="false"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "https://server-a.example.invalid/internal/fleet/v1/source/manifest" in curl_log
+    assert "https://server-a.example.invalid/internal/fleet/identities" not in curl_log
 
 
 def test_doctor_rejects_proxy_404_for_public_fleet_ingress(tmp_path):

@@ -26,6 +26,8 @@ def settings(tmp_path, **overrides):
         runtime_config_path=tmp_path / "runtime.env",
         log_path=tmp_path / "terminal-mcp.log",
         metrics_port=0,
+        persistent_agents_enabled=False,
+        legacy_agent_admission_enabled=True,
         cwd=tmp_path,
         public_base_url="https://terminal.example",
         oauth_issuer="https://terminal.example",

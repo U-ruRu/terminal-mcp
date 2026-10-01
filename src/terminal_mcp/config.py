@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     fleet_peers_json: str = "[]"
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
+    fleet_legacy_replication_enabled: bool = True
     fleet_v1_source_enabled: bool = False
     fleet_v1_authority_enabled: bool = False
     fleet_v1_projection_enabled: bool = False

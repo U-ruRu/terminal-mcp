@@ -128,6 +128,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if fleet_config
         else None
     )
+    legacy_fleet_replication = (
+        fleet_replication if settings.fleet_legacy_replication_enabled else None
+    )
     service = TerminalService(
         repo,
         terminal,
@@ -138,7 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events,
         metrics,
         agent_policy,
-        fleet_replication,
+        legacy_fleet_replication,
         legacy_agent_admission_enabled=settings.legacy_admission_allowed(),
         persistent_agents_enabled=settings.persistent_agents_enabled,
     )
@@ -282,8 +285,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await oauth_store.initialize()
         await auth_foundation.initialize()
         await pairing_store.initialize()
-        if fleet_replication:
-            await fleet_replication.start()
+        if legacy_fleet_replication:
+            await legacy_fleet_replication.start()
         await terminal.start()
         if fleet_projection_service:
             await fleet_projection_service.start()
@@ -300,8 +303,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if fleet_projection_service:
                 await fleet_projection_service.stop()
             await terminal.stop()
-            if fleet_replication:
-                await fleet_replication.stop()
+            if legacy_fleet_replication:
+                await legacy_fleet_replication.stop()
             events.emit("application_stopped", outcome="success")
             await metrics.stop()
             await runtime.stop()
@@ -321,6 +324,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.events = events
     app.state.event_store = service.event_store
     app.state.fleet_replication = fleet_replication
+    app.state.legacy_fleet_replication = legacy_fleet_replication
     app.state.fleet_node_meta = fleet_node_meta
     app.state.fleet_source = fleet_source
     app.state.fleet_control = fleet_control
@@ -332,7 +336,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
     if fleet_replication:
-        app.include_router(build_fleet_router(fleet_replication))
+        if settings.fleet_legacy_replication_enabled:
+            app.include_router(build_fleet_router(fleet_replication))
         if fleet_source:
             app.include_router(build_fleet_v1_source_router(fleet_source, fleet_replication))
         if fleet_projection:
