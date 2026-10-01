@@ -34,6 +34,7 @@ ACTIONS = (
     "comment",
     "relate",
     "unrelate",
+    "review",
 )
 REVIEW_DIMENSIONS = ("A", "C", "R")  # legacy read-only review history
 PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
@@ -255,6 +256,32 @@ class TaskCoordinator:
             return False, claims, blocking
         return True, claims, blocking
 
+    @staticmethod
+    def _normalize_refs(refs, field):
+        if refs is None:
+            return []
+        if not isinstance(refs, list):
+            raise ValueError(f"task.{field}: expected list")
+        if len(refs) > 64:
+            raise ValueError(f"task.{field}: maximum 64 refs")
+        result = []
+        seen = set()
+        for index, value in enumerate(refs):
+            if not isinstance(value, str):
+                raise ValueError(f"task.{field}[{index}]: expected string")
+            if not value:
+                raise ValueError(f"task.{field}[{index}]: empty ref is not allowed")
+            if value != value.strip():
+                raise ValueError(
+                    f"task.{field}[{index}]: leading/trailing whitespace is not allowed"
+                )
+            if len(value) > 512:
+                raise ValueError(f"task.{field}[{index}]: maximum length is 512 characters")
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
     async def _cleanup_stale_claims(self, namespace, task_id):
         active = await self.store.active_claims(namespace, task_id)
         live = await self._live_claims(namespace, task_id)
@@ -373,8 +400,12 @@ class TaskCoordinator:
             result["relations"] = await self.store.relations(namespace, task_id)
             reviews = await self.store.reviews(namespace, task_id)
             for review in reviews:
-                review["agent_name"] = public_agent_name(review.pop("agent_id"))
+                reviewer = public_agent_name(review.pop("agent_id"))
+                review["reviewer"] = reviewer
+                review["agent_name"] = reviewer
+                review.pop("candidate_ref", None)
             result["reviews"] = reviews
+            result["output_states"] = await self.store.output_states(namespace, task_id)
             events = await self.store.list_events(namespace, task_id, limit=100)
             comments = []
             for event in events:
@@ -437,6 +468,34 @@ class TaskCoordinator:
                 "warnings": [],
             }
         return None
+
+    async def _review_requirements_error(self, current, proposed_output_refs=None):
+        requirements = current.get("reviews") or []
+        if not requirements:
+            return None
+        if proposed_output_refs is not None and proposed_output_refs != current.get(
+            "output_refs", []
+        ):
+            missing = list(requirements)
+        else:
+            rows = await self.store.reviews(
+                current["namespace"],
+                current["task_id"],
+                output_state_id=current.get("output_state_id"),
+            )
+            approved = {row["dimension"] for row in rows if row["verdict"] == "NON_BLOCKING"}
+            missing = [item for item in requirements if item not in approved]
+        if not missing:
+            return None
+        return {
+            "ok": False,
+            "code": "review_requirements_unsatisfied",
+            "error": (
+                "task.done: current output state is missing NON_BLOCKING reviews for "
+                + ",".join(missing)
+            ),
+            "warnings": [],
+        }
 
     async def _review_feedback_events(
         self,
@@ -689,6 +748,16 @@ class TaskCoordinator:
             tags = self._normalize_tags(kwargs.get("tags")) or []
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "warnings": []}
+        try:
+            input_refs = self._normalize_refs(kwargs.get("input_refs") or [], "input_refs")
+            if "output_refs" in kwargs:
+                output_refs = self._normalize_refs(kwargs.get("output_refs") or [], "output_refs")
+            elif kwargs.get("candidate_ref"):
+                output_refs = self._normalize_refs([kwargs["candidate_ref"]], "output_refs")
+            else:
+                output_refs = []
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "warnings": []}
         isolation_hint, isolation_error = self._clean_reason(
             kwargs.get("isolation_hint"), "isolation_hint", max_length=160
         )
@@ -732,6 +801,8 @@ class TaskCoordinator:
                 cooperative=bool(kwargs.get("cooperative")),
                 checkpoint=kwargs.get("checkpoint") or {},
                 candidate_ref=kwargs.get("candidate_ref"),
+                input_refs=input_refs,
+                output_refs=output_refs,
                 result=kwargs.get("result"),
                 tags=tags,
                 dependencies=kwargs.get("dependencies"),
@@ -1054,6 +1125,15 @@ class TaskCoordinator:
         if dependency_error:
             return {"ok": False, "error": dependency_error, "warnings": []}
         current = await self.store.get_task(namespace, task_id)
+        if not current:
+            return self._missing()
+        try:
+            if "input_refs" in kwargs:
+                kwargs["input_refs"] = self._normalize_refs(kwargs["input_refs"], "input_refs")
+            if "output_refs" in kwargs:
+                kwargs["output_refs"] = self._normalize_refs(kwargs["output_refs"], "output_refs")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "warnings": []}
         fields = {}
         mapping = {
             "title": "title",
@@ -1065,6 +1145,8 @@ class TaskCoordinator:
             "cooperative": "cooperative",
             "checkpoint": "checkpoint",
             "candidate_ref": "candidate_ref",
+            "input_refs": "input_refs",
+            "output_refs": "output_refs",
             "result": "result",
             "tags": "tags",
         }
@@ -1131,6 +1213,12 @@ class TaskCoordinator:
 
         dependency_override = None
         if target_state == "done" and current["state"] != "done":
+            review_error = await self._review_requirements_error(
+                current,
+                proposed_output_refs=fields.get("output_refs"),
+            )
+            if review_error:
+                return review_error
             candidate_error = await self._review_completion_candidate_error(
                 current,
                 proposed_candidate=fields.get("candidate_ref"),
@@ -1244,6 +1332,8 @@ class TaskCoordinator:
         for key in (
             "checkpoint",
             "candidate_ref",
+            "input_refs",
+            "output_refs",
             "result",
             "tags",
             "state",
@@ -1301,26 +1391,25 @@ class TaskCoordinator:
                 "error": "task.review: dimensions and verdict=NON_BLOCKING|BLOCKING required",
                 "warnings": [],
             }
+        if kwargs.get("candidate_ref") is not None:
+            return {
+                "ok": False,
+                "error": (
+                    "task.review: candidate_ref is not accepted; review binds current "
+                    "output_state_id"
+                ),
+                "warnings": [],
+            }
+        output_state_id = current.get("output_state_id")
+        if output_state_id is None:
+            return {
+                "ok": False,
+                "code": "output_state_missing",
+                "error": "task.review: task has no current output state",
+                "warnings": [],
+            }
+
         warnings = []
-        candidate = kwargs.get("candidate_ref") or current.get("candidate_ref")
-        if not candidate:
-            warnings.append(
-                _warning(
-                    "stale_candidate",
-                    "Review has no candidate reference to bind the verdict.",
-                    task_id=task_id,
-                )
-            )
-        elif current.get("candidate_ref") and candidate != current["candidate_ref"]:
-            warnings.append(
-                _warning(
-                    "stale_candidate",
-                    "Review candidate differs from task current candidate.",
-                    task_id=task_id,
-                    current=current["candidate_ref"],
-                    reviewed=candidate,
-                )
-            )
         history = await self.store.claims(namespace, task_id, active_only=False)
         if any(item["agent_id"] == agent_id for item in history):
             warnings.append(
@@ -1332,25 +1421,37 @@ class TaskCoordinator:
                 )
             )
         now = utc_text()
-        for dimension in dimensions:
-            await self.store.upsert_review(
+        output_refs = list(current.get("output_refs") or [])
+        try:
+            await self.store.upsert_reviews(
                 namespace,
                 task_id,
-                candidate_ref=candidate,
-                dimension=dimension,
+                output_state_id=output_state_id,
+                output_refs=output_refs,
+                dimensions=dimensions,
                 verdict=verdict,
                 agent_id=agent_id,
                 evidence=kwargs.get("evidence") or {},
                 warnings=warnings,
                 now=now,
             )
+        except ValueError as exc:
+            if "changed before review" in str(exc):
+                return {
+                    "ok": False,
+                    "code": "output_state_changed",
+                    "error": f"task.review: {exc}",
+                    "warnings": warnings,
+                }
+            raise
         await self.store.add_event(
             namespace,
             task_id,
             "review",
             agent_id=agent_id,
             payload={
-                "candidate_ref": candidate,
+                "output_state_id": output_state_id,
+                "output_refs": output_refs,
                 "dimensions": dimensions,
                 "verdict": verdict,
                 "evidence": kwargs.get("evidence") or {},

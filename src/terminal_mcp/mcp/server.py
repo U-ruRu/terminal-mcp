@@ -18,6 +18,8 @@ from terminal_mcp.api_models import (
     MessageResponse,
     ReadResponse,
     RecoveryResponse,
+    ReviewDimension,
+    ReviewVerdict,
     RunResponse,
     TaskAction,
     TaskLane,
@@ -39,6 +41,7 @@ _SAFE_OPERATION = ToolAnnotations(
 )
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
 StepItem = Annotated[str, Field(min_length=1, max_length=160)]
+TaskRef = Annotated[str, Field(min_length=1, max_length=512)]
 
 
 class _StrictRequest(BaseModel):
@@ -401,10 +404,13 @@ def build_mcp(
             "workflow changes require a current live owner; an unclaimed task must be claimed first. "
             "blocked requires blocker_reason for a claimed task; "
             "release requires release_reason as durable handoff history; done requires result. "
-            "comment is append-only history. "
-            "relate/unrelate manage generic task relations; review work uses lane=review plus "
-            "relation_kind=review_of. archive requires archive_note and preserves workflow state. "
-            "force=true with force_reason overrides open dependencies only, never ownership."
+            "comment is append-only history. input_refs/output_refs are ordered, deduplicated "
+            "reference lists; changing output_refs creates a new output_state_id. "
+            "action=review binds dimensions/verdict/evidence to the task's current output state "
+            "automatically. relate/unrelate manage generic task relations; review work may also "
+            "use lane=review plus relation_kind=review_of. archive requires archive_note and "
+            "preserves workflow state. force=true with force_reason overrides open dependencies "
+            "only, never ownership."
         ),
     )
     async def task(
@@ -423,6 +429,11 @@ def build_mcp(
         cooperative: bool | None = None,
         checkpoint: str | dict[str, object] | list[object] | None = None,
         candidate_ref: Annotated[str | None, Field(max_length=200)] = None,
+        input_refs: Annotated[list[TaskRef] | None, Field(max_length=64)] = None,
+        output_refs: Annotated[list[TaskRef] | None, Field(max_length=64)] = None,
+        dimensions: Annotated[list[ReviewDimension] | None, Field(max_length=3)] = None,
+        verdict: ReviewVerdict | None = None,
+        evidence: dict[str, object] | None = None,
         result: str | dict[str, object] | list[object] | None = None,
         tags: Annotated[list[str] | None, Field(max_length=50)] = None,
         dependencies: Annotated[list[dict[str, str]] | None, Field(max_length=100)] = None,
@@ -452,6 +463,11 @@ def build_mcp(
             "cooperative": cooperative,
             "checkpoint": checkpoint,
             "candidate_ref": candidate_ref,
+            "input_refs": input_refs,
+            "output_refs": output_refs,
+            "dimensions": dimensions,
+            "verdict": verdict,
+            "evidence": evidence,
             "result": result,
             "tags": tags,
             "dependencies": dependencies,

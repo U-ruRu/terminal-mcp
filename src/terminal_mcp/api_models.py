@@ -25,6 +25,7 @@ TaskAction = Literal[
     "state",
     "done",
     "archive",
+    "review",
 ]
 TaskLane = Literal["implementation", "review", "release", "integration", "general"]
 TaskState = Literal["ready", "in_progress", "blocked", "deferred", "done"]
@@ -282,6 +283,10 @@ class TaskCard(BaseModel):
     next_action: str = ""
     checkpoint: str | dict[str, object] = Field(default_factory=dict)
     candidate_ref: str | None = None
+    input_refs: list[str] = Field(default_factory=list)
+    output_refs: list[str] = Field(default_factory=list)
+    output_state_id: int | None = None
+    output_states: list[dict[str, object]] | None = None
     result: str | dict[str, object] | list[object] | None = None
     tags: list[str] = Field(default_factory=list)
     state_changed_at: str | None = None
