@@ -92,6 +92,7 @@ class PersistentFleetBridge:
         permit_ttl_ms: int = 10000,
         control_store=None,
         control_node_id: str | None = None,
+        access_authority=None,
     ):
         self.config = config
         self.store = store
@@ -102,6 +103,7 @@ class PersistentFleetBridge:
         self.permit_ttl_ms = max(1, min(int(permit_ttl_ms), 60000))
         self.control_store = control_store
         self.control_node_id = control_node_id
+        self.access_authority = access_authority
         self.execution_fence = None
         self._permit_deadlines: dict[str, float] = {}
         self._task: asyncio.Task | None = None
@@ -115,6 +117,118 @@ class PersistentFleetBridge:
             "Authorization": f"Bearer {peer.auth_token}",
             "X-Terminal-MCP-Peer": self.config.instance_id,
         }
+
+    def _access_control_node_id(self) -> str:
+        return (self.control_node_id or self.config.instance_id).strip()
+
+    async def _remote_access_call(self, operation: str, payload: dict) -> dict:
+        control_id = self._access_control_node_id()
+        peer = self.config.peers_by_id.get(control_id)
+        if peer is None:
+            raise PersistentStoreError("authority_unavailable")
+        body = {**payload, "requesting_instance_id": self.config.instance_id}
+        async with self.client_factory() as client:
+            response = await client.post(
+                f"{peer.origin}/internal/fleet/persistent/access/{operation}",
+                headers=self._headers(peer),
+                json=body,
+            )
+        if response.status_code >= 400:
+            raise PersistentStoreError("authority_unavailable")
+        data = response.json()
+        if not data.get("ok"):
+            raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+        return data
+
+    async def resolve_access_code(self, access_code: str) -> dict:
+        control_id = self._access_control_node_id()
+        if control_id == self.config.instance_id:
+            if self.access_authority is None:
+                raise PersistentStoreError("authority_unavailable")
+            result = await self.access_authority.resolve_access_code(access_code)
+            if result is None:
+                raise PersistentStoreError("access_denied")
+            return result
+        data = await self._remote_access_call("resolve", {"access_code": access_code})
+        return dict(data["access"])
+
+    async def get_access_slot(self, logical_agent_id: str) -> dict | None:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("get", {"logical_agent_id": logical_agent_id})
+            return dict(data["access"]) if data.get("access") is not None else None
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.access_slot(logical_agent_id)
+
+    async def update_access_display_suffix(
+        self, logical_agent_id: str, display_suffix: str | None
+    ) -> dict:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call(
+                "display",
+                {"logical_agent_id": logical_agent_id, "display_suffix": display_suffix},
+            )
+            return dict(data["access"])
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.update_access_display_suffix(
+            logical_agent_id, display_suffix
+        )
+
+    async def ensure_access_slot(
+        self,
+        logical_agent_id: str,
+        authority_node_id: str,
+        *,
+        display_suffix: str | None = None,
+        forbidden_codes=(),
+    ) -> dict:
+        control_id = self._access_control_node_id()
+        payload = {
+            "logical_agent_id": logical_agent_id,
+            "authority_node_id": authority_node_id,
+            "slot_kind": "persistent",
+            "display_suffix": display_suffix,
+            "forbidden_codes": list(forbidden_codes),
+        }
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("register", payload)
+            return dict(data["access"])
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        await self.access_authority.reserve_access_codes(payload["forbidden_codes"])
+        slot = await self.access_authority.register_access_slot(
+            logical_agent_id,
+            authority_node_id,
+            slot_kind="persistent",
+            display_suffix=display_suffix,
+        )
+        if int(slot["access_generation"]) == 0:
+            issued = await self.access_authority.issue_access_code(logical_agent_id)
+            return {**slot, **issued}
+        return slot
+
+    async def rotate_access_code(self, logical_agent_id: str, *, forbidden_codes=()) -> dict:
+        control_id = self._access_control_node_id()
+        payload = {"logical_agent_id": logical_agent_id, "forbidden_codes": list(forbidden_codes)}
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("rotate", payload)
+            return dict(data["access"])
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        await self.access_authority.reserve_access_codes(payload["forbidden_codes"])
+        return await self.access_authority.issue_access_code(logical_agent_id)
+
+    async def retire_access_slot(self, logical_agent_id: str) -> dict:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("retire", {"logical_agent_id": logical_agent_id})
+            return dict(data["access"])
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.retire_access_slot(logical_agent_id)
 
     async def route_info(self, logical_agent_id: str) -> dict | None:
         if self.control_store is None:

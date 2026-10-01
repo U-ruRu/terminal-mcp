@@ -33,6 +33,143 @@ def build_persistent_fleet_router(replication, bridge) -> APIRouter:
             detail["blockers"] = exc.blockers
         raise HTTPException(status_code=status, detail=detail) from exc
 
+    @router.post("/internal/fleet/persistent/access/resolve", include_in_schema=False)
+    async def access_resolve(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        try:
+            access = await bridge.resolve_access_code(str(payload.get("access_code") or ""))
+        except (PersistentStoreError, ValueError) as exc:
+            code = exc.code if isinstance(exc, PersistentStoreError) else "access_denied"
+            return {"ok": False, "code": code}
+        return {"ok": True, "access": access}
+
+    @router.post("/internal/fleet/persistent/access/get", include_in_schema=False)
+    async def access_get(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        access = await bridge.access_authority.access_slot(
+            str(payload.get("logical_agent_id") or "")
+        )
+        return {"ok": True, "access": access}
+
+    @router.post("/internal/fleet/persistent/access/display", include_in_schema=False)
+    async def access_display(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        try:
+            access = await bridge.access_authority.update_access_display_suffix(
+                str(payload.get("logical_agent_id") or ""), payload.get("display_suffix")
+            )
+        except Exception:
+            return {"ok": False, "code": "access_update_failed"}
+        return {"ok": True, "access": access}
+
+    @router.post("/internal/fleet/persistent/access/register", include_in_schema=False)
+    async def access_register(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        logical_agent_id = str(payload.get("logical_agent_id") or "")
+        try:
+            await bridge.access_authority.reserve_access_codes(
+                list(payload.get("forbidden_codes") or [])
+            )
+            slot = await bridge.access_authority.register_access_slot(
+                logical_agent_id,
+                str(payload.get("authority_node_id") or ""),
+                slot_kind=str(payload.get("slot_kind") or "persistent"),
+                display_suffix=payload.get("display_suffix"),
+            )
+            access = (
+                await bridge.access_authority.issue_access_code(logical_agent_id)
+                if int(slot["access_generation"]) == 0
+                else slot
+            )
+        except Exception:
+            return {"ok": False, "code": "access_registration_failed"}
+        return {"ok": True, "access": {**slot, **access}}
+
+    @router.post("/internal/fleet/persistent/access/rotate", include_in_schema=False)
+    async def access_rotate(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        logical_agent_id = str(payload.get("logical_agent_id") or "")
+        try:
+            await bridge.access_authority.reserve_access_codes(
+                list(payload.get("forbidden_codes") or [])
+            )
+            access = await bridge.access_authority.issue_access_code(logical_agent_id)
+        except Exception:
+            return {"ok": False, "code": "access_rotation_failed"}
+        return {"ok": True, "access": access}
+
+    @router.post("/internal/fleet/persistent/access/retire", include_in_schema=False)
+    async def access_retire(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        try:
+            access = await bridge.access_authority.retire_access_slot(
+                str(payload.get("logical_agent_id") or "")
+            )
+        except Exception:
+            return {"ok": False, "code": "access_retire_failed"}
+        return {"ok": True, "access": access}
+
     @router.post("/internal/fleet/persistent/permit", include_in_schema=False)
     async def issue_permit(
         payload: dict,
