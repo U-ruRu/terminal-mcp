@@ -648,6 +648,9 @@ class AuthFoundationStore:
     async def access_slot(self, logical_agent_id: str) -> dict | None:
         return await self.access.get_slot(logical_agent_id)
 
+    async def access_slot_by_public_name(self, public_name: str) -> dict | None:
+        return await self.access.get_slot_by_public_name(public_name)
+
     async def access_slots(self, *, include_deleted: bool = False) -> list[dict]:
         return await self.access.list_slots(include_deleted=include_deleted)
 

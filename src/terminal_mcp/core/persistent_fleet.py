@@ -152,6 +152,24 @@ class PersistentFleetBridge:
         data = await self._remote_access_call("resolve", {"access_code": access_code})
         return dict(data["access"])
 
+    async def list_access_slots(self) -> list[dict]:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("list", {})
+            return [dict(item) for item in data.get("access", [])]
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.access_slots()
+
+    async def get_access_slot_by_public_name(self, public_name: str) -> dict | None:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("by-name", {"public_name": public_name})
+            return dict(data["access"]) if data.get("access") is not None else None
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.access_slot_by_public_name(public_name)
+
     async def get_access_slot(self, logical_agent_id: str) -> dict | None:
         control_id = self._access_control_node_id()
         if control_id != self.config.instance_id:
@@ -184,12 +202,13 @@ class PersistentFleetBridge:
         *,
         display_suffix: str | None = None,
         forbidden_codes=(),
+        slot_kind: str = "persistent",
     ) -> dict:
         control_id = self._access_control_node_id()
         payload = {
             "logical_agent_id": logical_agent_id,
             "authority_node_id": authority_node_id,
-            "slot_kind": "persistent",
+            "slot_kind": slot_kind,
             "display_suffix": display_suffix,
             "forbidden_codes": list(forbidden_codes),
         }
@@ -202,7 +221,7 @@ class PersistentFleetBridge:
         slot = await self.access_authority.register_access_slot(
             logical_agent_id,
             authority_node_id,
-            slot_kind="persistent",
+            slot_kind=slot_kind,
             display_suffix=display_suffix,
         )
         if int(slot["access_generation"]) == 0:
@@ -229,6 +248,43 @@ class PersistentFleetBridge:
         if self.access_authority is None:
             raise PersistentStoreError("authority_unavailable")
         return await self.access_authority.retire_access_slot(logical_agent_id)
+
+    async def unified_session_call(
+        self, authority_node_id: str, operation: str, payload: dict
+    ) -> dict:
+        if authority_node_id == self.config.instance_id:
+            raise PersistentStoreError("policy_incompatible")
+        peer = self.config.peers_by_id.get(authority_node_id)
+        if peer is None:
+            raise PersistentStoreError("authority_unavailable")
+        body = {**payload, "requesting_instance_id": self.config.instance_id}
+        try:
+            from terminal_mcp.core.persistent_admission import current_admission_context
+
+            admission = current_admission_context(required=False)
+        except Exception:
+            admission = None
+        if admission is not None:
+            body["forwarded_admission"] = {
+                "principal_id": admission.principal_id,
+                "credential_id": admission.credential_id,
+                "scopes": sorted(admission.scopes),
+                "auth_generation": admission.auth_generation,
+                "transport": admission.transport,
+                "auth_mode": admission.auth_mode,
+            }
+        async with self.client_factory() as client:
+            response = await client.post(
+                f"{peer.origin}/internal/fleet/persistent/unified-session/{operation}",
+                headers=self._headers(peer),
+                json=body,
+            )
+        if response.status_code >= 400:
+            raise PersistentStoreError("authority_unavailable")
+        data = response.json()
+        if not data.get("ok"):
+            raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+        return dict(data["result"])
 
     async def route_info(self, logical_agent_id: str) -> dict | None:
         if self.control_store is None:
@@ -589,7 +645,7 @@ class PersistentFleetBridge:
         operation: str | None = None,
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
-        if scope not in {"run", "cancel"}:
+        if scope not in {"run", "cancel", "task"}:
             raise PersistentStoreError("policy_incompatible")
         if requesting_instance_id not in self.config.peers_by_id:
             raise PersistentStoreError("authority_unavailable")

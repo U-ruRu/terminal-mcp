@@ -18,7 +18,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     with sqlite3.connect(repo.path) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == 17
+    assert version == 18
     assert {
         "work_items",
         "work_claims",
@@ -228,7 +228,7 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
     legacy = await tasks.get_task("project", "LEGACY-1")
     assert legacy["isolation_hint"] == "none"
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 18
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         claim = db.execute(
             "SELECT agent_id,owner_kind,owner_id FROM work_claims "
@@ -242,7 +242,8 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
         archived_at="2026-01-02T00:00:00.000Z",
         archive_note="legacy archive lifecycle test",
     )
-    assert migrated["state"] == "ready"
+    assert migrated["state"] == "in_progress"
+    assert migrated["ready_since"] is None
     assert migrated["archived_at"] == "2026-01-02T00:00:00.000Z"
     assert migrated["archive_note"] == "legacy archive lifecycle test"
     with sqlite3.connect(database) as db:
@@ -250,3 +251,96 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
             "SELECT claim_intent FROM work_claims WHERE namespace='project' AND task_id='LEGACY-1'"
         ).fetchone()
     assert intent == ("legacy claim",)
+
+
+@pytest.mark.asyncio
+async def test_schema_v18_preserves_pre_cutover_claimed_ready_as_in_progress(tmp_path):
+    database = tmp_path / "legacy-v17.sqlite3"
+    with sqlite3.connect(database) as db:
+        db.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+            CREATE TABLE work_items(
+                namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
+                lane TEXT NOT NULL CHECK(lane IN (
+                    'implementation','review','release','integration','general'
+                )),
+                priority INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
+                description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+                isolation_hint TEXT NOT NULL DEFAULT 'none',
+                resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
+                cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
+                checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT, result_json TEXT,
+                tags_json TEXT NOT NULL DEFAULT '[]', state_changed_at TEXT, ready_since TEXT,
+                archived_at TEXT, archive_note TEXT, revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY(namespace, task_id)
+            );
+            CREATE TABLE work_claims(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace TEXT NOT NULL, task_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL, claimed_at TEXT NOT NULL, released_at TEXT,
+                claim_intent TEXT NOT NULL DEFAULT '',
+                owner_kind TEXT NOT NULL DEFAULT 'legacy_session'
+                    CHECK(owner_kind IN ('legacy_session','logical_agent')),
+                owner_id TEXT NOT NULL,
+                FOREIGN KEY(namespace,task_id)
+                    REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
+            );
+            INSERT INTO work_items(
+                namespace,task_id,title,lane,priority,state,cooperative,
+                state_changed_at,ready_since,created_at,updated_at
+            ) VALUES
+                ('ns','CLAIMED','Claimed ready','implementation',3,'ready',0,
+                 '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',
+                 '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+                ('ns','COOP','Cooperative ready','implementation',2,'ready',1,
+                 '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',
+                 '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+                ('ns','READY','Unclaimed ready','general',1,'ready',0,
+                 '2026-01-02T00:00:00Z','2026-01-02T00:00:00Z',
+                 '2026-01-02T00:00:00Z','2026-01-02T00:00:00Z'),
+                ('ns','BLOCKED','Blocked','general',1,'blocked',0,
+                 '2026-01-03T00:00:00Z',NULL,
+                 '2026-01-03T00:00:00Z','2026-01-03T00:00:00Z'),
+                ('ns','DEFERRED','Deferred','general',1,'deferred',0,
+                 '2026-01-04T00:00:00Z',NULL,
+                 '2026-01-04T00:00:00Z','2026-01-04T00:00:00Z'),
+                ('ns','DONE','Done','general',1,'done',0,
+                 '2026-01-05T00:00:00Z',NULL,
+                 '2026-01-05T00:00:00Z','2026-01-05T00:00:00Z');
+            INSERT INTO work_claims(
+                namespace,task_id,agent_id,claimed_at,claim_intent,owner_kind,owner_id
+            ) VALUES
+                ('ns','CLAIMED','Alpha-old','2026-01-01T01:00:00Z','work','legacy_session','Alpha-old'),
+                ('ns','COOP','Bravo-old','2026-01-01T02:00:00Z','first','legacy_session','Bravo-old'),
+                ('ns','COOP','Charlie-old','2026-01-01T03:00:00Z','second','legacy_session','Charlie-old');
+            PRAGMA user_version=17;
+            """
+        )
+
+    repo = SqliteRepository(database, tmp_path / "output.sqlite3")
+    await repo.initialize()
+
+    with sqlite3.connect(database) as db:
+        rows = {
+            row[0]: row[1:]
+            for row in db.execute(
+                "SELECT task_id,state,state_changed_at,ready_since "
+                "FROM work_items WHERE namespace='ns' ORDER BY task_id"
+            )
+        }
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    assert rows["CLAIMED"] == ("in_progress", "2026-01-01T01:00:00Z", None)
+    assert rows["COOP"] == ("in_progress", "2026-01-01T02:00:00Z", None)
+    assert rows["READY"] == (
+        "ready",
+        "2026-01-02T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+    )
+    assert rows["BLOCKED"] == ("blocked", "2026-01-03T00:00:00Z", None)
+    assert rows["DEFERRED"] == ("deferred", "2026-01-04T00:00:00Z", None)
+    assert rows["DONE"] == ("done", "2026-01-05T00:00:00Z", None)

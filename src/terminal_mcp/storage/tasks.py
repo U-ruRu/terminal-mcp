@@ -11,7 +11,7 @@ from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
 
 LANES = frozenset({"implementation", "review", "release", "integration", "general"})
-STATES = frozenset({"ready", "blocked", "deferred", "done"})
+STATES = frozenset({"ready", "in_progress", "blocked", "deferred", "done"})
 REVIEW_DIMENSIONS = frozenset({"A", "C", "R"})
 
 
@@ -21,6 +21,22 @@ class TaskClaimConflict(RuntimeError):
         self.task_id = task_id
         self.agent_ids = agent_ids
         super().__init__(f"task already claimed: {namespace}/{task_id}")
+
+
+class TaskAgentBusy(RuntimeError):
+    def __init__(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        claimed_at: str,
+        claim_intent: str,
+    ):
+        self.namespace = namespace
+        self.task_id = task_id
+        self.claimed_at = claimed_at
+        self.claim_intent = claim_intent
+        super().__init__(f"owner already has a live claim: {namespace}/{task_id}")
 
 
 class TaskRevisionConflict(RuntimeError):
@@ -683,29 +699,67 @@ class TaskStore:
 
     @staticmethod
     def _claim_record(row, *, include_task=False):
-        result = {"id": row[0], "agent_id": row[1], "owner_kind": row[2], "owner_id": row[3], "claimed_at": row[4], "released_at": row[5], "claim_intent": row[6]}
+        result = {
+            "id": row[0],
+            "agent_id": row[1],
+            "owner_kind": row[2],
+            "owner_id": row[3],
+            "claimed_at": row[4],
+            "released_at": row[5],
+            "claim_intent": row[6],
+        }
         if include_task:
-            result.update({"namespace": row[7], "task_id": row[8], "lane": row[9], "priority": row[10], "state": row[11], "cooperative": bool(row[12]), "isolation_hint": row[13]})
+            result.update(
+                {
+                    "namespace": row[7],
+                    "task_id": row[8],
+                    "lane": row[9],
+                    "priority": row[10],
+                    "state": row[11],
+                    "cooperative": bool(row[12]),
+                    "isolation_hint": row[13],
+                }
+            )
         return result
 
     async def claims(self, namespace: str, task_id: str, *, active_only: bool = True):
         clause = " AND released_at IS NULL" if active_only else ""
         async with self._connect() as db:
-            rows = await (await db.execute("SELECT id,agent_id,owner_kind,owner_id,claimed_at,released_at,claim_intent FROM work_claims WHERE namespace=? AND task_id=?" + clause + " ORDER BY claimed_at,id", (namespace, task_id))).fetchall()
+            rows = await (
+                await db.execute(
+                    "SELECT id,agent_id,owner_kind,owner_id,claimed_at,released_at,claim_intent FROM work_claims WHERE namespace=? AND task_id=?"
+                    + clause
+                    + " ORDER BY claimed_at,id",
+                    (namespace, task_id),
+                )
+            ).fetchall()
         return [self._claim_record(row) for row in rows]
 
     async def claims_for_owner(self, owner: ClaimOwner, *, active_only: bool = True):
         clause = " AND c.released_at IS NULL" if active_only else ""
         async with self._connect() as db:
-            rows = await (await db.execute("SELECT c.id,c.agent_id,c.owner_kind,c.owner_id,c.claimed_at,c.released_at,c.claim_intent,c.namespace,c.task_id,w.lane,w.priority,w.state,w.cooperative,w.isolation_hint FROM work_claims c JOIN work_items w ON w.namespace=c.namespace AND w.task_id=c.task_id WHERE c.owner_kind=? AND c.owner_id=?" + clause + " ORDER BY c.claimed_at,c.id", (owner.kind, owner.owner_id))).fetchall()
+            rows = await (
+                await db.execute(
+                    "SELECT c.id,c.agent_id,c.owner_kind,c.owner_id,c.claimed_at,c.released_at,c.claim_intent,c.namespace,c.task_id,w.lane,w.priority,w.state,w.cooperative,w.isolation_hint FROM work_claims c JOIN work_items w ON w.namespace=c.namespace AND w.task_id=c.task_id WHERE c.owner_kind=? AND c.owner_id=?"
+                    + clause
+                    + " ORDER BY c.claimed_at,c.id",
+                    (owner.kind, owner.owner_id),
+                )
+            ).fetchall()
         return [self._claim_record(row, include_task=True) for row in rows]
 
     async def claims_for_agent(self, agent_id: str, *, active_only: bool = True):
-        return await self.claims_for_owner(ClaimOwner.legacy_session(agent_id), active_only=active_only)
+        return await self.claims_for_owner(
+            ClaimOwner.legacy_session(agent_id), active_only=active_only
+        )
 
     async def all_active_claims(self):
         async with self._connect() as db:
-            rows = await (await db.execute("SELECT id,agent_id,owner_kind,owner_id,claimed_at,released_at,claim_intent,namespace,task_id FROM work_claims WHERE released_at IS NULL ORDER BY claimed_at,id")).fetchall()
+            rows = await (
+                await db.execute(
+                    "SELECT id,agent_id,owner_kind,owner_id,claimed_at,released_at,claim_intent,namespace,task_id FROM work_claims WHERE released_at IS NULL ORDER BY claimed_at,id"
+                )
+            ).fetchall()
         result = []
         for row in rows:
             claim = self._claim_record(row[:7])
@@ -715,84 +769,296 @@ class TaskStore:
 
     async def stats(self):
         async with self._connect() as db:
-            states = await (await db.execute("SELECT state,COUNT(*) FROM work_items GROUP BY state")).fetchall()
-            lanes = await (await db.execute("SELECT lane,COUNT(*) FROM work_items WHERE state<>'done' AND archived_at IS NULL GROUP BY lane")).fetchall()
-            active_claims = int((await (await db.execute("SELECT COUNT(*) FROM work_claims WHERE released_at IS NULL")).fetchone())[0])
-            reviews = await (await db.execute("SELECT verdict,COUNT(*) FROM work_reviews GROUP BY verdict")).fetchall()
-        return {"by_state": {row[0]: int(row[1]) for row in states}, "by_lane": {row[0]: int(row[1]) for row in lanes}, "active_claims": active_claims, "reviews": {row[0]: int(row[1]) for row in reviews}}
+            states = await (
+                await db.execute("SELECT state,COUNT(*) FROM work_items GROUP BY state")
+            ).fetchall()
+            lanes = await (
+                await db.execute(
+                    "SELECT lane,COUNT(*) FROM work_items WHERE state<>'done' AND archived_at IS NULL GROUP BY lane"
+                )
+            ).fetchall()
+            active_claims = int(
+                (
+                    await (
+                        await db.execute(
+                            "SELECT COUNT(*) FROM work_claims WHERE released_at IS NULL"
+                        )
+                    ).fetchone()
+                )[0]
+            )
+            reviews = await (
+                await db.execute("SELECT verdict,COUNT(*) FROM work_reviews GROUP BY verdict")
+            ).fetchall()
+        return {
+            "by_state": {row[0]: int(row[1]) for row in states},
+            "by_lane": {row[0]: int(row[1]) for row in lanes},
+            "active_claims": active_claims,
+            "reviews": {row[0]: int(row[1]) for row in reviews},
+        }
 
     async def active_claims(self, namespace: str, task_id: str):
         return await self.claims(namespace, task_id, active_only=True)
 
-    async def claim(self, namespace: str, task_id: str, agent_id: str, *, claim_intent: str = "", exclusive: bool = False, event_payload: Any = None, dependency_override: Any = None, now: str | None = None):
-        return await self.claim_owner(namespace, task_id, ClaimOwner.legacy_session(agent_id), claim_intent=claim_intent, exclusive=exclusive, event_payload=event_payload, dependency_override=dependency_override, now=now)
+    async def claim(
+        self,
+        namespace: str,
+        task_id: str,
+        agent_id: str,
+        *,
+        claim_intent: str = "",
+        exclusive: bool = False,
+        event_payload: Any = None,
+        dependency_override: Any = None,
+        now: str | None = None,
+    ):
+        return await self.claim_owner(
+            namespace,
+            task_id,
+            ClaimOwner.legacy_session(agent_id),
+            claim_intent=claim_intent,
+            exclusive=exclusive,
+            event_payload=event_payload,
+            dependency_override=dependency_override,
+            now=now,
+        )
 
-    async def claim_owner(self, namespace: str, task_id: str, owner: ClaimOwner, *, claim_intent: str = "", exclusive: bool = False, event_payload: Any = None, dependency_override: Any = None, now: str | None = None):
+    async def claim_owner(
+        self,
+        namespace: str,
+        task_id: str,
+        owner: ClaimOwner,
+        *,
+        claim_intent: str = "",
+        exclusive: bool = False,
+        event_payload: Any = None,
+        dependency_override: Any = None,
+        now: str | None = None,
+    ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
-                existing = await (await db.execute("SELECT id,claimed_at FROM work_claims WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL", (namespace, task_id, owner.kind, owner.owner_id))).fetchone()
+                existing = await (
+                    await db.execute(
+                        "SELECT id,claimed_at FROM work_claims WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
+                        (namespace, task_id, owner.kind, owner.owner_id),
+                    )
+                ).fetchone()
                 if existing:
-                    await db.execute("UPDATE work_claims SET claim_intent=? WHERE id=?", (claim_intent, existing[0]))
-                    payload = {"claim_intent": claim_intent, "owner_kind": owner.kind, "owner_id": owner.owner_id}
-                    await db.execute("INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)", (namespace, task_id, "claim_intent_updated", owner.owner_id, self._json(payload), now))
+                    await db.execute(
+                        "UPDATE work_claims SET claim_intent=? WHERE id=?",
+                        (claim_intent, existing[0]),
+                    )
+                    payload = {
+                        "claim_intent": claim_intent,
+                        "owner_kind": owner.kind,
+                        "owner_id": owner.owner_id,
+                    }
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "claim_intent_updated",
+                            owner.owner_id,
+                            self._json(payload),
+                            now,
+                        ),
+                    )
                     await db.commit()
-                    return {"id": existing[0], "agent_id": owner.owner_id, "owner_kind": owner.kind, "owner_id": owner.owner_id, "claimed_at": existing[1], "claim_intent": claim_intent, "created": False}
-                task = await (await db.execute("SELECT cooperative,archived_at FROM work_items WHERE namespace=? AND task_id=?", (namespace, task_id))).fetchone()
+                    return {
+                        "id": existing[0],
+                        "agent_id": owner.owner_id,
+                        "owner_kind": owner.kind,
+                        "owner_id": owner.owner_id,
+                        "claimed_at": existing[1],
+                        "claim_intent": claim_intent,
+                        "created": False,
+                    }
+                busy = await (
+                    await db.execute(
+                        "SELECT namespace,task_id,claimed_at,claim_intent FROM work_claims "
+                        "WHERE owner_kind=? AND owner_id=? AND released_at IS NULL "
+                        "ORDER BY claimed_at,id LIMIT 1",
+                        (owner.kind, owner.owner_id),
+                    )
+                ).fetchone()
+                if busy is not None:
+                    raise TaskAgentBusy(
+                        busy[0],
+                        busy[1],
+                        claimed_at=busy[2],
+                        claim_intent=busy[3] or "",
+                    )
+                task = await (
+                    await db.execute(
+                        "SELECT cooperative,archived_at FROM work_items WHERE namespace=? AND task_id=?",
+                        (namespace, task_id),
+                    )
+                ).fetchone()
                 if task is None:
                     raise KeyError(f"unknown task: {namespace}/{task_id}")
                 if task[1] is not None:
                     raise ValueError("archived task cannot be claimed")
                 if exclusive or not bool(task[0]):
-                    conflicts = await (await db.execute("SELECT owner_id FROM work_claims WHERE namespace=? AND task_id=? AND released_at IS NULL AND NOT (owner_kind=? AND owner_id=?) ORDER BY claimed_at,id", (namespace, task_id, owner.kind, owner.owner_id))).fetchall()
+                    conflicts = await (
+                        await db.execute(
+                            "SELECT owner_id FROM work_claims WHERE namespace=? AND task_id=? AND released_at IS NULL AND NOT (owner_kind=? AND owner_id=?) ORDER BY claimed_at,id",
+                            (namespace, task_id, owner.kind, owner.owner_id),
+                        )
+                    ).fetchall()
                     if conflicts:
                         raise TaskClaimConflict(namespace, task_id, [row[0] for row in conflicts])
-                cur = await db.execute("INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at,released_at,claim_intent,owner_kind,owner_id) VALUES(?,?,?,?,NULL,?,?,?)", (namespace, task_id, owner.owner_id, now, claim_intent, owner.kind, owner.owner_id))
+                cur = await db.execute(
+                    "INSERT INTO work_claims(namespace,task_id,agent_id,claimed_at,released_at,claim_intent,owner_kind,owner_id) VALUES(?,?,?,?,NULL,?,?,?)",
+                    (
+                        namespace,
+                        task_id,
+                        owner.owner_id,
+                        now,
+                        claim_intent,
+                        owner.kind,
+                        owner.owner_id,
+                    ),
+                )
                 if dependency_override:
-                    await db.execute("INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)", (namespace, task_id, "dependency_override", owner.owner_id, self._json(dependency_override), now))
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "dependency_override",
+                            owner.owner_id,
+                            self._json(dependency_override),
+                            now,
+                        ),
+                    )
                 payload = dict(event_payload or {})
-                payload.update({"claim_intent": claim_intent, "owner_kind": owner.kind, "owner_id": owner.owner_id})
-                await db.execute("INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)", (namespace, task_id, "claim", owner.owner_id, self._json(payload), now))
+                payload.update(
+                    {
+                        "claim_intent": claim_intent,
+                        "owner_kind": owner.kind,
+                        "owner_id": owner.owner_id,
+                    }
+                )
+                await db.execute(
+                    "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (namespace, task_id, "claim", owner.owner_id, self._json(payload), now),
+                )
                 await db.commit()
-                return {"id": cur.lastrowid, "agent_id": owner.owner_id, "owner_kind": owner.kind, "owner_id": owner.owner_id, "claimed_at": now, "claim_intent": claim_intent, "created": True}
+                return {
+                    "id": cur.lastrowid,
+                    "agent_id": owner.owner_id,
+                    "owner_kind": owner.kind,
+                    "owner_id": owner.owner_id,
+                    "claimed_at": now,
+                    "claim_intent": claim_intent,
+                    "created": True,
+                }
             except Exception:
                 await db.rollback()
                 raise
 
-    async def release_claim(self, namespace: str, task_id: str, agent_id: str, *, now: str | None = None) -> bool:
-        return await self.release_owner_claim(namespace, task_id, ClaimOwner.legacy_session(agent_id), now=now)
+    async def release_claim(
+        self, namespace: str, task_id: str, agent_id: str, *, now: str | None = None
+    ) -> bool:
+        return await self.release_owner_claim(
+            namespace, task_id, ClaimOwner.legacy_session(agent_id), now=now
+        )
 
-    async def release_owner_claim(self, namespace: str, task_id: str, owner: ClaimOwner, *, now: str | None = None) -> bool:
+    async def release_owner_claim(
+        self, namespace: str, task_id: str, owner: ClaimOwner, *, now: str | None = None
+    ) -> bool:
         now = now or utc_text()
         async with self._connect() as db:
-            cur = await db.execute("UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL", (now, namespace, task_id, owner.kind, owner.owner_id))
+            cur = await db.execute(
+                "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
+                (now, namespace, task_id, owner.kind, owner.owner_id),
+            )
             await db.commit()
         return cur.rowcount > 0
 
-    async def release_claim_mutation(self, namespace: str, task_id: str, agent_id: str, *, reason: str, now: str | None = None) -> bool:
-        return await self.release_owner_claim_mutation(namespace, task_id, ClaimOwner.legacy_session(agent_id), reason=reason, now=now)
+    async def release_claim_mutation(
+        self, namespace: str, task_id: str, agent_id: str, *, reason: str, now: str | None = None
+    ) -> bool:
+        return await self.release_owner_claim_mutation(
+            namespace, task_id, ClaimOwner.legacy_session(agent_id), reason=reason, now=now
+        )
 
-    async def release_owner_claim_mutation(self, namespace: str, task_id: str, owner: ClaimOwner, *, reason: str, now: str | None = None) -> bool:
+    async def release_owner_claim_mutation(
+        self,
+        namespace: str,
+        task_id: str,
+        owner: ClaimOwner,
+        *,
+        reason: str,
+        now: str | None = None,
+    ) -> bool:
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
-                cur = await db.execute("UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL", (now, namespace, task_id, owner.kind, owner.owner_id))
+                cur = await db.execute(
+                    "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
+                    (now, namespace, task_id, owner.kind, owner.owner_id),
+                )
                 if cur.rowcount:
-                    await db.execute("INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)", (namespace, task_id, "comment", owner.owner_id, self._json({"text": reason, "kind": "handoff"}), now))
-                    await db.execute("INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)", (namespace, task_id, "claim_released", owner.owner_id, self._json({"reason": reason, "release_reason": reason, "owner_kind": owner.kind, "owner_id": owner.owner_id}), now))
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "comment",
+                            owner.owner_id,
+                            self._json({"text": reason, "kind": "handoff"}),
+                            now,
+                        ),
+                    )
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (
+                            namespace,
+                            task_id,
+                            "claim_released",
+                            owner.owner_id,
+                            self._json(
+                                {
+                                    "reason": reason,
+                                    "release_reason": reason,
+                                    "owner_kind": owner.kind,
+                                    "owner_id": owner.owner_id,
+                                }
+                            ),
+                            now,
+                        ),
+                    )
                 await db.commit()
                 return cur.rowcount > 0
             except Exception:
                 await db.rollback()
                 raise
 
-    async def release_claims(self, *, agent_id: str | None = None, namespace: str | None = None, task_id: str | None = None, now: str | None = None) -> int:
+    async def release_claims(
+        self,
+        *,
+        agent_id: str | None = None,
+        namespace: str | None = None,
+        task_id: str | None = None,
+        now: str | None = None,
+    ) -> int:
         owner = ClaimOwner.legacy_session(agent_id) if agent_id is not None else None
-        return await self.release_owner_claims(owner=owner, namespace=namespace, task_id=task_id, now=now)
+        return await self.release_owner_claims(
+            owner=owner, namespace=namespace, task_id=task_id, now=now
+        )
 
-    async def release_owner_claims(self, *, owner: ClaimOwner | None = None, namespace: str | None = None, task_id: str | None = None, now: str | None = None) -> int:
+    async def release_owner_claims(
+        self,
+        *,
+        owner: ClaimOwner | None = None,
+        namespace: str | None = None,
+        task_id: str | None = None,
+        now: str | None = None,
+    ) -> int:
         where = ["released_at IS NULL"]
         params: list[Any] = []
         if owner is not None:
@@ -805,7 +1071,9 @@ class TaskStore:
         now = now or utc_text()
         params.insert(0, now)
         async with self._connect() as db:
-            cur = await db.execute(f"UPDATE work_claims SET released_at=? WHERE {' AND '.join(where)}", params)
+            cur = await db.execute(
+                f"UPDATE work_claims SET released_at=? WHERE {' AND '.join(where)}", params
+            )
             await db.commit()
         return cur.rowcount
 
@@ -1207,8 +1475,15 @@ class TaskStore:
                 "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at,"
                 "logical_agent_id,work_session_id,session_epoch) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
-                    namespace, task_id, event_type, agent_id, self._json(payload or {}), now,
-                    logical_agent_id, work_session_id, session_epoch,
+                    namespace,
+                    task_id,
+                    event_type,
+                    agent_id,
+                    self._json(payload or {}),
+                    now,
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
                 ),
             )
             await db.commit()

@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from terminal_mcp.api_models import (
     AgentFinishResponse,
@@ -39,6 +39,77 @@ _SAFE_OPERATION = ToolAnnotations(
 )
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
 StepItem = Annotated[str, Field(min_length=1, max_length=160)]
+
+
+class _StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CmdReadRequest(_StrictRequest):
+    action: Literal["read"]
+    cmd_hash: str
+    lines_count: Annotated[int, Field(ge=1, le=MAX_READ_LINES)] = DEFAULT_READ_LINES
+    offset: Annotated[int | None, Field(ge=0)] = None
+
+
+class CmdRunRequest(_StrictRequest):
+    action: Literal["run"]
+    code: Annotated[str, Field(min_length=4, max_length=4)]
+    command: str
+    queue_id: Annotated[int | None, Field(ge=1)] = None
+    task_scope: str = "none"
+
+
+class CmdCancelRequest(_StrictRequest):
+    action: Literal["cancel"]
+    code: Annotated[str, Field(min_length=4, max_length=4)]
+    cmd_hash: str
+
+
+class CmdRecoveryRequest(_StrictRequest):
+    action: Literal["recovery"]
+    code: Annotated[str, Field(min_length=4, max_length=4)]
+    command: str
+
+
+CmdRequest = Annotated[
+    CmdReadRequest | CmdRunRequest | CmdCancelRequest | CmdRecoveryRequest,
+    Field(discriminator="action"),
+]
+
+
+class ContextListRequest(_StrictRequest):
+    action: Literal["list"]
+    show_details: bool = False
+
+
+class ContextCreateRequest(_StrictRequest):
+    action: Literal["create"]
+    code: Annotated[str, Field(min_length=4, max_length=4)]
+    summary: str
+    content: str
+    primary: bool = False
+
+
+class ContextUpdateRequest(_StrictRequest):
+    action: Literal["update"]
+    code: Annotated[str, Field(min_length=4, max_length=4)]
+    context_id: int
+    summary: str | None = None
+    content: str | None = None
+    primary: bool | None = None
+
+
+class ContextDeleteRequest(_StrictRequest):
+    action: Literal["delete"]
+    code: Annotated[str, Field(min_length=4, max_length=4)]
+    context_id: int
+
+
+ContextRequest = Annotated[
+    ContextListRequest | ContextCreateRequest | ContextUpdateRequest | ContextDeleteRequest,
+    Field(discriminator="action"),
+]
 
 
 def _structured_result(data, summary: str) -> CallToolResult:
@@ -777,15 +848,273 @@ def build_mcp(
             "Terminal service is healthy." if data.ok else "Terminal service is unhealthy.",
         )
 
-    if not persistent_enabled:
-        for tool_name in (
-            "persistent_slot",
-            "persistent_session",
-            "persistent_run",
-            "persistent_cancel",
-            "persistent_task",
-            "persistent_claim",
-        ):
-            mcp.remove_tool(tool_name)
+    # ACCESS002 hard cutover: public MCP discovery is deliberately reduced to
+    # seven capability tools. The legacy functions above remain internal adapters
+    # for Console/HTTP compatibility but are not discoverable over MCP.
+    for tool_name in (
+        "agent_start",
+        "coordinate",
+        "message",
+        "agents",
+        "context",
+        "tasks",
+        "task",
+        "agent_finish",
+        "run",
+        "recovery",
+        "read",
+        "cancel",
+        "persistent_slot",
+        "persistent_session",
+        "persistent_run",
+        "persistent_cancel",
+        "persistent_task",
+        "persistent_claim",
+        "health",
+    ):
+        mcp.remove_tool(tool_name)
+
+    def access_backend():
+        return getattr(service, "persistent", None)
+
+    async def access_identity(code: str | None):
+        backend = access_backend()
+        if backend is None:
+            return None, {
+                "ok": False,
+                "code": "policy_incompatible",
+                "error": "policy_incompatible",
+            }
+        if not code:
+            return None, {
+                "ok": False,
+                "code": "access_code_required",
+                "error": "access_code_required",
+            }
+        identity = await backend.access_identity(code)
+        if not identity.get("ok"):
+            return None, identity
+        return identity, None
+
+    @mcp.tool(
+        name="session",
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description=(
+            "Start, end, or interrupt a unified Access session. start requires an explicit "
+            "mode: persistent requires an existing Access code; legacy creates a temporary "
+            "slot and returns its Access code once. end/interrupt require the Access code."
+        ),
+    )
+    async def access_session_tool(
+        action: Literal["start", "end", "interrupt"],
+        mode: Literal["persistent", "legacy"] | None = None,
+        code: Annotated[str | None, Field(min_length=4, max_length=4)] = None,
+        display_name: Annotated[str | None, Field(max_length=80)] = None,
+    ) -> dict:
+        backend = access_backend()
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        if action == "start":
+            if mode is None:
+                return {"ok": False, "code": "mode_required", "error": "mode_required"}
+            if mode == "legacy" and code is not None:
+                return {
+                    "ok": False,
+                    "code": "legacy_code_not_allowed",
+                    "error": "legacy_code_not_allowed",
+                }
+            return await backend.access_session_start(
+                mode=mode, access_code=code, display_name=display_name
+            )
+        if not code:
+            return {
+                "ok": False,
+                "code": "access_code_required",
+                "error": "access_code_required",
+            }
+        return await backend.access_session_stop(code, interrupt=action == "interrupt")
+
+    @mcp.tool(
+        name="observe",
+        structured_output=False,
+        annotations=_SAFE_READ_ONLY,
+        description=(
+            "Read unified session or task state. Access codes are intentionally absent from "
+            "the observation path."
+        ),
+    )
+    async def access_observe_tool(
+        subject: Literal["sessions", "tasks"] = "sessions",
+        namespace: str | None = None,
+        task_id: str | None = None,
+        lane: TaskLane | None = None,
+        state: TaskState | None = None,
+        operational_status: TaskOperationalStatus | None = None,
+        tags: list[str] | None = None,
+        show_details: bool = False,
+        show_done: bool = False,
+        show_archived: bool = False,
+        limit: Annotated[int, Field(ge=1, le=1000)] = 50,
+        cursor: str | None = None,
+    ) -> dict:
+        backend = access_backend()
+        if subject == "sessions":
+            if backend is None:
+                return {
+                    "ok": False,
+                    "code": "policy_incompatible",
+                    "error": "policy_incompatible",
+                }
+            return await backend.access_observe_slots()
+        result = await service.tasks(
+            namespace=namespace,
+            task_id=task_id,
+            lane=lane,
+            state=state,
+            operational_status=operational_status,
+            tags=tags,
+            show_details=show_details,
+            show_done=show_done,
+            show_archived=show_archived,
+            limit=limit,
+            cursor=cursor,
+        )
+        store = getattr(service, "task_store", None)
+        if store is not None:
+            rows = await store.list_tasks(show_done=True, show_archived=True, limit=None, offset=0)
+            result["namespaces"] = sorted({item["namespace"] for item in rows})
+        return result
+
+    @mcp.tool(
+        name="message",
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description=(
+            "Send, acknowledge, or reply to coordination messages using the sender's public "
+            "Access name. The sender must resolve to an active unified session bound to the "
+            "authenticated transport principal. No Access code is accepted here."
+        ),
+    )
+    async def access_message_tool(
+        sender: str,
+        text: str | None = None,
+        target: str | None = None,
+        message_hash: str | None = None,
+        require_reply: bool = False,
+        alert: bool = False,
+        namespace: str | None = None,
+        task_id: str | None = None,
+    ) -> dict:
+        backend = access_backend()
+        if backend is None:
+            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+        return await backend.access_message(
+            sender,
+            text=text,
+            target=target,
+            message_hash=message_hash,
+            require_reply=require_reply,
+            alert=alert,
+            namespace=namespace,
+            task_id=task_id,
+        )
+
+    @mcp.tool(
+        name="task",
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description=(
+            "Mutate a managed task under an active unified Access session. Claim ownership is "
+            "durable per logical slot; WIP is one live managed-task claim per slot."
+        ),
+    )
+    async def access_task_tool(
+        code: Annotated[str, Field(min_length=4, max_length=4)],
+        action: TaskAction,
+        namespace: str,
+        task_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> dict:
+        identity, failure = await access_identity(code)
+        if failure is not None:
+            return failure
+        return await access_backend().task(
+            logical_agent_id=identity["logical_agent_id"],
+            work_session_id=identity["work_session_id"],
+            session_epoch=identity["session_epoch"],
+            action=action,
+            namespace=namespace,
+            task_id=task_id,
+            **(payload or {}),
+        )
+
+    @mcp.tool(
+        name="cmd",
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description=(
+            "Run, read, cancel, or execute recovery commands. The request is an action-"
+            "discriminated union: read has no code field; run/cancel/recovery require code."
+        ),
+    )
+    async def access_cmd_tool(request: CmdRequest) -> dict:
+        if request.action == "read":
+            return await service.read(
+                cmd_hash=request.cmd_hash,
+                lines_count=request.lines_count,
+                offset=request.offset,
+                agent_id=None,
+            )
+        identity, failure = await access_identity(request.code)
+        if failure is not None:
+            return failure
+        backend = access_backend()
+        if request.action == "run":
+            return await backend.run(
+                request.command,
+                logical_agent_id=identity["logical_agent_id"],
+                work_session_id=identity["work_session_id"],
+                session_epoch=identity["session_epoch"],
+                queue_id=request.queue_id,
+                task_scope=request.task_scope,
+            )
+        if request.action == "cancel":
+            return await backend.cancel(
+                request.cmd_hash,
+                logical_agent_id=identity["logical_agent_id"],
+                work_session_id=identity["work_session_id"],
+                session_epoch=identity["session_epoch"],
+            )
+        result = await service.recovery(request.command, agent_id=None)
+        result["public_name"] = identity["public_name"]
+        result["session_ref"] = identity["session_ref"]
+        return result
+
+    @mcp.tool(
+        name="context",
+        structured_output=False,
+        annotations=_SAFE_OPERATION,
+        description=(
+            "Read or mutate instance context using an action-discriminated request. list has "
+            "no code field; create/update/delete require an active unified Access code."
+        ),
+    )
+    async def access_context_tool(request: ContextRequest) -> dict:
+        data = request.model_dump(exclude={"action", "code"}, exclude_none=True)
+        if request.action != "list":
+            _identity, failure = await access_identity(request.code)
+            if failure is not None:
+                return failure
+        return await service.context(request.action, **data)
+
+    @mcp.tool(
+        name="health",
+        structured_output=False,
+        annotations=_SAFE_READ_ONLY,
+        description="Return terminal service health without requiring an Access code.",
+    )
+    async def access_health_tool() -> dict:
+        return await service.health(auth_mode, agent_id=None)
 
     return mcp

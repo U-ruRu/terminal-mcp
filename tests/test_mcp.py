@@ -1,5 +1,6 @@
+import json
+
 import pytest
-from mcp.types import CallToolResult
 
 from terminal_mcp.mcp.server import build_mcp
 
@@ -230,281 +231,141 @@ class FakeService:
         }
 
 
-def test_mcp_tools_advertise_agent_protocol_and_structured_schemas():
+def test_mcp_tools_advertise_canonical_access_surface():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    assert set(tools) == {
-        "agent_start",
-        "coordinate",
-        "message",
-        "agents",
-        "agent_finish",
-        "context",
-        "tasks",
-        "task",
-        "run",
-        "recovery",
-        "read",
-        "cancel",
-        "health",
-    }
+    assert set(tools) == {"session", "observe", "message", "task", "cmd", "context", "health"}
+
     for tool in tools.values():
-        assert tool.output_schema is not None and tool.output_schema["type"] == "object"
+        # Project policy keeps MCP tools conservatively marked read-only/non-destructive;
+        # mutation authorization is enforced by the tool contract and Access authority.
+        assert tool.annotations.readOnlyHint is True
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.openWorldHint is False
-    assert all(tool.annotations.readOnlyHint is True for tool in tools.values())
-    assert tools["run"].parameters["required"] == ["agent_id", "cmd", "task_scope"]
-    assert tools["run"].parameters["properties"]["queue_id"]["anyOf"][0]["minimum"] == 1
-    assert tools["agents"].parameters.get("required", []) == []
-    assert tools["recovery"].parameters["required"] == ["cmd"]
-    assert tools["cancel"].parameters["required"] == ["cmd_hash"]
-    assert tools["health"].parameters.get("required", []) == []
-    assert tools["read"].parameters.get("required", []) == []
-    start = tools["agent_start"].parameters["properties"]
-    assert start["task_summary"]["anyOf"][0]["maxLength"] == 120
-    assert start["intent"]["anyOf"][0]["maxLength"] == 160
-    assert start["details"]["anyOf"][0]["maxItems"] == 12
-    assert start["details"]["anyOf"][0]["items"]["maxLength"] == 160
-    assert start["work_scope"]["anyOf"][0]["maxItems"] == 4
-    assert tools["coordinate"].parameters["required"] == ["agent_id"]
-    coordinate = tools["coordinate"].parameters["properties"]
-    assert coordinate["intent"]["anyOf"][0]["maxLength"] == 160
-    assert coordinate["step"]["anyOf"][0]["minimum"] == 1
-    assert tools["message"].parameters["required"] == ["agent_id"]
-    message = tools["message"].parameters["properties"]
-    assert message["message_hash"]["anyOf"][0]["maxLength"] == 8
-    assert message["require_reply"]["default"] is False
-    assert message["alert"]["default"] is False
-    assert message["namespace"]["anyOf"][0]["maxLength"] == 120
-    assert message["task_id"]["anyOf"][0]["maxLength"] == 120
-    context = tools["context"].parameters["properties"]
-    assert tools["context"].parameters["required"] == ["action"]
-    assert set(context["action"]["enum"]) == {"list", "create", "update", "delete"}
-    assert context["summary"]["anyOf"][0]["maxLength"] == 100
-    assert context["id"]["anyOf"][0]["minimum"] == 1
-    tasks = tools["tasks"].parameters["properties"]
-    assert tasks["lane"]["anyOf"][0]["enum"] == [
-        "implementation",
-        "review",
-        "release",
-        "integration",
-        "general",
-    ]
-    assert tasks["state"]["anyOf"][0]["enum"] == [
+    assert tools["observe"].annotations.idempotentHint is True
+    assert tools["health"].annotations.idempotentHint is True
+    for name in {"session", "message", "task", "cmd", "context"}:
+        assert tools[name].annotations.idempotentHint is False
+
+    session = tools["session"].parameters
+    assert session["required"] == ["action"]
+    assert session["properties"]["action"]["enum"] == ["start", "end", "interrupt"]
+    assert session["properties"]["mode"]["anyOf"][0]["enum"] == ["persistent", "legacy"]
+    assert session["properties"]["code"]["anyOf"][0]["minLength"] == 4
+    assert session["properties"]["code"]["anyOf"][0]["maxLength"] == 4
+
+    observe = tools["observe"].parameters["properties"]
+    assert "code" not in observe
+    assert observe["subject"]["enum"] == ["sessions", "tasks"]
+    assert observe["state"]["anyOf"][0]["enum"] == [
         "ready",
+        "in_progress",
         "blocked",
         "deferred",
         "done",
     ]
-    task = tools["task"].parameters["properties"]
-    assert set(task["action"]["enum"]) == {
-        "create",
-        "claim",
-        "release",
-        "update",
-        "checkpoint",
-        "comment",
-        "relate",
-        "unrelate",
-        "state",
+    assert observe["operational_status"]["anyOf"][0]["enum"] == [
+        "ready",
+        "in_progress",
+        "blocked",
+        "deferred",
         "done",
-        "archive",
-    }
-    assert task["priority"]["anyOf"][0]["enum"] == ["P0", "P1", "P2", "P3"]
-    assert "review_requirements" not in task
-    assert "dimensions" not in task
-    assert "verdict" not in task
-    assert "evidence" not in task
-    assert "tags" in task
-    assert "force" in task
-    assert "force_reason" in task
-    assert task["isolation_hint"]["anyOf"][0]["minLength"] == 1
-    assert task["isolation_hint"]["anyOf"][0]["maxLength"] == 160
-    for field in (
-        "claim_intent",
-        "blocker_reason",
-        "release_reason",
-        "archive_note",
-        "comment_text",
-        "relation_kind",
-        "related_namespace",
-        "related_task_id",
-    ):
-        assert field in task
-    assert task["claim_intent"]["anyOf"][0]["maxLength"] == 160
-    assert "tags" in tasks
-    assert "task_scope" in tools["run"].parameters["properties"]
-    assert "task_scope" in tools["run"].parameters["required"]
-    assert "required on every command" in tools["run"].description
-    assert "concurrent participation" in tools["task"].description
-    assert "unclaimed task must be claimed first" in tools["task"].description
-    assert "durable handoff history" in tools["task"].description
-    assert "explicit isolation_hint" in tools["task"].description
-    assert "ACK REQUIRED" in tools["message"].description
-
-    task_card = tools["tasks"].output_schema["$defs"]["TaskCard"]["properties"]
-    assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
-    assert "isolation_hint" in task_card
-    assert "blocking_dependencies" in task_card
-    assert "open dependencies is blocked" in task_card["operational_status"]["description"]
-    assert "ordinary claimability" in task_card["blocking_dependencies"]["description"]
-    for field in (
-        "archived_at",
-        "archive_note",
-        "owner",
-        "participants",
-        "claims",
-        "relations",
-        "comments",
-    ):
-        assert field in task_card
-    claim = tools["tasks"].output_schema["$defs"]["TaskClaimView"]["properties"]
-    assert {
-        "agent_name",
-        "claimed_at",
-        "claim_age_seconds",
-        "claim_intent",
-        "role",
-    } <= set(claim)
-    managed_ref = tools["agents"].output_schema["$defs"]["ManagedTaskRef"]["properties"]
-    assert {
-        "claimed_at",
-        "claim_age_seconds",
-        "claim_intent",
-        "role",
-        "isolation_hint",
-    } <= set(managed_ref)
-    task_description = tools["task"].description.lower()
-    for term in (
-        "claim_intent",
-        "owner",
-        "blocker_reason",
-        "release_reason",
-        "comment",
-        "relation",
-        "archive",
-    ):
-        assert term in task_description
-    tasks_description = tools["tasks"].description.lower()
-    assert "claimable" in tasks_description
-    assert "missing" in tasks_description
-
-
-@pytest.mark.asyncio
-async def test_mcp_start_run_and_recovery_structured_results():
-    mcp = build_mcp(FakeService())
-    tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    started = await tools["agent_start"].run(
-        {
-            "task_summary": "Implement registry",
-            "intent": "Inspect schema",
-            "details": ["Inspect schema", "Patch schema"],
-            "work_scope": ["repo:storage"],
-        },
-        convert_result=True,
-    )
-    assert isinstance(started, CallToolResult)
-    assert started.structuredContent["self"]["agent_id"] == "Kilo-7K2M"
-    assert (
-        started.structuredContent["primary_context"][0]["content"] == "Use the local Git wrapper."
-    )
-
-    task_update = await tools["coordinate"].run(
-        {"agent_id": "Kilo-7K2M", "step": 2, "intent": "Inspect the next test"},
-        convert_result=True,
-    )
-    assert task_update.structuredContent["intent"] == "Inspect the next test"
-    assert task_update.structuredContent["step"] == 2
-
-    sent = await tools["message"].run(
-        {"agent_id": "Kilo-7K2M", "text": "Coordinate", "target": "India"},
-        convert_result=True,
-    )
-    assert sent.structuredContent["message_hash"] == "a1b2c3d4"
-    assert sent.structuredContent["delivered_to"] == ["India"]
-
-    task_sent = await tools["message"].run(
-        {
-            "agent_id": "Kilo-7K2M",
-            "text": "Task note",
-            "namespace": "project",
-            "task_id": "REV-1",
-        },
-        convert_result=True,
-    )
-    assert task_sent.structuredContent["namespace"] == "project"
-    assert task_sent.structuredContent["task_id"] == "REV-1"
-    assert task_sent.structuredContent["delivered_to"] == []
-
-    compact_context = await tools["context"].run({"action": "list"}, convert_result=True)
-    assert compact_context.structuredContent["primary"] == [
-        {"id": 1, "summary": "Git workflow"}
     ]
-    assert set(compact_context.structuredContent["primary"][0]) == {"id", "summary"}
-    detailed_context = await tools["context"].run(
-        {"action": "list", "show_details": True}, convert_result=True
-    )
-    assert (
-        detailed_context.structuredContent["primary"][0]["content"] == "Use the local Git wrapper."
-    )
-    created_context = await tools["context"].run(
-        {
-            "action": "create",
-            "summary": "Services",
-            "content": "Use systemctl.",
-            "primary": False,
-        },
-        convert_result=True,
-    )
-    assert created_context.structuredContent["entry"]["id"] == 3
-    assert created_context.structuredContent["entry"]["primary"] is False
 
-    run = await tools["run"].run(
-        {"agent_id": "Kilo-7K2M", "cmd": "printf ok", "task_scope": "none"}, convert_result=True
-    )
-    assert run.content[0].text == "Command 1234abcd queued."
-    assert run.structuredContent["agent_name"] == "Kilo"
-    assert "7K2M" not in str(run.structuredContent)
+    message = tools["message"].parameters
+    assert message["required"] == ["sender"]
+    assert "code" not in message["properties"]
+    assert "active unified session" in tools["message"].description
 
-    recovery = await tools["recovery"].run(
-        {"cmd": "printf recovery-ready", "agent_id": "Kilo-7K2M"}, convert_result=True
-    )
-    assert recovery.structuredContent["cmd_hash"] == "abcd1234"
-    assert recovery.structuredContent["displayed_lines_count"] == 1
+    task = tools["task"].parameters
+    assert task["required"] == ["code", "action", "namespace"]
+    assert task["properties"]["code"]["minLength"] == 4
+    assert task["properties"]["code"]["maxLength"] == 4
+    assert "WIP is one live managed-task claim per slot" in tools["task"].description
+
+    cmd = tools["cmd"].parameters
+    assert cmd["required"] == ["request"]
+    mapping = cmd["properties"]["request"]["discriminator"]["mapping"]
+    assert set(mapping) == {"run", "read", "cancel", "recovery"}
+    read_schema = cmd["$defs"]["CmdReadRequest"]
+    assert "code" not in read_schema["properties"]
+    assert read_schema["required"] == ["action", "cmd_hash"]
+    for name in ("CmdRunRequest", "CmdCancelRequest", "CmdRecoveryRequest"):
+        assert "code" in cmd["$defs"][name]["required"]
+        assert cmd["$defs"][name]["properties"]["code"]["minLength"] == 4
+        assert cmd["$defs"][name]["properties"]["code"]["maxLength"] == 4
+
+    context = tools["context"].parameters
+    assert context["required"] == ["request"]
+    list_schema = context["$defs"]["ContextListRequest"]
+    assert "code" not in list_schema["properties"]
+    for name in ("ContextCreateRequest", "ContextUpdateRequest", "ContextDeleteRequest"):
+        assert "code" in context["$defs"][name]["required"]
+
+    assert tools["health"].parameters.get("required", []) == []
+    assert tools["health"].parameters["properties"] == {}
+
+
+def _text_json(result):
+    assert len(result) == 1
+    return json.loads(result[0].text)
 
 
 @pytest.mark.asyncio
-async def test_mcp_health_and_emergency_tools_do_not_require_agent_id():
+async def test_mcp_code_free_read_paths_use_canonical_tools():
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    health = await tools["health"].run({}, convert_result=True)
-    assert health.structuredContent["version"] == "0.10.1"
-    assert health.structuredContent["ok"] is True
-    assert health.structuredContent["agent_name"] == "anonymous"
-    recovery = await tools["recovery"].run({"cmd": "printf recovery-ready"}, convert_result=True)
-    assert recovery.structuredContent["agent_name"] == "anonymous"
-    cancelled = await tools["cancel"].run({"cmd_hash": "1234abcd"}, convert_result=True)
-    assert cancelled.structuredContent["agent_name"] == "anonymous"
+
+    health = _text_json(await tools["health"].run({}, convert_result=True))
+    assert health["ok"] is True
+    assert health["version"] == "0.10.1"
+    assert health["agent_name"] == "anonymous"
+
+    read = _text_json(
+        await tools["cmd"].run(
+            {"request": {"action": "read", "cmd_hash": "1234abcd"}},
+            convert_result=True,
+        )
+    )
+    assert read["ok"] is True
+    assert read["status"] == "completed"
+    assert read["cmd_hash"] == "1234abcd"
+    assert read["agent_name"] == "anonymous"
+
+    context = _text_json(
+        await tools["context"].run(
+            {"request": {"action": "list", "show_details": True}},
+            convert_result=True,
+        )
+    )
+    assert context["primary"][0]["content"] == "Use the local Git wrapper."
 
 
 @pytest.mark.asyncio
-async def test_mcp_read_supports_independent_agent_and_command_scope():
+async def test_mcp_mutation_paths_fail_closed_without_access_backend():
     mcp = build_mcp(FakeService())
-    read = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["read"]
-    global_read = await read.run({}, convert_result=True)
-    assert global_read.structuredContent["ok"] is True
-    assert global_read.structuredContent["agent_name"] == "anonymous"
-    scoped = await read.run(
-        {"agent_id": "Kilo-7K2M", "cmd_hash": "1234abcd"},
-        convert_result=True,
+    tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
+
+    session = _text_json(
+        await tools["session"].run(
+            {"action": "start", "mode": "persistent", "code": "ABCD"},
+            convert_result=True,
+        )
     )
-    assert scoped.structuredContent["ok"] is True
-    assert scoped.structuredContent["status"] == "completed"
-    assert scoped.structuredContent["agent_name"] == "Kilo"
-    assert "7K2M" not in str(scoped.structuredContent)
-    command_only = await read.run({"cmd_hash": "1234abcd"}, convert_result=True)
-    assert command_only.structuredContent["ok"] is True
-    assert command_only.structuredContent["status"] == "completed"
-    agent_global = await read.run({"agent_id": "Kilo-7K2M"}, convert_result=True)
-    assert agent_global.structuredContent["ok"] is True
-    assert agent_global.structuredContent["agent_name"] == "Kilo"
+    assert session == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+
+    task = _text_json(
+        await tools["task"].run(
+            {"code": "ABCD", "action": "claim", "namespace": "project", "task_id": "REV-1"},
+            convert_result=True,
+        )
+    )
+    assert task == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+
+    cmd = _text_json(
+        await tools["cmd"].run(
+            {"request": {"action": "run", "code": "ABCD", "command": "printf ok"}},
+            convert_result=True,
+        )
+    )
+    assert cmd == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}

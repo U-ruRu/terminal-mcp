@@ -22,7 +22,7 @@ from terminal_mcp.storage.output import (
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -184,7 +184,7 @@ class SqliteRepository:
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
                     lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
                     priority INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL CHECK(state IN ('ready','blocked','deferred','done')),
+                    state TEXT NOT NULL CHECK(state IN ('ready','in_progress','blocked','deferred','done')),
                     description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
                     isolation_hint TEXT NOT NULL DEFAULT 'none',
                     resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
@@ -568,6 +568,8 @@ class SqliteRepository:
         await self._migrate_work_items_archive_lifecycle(db)
         # Schema v10: add creator-supplied isolation metadata after the v9 work_items rebuild.
         await add_columns("work_items", [("isolation_hint", "TEXT NOT NULL DEFAULT 'none'")])
+        # Schema v18: task execution state is explicit and independent from claims.
+        await self._migrate_work_items_explicit_state(db)
         await db.execute(
             "UPDATE work_items SET state_changed_at=COALESCE(state_changed_at,updated_at)"
         )
@@ -897,6 +899,108 @@ class SqliteRepository:
             )
         return True
 
+    async def _migrate_work_items_explicit_state(self, db):
+        row = await (
+            await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'"
+            )
+        ).fetchone()
+        table_sql = (row[0] or "") if row else ""
+        if "'in_progress'" in table_sql:
+            return False
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys=OFF")
+        if int((await (await db.execute("PRAGMA foreign_keys")).fetchone())[0]) != 0:
+            raise RuntimeError("schema v18 migration could not disable foreign keys")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute("DROP TABLE IF EXISTS work_items_v18")
+            await db.execute(
+                """
+                CREATE TABLE work_items_v18(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
+                    lane TEXT NOT NULL CHECK(
+                        lane IN ('implementation','review','release','integration','general')
+                    ),
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL CHECK(
+                        state IN ('ready','in_progress','blocked','deferred','done')
+                    ),
+                    description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+                    isolation_hint TEXT NOT NULL DEFAULT 'none',
+                    resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
+                    cooperative INTEGER NOT NULL DEFAULT 0 CHECK(cooperative IN (0,1)),
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}', candidate_ref TEXT, result_json TEXT,
+                    tags_json TEXT NOT NULL DEFAULT '[]', state_changed_at TEXT, ready_since TEXT,
+                    archived_at TEXT, archive_note TEXT, revision INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(namespace, task_id)
+                )
+                """
+            )
+            await db.execute(
+                """
+                INSERT INTO work_items_v18(
+                    namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,
+                    resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,
+                    tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at
+                )
+                SELECT namespace,task_id,title,lane,priority,
+                       CASE
+                           WHEN state='ready' AND EXISTS (
+                               SELECT 1 FROM work_claims c
+                               WHERE c.namespace=work_items.namespace
+                                 AND c.task_id=work_items.task_id
+                                 AND c.released_at IS NULL
+                           ) THEN 'in_progress'
+                           ELSE state
+                       END,
+                       description,next_action,isolation_hint,resource_json,reviews_json,cooperative,
+                       checkpoint_json,candidate_ref,result_json,tags_json,
+                       CASE
+                           WHEN state='ready' AND EXISTS (
+                               SELECT 1 FROM work_claims c
+                               WHERE c.namespace=work_items.namespace
+                                 AND c.task_id=work_items.task_id
+                                 AND c.released_at IS NULL
+                           ) THEN COALESCE((
+                               SELECT MIN(c.claimed_at) FROM work_claims c
+                               WHERE c.namespace=work_items.namespace
+                                 AND c.task_id=work_items.task_id
+                                 AND c.released_at IS NULL
+                           ), state_changed_at, updated_at)
+                           ELSE state_changed_at
+                       END,
+                       CASE
+                           WHEN state='ready' AND EXISTS (
+                               SELECT 1 FROM work_claims c
+                               WHERE c.namespace=work_items.namespace
+                                 AND c.task_id=work_items.task_id
+                                 AND c.released_at IS NULL
+                           ) THEN NULL
+                           ELSE ready_since
+                       END,
+                       archived_at,archive_note,revision,created_at,updated_at
+                FROM work_items
+                """
+            )
+            await db.execute("DROP TABLE work_items")
+            await db.execute("ALTER TABLE work_items_v18 RENAME TO work_items")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.execute("PRAGMA foreign_keys=ON")
+        if int((await (await db.execute("PRAGMA foreign_keys")).fetchone())[0]) != 1:
+            raise RuntimeError("schema v18 migration could not re-enable foreign keys")
+        violations = await (await db.execute("PRAGMA foreign_key_check")).fetchall()
+        if violations:
+            raise RuntimeError(
+                f"schema v18 explicit-state migration broke foreign keys: {violations}"
+            )
+        return True
+
     async def _migrate_legacy_output(self, db):
         table = await (
             await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lines'")
@@ -1076,7 +1180,9 @@ class SqliteRepository:
                                 persistent_permit["signature"],
                                 persistent_permit["issued_at"],
                                 int(persistent_permit.get("gate_revision", 1)),
-                                str(persistent_permit.get("operation") or persistent_permit["scope"]),
+                                str(
+                                    persistent_permit.get("operation") or persistent_permit["scope"]
+                                ),
                                 int(persistent_permit.get("ttl_ms", 10000)),
                                 (
                                     int(persistent_permit["slot_revision"])

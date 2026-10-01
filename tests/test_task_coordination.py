@@ -783,7 +783,67 @@ async def test_batched_task_list_preserves_logical_agent_claim_liveness(tmp_path
             claim_intent="persistent owner",
         )
         listing = await service.tasks(namespace="batch")
-        assert listing["tasks"][0]["operational_status"] == "in_progress"
+        assert listing["tasks"][0]["operational_status"] == "ready"
+        transitioned = await service.task_coordinator.mutate(
+            "logical-test",
+            action="state",
+            namespace="batch",
+            task_id="PERSISTENT",
+            state="in_progress",
+            _claim_owner=ClaimOwner.logical_agent("logical-test"),
+        )
+        assert transitioned["ok"] is True
+        assert transitioned["task"]["state"] == "in_progress"
+        assert transitioned["task"]["operational_status"] == "in_progress"
         assert listing["tasks"][0]["owner"]["agent_name"] == "logical-test"
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_claim_wip_one_per_owner_is_atomic_and_same_task_is_idempotent(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent = (await register(service, "wip-owner"))["self"]["agent_id"]
+        for task_id in ("ONE", "TWO"):
+            created = await service.task(
+                agent,
+                action="create",
+                namespace="wip",
+                task_id=task_id,
+                title=task_id,
+                isolation_hint="none",
+            )
+            assert created["ok"] is True
+        owner = ClaimOwner.logical_agent("logical-wip")
+        first = await service.task_coordinator.mutate(
+            "logical-wip",
+            action="claim",
+            namespace="wip",
+            task_id="ONE",
+            claim_intent="first",
+            _claim_owner=owner,
+        )
+        assert first["ok"] is True
+        same = await service.task_coordinator.mutate(
+            "logical-wip",
+            action="claim",
+            namespace="wip",
+            task_id="ONE",
+            claim_intent="updated",
+            _claim_owner=owner,
+        )
+        assert same["ok"] is True
+        busy = await service.task_coordinator.mutate(
+            "logical-wip",
+            action="claim",
+            namespace="wip",
+            task_id="TWO",
+            claim_intent="second",
+            _claim_owner=owner,
+        )
+        assert busy["ok"] is False
+        assert busy["code"] == "agent_busy"
+        assert busy["warnings"][0]["context"]["current_task_id"] == "ONE"
     finally:
         await terminal.stop()

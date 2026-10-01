@@ -27,7 +27,7 @@ TaskAction = Literal[
     "archive",
 ]
 TaskLane = Literal["implementation", "review", "release", "integration", "general"]
-TaskState = Literal["ready", "blocked", "deferred", "done"]
+TaskState = Literal["ready", "in_progress", "blocked", "deferred", "done"]
 TaskOperationalStatus = Literal["ready", "in_progress", "blocked", "deferred", "done"]
 TaskPriority = Literal["P0", "P1", "P2", "P3"]
 ReviewDimension = Literal["A", "C", "R"]

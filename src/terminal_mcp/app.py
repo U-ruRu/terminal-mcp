@@ -351,7 +351,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
         if persistent_fleet:
-            app.include_router(build_persistent_fleet_router(fleet_replication, persistent_fleet))
+            app.include_router(
+                build_persistent_fleet_router(
+                    fleet_replication, persistent_fleet, service.persistent
+                )
+            )
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(
         build_console_events_router(

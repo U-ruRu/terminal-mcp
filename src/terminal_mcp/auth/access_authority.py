@@ -224,6 +224,24 @@ class AccessCodeAuthority:
         finally:
             await db.close()
 
+    async def get_slot_by_public_name(self, public_name: str) -> dict | None:
+        name = (public_name or "").strip()
+        if not name:
+            return None
+        db = await self.foundation._connect()
+        try:
+            row = await (
+                await db.execute(
+                    "SELECT logical_agent_id,public_name,slot_kind,display_suffix,"
+                    "authority_node_id,access_generation,status,created_at,updated_at,deleted_at "
+                    "FROM auth_access_slots WHERE public_name=? AND status='active'",
+                    (name,),
+                )
+            ).fetchone()
+            return self._slot(row)
+        finally:
+            await db.close()
+
     async def list_slots(self, *, include_deleted: bool = False) -> list[dict]:
         db = await self.foundation._connect()
         try:
