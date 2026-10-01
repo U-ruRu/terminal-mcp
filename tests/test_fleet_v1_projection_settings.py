@@ -19,7 +19,8 @@ def base(tmp_path):
     }
 
 
-def test_projection_and_public_flags_default_off(tmp_path):
+def test_projection_and_public_flags_default_off(tmp_path, monkeypatch):
+    monkeypatch.delenv("TERMINAL_MCP_FLEET_PROJECTION_PATH", raising=False)
     settings = Settings(_env_file=None, database_path=tmp_path / "runtime.sqlite3")
     assert settings.fleet_v1_projection_enabled is False
     assert settings.fleet_v1_public_enabled is False

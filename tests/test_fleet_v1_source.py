@@ -236,6 +236,7 @@ def test_fleet_v1_source_settings_are_default_off_and_validate_identity(tmp_path
         "TERMINAL_MCP_FLEET_NODE_ID",
         "TERMINAL_MCP_FLEET_SIGNING_PRIVATE_KEY",
         "TERMINAL_MCP_FLEET_PEERS_JSON",
+        "TERMINAL_MCP_FLEET_NODE_META_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
 

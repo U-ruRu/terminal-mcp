@@ -24,6 +24,8 @@ def _settings(tmp_path, **overrides):
         cwd=tmp_path,
         public_base_url="https://terminal.example",
         auth_mode="bearer",
+        mcp_auth_mode="bearer",
+        actions_auth_mode="bearer",
         bearer_tokens="console-token",
     )
     values.update(overrides)
