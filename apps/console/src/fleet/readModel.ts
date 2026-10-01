@@ -9,7 +9,7 @@ import type {
 import type { InstanceEvent, RealtimeStatus } from '../realtime/state'
 import type { FleetInstanceView } from './types'
 
-export type FleetFreshness = 'fresh' | 'stale' | 'offline'
+export type FleetFreshness = 'fresh' | 'catching_up' | 'stale' | 'offline'
 
 export type FleetSource = {
   instanceId: string
@@ -89,6 +89,7 @@ export type FleetServerReadModel = FleetSource & {
   reconnectAttempt: number
   lastError?: string
   staleReason?: string
+  catchingUpScopes: string[]
   activeAgentCount: number
   activeIntents: string[]
   taskCounts: FleetTaskCounts
@@ -123,10 +124,10 @@ function sourceOf(instance: FleetInstanceView): FleetSource {
   }
 }
 
-function freshness(status: RealtimeStatus): FleetFreshness {
-  if (status === 'live') return 'fresh'
-  if (status === 'offline') return 'offline'
-  return 'stale'
+function freshness(instance: FleetInstanceView): FleetFreshness {
+  if (instance.runtime.status === 'offline') return 'offline'
+  if (instance.runtime.status !== 'live') return 'stale'
+  return instance.runtime.realtime?.freshness === 'catching_up' ? 'catching_up' : 'fresh'
 }
 
 function taskCounts(tasks: TaskReadModel[]): FleetTaskCounts {
@@ -365,7 +366,7 @@ export function buildFleetReadModel(
     servers.push({
       ...source,
       connectivity: instance.runtime.status,
-      freshness: freshness(instance.runtime.status),
+      freshness: freshness(instance),
       version: snapshot?.instance.version,
       healthy: snapshot?.instance.healthy,
       resources: snapshot?.instance.resources,
@@ -376,6 +377,7 @@ export function buildFleetReadModel(
       reconnectAttempt: instance.runtime.reconnectAttempt,
       lastError: instance.runtime.lastError,
       staleReason: instance.runtime.realtime?.staleReason,
+      catchingUpScopes: instance.runtime.realtime?.catchingUpScopes ?? [],
       activeAgentCount: agents.filter((agent) => agent.status === 'active').length,
       activeIntents: agents
         .filter((agent) => agent.status === 'active')

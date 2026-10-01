@@ -457,10 +457,14 @@ export function buildProjectedFleetInstances(
     const sourceFreshness = cache.sources.find((item) => item.sourceNodeId === source)?.freshness ?? 'stale'
     const scopeStatuses = (cache.scopeStatuses ?? []).filter((item) => item.sourceNodeId === source)
     const scopeOfflineAuth = scopeStatuses.some((item) => item.status === 'OFFLINE_AUTH')
-    const scopeDegraded = scopeStatuses.some((item) => item.status !== 'LIVE')
+    const catchingUpScopes = scopeStatuses.filter((item) => item.status === 'CATCHING_UP').map((item) => item.scope)
+    const scopeDegraded = scopeStatuses.some((item) => item.status === 'DEGRADED')
     const effectiveFreshness = scopeOfflineAuth ? 'unavailable' : sourceFreshness
     const degraded = overlayDegraded(cache, source) || scopeDegraded
     const realtimeStatus = status(effectiveFreshness, fleetStatus, degraded)
+    const realtimeFreshness = realtimeStatus !== 'live'
+      ? 'stale' as const
+      : catchingUpScopes.length > 0 ? 'catching_up' as const : 'fresh' as const
     return {
       profile,
       runtime: {
@@ -474,6 +478,8 @@ export function buildProjectedFleetInstances(
           highWaterSeq: cache.appliedProjectionSeq,
           socketConnected: fleetStatus === 'live',
           reconnectAttempt: 0,
+          freshness: realtimeFreshness,
+          catchingUpScopes,
           staleReason: realtimeStatus === 'stale'
             ? scopeDegraded ? 'fleet_scope_not_live'
               : degraded ? 'runtime_ownership_degraded' : 'fleet_projection_stale'

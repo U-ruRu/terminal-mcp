@@ -1,6 +1,7 @@
-import type { ConsoleSnapshotReadModel, JsonRecord } from '../api/models'
+import type { ConsoleSnapshotReadModel, JsonRecord, PersistentMutationResult, PersistentPolicyReadModel, PersistentSlotReadModel, PersistentWorkSessionReadModel } from '../api/models'
 
 export type RealtimeStatus = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'stale'
+export type RealtimeFreshness = 'fresh' | 'catching_up' | 'stale'
 
 export type InstanceEvent = {
   seq: number
@@ -24,41 +25,60 @@ export type RealtimeState = {
   highWaterSeq: number
   socketConnected: boolean
   reconnectAttempt: number
+  freshness: RealtimeFreshness
+  catchingUpScopes: string[]
   staleReason?: string
   lastError?: string
   lastEvent?: InstanceEvent
 }
 
 export function createRealtimeState(): RealtimeState {
-  return { status: 'offline', snapshot: null, cursor: 0, highWaterSeq: 0, socketConnected: false, reconnectAttempt: 0 }
+  return {
+    status: 'offline', snapshot: null, cursor: 0, highWaterSeq: 0, socketConnected: false,
+    reconnectAttempt: 0, freshness: 'stale', catchingUpScopes: [],
+  }
 }
 
 export function beginConnecting(state: RealtimeState, reconnecting = false): RealtimeState {
-  return { ...state, status: reconnecting ? 'reconnecting' : 'connecting', socketConnected: false, staleReason: undefined, lastError: undefined }
+  return {
+    ...state,
+    status: reconnecting ? 'reconnecting' : 'connecting',
+    socketConnected: false,
+    staleReason: undefined,
+    lastError: undefined,
+  }
 }
 
 export function replaceSnapshot(state: RealtimeState, snapshot: ConsoleSnapshotReadModel, resetCursor: boolean): RealtimeState {
   const cursor = resetCursor ? snapshot.replayFromSeq : state.cursor
   const caughtUp = resetCursor || snapshot.highWaterSeq >= cursor
+  const hazardous = state.status === 'stale' && state.freshness === 'stale' && Boolean(state.staleReason)
   return {
     ...state,
     snapshot,
     cursor,
     highWaterSeq: Math.max(state.highWaterSeq, snapshot.highWaterSeq),
-    status: caughtUp ? (state.socketConnected ? 'live' : state.status) : 'stale',
-    staleReason: caughtUp ? undefined : 'events_after_snapshot',
+    status: caughtUp
+      ? (state.socketConnected ? 'live' : state.status)
+      : (state.socketConnected && !hazardous ? 'live' : state.status),
+    freshness: caughtUp ? 'fresh' : (hazardous ? 'stale' : 'catching_up'),
+    catchingUpScopes: caughtUp ? [] : (state.catchingUpScopes.length > 0 ? state.catchingUpScopes : ['*']),
+    staleReason: caughtUp ? undefined : (hazardous ? state.staleReason : undefined),
     lastError: undefined,
   }
 }
 
 export function socketOpened(state: RealtimeState): RealtimeState {
   const snapshotCaughtUp = state.snapshot !== null && state.snapshot.highWaterSeq >= state.cursor
+  const hazardous = state.status === 'stale' && state.freshness === 'stale' && Boolean(state.staleReason)
   return {
     ...state,
-    status: snapshotCaughtUp ? 'live' : 'stale',
+    status: hazardous ? 'stale' : 'live',
     socketConnected: true,
     reconnectAttempt: 0,
-    staleReason: snapshotCaughtUp ? undefined : state.staleReason ?? 'snapshot_behind_cursor',
+    freshness: hazardous ? 'stale' : (snapshotCaughtUp ? 'fresh' : 'catching_up'),
+    catchingUpScopes: snapshotCaughtUp ? [] : (state.catchingUpScopes.length > 0 ? state.catchingUpScopes : ['*']),
+    staleReason: hazardous ? state.staleReason : undefined,
     lastError: undefined,
   }
 }
@@ -72,25 +92,174 @@ export function markOffline(state: RealtimeState, error?: string): RealtimeState
 }
 
 export function markStale(state: RealtimeState, reason: string, error?: string): RealtimeState {
-  return { ...state, status: 'stale', staleReason: reason, lastError: error }
+  return { ...state, status: 'stale', freshness: 'stale', catchingUpScopes: [], staleReason: reason, lastError: error }
+}
+
+function addScope(scopes: string[], scope: string): string[] {
+  return scopes.includes(scope) ? scopes : [...scopes, scope]
 }
 
 export function applyRealtimeFrame(state: RealtimeState, frame: RealtimeFrame): RealtimeState {
   if (frame.type === 'resync_required') {
-    return { ...state, status: 'stale', highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq), staleReason: frame.reason || 'resync_required' }
+    return markStale(
+      { ...state, highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq) },
+      frame.reason || 'resync_required',
+    )
   }
   if (frame.type === 'heartbeat') {
     if (frame.cursor > state.cursor) {
-      return { ...state, status: 'stale', highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq), staleReason: 'heartbeat_cursor_ahead' }
+      return markStale(
+        { ...state, highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq) },
+        'heartbeat_cursor_ahead',
+      )
     }
     return { ...state, highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq) }
   }
   const { event } = frame
   if (event.seq <= state.cursor) return { ...state, highWaterSeq: Math.max(state.highWaterSeq, event.seq) }
   if (event.seq !== state.cursor + 1) {
-    return { ...state, status: 'stale', highWaterSeq: Math.max(state.highWaterSeq, event.seq), staleReason: 'cursor_gap', lastEvent: event }
+    return markStale(
+      { ...state, highWaterSeq: Math.max(state.highWaterSeq, event.seq), lastEvent: event },
+      'cursor_gap',
+    )
   }
-  return { ...state, status: 'stale', cursor: event.seq, highWaterSeq: Math.max(state.highWaterSeq, event.seq), staleReason: 'event_pending_refresh', lastEvent: event }
+  return {
+    ...state,
+    status: state.socketConnected ? 'live' : state.status,
+    cursor: event.seq,
+    highWaterSeq: Math.max(state.highWaterSeq, event.seq),
+    freshness: state.freshness === 'stale' ? 'stale' : 'catching_up',
+    catchingUpScopes: state.freshness === 'stale'
+      ? state.catchingUpScopes
+      : addScope(state.catchingUpScopes, event.entityType),
+    staleReason: state.freshness === 'stale' ? state.staleReason : undefined,
+    lastEvent: event,
+  }
+}
+
+function rawRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+function rawString(value: unknown): string | undefined { return typeof value === 'string' ? value : undefined }
+function rawInteger(value: unknown): number | undefined { return Number.isInteger(value) ? Number(value) : undefined }
+function rawBoolean(value: unknown): boolean | undefined { return typeof value === 'boolean' ? value : undefined }
+
+function workSessionPatch(value: unknown): PersistentWorkSessionReadModel | undefined {
+  const item = rawRecord(value)
+  if (!item) return undefined
+  const workSessionId = rawString(item.work_session_id)
+  const sessionEpoch = rawInteger(item.session_epoch)
+  const authorityNodeId = rawString(item.authority_node_id)
+  const authorityEpoch = rawInteger(item.authority_epoch)
+  const startedAt = rawString(item.started_at)
+  const hardExpiresAt = rawString(item.hard_expires_at)
+  const state = rawString(item.state)
+  if (!workSessionId || sessionEpoch === undefined || !authorityNodeId || authorityEpoch === undefined || !startedAt || !hardExpiresAt || !state) return undefined
+  return {
+    workSessionId, sessionEpoch, authorityNodeId, authorityEpoch, startedAt, hardExpiresAt, state,
+    originInstanceId: rawString(item.origin_instance_id),
+  }
+}
+
+function slotPatch(prior: PersistentSlotReadModel | undefined, payload: Record<string, unknown>): PersistentSlotReadModel | undefined {
+  const raw = rawRecord(payload.slot)
+  if (!raw) return prior
+  const logicalAgentId = rawString(raw.logical_agent_id) ?? prior?.logicalAgentId
+  const displayName = rawString(raw.display_name) ?? prior?.displayName
+  const state = rawString(raw.state) ?? prior?.state
+  const authorityNodeId = rawString(raw.authority_node_id) ?? prior?.authorityNodeId
+  const authorityEpoch = rawInteger(raw.authority_epoch) ?? prior?.authorityEpoch
+  const slotRevision = rawInteger(raw.slot_revision) ?? prior?.slotRevision
+  const selectorGeneration = rawInteger(raw.selector_generation) ?? prior?.selectorGeneration
+  const authGeneration = rawInteger(raw.auth_generation) ?? prior?.authGeneration
+  const createdAt = rawString(raw.created_at) ?? prior?.createdAt
+  const updatedAt = rawString(raw.updated_at) ?? prior?.updatedAt
+  const selectorRaw = rawRecord(payload.selector)
+  const selector = rawString(selectorRaw?.selector) ?? prior?.selector
+  const serverNow = rawString(payload.server_now) ?? prior?.serverNow
+  if (!logicalAgentId || !displayName || !state || !authorityNodeId || authorityEpoch === undefined || slotRevision === undefined || selectorGeneration === undefined || authGeneration === undefined || !createdAt || !updatedAt || !selector || !serverNow) return prior
+
+  let access = prior?.access
+  const accessRaw = rawRecord(payload.access)
+  const publicName = rawString(accessRaw?.public_name)
+  const accessGeneration = rawInteger(accessRaw?.access_generation)
+  const accessStatus = rawString(accessRaw?.status)
+  if (publicName && accessGeneration !== undefined && accessStatus) {
+    access = { publicName, accessGeneration, status: accessStatus }
+  }
+
+  const returnedSession = workSessionPatch(payload.work_session)
+  const workSession = state === 'active' || state === 'stopping'
+    ? (returnedSession ?? prior?.workSession)
+    : undefined
+
+  return {
+    logicalAgentId, displayName, state, authorityNodeId, authorityEpoch, slotRevision, selector,
+    selectorGeneration, authGeneration, access, createdAt, updatedAt, serverNow, workSession,
+    claims: prior?.claims ?? [], audit: prior?.audit ?? [], attachments: prior?.attachments ?? [],
+  }
+}
+
+function policyPatch(prior: PersistentPolicyReadModel, value: unknown): PersistentPolicyReadModel {
+  const raw = rawRecord(value)
+  if (!raw) return prior
+  return {
+    durationSeconds: rawInteger(raw.duration_seconds) ?? prior.durationSeconds,
+    warningAfterSeconds: rawInteger(raw.warning_after_seconds) ?? prior.warningAfterSeconds,
+    alertAfterSeconds: rawInteger(raw.alert_after_seconds) ?? prior.alertAfterSeconds,
+    rearmAfterSeconds: rawInteger(raw.rearm_after_seconds) ?? prior.rearmAfterSeconds,
+    manualRearm: rawBoolean(raw.manual_rearm) ?? prior.manualRearm,
+    admissionMode: rawString(raw.admission_mode) ?? prior.admissionMode,
+    legacyAdmissionEnabled: rawBoolean(raw.legacy_admission_enabled) ?? prior.legacyAdmissionEnabled,
+    policyControlSupported: rawBoolean(raw.policy_control_supported) ?? prior.policyControlSupported,
+    projected: prior.projected,
+  }
+}
+
+export function applyPersistentMutationResult(state: RealtimeState, result: PersistentMutationResult): RealtimeState {
+  if (!result.ok || !state.snapshot?.persistent) return state
+  const persistent = state.snapshot.persistent
+  const payload = result.payload
+  let slots = persistent.slots
+  const rawSlot = rawRecord(payload.slot)
+  const logicalAgentId = rawString(rawSlot?.logical_agent_id)
+  let touched = false
+  if (logicalAgentId) {
+    const prior = slots.find((item) => item.logicalAgentId === logicalAgentId)
+    const next = slotPatch(prior, payload)
+    if (next) {
+      touched = true
+      slots = next.state === 'deleted'
+        ? slots.filter((item) => item.logicalAgentId !== logicalAgentId)
+        : prior
+          ? slots.map((item) => item.logicalAgentId === logicalAgentId ? next : item)
+          : [...slots, next]
+    }
+  }
+  const hasPolicy = Boolean(rawRecord(payload.policy))
+  const policy = hasPolicy ? policyPatch(persistent.policy, payload.policy) : persistent.policy
+  touched = touched || hasPolicy
+  if (!touched) return state
+  const scopes = [
+    ...(logicalAgentId ? ['logical_agent'] : []),
+    ...(hasPolicy ? ['persistent_policy'] : []),
+  ]
+  return {
+    ...state,
+    snapshot: {
+      ...state.snapshot,
+      persistent: {
+        ...persistent,
+        serverNow: rawString(payload.server_now) ?? persistent.serverNow,
+        policy,
+        slots,
+      },
+    },
+    freshness: state.freshness === 'stale' ? 'stale' : 'catching_up',
+    catchingUpScopes: state.freshness === 'stale'
+      ? state.catchingUpScopes
+      : scopes.reduce((values, scope) => addScope(values, scope), state.catchingUpScopes),
+  }
 }
 
 export function boundedBackoffDelay(attempt: number, baseMs = 250, maxMs = 8000): number {

@@ -158,7 +158,7 @@ test('confirmed write overlay masks stale projected slot until projection catche
 })
 
 
-test('scope freshness is independent from query completeness and degrades only the affected source', () => {
+test('scope CATCHING_UP keeps server live while exposing only the affected scope as catching up', () => {
   const value = cache([entity('logical_agent', 'logical-1', {
     logical_agent_id: 'logical-1', display_name: 'Oscar', state: 'suspended',
     authority_node_id: 'node-a', authority_epoch: 2, slot_revision: 7,
@@ -175,8 +175,8 @@ test('scope freshness is independent from query completeness and degrades only t
     [{ sourceNodeId: 'node-a', profile }],
     'live',
   )
-  expect(instance.runtime.status).toBe('stale')
-  expect(instance.runtime.realtime?.staleReason).toBe('fleet_scope_not_live')
+  expect(instance.runtime.status).toBe('live')
+  expect(instance.runtime.realtime).toMatchObject({ freshness: 'catching_up', catchingUpScopes: ['commands'], staleReason: undefined })
 })
 
 test('query task decoder preserves cold detail without inventing ownership', () => {

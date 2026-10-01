@@ -40,6 +40,7 @@ h2 { font-size: clamp(1.6rem, 4vw, 2.4rem); }
 .fleet-server-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); }
 .fleet-server-heading .muted { overflow-wrap: anywhere; }
 .fleet-status-fresh { color: var(--color-success); }
+.fleet-status-catching_up { color: var(--color-warning); }
 .fleet-status-stale { color: var(--color-warning); }
 .fleet-status-offline { color: var(--color-danger); }
 .resource-grid { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }

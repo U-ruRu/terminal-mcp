@@ -25,7 +25,7 @@ const snapshot: ConsoleSnapshotReadModel = {
 
 const instance: FleetInstanceView = {
   profile: { instanceId: 'alpha', origin: 'https://alpha.example', displayName: 'Alpha', credentialRef: 'cred-alpha', metadata: { deviceId: 'd', clientId: 'c', deviceLabel: 'Console', scope: 'terminal:read', pairedAt: 1 }, createdAt: 1, updatedAt: 1 },
-  runtime: { instanceId: 'alpha', status: 'live', authStatus: 'connected', reconnectAttempt: 0, realtime: { status: 'live', snapshot, cursor: 1, highWaterSeq: 1, socketConnected: true, reconnectAttempt: 0 } },
+  runtime: { instanceId: 'alpha', status: 'live', authStatus: 'connected', reconnectAttempt: 0, realtime: { status: 'live', snapshot, cursor: 1, highWaterSeq: 1, socketConnected: true, reconnectAttempt: 0, freshness: 'fresh', catchingUpScopes: [] } },
 }
 
 afterEach(() => cleanup())

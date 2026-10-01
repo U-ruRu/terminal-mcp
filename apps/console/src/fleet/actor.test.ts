@@ -161,11 +161,11 @@ test('persistent mutations fail closed without an authenticated write client', a
 test('persistent mutations remain available when realtime reads are stale but auth is connected', async () => {
   const actor = new BrowserFleetInstanceActor(makeProfile('alpha'), { storage: new MemoryStorage() })
   const persistentMutation = vi.fn(async () => ({ ok: false, code: 'revision_conflict' }))
-  const refreshNow = vi.fn(async () => undefined)
+  const applyPersistentMutation = vi.fn(() => undefined)
   const internals = actor as unknown as {
     state: ReturnType<BrowserFleetInstanceActor['getState']>
     client: { persistentMutation: typeof persistentMutation }
-    engine: { refreshNow: typeof refreshNow }
+    engine: { applyPersistentMutation: typeof applyPersistentMutation }
   }
   internals.state = {
     instanceId: 'alpha',
@@ -175,7 +175,7 @@ test('persistent mutations remain available when realtime reads are stale but au
     reconnectAttempt: 1,
   }
   internals.client = { persistentMutation }
-  internals.engine = { refreshNow }
+  internals.engine = { applyPersistentMutation }
 
   await expect(
     actor.persistentMutation('/actions/persistent/slots/play', {
@@ -185,5 +185,5 @@ test('persistent mutations remain available when realtime reads are stale but au
     }),
   ).resolves.toEqual({ ok: false, code: 'revision_conflict' })
   expect(persistentMutation).toHaveBeenCalledOnce()
-  expect(refreshNow).toHaveBeenCalledOnce()
+  expect(applyPersistentMutation).toHaveBeenCalledWith({ ok: false, code: 'revision_conflict' })
 })

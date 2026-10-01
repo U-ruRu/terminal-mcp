@@ -1,5 +1,7 @@
 import { ConsoleHttpError, type ConsoleClient } from '../api/client'
+import type { PersistentMutationResult } from '../api/models'
 import {
+  applyPersistentMutationResult,
   applyRealtimeFrame,
   beginConnecting,
   boundedBackoffDelay,
@@ -33,6 +35,7 @@ export type RealtimeEngineOptions = {
   reconnectBaseMs?: number
   reconnectMaxMs?: number
   reconnectJitter?: (delayMs: number, attempt: number) => number
+  refreshDebounceMs?: number
 }
 type Listener = (state: RealtimeState) => void
 
@@ -64,6 +67,7 @@ export class RealtimeConsoleEngine {
   private readonly reconnectBaseMs: number
   private readonly reconnectMaxMs: number
   private readonly reconnectJitter: (delayMs: number, attempt: number) => number
+  private readonly refreshDebounceMs: number
   private socket: RealtimeSocket | null = null
   private reconnectTimer: unknown = null
   private refreshTimer: unknown = null
@@ -71,6 +75,8 @@ export class RealtimeConsoleEngine {
   private generation = 0
   private refreshInFlight = false
   private refreshAgain = false
+  private refreshFailures = 0
+  private refreshLagCount = 0
   private resyncInFlight = false
 
   constructor(private readonly client: RealtimeClient, private readonly origin: string, options: RealtimeEngineOptions = {}) {
@@ -80,6 +86,7 @@ export class RealtimeConsoleEngine {
     this.reconnectBaseMs = options.reconnectBaseMs ?? 250
     this.reconnectMaxMs = options.reconnectMaxMs ?? 8000
     this.reconnectJitter = options.reconnectJitter ?? ((delayMs) => delayMs)
+    this.refreshDebounceMs = Math.max(0, options.refreshDebounceMs ?? 100)
   }
 
   getState(): RealtimeState { return this.state }
@@ -123,7 +130,14 @@ export class RealtimeConsoleEngine {
 
   async refreshNow(): Promise<void> {
     if (!this.running) return
+    this.clearRefreshTimer()
     await this.refreshSnapshot()
+  }
+
+  applyPersistentMutation(result: PersistentMutationResult): void {
+    if (!this.running) return
+    if (result.ok) this.setState(applyPersistentMutationResult(this.state, result))
+    this.queueSnapshotRefresh()
   }
 
   async retryNow(): Promise<void> {
@@ -208,27 +222,50 @@ export class RealtimeConsoleEngine {
       this.refreshAgain = true
       return
     }
-    void this.refreshSnapshot()
+    if (this.refreshTimer !== null) return
+    this.refreshTimer = this.scheduler.setTimeout(() => {
+      this.refreshTimer = null
+      void this.refreshSnapshot()
+    }, this.refreshDebounceMs)
   }
 
   private async refreshSnapshot(): Promise<void> {
     if (!this.running || this.refreshInFlight) return
     this.refreshInFlight = true
+    this.refreshAgain = false
     try {
-      do {
+      const snapshot = await this.client.snapshot()
+      if (!this.running) return
+      this.refreshFailures = 0
+      this.setState(replaceSnapshot(this.state, snapshot, false))
+      if (snapshot.highWaterSeq < this.state.cursor) {
+        this.refreshLagCount += 1
+        this.refreshAgain = true
+        if (this.refreshLagCount >= 3) {
+          this.setState(markStale(this.state, 'snapshot_refresh_lag'))
+        }
+      } else {
+        this.refreshLagCount = 0
         this.refreshAgain = false
-        const snapshot = await this.client.snapshot()
-        if (!this.running) return
-        this.setState(replaceSnapshot(this.state, snapshot, false))
-        if (snapshot.highWaterSeq < this.state.cursor) this.refreshAgain = true
-      } while (this.running && this.refreshAgain)
+      }
     } catch (error) {
       if (this.running) {
-        this.setState(markStale(this.state, 'snapshot_refresh_failed', errorCode(error)))
+        this.refreshFailures += 1
+        const code = errorCode(error)
+        if (this.refreshFailures >= 3) {
+          this.setState(markStale(this.state, 'snapshot_refresh_failed', code))
+        } else {
+          this.setState({
+            ...this.state,
+            freshness: this.state.freshness === 'stale' ? 'stale' : 'catching_up',
+            lastError: code,
+          })
+        }
         this.scheduleSnapshotRefresh()
       }
     } finally {
       this.refreshInFlight = false
+      if (this.running && this.refreshAgain && this.refreshTimer === null) this.queueSnapshotRefresh()
     }
   }
 
@@ -293,7 +330,7 @@ export class RealtimeConsoleEngine {
     const delay = this.backoffDelay(Math.max(1, this.state.reconnectAttempt + 1))
     this.refreshTimer = this.scheduler.setTimeout(() => {
       this.refreshTimer = null
-      this.queueSnapshotRefresh()
+      void this.refreshSnapshot()
     }, delay)
   }
   private backoffDelay(attempt: number): number {

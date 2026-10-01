@@ -104,6 +104,8 @@ function instance(status: 'live' | 'offline', item: PersistentSlotReadModel): Fl
         highWaterSeq: 3,
         socketConnected: status === 'live',
         reconnectAttempt: 0,
+        freshness: status === 'live' ? 'fresh' : 'stale',
+        catchingUpScopes: [],
       },
     },
   }

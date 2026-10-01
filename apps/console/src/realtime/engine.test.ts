@@ -34,8 +34,10 @@ test('ordered event refreshes snapshot; disconnect resumes from cursor with back
   const engine=new RealtimeConsoleEngine(client,'https://terminal.example',{scheduler,socketFactory:(url)=>{urls.push(url);const s=new Sock();sockets.push(s);return s}})
   await engine.start(); sockets[0].open()
   sockets[0].msg({type:'event',event:{seq:11,event_type:'task.updated',entity_type:'task',entity_id:'x',payload:{},created_at:'2026-09-28T09:00:00Z'}})
-  await vi.waitFor(()=>expect(engine.getState().status).toBe('live'))
-  expect(engine.getState().cursor).toBe(11)
+  expect(engine.getState()).toMatchObject({status:'live', freshness:'catching_up', cursor:11, catchingUpScopes:['task']})
+  expect(client.snapshot).toHaveBeenCalledTimes(1)
+  expect(scheduler.run()).toBe(100); await vi.waitFor(()=>expect(client.snapshot).toHaveBeenCalledTimes(2))
+  expect(engine.getState()).toMatchObject({status:'live', freshness:'fresh', cursor:11})
   sockets[0].drop()
   expect(engine.getState()).toMatchObject({status:'reconnecting',reconnectAttempt:1})
   expect(scheduler.run()).toBe(250); await tick()
@@ -88,21 +90,19 @@ test('initial snapshot failure retries with jitter and recovers without a page r
   engine.stop()
 })
 
-test('event bursts coalesce snapshot refreshes instead of creating an unbounded request queue', async () => {
+test('Tokyo-like high RTT event bursts coalesce into one refresh and stay live while catching up', async () => {
+  const scheduler = new Scheduler()
   let resolveRefresh: ((value: ConsoleSnapshotReadModel) => void) | undefined
   const pendingRefresh = new Promise<ConsoleSnapshotReadModel>((resolve) => {
     resolveRefresh = resolve
   })
   const client = {
-    snapshot: vi
-      .fn()
-      .mockResolvedValueOnce(snap(0))
-      .mockImplementationOnce(() => pendingRefresh)
-      .mockResolvedValue(snap(20)),
+    snapshot: vi.fn().mockResolvedValueOnce(snap(0)).mockImplementationOnce(() => pendingRefresh),
     webSocketTicket: vi.fn().mockResolvedValue({ ticket: 'burst', expiresIn: 10 }),
   }
   const sockets: Sock[] = []
   const engine = new RealtimeConsoleEngine(client, 'https://terminal.example', {
+    scheduler,
     socketFactory: () => {
       const socket = new Sock()
       sockets.push(socket)
@@ -112,27 +112,23 @@ test('event bursts coalesce snapshot refreshes instead of creating an unbounded 
 
   await engine.start()
   sockets[0].open()
-  for (let seq = 1; seq <= 20; seq += 1) {
-    sockets[0].msg({
-      type: 'event',
-      event: {
-        seq,
-        event_type: 'task.updated',
-        entity_type: 'task',
-        entity_id: String(seq),
-        payload: {},
-        created_at: '2026-09-28T09:00:00Z',
-      },
-    })
+  for (let seq = 1; seq <= 10; seq += 1) {
+    sockets[0].msg({ type: 'event', event: { seq, event_type: 'task.updated', entity_type: 'task', entity_id: String(seq), payload: {}, created_at: '2026-09-28T09:00:00Z' } })
   }
-
+  expect(engine.getState()).toMatchObject({ status: 'live', freshness: 'catching_up', cursor: 10 })
+  expect(client.snapshot).toHaveBeenCalledTimes(1)
+  expect(scheduler.run()).toBe(100)
   await vi.waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(2))
-  resolveRefresh?.(snap(20))
-  await vi.waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(3))
-  await tick()
 
-  expect(engine.getState().cursor).toBe(20)
-  expect(client.snapshot).toHaveBeenCalledTimes(3)
+  for (let seq = 11; seq <= 20; seq += 1) {
+    sockets[0].msg({ type: 'event', event: { seq, event_type: 'task.updated', entity_type: 'task', entity_id: String(seq), payload: {}, created_at: '2026-09-28T09:00:00Z' } })
+  }
+  expect(engine.getState()).toMatchObject({ status: 'live', freshness: 'catching_up', cursor: 20 })
+  resolveRefresh?.(snap(20))
+  await vi.waitFor(() => expect(engine.getState().freshness).toBe('fresh'))
+
+  expect(client.snapshot).toHaveBeenCalledTimes(2)
+  expect(scheduler.q).toHaveLength(0)
   engine.stop()
 })
 
