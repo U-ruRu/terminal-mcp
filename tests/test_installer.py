@@ -1,5 +1,7 @@
 import os
+import sqlite3
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -225,9 +227,51 @@ def test_installer_separates_durable_auth_database_from_runtime_backup():
     assert 'TERMINAL_MCP_AUTH_DATABASE_PATH="$DATA/auth.sqlite3"' in script
     assert 'ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"' in script
     assert 'chmod 0600 "$DATA/auth.sqlite3"' in script
-    backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
+    backup_body = script.split("backup(){", 1)[1].split("schema_rollback_safe(){", 1)[0]
     assert "terminal-mcp.sqlite3" in backup_body
     assert "auth.sqlite3" not in backup_body
+
+def test_installer_blocks_rollback_to_binary_with_older_auth_schema(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "deploy" / "install.sh").read_text()
+    function = "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
+        "\n}\n\ninstall_cli_link(){", 1
+    )[0] + "\n}"
+
+    data = tmp_path / "data"
+    data.mkdir()
+    auth_db = data / "auth.sqlite3"
+    with sqlite3.connect(auth_db) as db:
+        db.execute("PRAGMA user_version=3")
+    assert not (data / "terminal-mcp.sqlite3").exists()
+
+    old_release = tmp_path / "old-release"
+    package = old_release / "terminal_mcp" / "auth"
+    package.mkdir(parents=True)
+    (old_release / "terminal_mcp" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "foundation.py").write_text("AUTH_SCHEMA_VERSION = 2\n")
+
+    runner = tmp_path / "schema-check.sh"
+    runner.write_text(
+        "#!/bin/bash\n"
+        f"DATA={str(data)!r}\n"
+        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
+        + function
+        + "\n"
+        + f"schema_rollback_safe {str(old_release)!r}\n"
+    )
+    result = subprocess.run(
+        ["bash", str(runner)],
+        env={**os.environ, "PYTHON": sys.executable},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 43
+    assert "Refusing auth schema downgrade 3->2" in result.stderr
+    assert "rollback-excluded Access security state" in result.stderr
+
 
 def test_installer_pins_isolated_fixed_sqlite_runtime():
     script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
@@ -260,7 +304,7 @@ def test_update_stages_fixed_sqlite_before_backup_and_activation():
         < update.index('backup "$STAGED_RELEASE"')
         < update.index("activate")
     )
-    backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
+    backup_body = script.split("backup(){", 1)[1].split("schema_rollback_safe(){", 1)[0]
     assert 'runtime_python "$release"' in backup_body
 
 

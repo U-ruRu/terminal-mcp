@@ -501,39 +501,67 @@ PYBACKUP
 }
 schema_rollback_safe(){
   local release=$1
-  [ -f "$DATA/terminal-mcp.sqlite3" ] || return 0
-  runtime_python "$release" - "$DATA/terminal-mcp.sqlite3" <<'PYSCHEMA'
-import sqlite3, sys
+  local runtime_db="$DATA/terminal-mcp.sqlite3"
+  local auth_db="$DATA/auth.sqlite3"
+  [ -f "$runtime_db" ] || [ -f "$auth_db" ] || return 0
+  runtime_python "$release" - "$runtime_db" "$auth_db" <<'PYSCHEMA'
+import sqlite3
+import sys
+from pathlib import Path
 
-try:
-    from terminal_mcp.storage import sqlite as target_sqlite
-    target_version = int(getattr(target_sqlite, "SCHEMA_VERSION", 14))
-except Exception:
-    target_version = 14
+runtime_path = Path(sys.argv[1])
+auth_path = Path(sys.argv[2])
 
-with sqlite3.connect(sys.argv[1]) as db:
-    current_version = int(db.execute("PRAGMA user_version").fetchone()[0])
-    if current_version <= target_version:
-        raise SystemExit(0)
+if runtime_path.is_file():
+    try:
+        from terminal_mcp.storage import sqlite as target_sqlite
+        target_version = int(getattr(target_sqlite, "SCHEMA_VERSION", 14))
+    except Exception:
+        target_version = 14
 
-    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    persistent = False
-    if "logical_agents" in tables:
-        persistent = db.execute("SELECT 1 FROM logical_agents LIMIT 1").fetchone() is not None
-    if not persistent and "work_claims" in tables:
-        columns = {row[1] for row in db.execute("PRAGMA table_info(work_claims)")}
-        if "owner_kind" in columns:
-            persistent = db.execute(
-                "SELECT 1 FROM work_claims WHERE owner_kind='logical_agent' LIMIT 1"
-            ).fetchone() is not None
+    with sqlite3.connect(runtime_path) as db:
+        current_version = int(db.execute("PRAGMA user_version").fetchone()[0])
+        if current_version > target_version:
+            tables = {
+                row[0]
+                for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            persistent = False
+            if "logical_agents" in tables:
+                persistent = db.execute(
+                    "SELECT 1 FROM logical_agents LIMIT 1"
+                ).fetchone() is not None
+            if not persistent and "work_claims" in tables:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(work_claims)")}
+                if "owner_kind" in columns:
+                    persistent = db.execute(
+                        "SELECT 1 FROM work_claims WHERE owner_kind='logical_agent' LIMIT 1"
+                    ).fetchone() is not None
 
-    if persistent:
+            if persistent:
+                print(
+                    f"Refusing schema downgrade {current_version}->{target_version}: "
+                    "Persistent Slot ownership exists",
+                    file=sys.stderr,
+                )
+                raise SystemExit(42)
+
+if auth_path.is_file():
+    try:
+        from terminal_mcp.auth import foundation as target_auth
+        target_auth_version = int(getattr(target_auth, "AUTH_SCHEMA_VERSION", 2))
+    except Exception:
+        target_auth_version = 2
+
+    with sqlite3.connect(auth_path) as db:
+        current_auth_version = int(db.execute("PRAGMA user_version").fetchone()[0])
+    if current_auth_version > target_auth_version:
         print(
-            f"Refusing schema downgrade {current_version}->{target_version}: "
-            "Persistent Slot ownership exists",
+            f"Refusing auth schema downgrade {current_auth_version}->{target_auth_version}: "
+            "rollback-excluded Access security state requires a compatible binary",
             file=sys.stderr,
         )
-        raise SystemExit(42)
+        raise SystemExit(43)
 PYSCHEMA
 }
 

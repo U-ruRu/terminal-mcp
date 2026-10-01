@@ -13,6 +13,8 @@ from terminal_mcp.storage.sqlite_observability import (
     open_observed_connection,
 )
 
+AUTH_SCHEMA_VERSION = 3
+
 
 class AuthFoundationError(RuntimeError):
     pass
@@ -80,9 +82,10 @@ class AuthFoundationStore:
         try:
             schema_row = await (await db.execute("PRAGMA user_version")).fetchone()
             schema_version = int(schema_row[0]) if schema_row else 0
-            if schema_version > 3:
+            if schema_version > AUTH_SCHEMA_VERSION:
                 raise AuthFoundationError(
-                    f"auth schema version {schema_version} is newer than supported version 3"
+                    f"auth schema version {schema_version} is newer than supported version "
+                    f"{AUTH_SCHEMA_VERSION}"
                 )
             await db.executescript(
                 """
@@ -155,7 +158,7 @@ class AuthFoundationStore:
                 """
             )
             await self.access.initialize(db)
-            await db.execute("PRAGMA user_version=3")
+            await db.execute(f"PRAGMA user_version={AUTH_SCHEMA_VERSION}")
             now = _utc_now()
             await db.execute(
                 "INSERT OR IGNORE INTO auth_security_state(singleton,generation,updated_at) "
