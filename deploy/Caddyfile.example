@@ -1,5 +1,5 @@
 # Public peer origins must forward /internal/fleet/* to Terminal MCP.
-# Required Console/browser surfaces: /connect, /pairing/exchange, /actions/console/*, /console/*.
+# Required Console/browser surfaces: /connect, /pairing/exchange, /actions/console/*, /actions/context, /actions/persistent/*, /console/*.
 # /console/* includes Fleet v1 probe/snapshot/activity/query/detail/history/ws-ticket/events.
 # If this catch-all is replaced with a path allowlist, keep that route protected by the application fleet-signing check.
 server-a.example.invalid {
