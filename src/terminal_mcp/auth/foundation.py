@@ -47,10 +47,13 @@ def _string_set(values, label: str) -> list[str]:
 class AuthFoundationStore:
     """Canonical identity/grant foundation kept outside the runtime rollback DB."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, access_code_secret: str | bytes | None = None):
         self.path = Path(path)
         self.passwords = PasswordHasher()
         self.sqlite_diagnostics = SqliteDiagnostics("auth")
+        from terminal_mcp.auth.access_authority import AccessCodeAuthority
+
+        self.access = AccessCodeAuthority(self, access_code_secret)
 
     def configure_observability(self, events, metrics):
         self.sqlite_diagnostics.configure(events, metrics)
@@ -74,6 +77,12 @@ class AuthFoundationStore:
         secure_database_path(self.path)
         db = await self._connect()
         try:
+            schema_row = await (await db.execute("PRAGMA user_version")).fetchone()
+            schema_version = int(schema_row[0]) if schema_row else 0
+            if schema_version > 2:
+                raise AuthFoundationError(
+                    f"auth schema version {schema_version} is newer than supported version 2"
+                )
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS auth_security_state(
@@ -144,6 +153,8 @@ class AuthFoundationStore:
                     ON auth_audit(created_at,id);
                 """
             )
+            await self.access.initialize(db)
+            await db.execute("PRAGMA user_version=2")
             now = _utc_now()
             await db.execute(
                 "INSERT OR IGNORE INTO auth_security_state(singleton,generation,updated_at) "
@@ -160,9 +171,7 @@ class AuthFoundationStore:
             (now,),
         )
         row = await (
-            await db.execute(
-                "SELECT generation FROM auth_security_state WHERE singleton=1"
-            )
+            await db.execute("SELECT generation FROM auth_security_state WHERE singleton=1")
         ).fetchone()
         return int(row[0])
 
@@ -202,9 +211,7 @@ class AuthFoundationStore:
         db = await self._connect()
         try:
             row = await (
-                await db.execute(
-                    "SELECT generation FROM auth_security_state WHERE singleton=1"
-                )
+                await db.execute("SELECT generation FROM auth_security_state WHERE singleton=1")
             ).fetchone()
             return int(row[0])
         finally:
@@ -636,6 +643,45 @@ class AuthFoundationStore:
             }
             for row in rows
         ]
+
+    async def access_slot(self, logical_agent_id: str) -> dict | None:
+        return await self.access.get_slot(logical_agent_id)
+
+    async def access_slots(self, *, include_deleted: bool = False) -> list[dict]:
+        return await self.access.list_slots(include_deleted=include_deleted)
+
+    async def register_access_slot(
+        self,
+        logical_agent_id: str,
+        authority_node_id: str,
+        *,
+        slot_kind: str = "persistent",
+        display_suffix: str | None = None,
+    ) -> dict:
+        return await self.access.register_slot(
+            logical_agent_id, authority_node_id, slot_kind=slot_kind, display_suffix=display_suffix
+        )
+
+    async def reserve_access_codes(self, codes, *, reason: str = "legacy_selector") -> int:
+        return await self.access.reserve_codes(codes, reason=reason)
+
+    async def issue_access_code(
+        self, logical_agent_id: str, *, forbidden_codes=(), requested_code: str | None = None
+    ) -> dict:
+        return await self.access.issue_code(
+            logical_agent_id, forbidden_codes=forbidden_codes, requested_code=requested_code
+        )
+
+    async def resolve_access_code(self, access_code: str) -> dict | None:
+        return await self.access.resolve_code(access_code)
+
+    async def retire_access_slot(self, logical_agent_id: str) -> dict:
+        return await self.access.retire_slot(logical_agent_id)
+
+    async def update_access_display_suffix(
+        self, logical_agent_id: str, display_suffix: str | None
+    ) -> dict:
+        return await self.access.update_display_suffix(logical_agent_id, display_suffix)
 
     async def audit_events(self, limit: int = 100) -> list[dict]:
         limit = max(1, min(int(limit), 1000))

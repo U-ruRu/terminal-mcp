@@ -18,7 +18,14 @@ from terminal_mcp.storage.persistent_agents import PersistentStoreError
 class PersistentBackend:
     """Feature-gated application service for Persistent Slots."""
 
-    def __init__(self, service, lifecycle: PersistentLifecycleCoordinator, fleet_bridge=None):
+    def __init__(
+        self,
+        service,
+        lifecycle: PersistentLifecycleCoordinator,
+        fleet_bridge=None,
+        *,
+        access_authority=None,
+    ):
         self.service = service
         self.lifecycle = lifecycle
         self.repo = service.repo
@@ -26,6 +33,7 @@ class PersistentBackend:
         self.task_coordinator = service.task_coordinator
         self.task_store = service.task_store
         self.fleet_bridge = fleet_bridge
+        self.access_authority = access_authority
 
     async def _audit(
         self,
@@ -138,9 +146,91 @@ class PersistentBackend:
             raise PersistentLifecycleError(exc.code, blockers=exc.blockers) from exc
         return None, permit
 
+    async def _access_ensure(self, logical_agent_id: str, *, display_suffix: str | None = None):
+        selectors = await self.lifecycle.store.all_selectors()
+        slot = await self.lifecycle.store.get_slot(logical_agent_id)
+        if slot is None:
+            raise PersistentLifecycleError("slot_not_found")
+        if self.fleet_bridge is not None:
+            return await self.fleet_bridge.ensure_access_slot(
+                logical_agent_id,
+                slot.authority_node_id,
+                display_suffix=display_suffix,
+                forbidden_codes=selectors,
+            )
+        if self.access_authority is None:
+            raise PersistentLifecycleError("authority_unavailable")
+        await self.access_authority.reserve_access_codes(selectors)
+        access = await self.access_authority.register_access_slot(
+            logical_agent_id,
+            slot.authority_node_id,
+            slot_kind="persistent",
+            display_suffix=display_suffix,
+        )
+        if int(access["access_generation"]) == 0:
+            issued = await self.access_authority.issue_access_code(logical_agent_id)
+            return {**access, **issued}
+        return access
+
+    async def slot_migrate_access(self, logical_agent_id: str):
+        try:
+            return {"ok": True, "access": await self._access_ensure(logical_agent_id)}
+        except (PersistentLifecycleError, PersistentStoreError) as exc:
+            code = getattr(exc, "code", "authority_unavailable")
+            return {"ok": False, "code": code, "error": code}
+
+    async def slot_rotate_access_code(self, logical_agent_id: str):
+        try:
+            selectors = await self.lifecycle.store.all_selectors()
+            if self.fleet_bridge is not None:
+                access = await self.fleet_bridge.rotate_access_code(
+                    logical_agent_id, forbidden_codes=selectors
+                )
+            elif self.access_authority is not None:
+                await self.access_authority.reserve_access_codes(selectors)
+                access = await self.access_authority.issue_access_code(logical_agent_id)
+            else:
+                raise PersistentStoreError("authority_unavailable")
+            return {"ok": True, "access": access}
+        except Exception as exc:
+            code = getattr(exc, "code", "access_rotation_failed")
+            return {"ok": False, "code": code, "error": code}
+
+    async def _access_get(self, logical_agent_id: str):
+        try:
+            if self.fleet_bridge is not None:
+                return await self.fleet_bridge.get_access_slot(logical_agent_id)
+            if self.access_authority is not None:
+                return await self.access_authority.access_slot(logical_agent_id)
+        except PersistentStoreError:
+            return None
+        return None
+
+    async def _access_update_display(self, logical_agent_id: str, display_name: str):
+        if self.fleet_bridge is not None:
+            return await self.fleet_bridge.update_access_display_suffix(
+                logical_agent_id, display_name
+            )
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.update_access_display_suffix(
+            logical_agent_id, display_name
+        )
+
+    async def _access_retire(self, logical_agent_id: str):
+        if self.fleet_bridge is not None:
+            return await self.fleet_bridge.retire_access_slot(logical_agent_id)
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.retire_access_slot(logical_agent_id)
+
     async def slot_list(self):
         try:
-            return await self.lifecycle.list_slots()
+            result = await self.lifecycle.list_slots()
+            for item in result.get("slots") or []:
+                logical_agent_id = item["slot"]["logical_agent_id"]
+                item["access"] = await self._access_get(logical_agent_id)
+            return result
         except PersistentLifecycleError as exc:
             return self._error(exc)
 
@@ -148,6 +238,7 @@ class PersistentBackend:
         try:
             result = await self.lifecycle.get_slot(logical_agent_id)
             result["audit"] = await self.lifecycle.store.audit_events(logical_agent_id)
+            result["access"] = await self._access_get(logical_agent_id)
             return result
         except PersistentLifecycleError as exc:
             return self._error(exc)
@@ -156,8 +247,21 @@ class PersistentBackend:
         try:
             result = await self.lifecycle.create_slot(display_name)
             if result.get("ok"):
+                logical_agent_id = result["slot"]["logical_agent_id"]
+                try:
+                    result["access"] = await self._access_ensure(
+                        logical_agent_id, display_suffix=display_name
+                    )
+                except PersistentStoreError as exc:
+                    # ACCESS001 is independently deployable before ACCESS002 cutover.
+                    # A remote control authority may still run the previous artifact;
+                    # keep the legacy slot surface usable and expose migration debt.
+                    result["access"] = {
+                        "status": "migration_pending",
+                        "code": exc.code,
+                    }
                 await self._audit(
-                    result["slot"]["logical_agent_id"],
+                    logical_agent_id,
                     "create",
                     payload={"display_name": display_name},
                 )
@@ -175,7 +279,7 @@ class PersistentBackend:
     ):
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
-                return await self._idempotent(
+                result = await self._idempotent(
                     logical_agent_id,
                     "rename",
                     idempotency_key,
@@ -184,6 +288,14 @@ class PersistentBackend:
                         logical_agent_id, display_name, expected_revision=expected_revision
                     ),
                 )
+                if result.get("ok"):
+                    try:
+                        result["access"] = await self._access_update_display(
+                            logical_agent_id, display_name
+                        )
+                    except PersistentStoreError as exc:
+                        result["access"] = {"status": "migration_pending", "code": exc.code}
+                return result
         except PersistentLifecycleError as exc:
             return self._error(exc)
 
@@ -243,7 +355,7 @@ class PersistentBackend:
     ):
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
-                return await self._idempotent(
+                result = await self._idempotent(
                     logical_agent_id,
                     "delete",
                     idempotency_key,
@@ -252,6 +364,12 @@ class PersistentBackend:
                         logical_agent_id, expected_revision=expected_revision
                     ),
                 )
+                if result.get("ok"):
+                    try:
+                        result["access"] = await self._access_retire(logical_agent_id)
+                    except PersistentStoreError as exc:
+                        result["access"] = {"status": "retirement_pending", "code": exc.code}
+                return result
         except PersistentLifecycleError as exc:
             return self._error(exc)
 
