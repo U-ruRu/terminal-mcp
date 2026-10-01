@@ -217,8 +217,17 @@ class PersistentFleetBridge:
     async def get_access_slot_by_public_name(self, public_name: str) -> dict | None:
         control_id = self._access_control_node_id()
         if control_id != self.config.instance_id:
-            data = await self._remote_access_call("by-name", {"public_name": public_name})
-            return dict(data["access"]) if data.get("access") is not None else None
+            try:
+                data = await self._remote_access_call("by-name", {"public_name": public_name})
+                return dict(data["access"]) if data.get("access") is not None else None
+            except PersistentStoreError as exc:
+                if exc.code != "route_unavailable":
+                    raise
+                for slot in await self.store.list_slots():
+                    access = await self.get_access_slot(slot.logical_agent_id)
+                    if access is not None and access.get("public_name") == public_name:
+                        return access
+                return None
         if self.access_authority is None:
             raise PersistentStoreError("authority_unavailable")
         return await self.access_authority.access_slot_by_public_name(public_name)
