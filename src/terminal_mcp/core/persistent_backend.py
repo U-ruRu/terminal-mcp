@@ -233,14 +233,22 @@ class PersistentBackend:
 
     @staticmethod
     def _session_result(access: dict, session, *, access_code: str | None = None) -> dict:
+        if isinstance(session, dict):
+            session_ref = session["work_session_id"]
+            session_epoch = session["session_epoch"]
+            hard_expires_at = session["hard_expires_at"]
+        else:
+            session_ref = session.work_session_id
+            session_epoch = session.session_epoch
+            hard_expires_at = session.hard_expires_at
         result = {
             "ok": True,
             "mode": access["slot_kind"],
             "public_name": access["public_name"],
             "display_suffix": access.get("display_suffix"),
-            "session_ref": session.work_session_id,
-            "session_epoch": session.session_epoch,
-            "hard_expires_at": session.hard_expires_at,
+            "session_ref": session_ref,
+            "session_epoch": session_epoch,
+            "hard_expires_at": hard_expires_at,
         }
         if access_code is not None:
             result["access_code"] = access_code

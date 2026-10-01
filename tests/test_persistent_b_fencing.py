@@ -437,6 +437,53 @@ async def test_persistent_recovery_has_exact_session_attribution_and_is_fenced(t
 
 
 @pytest.mark.asyncio
+async def test_access_session_start_accepts_fresh_lifecycle_mapping(tmp_path):
+    repo = SqliteRepository(
+        tmp_path / "access-start.sqlite3", tmp_path / "access-start-output.sqlite3"
+    )
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    service = TerminalService(repo, terminal, 5000, persistent_agents_enabled=True)
+    store = PersistentAgentStore(repo.path)
+    fence = PersistentExecutionFence(repo, terminal, service.task_store)
+    lifecycle = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=90,
+        execution_fence=fence,
+    )
+    backend = PersistentBackend(service, lifecycle)
+    ctx = _persistent_admission()
+    created = await lifecycle.create_slot("Alpha", admission=ctx)
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    await lifecycle.play(logical_agent_id, expected_revision=1, admission=ctx)
+
+    async def resolve_access(_code):
+        return {
+            "logical_agent_id": logical_agent_id,
+            "authority_node_id": "node-a",
+            "slot_kind": "persistent",
+            "public_name": "Alpha",
+            "display_suffix": None,
+        }
+
+    backend._resolve_access = resolve_access
+    token = bind_admission_context(ctx)
+    try:
+        result = await backend.access_session_start(mode="persistent", access_code="ABCD")
+    finally:
+        reset_admission_context(token)
+
+    assert result["ok"] is True
+    assert result["mode"] == "persistent"
+    assert result["public_name"] == "Alpha"
+    assert result["session_ref"].startswith("ws_")
+    assert result["session_epoch"] == 1
+    assert result["hard_expires_at"]
+
+
+@pytest.mark.asyncio
 async def test_access_end_serializes_with_run_materialization(tmp_path):
     repo = SqliteRepository(tmp_path / "stop-race.sqlite3", tmp_path / "stop-race-output.sqlite3")
     await repo.initialize()
