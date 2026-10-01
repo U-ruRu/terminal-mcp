@@ -663,3 +663,27 @@ def test_refresh_rotation_is_single_use_under_concurrency(tmp_path):
 
     results = asyncio.run(scenario())
     assert sum(result is not None for result in results) == 1
+
+
+def test_paired_console_access_code_handoff_routes_require_execute_scope():
+    from terminal_mcp.auth.middleware import AuthMiddleware
+
+    expected = ["terminal:read", "terminal:execute"]
+    assert (
+        AuthMiddleware._paired_console_scopes(
+            "/actions/persistent/slots/migrate-access", "POST"
+        )
+        == expected
+    )
+    assert (
+        AuthMiddleware._paired_console_scopes(
+            "/actions/persistent/slots/rotate-access-code", "POST"
+        )
+        == expected
+    )
+    assert (
+        AuthMiddleware._paired_console_scopes(
+            "/actions/persistent/slots/migrate-access", "GET"
+        )
+        is None
+    )

@@ -22,6 +22,8 @@ PAIRED_CONSOLE_PERSISTENT_MUTATIONS = frozenset(
     {
         "/actions/persistent/policy",
         "/actions/persistent/slots/create",
+        "/actions/persistent/slots/migrate-access",
+        "/actions/persistent/slots/rotate-access-code",
         "/actions/persistent/slots/rotate-selector",
         "/actions/persistent/slots/play",
         "/actions/persistent/slots/suspend",
