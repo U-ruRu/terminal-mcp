@@ -296,6 +296,13 @@ class PersistentAgentStore:
             ).fetchall()
         return [self._slot(row) for row in rows]
 
+    async def all_selectors(self) -> list[str]:
+        async with self._connect("persistent_selector_all") as db:
+            rows = await (
+                await db.execute("SELECT selector FROM logical_agent_selectors ORDER BY selector")
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     async def active_selector(self, logical_agent_id: str) -> dict | None:
         async with self._connect("persistent_selector_active") as db:
             row = await (
@@ -1647,11 +1654,7 @@ class PersistentAgentStore:
         *,
         active_only: bool = True,
     ) -> list[dict]:
-        clause = (
-            " AND a.revoked_at IS NULL AND s.state='active'"
-            if active_only
-            else ""
-        )
+        clause = " AND a.revoked_at IS NULL AND s.state='active'" if active_only else ""
         async with self._connect("persistent_attachment_presence_list") as db:
             rows = await (
                 await db.execute(

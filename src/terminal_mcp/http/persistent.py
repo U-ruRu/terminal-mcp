@@ -27,6 +27,7 @@ class PersistentPolicyRequest(StrictRequest):
             raise ValueError("at least one policy field is required")
         return self
 
+
 class SlotCreateRequest(StrictRequest):
     display_name: str = Field(min_length=1, max_length=120)
 
@@ -151,6 +152,18 @@ def build_persistent_router(service, policy_controller=None) -> APIRouter:
             body.selector,
             expected_revision=body.expected_revision,
             idempotency_key=body.idempotency_key,
+        )
+
+    @router.post("/slots/migrate-access", operation_id="migratePersistentSlotAccess")
+    async def slot_migrate_access(body: SlotGetRequest):
+        target = backend()
+        return await target.slot_migrate_access(body.logical_agent_id) if target else unavailable()
+
+    @router.post("/slots/rotate-access-code", operation_id="rotatePersistentSlotAccessCode")
+    async def slot_rotate_access_code(body: SlotGetRequest):
+        target = backend()
+        return (
+            await target.slot_rotate_access_code(body.logical_agent_id) if target else unavailable()
         )
 
     @router.post("/slots/play", operation_id="playPersistentSlot")

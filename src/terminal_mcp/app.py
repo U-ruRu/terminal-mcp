@@ -74,7 +74,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output_prune_rows=settings.output_retention_prune_rows,
     )
     oauth_store = OAuthStore(settings.database_path)
-    auth_foundation = AuthFoundationStore(settings.auth_database_path)
+    auth_foundation = AuthFoundationStore(
+        settings.auth_database_path,
+        access_code_secret=(
+            settings.admin_session_secret.strip()
+            or settings.oauth_signing_secret.strip()
+            or settings.fleet_signing_private_key.strip()
+        ),
+    )
     pairing_store = PairingStore(settings.database_path)
     ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     fleet_ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
@@ -216,6 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             control_node_id=(
                 settings.fleet_control_node_id if settings.fleet_v1_authority_enabled else None
             ),
+            access_authority=auth_foundation,
         )
         if fleet_config and settings.persistent_agents_enabled
         else None
@@ -238,7 +246,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_duration_seconds=settings.persistent_session_duration_sec,
         execution_fence=persistent_fence,
     )
-    service.persistent = PersistentBackend(service, persistent_lifecycle, persistent_fleet)
+    service.persistent = PersistentBackend(
+        service, persistent_lifecycle, persistent_fleet, access_authority=auth_foundation
+    )
     service.persistent_lifecycle = persistent_lifecycle
     persistent_policy_controller = PersistentPolicyController(
         settings, service, persistent_lifecycle
