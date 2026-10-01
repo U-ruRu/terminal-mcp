@@ -201,6 +201,12 @@ export type PersistentWorkSessionReadModel = {
   originInstanceId?: string
 }
 
+export type PersistentAccessReadModel = {
+  publicName: string
+  accessGeneration: number
+  status: string
+}
+
 export type PersistentSlotReadModel = {
   logicalAgentId: string
   displayName: string
@@ -211,6 +217,7 @@ export type PersistentSlotReadModel = {
   selector: string
   selectorGeneration: number
   authGeneration: number
+  access?: PersistentAccessReadModel
   createdAt: string
   updatedAt: string
   serverNow: string

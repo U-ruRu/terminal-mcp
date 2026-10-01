@@ -136,8 +136,6 @@ test('cached/offline read state does not disable a healthy authenticated write r
   const user = userEvent.setup()
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
   renderSlots([instance('offline', slot())], mutate)
-  expect(screen.getByText('A1B2')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('status')).toHaveTextContent('cached')
@@ -182,6 +180,7 @@ test('expanded slot detail exposes session, generations and admission policy', a
   renderSlots([instance('live', slot('active', '2026-09-30T12:02:00Z'))])
   await user.click(screen.getByRole('link', { name: 'Details' }))
 
+  expect(screen.getByText('Legacy selector')).toBeInTheDocument()
   expect(screen.getByText('Selector generation')).toBeInTheDocument()
   expect(screen.getByText('Auth generation')).toBeInTheDocument()
   expect(screen.getByText('Session epoch')).toBeInTheDocument()
@@ -254,4 +253,73 @@ test('unpaired projected slot can load audit through Fleet ingress while mutatio
   expect(screen.getByText('session_start')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
   expect(mutate).not.toHaveBeenCalled()
+})
+
+
+test('Access code handoff is one-time ephemeral UI and selector is not a credential action', async () => {
+  const user = userEvent.setup()
+  const mutate = vi.fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        access: { public_name: 'Alpha', access_generation: 1, access_code: 'ZQPH' },
+      },
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        access: { public_name: 'Alpha', access_generation: 2, access_code: 'R5M4' },
+      },
+    }) as PersistentMutator
+  renderSlots([instance('live', slot())], mutate)
+
+  await user.click(screen.getByRole('link', { name: 'Details' }))
+  expect(screen.queryByRole('button', { name: 'Copy selector' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Rotate selector' })).not.toBeInTheDocument()
+
+  await user.click(screen.getByRole('button', { name: 'Set up Access code' }))
+  expect(mutate).toHaveBeenLastCalledWith(
+    'alpha',
+    '/actions/persistent/slots/migrate-access',
+    { logical_agent_id: 'la_alpha' },
+  )
+  expect(screen.getByRole('dialog')).toHaveTextContent('ZQPH')
+  expect(screen.getByRole('dialog')).toHaveTextContent('Shown once')
+
+  await user.click(screen.getByRole('button', { name: 'Dismiss code' }))
+  expect(screen.queryByText('ZQPH')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeEnabled()
+
+  await user.click(screen.getByRole('button', { name: 'Rotate Access code' }))
+  expect(mutate).toHaveBeenLastCalledWith(
+    'alpha',
+    '/actions/persistent/slots/rotate-access-code',
+    { logical_agent_id: 'la_alpha' },
+  )
+  expect(screen.getByRole('dialog')).toHaveTextContent('R5M4')
+
+  await user.click(screen.getByRole('link', { name: 'Back to slots' }))
+  await waitFor(() => expect(screen.queryByText('R5M4')).not.toBeInTheDocument())
+})
+
+
+test('existing Access generation without plaintext code offers explicit rotation', async () => {
+  const user = userEvent.setup()
+  const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({
+    ok: true,
+    payload: {
+      ok: true,
+      access: { public_name: 'Alpha', access_generation: 3, status: 'active' },
+    },
+  })) as PersistentMutator
+  renderSlots([instance('live', slot())], mutate)
+
+  await user.click(screen.getByRole('link', { name: 'Details' }))
+  await user.click(screen.getByRole('button', { name: 'Set up Access code' }))
+
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent('already exists')
+  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeEnabled()
 })

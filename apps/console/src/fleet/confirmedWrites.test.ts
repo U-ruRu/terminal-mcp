@@ -45,3 +45,26 @@ test('delete confirmation becomes a local tombstone overlay', () => {
   )
   expect(writes[0].remove).toBe(true)
 })
+
+
+test('Access-code mutation secrets never become durable confirmed-write overlays', () => {
+  const writes = confirmedWritesFromPersistentMutation(
+    'node-a',
+    '/actions/persistent/slots/migrate-access',
+    { logical_agent_id: 'la-1' },
+    {
+      ok: true,
+      payload: {
+        ok: true,
+        access: {
+          logical_agent_id: 'la-1',
+          public_name: 'Alpha',
+          access_generation: 1,
+          access_code: 'ZQPH',
+        },
+      },
+    },
+  )
+  expect(writes).toEqual([])
+  expect(JSON.stringify(writes)).not.toContain('ZQPH')
+})

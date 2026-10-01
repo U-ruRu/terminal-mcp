@@ -388,6 +388,17 @@ function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
   const item = record(value, path)
   const slot = record(item.slot, path + '.slot')
   const selector = record(item.selector, path + '.selector')
+  const rawAccess = item.access
+  const access = rawAccess === undefined || rawAccess === null
+    ? undefined
+    : (() => {
+        const value = record(rawAccess, path + '.access')
+        return {
+          publicName: string(value.public_name, path + '.access.public_name'),
+          accessGeneration: integer(value.access_generation, path + '.access.access_generation'),
+          status: string(value.status, path + '.access.status'),
+        }
+      })()
   const rawSession = item.work_session
   const workSession = rawSession === undefined || rawSession === null
     ? undefined
@@ -414,6 +425,7 @@ function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
     selector: string(selector.selector, path + '.selector.selector'),
     selectorGeneration: integer(slot.selector_generation, path + '.slot.selector_generation'),
     authGeneration: integer(slot.auth_generation, path + '.slot.auth_generation'),
+    access,
     createdAt: string(slot.created_at, path + '.slot.created_at'),
     updatedAt: string(slot.updated_at, path + '.slot.updated_at'),
     serverNow: string(item.server_now, path + '.server_now'),

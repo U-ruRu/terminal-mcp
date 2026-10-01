@@ -383,6 +383,7 @@ test('persistent snapshot and mutation keep authority fields typed and POST exac
           created_at: '2026-09-30T11:00:00Z', updated_at: '2026-09-30T11:30:00Z',
         },
         selector: { selector: 'A1B2', generation: 2 },
+        access: { public_name: 'Alpha', access_generation: 2, status: 'active' },
         work_session: null,
         server_now: '2026-09-30T12:00:00Z',
         claims: [], audit: [], attachments: [],
@@ -401,7 +402,7 @@ test('persistent snapshot and mutation keep authority fields typed and POST exac
     enabled: true,
     available: true,
     policy: { durationSeconds: 1380, warningAfterSeconds: 1200, alertAfterSeconds: 1320, legacyAdmissionEnabled: false, policyControlSupported: true },
-    slots: [{ logicalAgentId: 'la_alpha', selector: 'A1B2', slotRevision: 7, authorityEpoch: 3 }],
+    slots: [{ logicalAgentId: 'la_alpha', selector: 'A1B2', slotRevision: 7, authorityEpoch: 3, access: { publicName: 'Alpha', accessGeneration: 2, status: 'active' } }],
   })
   const result = await client.persistentMutation('/actions/persistent/slots/play', {
     logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: 'idem-12345678',
