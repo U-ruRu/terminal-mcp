@@ -170,6 +170,13 @@ class PersistentFleetBridge:
                 json=body,
             )
         if response.status_code >= 400:
+            if response.status_code == 404:
+                try:
+                    detail = response.json().get("detail")
+                except Exception:
+                    detail = None
+                if detail == "Not Found":
+                    raise PersistentStoreError("route_unavailable")
             raise PersistentStoreError("authority_unavailable")
         data = response.json()
         if not data.get("ok"):
@@ -191,8 +198,18 @@ class PersistentFleetBridge:
     async def list_access_slots(self) -> list[dict]:
         control_id = self._access_control_node_id()
         if control_id != self.config.instance_id:
-            data = await self._remote_access_call("list", {})
-            return [dict(item) for item in data.get("access", [])]
+            try:
+                data = await self._remote_access_call("list", {})
+                return [dict(item) for item in data.get("access", [])]
+            except PersistentStoreError as exc:
+                if exc.code != "route_unavailable":
+                    raise
+                access = []
+                for slot in await self.store.list_slots():
+                    item = await self.get_access_slot(slot.logical_agent_id)
+                    if item is not None:
+                        access.append(item)
+                return access
         if self.access_authority is None:
             raise PersistentStoreError("authority_unavailable")
         return await self.access_authority.access_slots()

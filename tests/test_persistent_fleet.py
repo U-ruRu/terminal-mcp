@@ -501,3 +501,86 @@ async def test_remote_drain_preserves_materialized_command_until_natural_complet
     assert claimed is not None and claimed.cmd_hash == command.cmd_hash
     assert await repo.finish_running(command.cmd_hash, "completed", 0, None)
     assert (await repo.get(command.cmd_hash)).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_access_list_falls_back_to_legacy_get_when_control_node_lacks_list_route(tmp_path):
+    repo = SqliteRepository(tmp_path / "compat.sqlite3", tmp_path / "compat-out.sqlite3")
+    await repo.initialize()
+    store = PersistentAgentStore(repo.path)
+    life = PersistentLifecycleCoordinator(
+        store, enabled=True, authority_node_id="bacloud", session_duration_seconds=120
+    )
+    created = await life.create_slot("Compat", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    private_key, _ = keypair()
+    _, control_public = keypair()
+    config = FleetConfig(
+        "bacloud",
+        private_key,
+        (FleetPeer("main", "https://main.example", control_public, "token"),),
+        1.0,
+        1.0,
+    )
+    bridge = PersistentFleetBridge(
+        config,
+        store,
+        repo,
+        object(),
+        TaskStore(repo.path),
+        control_node_id="main",
+    )
+    calls = []
+
+    async def remote_call(operation, payload):
+        calls.append((operation, payload))
+        if operation == "list":
+            raise PersistentStoreError("route_unavailable")
+        assert operation == "get"
+        assert payload == {"logical_agent_id": logical_agent_id}
+        return {
+            "ok": True,
+            "access": {
+                "logical_agent_id": logical_agent_id,
+                "authority_node_id": "bacloud",
+                "slot_kind": "persistent",
+                "public_name": "Alpha-Compat",
+                "display_suffix": "Compat",
+                "access_generation": 1,
+            },
+        }
+
+    bridge._remote_access_call = remote_call
+    result = await bridge.list_access_slots()
+    assert [item["logical_agent_id"] for item in result] == [logical_agent_id]
+    assert [operation for operation, _ in calls] == ["list", "get"]
+
+
+@pytest.mark.asyncio
+async def test_access_list_does_not_mask_real_authority_failure(tmp_path):
+    repo = SqliteRepository(tmp_path / "compat-fail.sqlite3", tmp_path / "compat-fail-out.sqlite3")
+    await repo.initialize()
+    store = PersistentAgentStore(repo.path)
+    private_key, _ = keypair()
+    _, control_public = keypair()
+    bridge = PersistentFleetBridge(
+        FleetConfig(
+            "bacloud",
+            private_key,
+            (FleetPeer("main", "https://main.example", control_public, "token"),),
+            1.0,
+            1.0,
+        ),
+        store,
+        repo,
+        object(),
+        TaskStore(repo.path),
+        control_node_id="main",
+    )
+
+    async def remote_call(operation, payload):
+        raise PersistentStoreError("authority_unavailable")
+
+    bridge._remote_access_call = remote_call
+    with pytest.raises(PersistentStoreError, match="authority_unavailable"):
+        await bridge.list_access_slots()
