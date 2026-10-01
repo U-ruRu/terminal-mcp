@@ -14,6 +14,8 @@ PATHS = (
     "/pairing/exchange",
     "/actions/console",
     "/actions/console/*",
+    "/actions/context",
+    "/actions/persistent/*",
     "/console/*",
     "/internal/fleet/*",
 )
@@ -32,7 +34,9 @@ def managed_block(upstream: str, indent: str = "    ") -> str:
         (
             f"{indent}{BEGIN}",
             f"{indent}@terminal_mcp_console path {paths}",
-            f"{indent}reverse_proxy @terminal_mcp_console {upstream}",
+            f"{indent}handle @terminal_mcp_console {{",
+            f"{indent}    reverse_proxy {upstream}",
+            f"{indent}}}",
             f"{indent}{END}",
         )
     )
@@ -87,12 +91,15 @@ def _lines_with_offsets(text: str):
 
 
 def _has_catch_all_proxy(block: str, upstream: str) -> bool:
+    depth = 0
     for line in block.splitlines():
         stripped = line.strip()
-        if stripped == f"reverse_proxy {upstream}":
-            return True
-        if stripped.startswith(f"reverse_proxy {upstream} "):
-            return True
+        if depth == 0:
+            if stripped == f"reverse_proxy {upstream}":
+                return True
+            if stripped.startswith(f"reverse_proxy {upstream} "):
+                return True
+        depth += line.count("{") - line.count("}")
     return False
 
 

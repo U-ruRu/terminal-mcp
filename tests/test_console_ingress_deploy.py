@@ -21,6 +21,8 @@ def test_restrictive_site_gets_managed_console_routes_idempotently():
     assert once.count(MODULE.BEGIN) == 1
     for path in MODULE.PATHS:
         assert path in once
+    assert "/actions/context" in MODULE.PATHS
+    assert "/actions/persistent/*" in MODULE.PATHS
     assert "@legacy path /mcp /health/* /internal/fleet/*" in once
 
 
@@ -37,6 +39,30 @@ def test_catch_all_proxy_is_already_console_ready():
     assert MODULE.patch_caddyfile(
         original, site="example.test", upstream="127.0.0.1:8080"
     ) == original
+
+
+def test_matcher_scoped_proxy_is_not_mistaken_for_catch_all():
+    original = """example.test {
+    @terminal path /actions/console/*
+    handle @terminal {
+        reverse_proxy 127.0.0.1:8080 {
+            transport http {
+                dial_timeout 5s
+            }
+        }
+    }
+    handle {
+        respond "Not found" 404
+    }
+}
+"""
+    result = MODULE.patch_caddyfile(original, site="example.test", upstream="127.0.0.1:8080")
+
+    assert result.count(MODULE.BEGIN) == 1
+    assert "/actions/context" in result
+    assert "/actions/persistent/*" in result
+    assert "handle @terminal_mcp_console {" in result
+    assert original.splitlines()[1] in result
 
 
 def test_missing_site_appends_dedicated_catch_all_site():
