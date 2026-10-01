@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
 from terminal_mcp.config import Settings
+from terminal_mcp.core.persistent_agents import ClaimOwner
 
 
 def _settings(tmp_path, **overrides):
@@ -102,6 +103,24 @@ def test_console_snapshot_projects_persistent_slot_policy_and_audit(tmp_path):
         )
         assert created.status_code == 200
         assert created.json()["ok"] is True
+        logical_agent_id = created.json()["slot"]["logical_agent_id"]
+        asyncio.run(
+            app.state.service.task_store.create_task(
+                "console-contract",
+                "P0-CLAIM",
+                "Persistent claim contract",
+                lane="implementation",
+                priority=3,
+            )
+        )
+        asyncio.run(
+            app.state.service.task_store.claim_owner(
+                "console-contract",
+                "P0-CLAIM",
+                ClaimOwner.logical_agent(logical_agent_id),
+                claim_intent="continue",
+            )
+        )
         response = client.get("/actions/console/snapshot", headers=headers)
         assert response.status_code == 200
         persistent = response.json()["persistent"]
@@ -120,7 +139,10 @@ def test_console_snapshot_projects_persistent_slot_policy_and_audit(tmp_path):
         slot = persistent["slots"][0]
         assert slot["slot"]["display_name"] == "Persistent Alpha"
         assert len(slot["selector"]["selector"]) == 4
-        assert slot["claims"] == []
+        assert len(slot["claims"]) == 1
+        assert slot["claims"][0]["namespace"] == "console-contract"
+        assert slot["claims"][0]["task_id"] == "P0-CLAIM"
+        assert slot["claims"][0]["priority"] == "P0"
         assert slot["attachments"] == []
         assert slot["audit"][0]["event_type"] == "create"
         assert slot["audit"][0]["principal_id"]

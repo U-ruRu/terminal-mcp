@@ -6,7 +6,7 @@ from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.agents import AgentCoordinator
 from terminal_mcp.core.orchestration import normalize_preview, public_agent_name
 from terminal_mcp.core.persistent_agents import ClaimOwner
-from terminal_mcp.core.tasks import TaskCoordinator
+from terminal_mcp.core.tasks import VALUE_PRIORITY, TaskCoordinator
 from terminal_mcp.host_resources import collect_host_resources
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.context import ContextStore
@@ -812,6 +812,13 @@ class TerminalService:
                 claims = await self.task_store.claims_for_owner(
                     ClaimOwner.logical_agent(logical_agent_id)
                 )
+                claims = [
+                    {
+                        **claim,
+                        "priority": VALUE_PRIORITY.get(int(claim.get("priority", 0)), "P3"),
+                    }
+                    for claim in claims
+                ]
             if logical_agent_id:
                 audit = await backend.lifecycle.store.audit_events(logical_agent_id, limit=50)
             work_session = item.get("work_session")
