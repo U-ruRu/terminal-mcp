@@ -21,6 +21,13 @@ def settings(tmp_path, **overrides):
         actions_auth_mode="",
         persistent_agents_enabled=True,
         fleet_instance_id="",
+        fleet_id="",
+        fleet_signing_private_key="",
+        fleet_peers_json="[]",
+        fleet_v1_source_enabled=False,
+        fleet_v1_authority_enabled=False,
+        fleet_v1_projection_enabled=False,
+        fleet_v1_public_enabled=False,
     )
     data.update(overrides)
     return Settings(**data)
