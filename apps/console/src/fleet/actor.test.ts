@@ -151,9 +151,39 @@ test('actors use independent credential namespaces with shared storage', async (
   expect(bodies[1]).not.toContain('refresh-alpha')
 })
 
-test('persistent mutations fail closed unless the instance is live and authenticated', async () => {
+test('persistent mutations fail closed without an authenticated write client', async () => {
   const actor = new BrowserFleetInstanceActor(makeProfile('alpha'), { storage: new MemoryStorage() })
   await expect(actor.persistentMutation('/actions/persistent/slots/play', {})).rejects.toThrow(
-    'instance_not_live:alpha',
+    'instance_not_connected:alpha',
   )
+})
+
+test('persistent mutations remain available when realtime reads are stale but auth is connected', async () => {
+  const actor = new BrowserFleetInstanceActor(makeProfile('alpha'), { storage: new MemoryStorage() })
+  const persistentMutation = vi.fn(async () => ({ ok: false, code: 'revision_conflict' }))
+  const refreshNow = vi.fn(async () => undefined)
+  const internals = actor as unknown as {
+    state: ReturnType<BrowserFleetInstanceActor['getState']>
+    client: { persistentMutation: typeof persistentMutation }
+    engine: { refreshNow: typeof refreshNow }
+  }
+  internals.state = {
+    instanceId: 'alpha',
+    status: 'reconnecting',
+    authStatus: 'connected',
+    realtime: null,
+    reconnectAttempt: 1,
+  }
+  internals.client = { persistentMutation }
+  internals.engine = { refreshNow }
+
+  await expect(
+    actor.persistentMutation('/actions/persistent/slots/play', {
+      logical_agent_id: 'la_alpha',
+      expected_revision: 7,
+      idempotency_key: 'actor-stale-write-001',
+    }),
+  ).resolves.toEqual({ ok: false, code: 'revision_conflict' })
+  expect(persistentMutation).toHaveBeenCalledOnce()
+  expect(refreshNow).toHaveBeenCalledOnce()
 })

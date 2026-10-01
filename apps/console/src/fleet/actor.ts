@@ -136,11 +136,14 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
   }
 
   async persistentMutation(path: string, body: Record<string, unknown>): Promise<PersistentMutationResult> {
-    if (!this.client || this.state.authStatus !== 'connected' || this.state.status !== 'live') {
-      throw new Error('instance_not_live:' + this.instanceId)
+    // Realtime/read freshness and authenticated HTTP write reachability are separate planes.
+    // Keep mutations available while the authenticated client exists; authority validation
+    // decides whether the revisioned operation is legal.
+    if (!this.client || this.state.authStatus !== 'connected') {
+      throw new Error('instance_not_connected:' + this.instanceId)
     }
     const result = await this.client.persistentMutation(path, body)
-    if (result.ok && this.engine) await this.engine.refreshNow()
+    if (this.engine) await this.engine.refreshNow()
     return result
   }
 
