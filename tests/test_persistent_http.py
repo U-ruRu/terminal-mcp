@@ -20,7 +20,7 @@ def settings(tmp_path, **overrides):
         mcp_auth_mode="",
         actions_auth_mode="",
         persistent_agents_enabled=True,
-        fleet_instance_id="test-node",
+        fleet_instance_id="",
     )
     data.update(overrides)
     return Settings(**data)
