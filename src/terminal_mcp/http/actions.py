@@ -15,6 +15,8 @@ from terminal_mcp.api_models import (
     MessageResponse,
     ReadResponse,
     RecoveryResponse,
+    ReviewDimension,
+    ReviewVerdict,
     RunResponse,
     TaskAction,
     TaskLane,
@@ -34,6 +36,7 @@ from terminal_mcp.telemetry import observed
 
 ScopeItem = Annotated[str, Field(min_length=1, max_length=80)]
 StepItem = Annotated[str, Field(min_length=1, max_length=160)]
+TaskRef = Annotated[str, Field(min_length=1, max_length=512)]
 
 
 class StrictRequest(BaseModel):
@@ -85,7 +88,10 @@ class MessageRequest(AgentRequest):
     )
     message_hash: str | None = Field(default=None, min_length=8, max_length=8)
     require_reply: bool = False
-    alert: bool = Field(default=False, description="ALERT requires an explicit destination: target, target='broadcast', or namespace+task_id.")
+    alert: bool = Field(
+        default=False,
+        description="ALERT requires an explicit destination: target, target='broadcast', or namespace+task_id.",
+    )
     namespace: str | None = Field(default=None, min_length=1, max_length=120)
     task_id: str | None = Field(default=None, min_length=1, max_length=120)
 
@@ -190,6 +196,11 @@ class TaskRequest(AgentRequest):
     )
     checkpoint: str | dict[str, object] | list[object] | None = None
     candidate_ref: str | None = Field(default=None, max_length=200)
+    input_refs: list[TaskRef] | None = Field(default=None, max_length=64)
+    output_refs: list[TaskRef] | None = Field(default=None, max_length=64)
+    dimensions: list[ReviewDimension] | None = Field(default=None, max_length=3)
+    verdict: ReviewVerdict | None = None
+    evidence: dict[str, object] | None = None
     result: str | dict[str, object] | list[object] | None = None
     tags: list[str] | None = Field(default=None, max_length=50)
     dependencies: list[dict[str, str]] | None = Field(default=None, max_length=100)

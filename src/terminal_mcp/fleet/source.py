@@ -378,8 +378,8 @@ class FleetSourceService:
             tasks = await (
                 await db.execute(
                     "SELECT namespace,task_id,lane,priority,state,cooperative,revision,"
-                    "state_changed_at,updated_at,archived_at "
-                    "FROM work_items ORDER BY namespace,task_id"
+                    "state_changed_at,updated_at,archived_at,input_refs_json,output_refs_json,"
+                    "output_state_id FROM work_items ORDER BY namespace,task_id"
                 )
             ).fetchall()
             commands = await (
@@ -537,6 +537,9 @@ class FleetSourceService:
                         "state_changed_at": row[7],
                         "updated_at": row[8],
                         "archived_at": row[9],
+                        "input_refs": json.loads(row[10] or "[]"),
+                        "output_refs": json.loads(row[11] or "[]"),
+                        "output_state_id": row[12],
                     },
                 )
             )

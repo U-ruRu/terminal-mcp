@@ -721,9 +721,9 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
                 PRIMARY KEY(namespace, task_id)
             );
             INSERT INTO work_items(
-                namespace,task_id,title,lane,priority,state,created_at,updated_at
+                namespace,task_id,title,lane,priority,state,candidate_ref,created_at,updated_at
             ) VALUES(
-                'project','READY-1','Ready','general',1,'ready',
+                'project','READY-1','Ready','general',1,'ready','legacy-sha',
                 '2026-01-01T00:00:00.000Z','2026-01-03T00:00:00.000Z'
             );
             INSERT INTO work_items(
@@ -758,7 +758,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(
@@ -787,6 +787,17 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
             "Reviewer-1",
             '{"tests":1}',
         )
+        migrated_task = db.execute(
+            "SELECT output_refs_json,output_state_id FROM work_items "
+            "WHERE namespace='project' AND task_id='READY-1'"
+        ).fetchone()
+        migrated_review = db.execute(
+            "SELECT output_refs_json,output_state_id FROM work_reviews "
+            "WHERE namespace='project' AND task_id='READY-1'"
+        ).fetchone()
+        assert migrated_task[0] == '["legacy-sha"]'
+        assert migrated_review[0] == '["legacy-sha"]'
+        assert migrated_task[1] == migrated_review[1]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -812,6 +823,7 @@ def test_mcp_schema_has_unified_task_contract():
         "state",
         "done",
         "archive",
+        "review",
     }
     assert task["properties"]["code"]["minLength"] == 4
     assert task["properties"]["code"]["maxLength"] == 4
@@ -820,10 +832,18 @@ def test_mcp_schema_has_unified_task_contract():
     assert observe["subject"]["enum"] == ["sessions", "tasks"]
     assert "code" not in observe
     assert observe["state"]["anyOf"][0]["enum"] == [
-        "ready", "in_progress", "blocked", "deferred", "done"
+        "ready",
+        "in_progress",
+        "blocked",
+        "deferred",
+        "done",
     ]
     assert observe["operational_status"]["anyOf"][0]["enum"] == [
-        "ready", "in_progress", "blocked", "deferred", "done"
+        "ready",
+        "in_progress",
+        "blocked",
+        "deferred",
+        "done",
     ]
     assert "tags" in observe
 

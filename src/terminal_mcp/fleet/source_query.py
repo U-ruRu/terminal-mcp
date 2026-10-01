@@ -117,7 +117,8 @@ CURRENT_SCOPES = {
         "task",
         """
         SELECT namespace AS k1,task_id AS k2,title,lane,priority,state,cooperative,revision,
-               state_changed_at,updated_at,archived_at,ready_since,tags_json
+               state_changed_at,updated_at,archived_at,ready_since,tags_json,
+               input_refs_json,output_refs_json,output_state_id
         FROM work_items WHERE archived_at IS NULL AND state != 'done'""",
         ("k1", "k2"),
     ),
@@ -172,7 +173,8 @@ QUERY_RESOURCES = {
         "SELECT namespace AS k1,task_id AS k2,title,lane,priority,state,description,"
         "next_action,isolation_hint,resource_json,reviews_json,cooperative,checkpoint_json,"
         "candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,"
-        "archive_note,revision,created_at,updated_at FROM work_items",
+        "archive_note,revision,created_at,updated_at,input_refs_json,output_refs_json,"
+        "output_state_id FROM work_items",
         ("namespace", "task_id"),
         ("k1", "k2"),
         {"namespace": "namespace", "state": "state", "lane": "lane", "priority": "priority"},
@@ -804,6 +806,8 @@ class FleetSourceQueryPlane:
                 ("checkpoint_json", {}),
                 ("result_json", None),
                 ("tags_json", []),
+                ("input_refs_json", []),
+                ("output_refs_json", []),
             ):
                 item[field.removesuffix("_json")] = _loads(item.pop(field), default)
             item["cooperative"] = bool(item["cooperative"])

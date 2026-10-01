@@ -288,6 +288,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "state",
             "done",
             "archive",
+            "review",
         }
         assert task_request["properties"]["priority"]["anyOf"][0]["enum"] == [
             "P0",
@@ -295,8 +296,11 @@ def test_bearer_actions_and_openapi(tmp_path):
             "P2",
             "P3",
         ]
-        for legacy_field in ("review_requirements", "dimensions", "verdict", "evidence"):
-            assert legacy_field not in task_request["properties"]
+        assert "review_requirements" not in task_request["properties"]
+        for review_field in ("dimensions", "verdict", "evidence"):
+            assert review_field in task_request["properties"]
+        assert task_request["properties"]["input_refs"]["anyOf"][0]["maxItems"] == 64
+        assert task_request["properties"]["output_refs"]["anyOf"][0]["maxItems"] == 64
         assert "tags" in task_request["properties"]
         assert "force" in task_request["properties"]
         assert "force_reason" in task_request["properties"]
