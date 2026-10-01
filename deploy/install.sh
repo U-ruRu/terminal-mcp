@@ -130,6 +130,7 @@ ensure_env_defaults(){
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC "${TERMINAL_MCP_AGENT_SESSION_ALERT_REPEAT_SEC:-60}"
   ensure_env TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE "${TERMINAL_MCP_AGENT_SESSION_ALERT_MESSAGE:-Ваша сессия закончилась. У пользователя для вас новая задача. Завершите сессию и немедленно вернитесь в чат к пользователю, чтобы дать ему промежуточный отчёт, получить дальнейшие указания и новую задачу.}"
   ensure_env TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED "${TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED:-true}"
+  ensure_env TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED "${TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED:-false}"
   ensure_env TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED "${TERMINAL_MCP_PERSISTENT_AGENTS_ENABLED:-true}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC:-1380}"
   ensure_env TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC "${TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC:-1200}"
@@ -201,23 +202,26 @@ check_public_console_ingress(){
     return 1
   fi
 
-  while IFS='|' read -r method route json_body; do
-    [ -n "$route" ] || continue
-    if [ -n "$json_body" ]; then
-      status=$(
-        public_status "$method" "${public_base_url%/}${route}" \
-          -H "Origin: $console_origin" \
-          -H 'Content-Type: application/json' \
-          --data "$json_body"
-      )
-    else
-      status=$(public_status "$method" "${public_base_url%/}${route}" -H "Origin: $console_origin")
-    fi
-    if [ "$status" != "401" ]; then
-      echo "Public Fleet v1 Console route check failed: $method $route returned ${status:-request_error}, expected 401" >&2
-      return 1
-    fi
-  done <<'ROUTES'
+  fleet_v1_public_enabled=$(read_env_value TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED)
+  case "${fleet_v1_public_enabled,,}" in
+    true|1|yes|on)
+      while IFS='|' read -r method route json_body; do
+        [ -n "$route" ] || continue
+        if [ -n "$json_body" ]; then
+          status=$(
+            public_status "$method" "${public_base_url%/}${route}" \
+              -H "Origin: $console_origin" \
+              -H 'Content-Type: application/json' \
+              --data "$json_body"
+          )
+        else
+          status=$(public_status "$method" "${public_base_url%/}${route}" -H "Origin: $console_origin")
+        fi
+        if [ "$status" != "401" ]; then
+          echo "Public Fleet v1 Console route check failed: $method $route returned ${status:-request_error}, expected 401" >&2
+          return 1
+        fi
+      done <<'ROUTES'
 GET|/console/fleet/v1/probe|
 GET|/console/fleet/v1/snapshot|
 POST|/console/fleet/v1/activity|{}
@@ -227,6 +231,8 @@ POST|/console/fleet/v1/namespaces|{}
 GET|/console/fleet/v1/task-graph?namespace=ingress-probe&task_id=ingress-probe|
 POST|/console/fleet/v1/ws-ticket|
 ROUTES
+      ;;
+  esac
 }
 
 configure_console_caddy(){

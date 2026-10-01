@@ -117,7 +117,11 @@ def test_oauth_access_ttl_defaults_to_30_days_everywhere():
 
 
 def _run_doctor_with_ingress_status(
-    tmp_path, ingress_status: str, *, legacy_replication_enabled: str = "true"
+    tmp_path,
+    ingress_status: str,
+    *,
+    legacy_replication_enabled: str = "true",
+    fleet_v1_public_enabled: str = "true",
 ):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -156,6 +160,7 @@ def _run_doctor_with_ingress_status(
         'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"\n'
         'TERMINAL_MCP_QUEUE_WORKERS="4"\n'
         f'TERMINAL_MCP_FLEET_LEGACY_REPLICATION_ENABLED="{legacy_replication_enabled}"\n'
+        f'TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED="{fleet_v1_public_enabled}"\n'
     )
     env = {
         **os.environ,
@@ -373,6 +378,17 @@ def test_ingress_command_restores_caddyfile_when_reload_fails(tmp_path):
     assert caddyfile.read_text() == original
     assert len(list(backups.glob("caddy-*.Caddyfile"))) == 1
     assert systemctl_log.read_text().splitlines() == ["reload caddy", "reload caddy"]
+
+
+def test_doctor_skips_v1_console_probes_until_public_cutover(tmp_path):
+    result, curl_log = _run_doctor_with_ingress_status(
+        tmp_path, "401", fleet_v1_public_enabled="false"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "/connect" in curl_log
+    assert "/actions/console/snapshot" in curl_log
+    assert "/console/fleet/v1/" not in curl_log
 
 
 def test_doctor_probes_console_fallback_and_read_v2_surfaces(tmp_path):
