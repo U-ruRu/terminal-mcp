@@ -521,30 +521,13 @@ if runtime_path.is_file():
 
     with sqlite3.connect(runtime_path) as db:
         current_version = int(db.execute("PRAGMA user_version").fetchone()[0])
-        if current_version > target_version:
-            tables = {
-                row[0]
-                for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            }
-            persistent = False
-            if "logical_agents" in tables:
-                persistent = db.execute(
-                    "SELECT 1 FROM logical_agents LIMIT 1"
-                ).fetchone() is not None
-            if not persistent and "work_claims" in tables:
-                columns = {row[1] for row in db.execute("PRAGMA table_info(work_claims)")}
-                if "owner_kind" in columns:
-                    persistent = db.execute(
-                        "SELECT 1 FROM work_claims WHERE owner_kind='logical_agent' LIMIT 1"
-                    ).fetchone() is not None
-
-            if persistent:
-                print(
-                    f"Refusing schema downgrade {current_version}->{target_version}: "
-                    "Persistent Slot ownership exists",
-                    file=sys.stderr,
-                )
-                raise SystemExit(42)
+    if current_version > target_version:
+        print(
+            f"Refusing runtime schema downgrade {current_version}->{target_version}: "
+            "automatic binary rollback cannot restore a compatible runtime database",
+            file=sys.stderr,
+        )
+        raise SystemExit(42)
 
 if auth_path.is_file():
     try:
@@ -555,6 +538,29 @@ if auth_path.is_file():
 
     with sqlite3.connect(auth_path) as db:
         current_auth_version = int(db.execute("PRAGMA user_version").fetchone()[0])
+        if current_auth_version < 3 <= target_auth_version:
+            tables = {
+                row[0]
+                for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            access_tables = (
+                "auth_access_slots",
+                "auth_access_codes",
+                "auth_access_code_tombstones",
+            )
+            access_rows = sum(
+                int(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in access_tables
+                if table in tables
+            )
+            if access_rows:
+                print(
+                    f"Refusing auth schema upgrade {current_auth_version}->{target_auth_version}: "
+                    "pre-v3 Access verifier state exists and cannot be safely re-keyed automatically; "
+                    "resolve the legacy Access state before activating this release",
+                    file=sys.stderr,
+                )
+                raise SystemExit(44)
     if current_auth_version > target_auth_version:
         print(
             f"Refusing auth schema downgrade {current_auth_version}->{target_auth_version}: "
