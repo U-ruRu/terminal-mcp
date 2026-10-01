@@ -261,7 +261,7 @@ function task(value: unknown, path: string): TaskReadModel {
       `${path}.lane`,
     ),
     priority: enumValue(item.priority, ['P0', 'P1', 'P2', 'P3'] as const, `${path}.priority`),
-    state: enumValue(item.state, ['ready', 'blocked', 'deferred', 'done'] as const, `${path}.state`),
+    state: enumValue(item.state, ['ready', 'in_progress', 'blocked', 'deferred', 'done'] as const, `${path}.state`),
     operationalStatus: enumValue(
       item.operational_status,
       ['ready', 'in_progress', 'blocked', 'deferred', 'done'] as const,

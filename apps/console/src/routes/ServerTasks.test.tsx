@@ -76,3 +76,73 @@ test('unpaired projected task detail loads through Fleet ingress', async () => {
   await waitFor(() => expect(loadTask).toHaveBeenCalledWith('fleet-source-node-b', 'console', 'T-9'))
   expect(await screen.findByText(/T-9 · Remote cold detail/)).toBeInTheDocument()
 })
+
+
+test('task list defaults to open work and exposes namespace/state filters', async () => {
+  const doneTask: TaskReadModel = {
+    ...task,
+    key: 'history/T-2',
+    namespace: 'history',
+    taskId: 'T-2',
+    title: 'Completed task',
+    state: 'done',
+    operationalStatus: 'done',
+  }
+  const runningTask: TaskReadModel = {
+    ...task,
+    key: 'ops/T-3',
+    namespace: 'ops',
+    taskId: 'T-3',
+    title: 'Running task',
+    state: 'in_progress',
+    operationalStatus: 'in_progress',
+  }
+  const filteredInstance: FleetInstanceView = {
+    ...instance,
+    runtime: {
+      ...instance.runtime,
+      realtime: instance.runtime.realtime
+        ? { ...instance.runtime.realtime, snapshot: { ...snapshot, tasks: [task, doneTask, runningTask] } }
+        : null,
+    },
+  }
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/servers/alpha/tasks']}>
+        <Routes>
+          <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={[filteredInstance]} />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+
+  expect(screen.getByRole('link', { name: 'T-1 · Clickable task' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'T-3 · Running task' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'T-2 · Completed task' })).not.toBeInTheDocument()
+
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'State' }), 'done')
+  expect(screen.getByRole('link', { name: 'T-2 · Completed task' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'T-1 · Clickable task' })).not.toBeInTheDocument()
+
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'State' }), 'all')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Namespace' }), 'ops')
+  expect(screen.getByRole('link', { name: 'T-3 · Running task' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'T-2 · Completed task' })).not.toBeInTheDocument()
+})
+
+
+test('task detail route is a dedicated surface without the task list', () => {
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}>
+        <Routes>
+          <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[instance]} />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+
+  expect(screen.getByRole('article', { name: 'Task detail' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'T-1 · Clickable task' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Back to tasks' })).toBeInTheDocument()
+})
