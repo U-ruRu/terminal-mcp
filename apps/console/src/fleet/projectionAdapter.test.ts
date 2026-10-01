@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { ConnectionProfile } from '../connections/types'
-import { buildProjectedFleetInstances } from './projectionAdapter'
+import { buildProjectedFleetInstances, projectedSourceNodeId, taskFromQueryItem } from './projectionAdapter'
 import type { FleetCacheView, FleetProjectionEntity } from './v1Types'
 
 const profile: ConnectionProfile = {
@@ -155,4 +155,58 @@ test('confirmed write overlay masks stale projected slot until projection catche
     state: 'armed',
     slotRevision: 8,
   })
+})
+
+
+test('scope freshness is independent from query completeness and degrades only the affected source', () => {
+  const value = cache([entity('logical_agent', 'logical-1', {
+    logical_agent_id: 'logical-1', display_name: 'Oscar', state: 'suspended',
+    authority_node_id: 'node-a', authority_epoch: 2, slot_revision: 7,
+  })])
+  value.scopeStatuses = [{
+    sourceNodeId: 'node-a',
+    scope: 'commands',
+    status: 'CATCHING_UP',
+    reason: 'backlog',
+    updatedAt: '2026-09-30T19:00:00Z',
+  }]
+  const [instance] = buildProjectedFleetInstances(
+    value,
+    [{ sourceNodeId: 'node-a', profile }],
+    'live',
+  )
+  expect(instance.runtime.status).toBe('stale')
+  expect(instance.runtime.realtime?.staleReason).toBe('fleet_scope_not_live')
+})
+
+test('query task decoder preserves cold detail without inventing ownership', () => {
+  expect(taskFromQueryItem({
+    namespace: 'terminal',
+    task_id: 'T-9',
+    title: 'Cold detail',
+    lane: 'implementation',
+    priority: 3,
+    state: 'done',
+    tags: ['M4.5'],
+    next_action: '',
+    checkpoint: { stage: 'done' },
+    result: { ok: true },
+    revision: 12,
+  })).toMatchObject({
+    key: 'terminal/T-9',
+    priority: 'P0',
+    state: 'done',
+    operationalStatus: 'done',
+    active: false,
+    details: { revision: 12 },
+  })
+})
+
+
+test('synthetic projected instance ids resolve back to their source node', () => {
+  const [projected] = buildProjectedFleetInstances(cache([]), [], 'live')
+  expect(projected.profile.instanceId).toBe('fleet-source-node-a')
+  expect(projected.runtime.authStatus).toBe('unpaired')
+  expect(projectedSourceNodeId(projected.profile.instanceId)).toBe('node-a')
+  expect(projectedSourceNodeId('profile-a')).toBeUndefined()
 })

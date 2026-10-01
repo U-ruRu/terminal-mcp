@@ -47,6 +47,7 @@ export type FleetAdaptiveRuntimeState = {
   networkEpoch: number
   lastSwitchReason?: FleetHandoverDecision['reason']
   lastError?: string
+  catchupWarning?: string
   cache: FleetCacheView
 }
 
@@ -59,6 +60,7 @@ export class FleetAdaptiveReadRuntime {
   private active: FleetIngressEndpoint | null = null
   private recovery: Promise<void> | null = null
   private readonly queryFlights = new Map<string, Promise<unknown>>()
+  private catchupWarning?: string
 
   constructor(
     private readonly cache: FleetProjectionCache,
@@ -244,6 +246,8 @@ export class FleetAdaptiveReadRuntime {
   }
 
   private async catchUp(endpoint: FleetIngressEndpoint): Promise<void> {
+    const startedAt = this.now()
+    this.catchupWarning = undefined
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
       const cached = await this.cache.restore()
       const before = cached.appliedProjectionSeq
@@ -254,6 +258,9 @@ export class FleetAdaptiveReadRuntime {
       }
       if (page.events.length > 0) await this.cache.applyEvents(page)
       const after = (await this.cache.restore()).appliedProjectionSeq
+      const elapsed = Math.max(0, this.now() - startedAt)
+      if (elapsed > 10_000) throw new Error('fleet_projection_catchup_timeout')
+      if (elapsed > 5_000) this.catchupWarning = 'fleet_projection_catchup_slow'
       if (after >= page.projectionSeq) return
       if (page.events.length === 0 || after <= before) {
         throw new Error('fleet_projection_catchup_stalled')
@@ -313,6 +320,7 @@ export class FleetAdaptiveReadRuntime {
       networkEpoch: this.selector.getNetworkEpoch(),
       lastSwitchReason: lastSwitchReason ?? this.state?.lastSwitchReason,
       lastError,
+      catchupWarning: this.catchupWarning,
       cache,
     }
   }

@@ -1,7 +1,7 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import type { ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
@@ -46,4 +46,33 @@ test('the whole task card opens task detail', async () => {
   expect(card).toHaveAttribute('href', '/servers/alpha/tasks/console/T-1')
   await userEvent.click(card)
   expect(screen.getByText('Task destination')).toBeInTheDocument()
+})
+
+
+test('unpaired projected task detail loads through Fleet ingress', async () => {
+  const projected: FleetInstanceView = {
+    profile: { ...instance.profile, instanceId: 'fleet-source-node-b', displayName: 'Node B' },
+    runtime: {
+      ...instance.runtime,
+      instanceId: 'fleet-source-node-b',
+      authStatus: 'unpaired',
+      realtime: instance.runtime.realtime
+        ? { ...instance.runtime.realtime, snapshot: { ...snapshot, tasks: [] } }
+        : undefined,
+    },
+  }
+  const loaded: TaskReadModel = { ...task, key: 'console/T-9', taskId: 'T-9', title: 'Remote cold detail' }
+  const loadTask = vi.fn(async () => loaded)
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/servers/fleet-source-node-b/tasks/console/T-9']}>
+        <Routes>
+          <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[projected]} loadTask={loadTask} />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+
+  await waitFor(() => expect(loadTask).toHaveBeenCalledWith('fleet-source-node-b', 'console', 'T-9'))
+  expect(await screen.findByText(/T-9 · Remote cold detail/)).toBeInTheDocument()
 })

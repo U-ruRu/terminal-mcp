@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { App } from '../App'
+import type { ContextReadModel, PersistentAuditReadModel } from '../api/models'
 import { PairingHandoffController } from '../connections/PairingHandoffController'
 import { BrowserConnectionRegistry } from '../connections/registry'
 import { ConnectionRuntimeProvider } from '../connections/runtime'
@@ -18,9 +19,53 @@ import { fleetV1ClientEnabled } from './flags'
 import { FleetConnectionManager } from './manager'
 import { defaultFleetVisibilitySource } from './nativeVisibility'
 import { FleetVisibilityController, type FleetVisibilitySource } from './policy'
-import { buildProjectedFleetInstances, projectedActivity, projectedTask, type FleetSourceBinding } from './projectionAdapter'
+import { buildProjectedFleetInstances, projectedActivity, projectedSourceNodeId, projectedTask, taskFromQueryItem, type FleetSourceBinding } from './projectionAdapter'
 import { buildFleetReadModel } from './readModel'
 import type { FleetInstanceView } from './types'
+
+type QueryPageData<T> = {
+  items?: T[]
+  next_cursor?: string | null
+  complete?: boolean
+}
+
+async function queryAll<T>(
+  runtime: FleetAdaptiveReadRuntime,
+  resource: string,
+  sourceNodeId: string,
+  filters: Record<string, string | number | boolean> = {},
+): Promise<T[]> {
+  const items: T[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < 100; page += 1) {
+    const result = await runtime.query<QueryPageData<T>>(resource, {
+      sourceNodeIds: [sourceNodeId],
+      cursor,
+      limit: 100,
+      filters,
+    })
+    const source = result.sources.find((item) => item.sourceNodeId === sourceNodeId)
+    if (!source?.ok || !source.data) {
+      throw new Error(
+        source?.status === 'OFFLINE_AUTH'
+          ? 'fleet_query_unavailable_auth'
+          : 'fleet_query_unavailable_degraded',
+      )
+    }
+    items.push(...(source.data.items ?? []))
+    if (source.data.complete !== false) return items
+    const next = source.data.next_cursor ?? undefined
+    if (!next || next === cursor) throw new Error('fleet_query_cursor_stalled')
+    cursor = next
+  }
+  throw new Error('fleet_query_page_limit')
+}
+
+function rawRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
 
 export type FleetRuntimeDependencies = {
   manager?: FleetConnectionManager
@@ -143,13 +188,14 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
         state.networkEpoch,
         state.lastSwitchReason ?? '',
         state.lastError ?? '',
+        state.catchupWarning ?? '',
       ].join('|')
       if (fleetSignature.current !== signature) {
         fleetSignature.current = signature
         diagnostics.append({
           type: 'fleet_v1_state',
           status: state.status,
-          code: diagnosticErrorCode(state.lastError),
+          code: diagnosticErrorCode(state.lastError ?? state.catchupWarning),
           detail: [
             `selector=${state.selectorState}`,
             `ingress=${state.activeIngressId ?? 'none'}`,
@@ -157,6 +203,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
             `epoch=${state.projectionEpoch}`,
             `seq=${state.projectionSeq}`,
             `network_epoch=${state.networkEpoch}`,
+            state.catchupWarning ? `warning=${state.catchupWarning}` : '',
             state.lastSwitchReason ? `switch=${state.lastSwitchReason}` : '',
           ].filter(Boolean).join(' '),
         })
@@ -266,6 +313,10 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
     () => new Map(bindings.map((item) => [item.profile.instanceId, item.sourceNodeId])),
     [bindings],
   )
+  const sourceForRead = useCallback(
+    (instanceId: string) => sourceForProfile.get(instanceId) ?? projectedSourceNodeId(instanceId),
+    [sourceForProfile],
+  )
 
   return (
     <ConnectionRuntimeProvider
@@ -281,19 +332,85 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
         instances={instances}
         loadActivity={(instanceId, options) => {
           if (useProjected && adaptiveState) {
-            const source = sourceForProfile.get(instanceId)
+            const source = sourceForRead(instanceId)
             if (source) return Promise.resolve(projectedActivity(adaptiveState.cache, source, options))
           }
           return directAuthority.activity(instanceId, options)
         }}
-        loadTask={(instanceId, namespace, taskId) => {
+        loadContexts={async (instanceId): Promise<ContextReadModel[]> => {
           if (useProjected && adaptiveState) {
-            const source = sourceForProfile.get(instanceId)
+            const source = sourceForRead(instanceId)
+            const runtime = fleetRuntimeRef.current
+            if (!source || !runtime) throw new Error('fleet_context_unavailable_offline')
+            const values = await queryAll<Record<string, unknown>>(runtime, 'contexts', source)
+            return values.map((item) => ({
+              id: Number(item.id ?? 0),
+              summary: String(item.summary ?? ''),
+              content: typeof item.content === 'string' ? item.content : undefined,
+              primary: item.is_primary === true || item.is_primary === 1,
+            }))
+          }
+          const instance = directInstances.find((item) => item.profile.instanceId === instanceId)
+          return instance?.runtime.realtime?.snapshot?.contexts ?? []
+        }}
+        loadSlotAudit={async (instanceId, logicalAgentId): Promise<PersistentAuditReadModel[]> => {
+          if (useProjected && adaptiveState) {
+            const source = sourceForRead(instanceId)
+            const runtime = fleetRuntimeRef.current
+            if (!source || !runtime) throw new Error('fleet_slot_audit_unavailable_offline')
+            const values = await queryAll<Record<string, unknown>>(
+              runtime,
+              'audit',
+              source,
+              { logical_agent_id: logicalAgentId },
+            )
+            return values.map((item) => ({
+              id: Number(item.id ?? 0),
+              eventType: String(item.event_type ?? ''),
+              principalId: String(item.principal_id ?? ''),
+              workSessionId: typeof item.work_session_id === 'string'
+                ? item.work_session_id
+                : undefined,
+              sessionEpoch: Number.isInteger(item.session_epoch)
+                ? Number(item.session_epoch)
+                : undefined,
+              payload: rawRecord(item.payload),
+              createdAt: String(item.created_at ?? ''),
+            }))
+          }
+          const instance = directInstances.find((item) => item.profile.instanceId === instanceId)
+          const slot = instance?.runtime.realtime?.snapshot?.persistent?.slots
+            .find((item) => item.logicalAgentId === logicalAgentId)
+          return slot?.audit ?? []
+        }}
+        loadTask={async (instanceId, namespace, taskId) => {
+          if (useProjected && adaptiveState) {
+            const source = sourceForRead(instanceId)
             const task = source
               ? projectedTask(adaptiveState.cache, source, namespace, taskId)
               : undefined
-            if (task) return Promise.resolve(task)
-            return Promise.reject(new Error('fleet_task_not_cached'))
+            if (task) return task
+            const runtime = fleetRuntimeRef.current
+            if (!runtime || !source) throw new Error('fleet_task_unavailable_offline')
+            try {
+              const result = await runtime.detail<Record<string, unknown>>(
+                'tasks',
+                namespace + '/' + taskId,
+                source,
+              )
+              const resolved = result.sources.find((item) => item.sourceNodeId === source)
+              if (resolved?.ok && resolved.data) return taskFromQueryItem(resolved.data)
+              throw new Error(
+                resolved?.status === 'OFFLINE_AUTH'
+                  ? 'fleet_task_unavailable_auth'
+                  : 'fleet_task_unavailable_degraded',
+              )
+            } catch (error) {
+              if (error instanceof Error && error.message === 'fleet_query_capability_unavailable') {
+                return directAuthority.task(instanceId, namespace, taskId)
+              }
+              throw error
+            }
           }
           return directAuthority.task(instanceId, namespace, taskId)
         }}

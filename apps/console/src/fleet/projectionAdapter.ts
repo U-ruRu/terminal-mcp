@@ -381,6 +381,7 @@ function snapshot(
   source: string,
   profile: ConnectionProfile,
   nowMs: number,
+  sourceDegraded = overlayDegraded(cache, source),
 ): ConsoleSnapshotReadModel {
   const projectedAgents = agents(cache, source, nowMs)
   return {
@@ -391,7 +392,7 @@ function snapshot(
       application: 'terminal-mcp',
       version: 'fleet-v1',
       publicBaseUrl: profile.origin,
-      healthy: !overlayDegraded(cache, source),
+      healthy: !sourceDegraded,
       health: {
         source: 'fleet-v1',
         projection_epoch: cache.projectionEpoch,
@@ -417,9 +418,17 @@ function status(
   return 'live'
 }
 
+const SYNTHETIC_FLEET_INSTANCE_PREFIX = 'fleet-source-'
+
+export function projectedSourceNodeId(instanceId: string): string | undefined {
+  if (!instanceId.startsWith(SYNTHETIC_FLEET_INSTANCE_PREFIX)) return undefined
+  const sourceNodeId = instanceId.slice(SYNTHETIC_FLEET_INSTANCE_PREFIX.length)
+  return sourceNodeId || undefined
+}
+
 function syntheticProfile(source: string): ConnectionProfile {
   return {
-    instanceId: 'fleet-source-' + source,
+    instanceId: SYNTHETIC_FLEET_INSTANCE_PREFIX + source,
     origin: 'https://fleet.invalid',
     displayName: source,
     credentialRef: 'fleet-unbound-' + source,
@@ -439,12 +448,18 @@ export function buildProjectedFleetInstances(
   const sourceIds = new Set([
     ...cache.sources.map((item) => item.sourceNodeId),
     ...cache.entities.map((item) => item.sourceNodeId),
+    ...(cache.scopeStatuses ?? []).map((item) => item.sourceNodeId),
+    ...(cache.confirmedWrites ?? []).map((item) => item.sourceNodeId),
   ])
   return [...sourceIds].sort().map((source) => {
     const profile = bound.get(source) ?? syntheticProfile(source)
     const sourceFreshness = cache.sources.find((item) => item.sourceNodeId === source)?.freshness ?? 'stale'
-    const degraded = overlayDegraded(cache, source)
-    const realtimeStatus = status(sourceFreshness, fleetStatus, degraded)
+    const scopeStatuses = (cache.scopeStatuses ?? []).filter((item) => item.sourceNodeId === source)
+    const scopeOfflineAuth = scopeStatuses.some((item) => item.status === 'OFFLINE_AUTH')
+    const scopeDegraded = scopeStatuses.some((item) => item.status !== 'LIVE')
+    const effectiveFreshness = scopeOfflineAuth ? 'unavailable' : sourceFreshness
+    const degraded = overlayDegraded(cache, source) || scopeDegraded
+    const realtimeStatus = status(effectiveFreshness, fleetStatus, degraded)
     return {
       profile,
       runtime: {
@@ -453,14 +468,17 @@ export function buildProjectedFleetInstances(
         authStatus: bound.has(source) ? 'connected' : 'unpaired',
         realtime: {
           status: realtimeStatus,
-          snapshot: snapshot(cache, source, profile, nowMs),
+          snapshot: snapshot(cache, source, profile, nowMs, degraded),
           cursor: cache.appliedProjectionSeq,
           highWaterSeq: cache.appliedProjectionSeq,
           socketConnected: fleetStatus === 'live',
           reconnectAttempt: 0,
           staleReason: realtimeStatus === 'stale'
-            ? degraded ? 'runtime_ownership_degraded' : 'fleet_projection_stale'
-            : undefined,
+            ? scopeDegraded ? 'fleet_scope_not_live'
+              : degraded ? 'runtime_ownership_degraded' : 'fleet_projection_stale'
+            : realtimeStatus === 'offline' && scopeOfflineAuth
+              ? 'fleet_scope_offline_auth'
+              : undefined,
         },
         reconnectAttempt: 0,
       },
@@ -479,6 +497,33 @@ export function projectedTask(
   return tasks(cache, sourceNodeId, nowMs).find(
     (item) => item.namespace === namespace && item.taskId === taskId,
   )
+}
+
+export function taskFromQueryItem(
+  value: Record<string, unknown>,
+): TaskReadModel {
+  const namespace = text(value.namespace)
+  const taskId = text(value.task_id)
+  const taskState = state(value.state)
+  return {
+    key: namespace + '/' + taskId,
+    namespace,
+    taskId,
+    title: text(value.title, taskId),
+    lane: lane(value.lane),
+    priority: priority(value.priority),
+    state: taskState,
+    operationalStatus: taskState,
+    active: false,
+    archived: Boolean(value.archived_at),
+    tags: strings(value.tags),
+    nextAction: text(value.next_action),
+    candidateRef: text(value.candidate_ref) || undefined,
+    participants: [],
+    checkpoint: value.checkpoint ?? {},
+    result: value.result,
+    details: { revision: integer(value.revision) },
+  }
 }
 
 export function projectedActivity(

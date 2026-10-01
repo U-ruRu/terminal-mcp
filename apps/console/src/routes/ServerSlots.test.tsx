@@ -108,13 +108,18 @@ function instance(status: 'live' | 'offline', item: PersistentSlotReadModel): Fl
   }
 }
 
-function renderSlots(fleet: FleetInstanceView[], mutatePersistent?: PersistentMutator) {
+function renderSlots(
+  fleet: FleetInstanceView[],
+  mutatePersistent?: PersistentMutator,
+  loadSlotAudit?: (instanceId: string, logicalAgentId: string) => Promise<import('../api/models').PersistentAuditReadModel[]>,
+) {
+  const initialInstanceId = fleet[0]?.profile.instanceId ?? 'alpha'
   return render(
     <I18nProvider>
-      <MemoryRouter initialEntries={['/servers/alpha/slots']}>
+      <MemoryRouter initialEntries={['/servers/' + initialInstanceId + '/slots']}>
         <Routes>
-          <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} />} />
-          <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} />} />
+          <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} />} />
+          <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} />} />
         </Routes>
       </MemoryRouter>
     </I18nProvider>,
@@ -213,4 +218,27 @@ test('D/W/A controls lock while a slot is active but Legacy remains switchable',
   expect(screen.getByRole('spinbutton', { name: 'D — hard duration (seconds)' })).toBeDisabled()
   expect(screen.getByRole('checkbox', { name: 'Allow Legacy agent admission' })).toBeEnabled()
   expect(screen.getByText(/Suspend or cancel every armed\/active slot/)).toBeInTheDocument()
+})
+
+
+test('unpaired projected slot can load audit through Fleet ingress while mutations stay disabled', async () => {
+  const user = userEvent.setup()
+  const projected = instance('live', slot())
+  projected.profile = { ...projected.profile, instanceId: 'fleet-source-node-b', displayName: 'Node B' }
+  projected.runtime = { ...projected.runtime, instanceId: 'fleet-source-node-b', authStatus: 'unpaired' }
+  const loadAudit = vi.fn(async () => [{
+    id: 99,
+    eventType: 'session_start',
+    principalId: 'fleet-ingress',
+    createdAt: '2026-09-30T12:01:00Z',
+  }])
+  const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+
+  renderSlots([projected], mutate, loadAudit)
+  await user.click(screen.getByRole('link', { name: 'Details' }))
+
+  await waitFor(() => expect(loadAudit).toHaveBeenCalledWith('fleet-source-node-b', 'la_alpha'))
+  expect(screen.getByText('session_start')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+  expect(mutate).not.toHaveBeenCalled()
 })

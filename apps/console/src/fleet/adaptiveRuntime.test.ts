@@ -214,3 +214,80 @@ test('query plane coalesces identical in-flight requests and fails closed offlin
   const offline = new FleetAdaptiveReadRuntime(new MemoryFleetProjectionCache())
   await expect(offline.query('tasks')).rejects.toThrow('fleet_query_unavailable_offline')
 })
+
+
+test('slow catch-up emits warning while successful convergence stays live', async () => {
+  let clock = 0
+  const cache = new MemoryFleetProjectionCache()
+  const runtime = new FleetAdaptiveReadRuntime(
+    cache,
+    new FleetIngressSelector(),
+    () => clock,
+  )
+  const a = endpoint('a', 3, 10)
+  await runtime.start([a])
+  a.events = vi.fn(async (since): Promise<FleetProjectionEventPage> => {
+    clock += 6001
+    return {
+      projectionEpoch: 3,
+      projectionSeq: since + 1,
+      resetRequired: false,
+      events: [{
+        projectionEpoch: 3,
+        projectionSeq: since + 1,
+        eventId: 'slow-' + (since + 1),
+        sourceNodeId: 'home',
+        sourceStreamGeneration: 'g',
+        sourceSeq: since + 1,
+        eventType: 'command.changed',
+        entityType: 'command',
+        entityId: 'slow-command',
+        entityRevision: since + 1,
+        payloadVersion: 2,
+        payload: { status: 'running' },
+        createdAt: 'now',
+      }],
+    }
+  })
+  await runtime.syncOnce()
+  expect(runtime.getState().status).toBe('live')
+  expect(runtime.getState().catchupWarning).toBe('fleet_projection_catchup_slow')
+})
+
+test('catch-up beyond acceptance timeout fails closed as degraded', async () => {
+  let clock = 0
+  const cache = new MemoryFleetProjectionCache()
+  const runtime = new FleetAdaptiveReadRuntime(
+    cache,
+    new FleetIngressSelector(),
+    () => clock,
+  )
+  const a = endpoint('a', 3, 10)
+  await runtime.start([a])
+  a.events = vi.fn(async (since): Promise<FleetProjectionEventPage> => {
+    clock += 10001
+    return {
+      projectionEpoch: 3,
+      projectionSeq: since + 1,
+      resetRequired: false,
+      events: [{
+        projectionEpoch: 3,
+        projectionSeq: since + 1,
+        eventId: 'timeout-' + (since + 1),
+        sourceNodeId: 'home',
+        sourceStreamGeneration: 'g',
+        sourceSeq: since + 1,
+        eventType: 'command.changed',
+        entityType: 'command',
+        entityId: 'timeout-command',
+        entityRevision: since + 1,
+        payloadVersion: 2,
+        payload: { status: 'running' },
+        createdAt: 'now',
+      }],
+    }
+  })
+  await runtime.syncOnce()
+  expect(runtime.getState().status).toBe('degraded')
+  expect(runtime.getState().lastError).toBe('fleet_projection_catchup_timeout')
+})

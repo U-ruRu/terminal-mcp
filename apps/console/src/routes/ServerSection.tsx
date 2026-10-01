@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 
+import type { ContextReadModel } from '../api/models'
 import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
@@ -18,21 +19,51 @@ export function ServerSection({
   model,
   section,
   diagnostics,
+  loadContexts,
 }: {
   model: FleetReadModel
   section: ServerSectionKind
   diagnostics?: BrowserDiagnosticJournal
+  loadContexts?: (instanceId: string) => Promise<ContextReadModel[]>
 }) {
   const { t, dateTime, number } = useI18n()
   const { instanceId } = useParams()
   const server = model.servers.find((item) => item.instanceId === instanceId)
   const [, setDiagnosticRevision] = useState(0)
   const [copied, setCopied] = useState(false)
+  const [loadedContexts, setLoadedContexts] = useState<{
+    instanceId: string
+    values?: ContextReadModel[]
+    error?: string
+  }>({ instanceId: '' })
   useEffect(() => diagnostics?.subscribe(() => setDiagnosticRevision((value) => value + 1)), [diagnostics])
+  useEffect(() => {
+    if (section !== 'context' || !instanceId || !loadContexts) return
+    let cancelled = false
+    void loadContexts(instanceId)
+      .then((values) => {
+        if (!cancelled) setLoadedContexts({ instanceId, values })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadedContexts({
+            instanceId,
+            error: error instanceof Error ? error.message : 'context_unavailable',
+          })
+        }
+      })
+    return () => { cancelled = true }
+  }, [instanceId, loadContexts, section])
   if (!server) return <Navigate to={'/' + section} replace />
 
   const diagnosticEntries = diagnostics?.list(server.instanceId) ?? []
   const title = t(titles[section])
+  const contexts = loadedContexts.instanceId === server.instanceId && loadedContexts.values
+    ? loadedContexts.values
+    : (server.contexts ?? [])
+  const contextError = loadedContexts.instanceId === server.instanceId
+    ? loadedContexts.error
+    : undefined
 
   async function copyDiagnostics() {
     if (!diagnostics) return
@@ -79,9 +110,9 @@ export function ServerSection({
         ) : section === 'context' ? (
           <>
             <h3>{title} {t('section.on')} {server.displayName}</h3>
-            {(server.contexts ?? []).length === 0 ? <p className="muted">{t('context.empty')}</p> : (
+            {contexts.length === 0 ? <p className="muted">{t('context.empty')}</p> : (
               <div className="stack context-list">
-                {(server.contexts ?? []).map((context) => (
+                {contexts.map((context) => (
                   <section className="context-entry" key={context.id}>
                     <div className="section-heading">
                       <strong>{context.summary}</strong>
@@ -92,6 +123,7 @@ export function ServerSection({
                 ))}
               </div>
             )}
+            {contextError ? <p className="muted" role="status">{contextError}</p> : null}
           </>
         ) : (
           <>

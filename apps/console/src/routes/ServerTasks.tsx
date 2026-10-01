@@ -37,7 +37,6 @@ export function ServerTasks({
 
   useEffect(() => {
     if (!instance || !namespace || !taskId || !loadTask) return
-    if (instance.runtime.authStatus !== 'connected') return
     const key = namespace + '/' + taskId
     let cancelled = false
     void loadTask(instanceId, namespace, taskId)

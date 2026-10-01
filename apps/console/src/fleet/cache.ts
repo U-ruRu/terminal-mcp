@@ -302,7 +302,7 @@ export class BrowserFleetProjectionCache implements FleetProjectionCache {
       }
       for (const item of next.sources) tx.objectStore('sources').put(item)
       for (const item of next.scopeStatuses ?? []) {
-        tx.objectStore('scopeStatuses').put({ ...item, key: item.sourceNodeId + ' ' + item.scope })
+        tx.objectStore('scopeStatuses').put({ ...item, key: item.sourceNodeId + '\u0000' + item.scope })
       }
       for (const item of next.confirmedWrites ?? []) tx.objectStore('pendingWrites').put(item)
       tx.objectStore('state').put(this.stateRecord(next))
