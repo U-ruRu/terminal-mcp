@@ -70,6 +70,7 @@ function snapshot(item: PersistentSlotReadModel): ConsoleSnapshotReadModel {
         durationSeconds: 1380,
         warningAfterSeconds: 1200,
         alertAfterSeconds: 1320,
+        rearmAfterSeconds: 180,
         manualRearm: true,
         admissionMode: 'bearer',
         legacyAdmissionEnabled: false,
@@ -131,13 +132,21 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-test('cached/offline slot state stays readable but mutations are disabled', () => {
-  renderSlots([instance('offline', slot())])
+test('cached/offline read state does not disable a healthy authenticated write route', async () => {
+  const user = userEvent.setup()
+  const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+  renderSlots([instance('offline', slot())], mutate)
   expect(screen.getByText('A1B2')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled()
-  expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('status')).toHaveTextContent('cached')
+  await user.click(screen.getByRole('button', { name: 'Play' }))
+  expect(mutate).toHaveBeenCalledWith(
+    'alpha',
+    '/actions/persistent/slots/play',
+    expect.objectContaining({ logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: expect.any(String) }),
+  )
 })
 
 test('delete requires explicit confirmation and only succeeds through a live authority mutation', async () => {
@@ -186,7 +195,7 @@ test('expanded slot detail exposes session, generations and admission policy', a
 })
 
 
-test('policy controls mutate D/W/A and Legacy only on capable live servers', async () => {
+test('policy controls mutate D/W/A/R and Legacy through the authenticated write path', async () => {
   const user = userEvent.setup()
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
   renderSlots([instance('live', slot())], mutate)
@@ -194,11 +203,13 @@ test('policy controls mutate D/W/A and Legacy only on capable live servers', asy
   const duration = screen.getByRole('spinbutton', { name: 'D — hard duration (seconds)' })
   const warning = screen.getByRole('spinbutton', { name: 'W — warning after (seconds)' })
   const alert = screen.getByRole('spinbutton', { name: 'A — alert after (seconds)' })
+  const rearm = screen.getByRole('spinbutton', { name: 'R — automatic rearm after (seconds)' })
   await user.clear(duration); await user.type(duration, '180')
   await user.clear(warning); await user.type(warning, '60')
   await user.clear(alert); await user.type(alert, '120')
-  await user.click(screen.getByRole('button', { name: 'Save D/W/A' }))
-  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { duration_seconds: 180, warning_after_seconds: 60, alert_after_seconds: 120 })
+  await user.clear(rearm); await user.type(rearm, '15')
+  await user.click(screen.getByRole('button', { name: 'Save D/W/A/R' }))
+  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { duration_seconds: 180, warning_after_seconds: 60, alert_after_seconds: 120, rearm_after_seconds: 15 })
 
   await user.click(screen.getByRole('checkbox', { name: 'Allow Legacy agent admission' }))
   expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { legacy_admission_enabled: true })
@@ -208,14 +219,15 @@ test('old server snapshots do not expose policy mutation controls', () => {
   const old = instance('live', slot())
   old.runtime.realtime!.snapshot!.persistent!.policy.policyControlSupported = false
   renderSlots([old])
-  expect(screen.queryByRole('button', { name: 'Save D/W/A' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Save D/W/A/R' })).not.toBeInTheDocument()
   expect(screen.queryByRole('checkbox', { name: 'Allow Legacy agent admission' })).not.toBeInTheDocument()
 })
 
-test('D/W/A controls lock while a slot is active but Legacy remains switchable', () => {
+test('stale active state remains informative but does not client-side fence policy writes', () => {
   renderSlots([instance('live', slot('active', '2026-09-30T12:02:00Z'))], vi.fn(async () => ({ ok: true, payload: { ok: true } })) as PersistentMutator)
-  expect(screen.getByRole('button', { name: 'Save D/W/A' })).toBeDisabled()
-  expect(screen.getByRole('spinbutton', { name: 'D — hard duration (seconds)' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Save D/W/A/R' })).toBeEnabled()
+  expect(screen.getByRole('spinbutton', { name: 'D — hard duration (seconds)' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('checkbox', { name: 'Allow Legacy agent admission' })).toBeEnabled()
   expect(screen.getByText(/Suspend or cancel every armed\/active slot/)).toBeInTheDocument()
 })

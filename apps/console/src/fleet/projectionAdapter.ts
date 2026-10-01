@@ -172,6 +172,7 @@ function persistent(
       durationSeconds: 0,
       warningAfterSeconds: 0,
       alertAfterSeconds: 0,
+      rearmAfterSeconds: 180,
       manualRearm: true,
       admissionMode: 'fleet-projected',
       legacyAdmissionEnabled: false,

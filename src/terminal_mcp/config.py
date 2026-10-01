@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     persistent_session_duration_sec: int = 23 * 60
     persistent_session_warning_after_sec: int = 20 * 60
     persistent_session_alert_after_sec: int = 22 * 60
+    persistent_session_rearm_after_sec: int = 3 * 60
     legacy_agent_admission_enabled: bool | None = None
 
     @model_validator(mode="after")
@@ -110,6 +111,7 @@ class Settings(BaseSettings):
         duration = self.persistent_session_duration_sec
         warning = self.persistent_session_warning_after_sec
         alert = self.persistent_session_alert_after_sec
+        rearm = self.persistent_session_rearm_after_sec
         if duration <= 0:
             raise ValueError("persistent_session_duration_sec must be positive")
         if warning <= 0 or warning >= duration:
@@ -120,6 +122,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "persistent_session_alert_after_sec must be above warning and below duration"
             )
+        if rearm <= 0:
+            raise ValueError("persistent_session_rearm_after_sec must be positive")
         return self
 
     @model_validator(mode="after")

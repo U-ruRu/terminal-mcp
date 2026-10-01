@@ -155,6 +155,7 @@ export type PersistentPolicyReadModel = {
   durationSeconds: number
   warningAfterSeconds: number
   alertAfterSeconds: number
+  rearmAfterSeconds: number
   manualRearm: boolean
   admissionMode: string
   legacyAdmissionEnabled: boolean

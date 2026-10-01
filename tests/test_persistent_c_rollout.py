@@ -130,6 +130,7 @@ def test_console_snapshot_projects_persistent_slot_policy_and_audit(tmp_path):
             "duration_seconds": 1380,
             "warning_after_seconds": 1200,
             "alert_after_seconds": 1320,
+            "rearm_after_seconds": 180,
             "manual_rearm": True,
             "admission_mode": "oauth",
             "legacy_admission_enabled": False,
@@ -157,6 +158,7 @@ def test_installer_persists_persistent_rollout_defaults_without_overwriting_oper
         "TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC": "1380",
         "TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC": "1200",
         "TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC": "1320",
+        "TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC": "180",
     }
     for key, value in expected.items():
         assert f'{key}="${{{key}:-{value}}}"' in script
@@ -211,6 +213,7 @@ def test_persistent_policy_control_updates_next_arm_and_persists_env(tmp_path):
                 "duration_seconds": 180,
                 "warning_after_seconds": 60,
                 "alert_after_seconds": 120,
+                "rearm_after_seconds": 15,
                 "legacy_admission_enabled": True,
             },
         ).json()
@@ -220,6 +223,7 @@ def test_persistent_policy_control_updates_next_arm_and_persists_env(tmp_path):
                 "duration_seconds": 180,
                 "warning_after_seconds": 60,
                 "alert_after_seconds": 120,
+                "rearm_after_seconds": 15,
                 "legacy_admission_enabled": True,
             },
         }
@@ -227,6 +231,7 @@ def test_persistent_policy_control_updates_next_arm_and_persists_env(tmp_path):
         assert snapshot["policy"]["duration_seconds"] == 180
         assert snapshot["policy"]["warning_after_seconds"] == 60
         assert snapshot["policy"]["alert_after_seconds"] == 120
+        assert snapshot["policy"]["rearm_after_seconds"] == 15
         assert snapshot["policy"]["legacy_admission_enabled"] is True
         assert snapshot["policy"]["policy_control_supported"] is True
 
@@ -248,6 +253,7 @@ def test_persistent_policy_control_updates_next_arm_and_persists_env(tmp_path):
 
     persisted = (tmp_path / "terminal-mcp.env").read_text()
     assert 'TERMINAL_MCP_PERSISTENT_SESSION_DURATION_SEC="180"' in persisted
+    assert 'TERMINAL_MCP_PERSISTENT_SESSION_REARM_AFTER_SEC="15"' in persisted
     assert 'TERMINAL_MCP_PERSISTENT_SESSION_WARNING_AFTER_SEC="60"' in persisted
     assert 'TERMINAL_MCP_PERSISTENT_SESSION_ALERT_AFTER_SEC="120"' in persisted
     assert 'TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED="true"' in persisted

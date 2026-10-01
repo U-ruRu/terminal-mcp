@@ -416,7 +416,8 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
         }}
         mutatePersistent={async (instanceId, path, body) => {
           const result = await directAuthority.persistentMutation(instanceId, path, body)
-          if (result.ok && fleetRuntimeRef.current && cache) {
+          const runtime = fleetRuntimeRef.current
+          if (result.ok && runtime && cache) {
             const sourceNodeId = sourceForProfile.get(instanceId)
             if (sourceNodeId) {
               const writes = confirmedWritesFromPersistentMutation(
@@ -430,8 +431,10 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
                 setAdaptiveState((current) => current ? { ...current, cache: next } : current)
               }
             }
-            void fleetRuntimeRef.current.syncOnce()
           }
+          // Rejections such as revision_conflict are authoritative evidence that the cached
+          // read model is stale too, so request projection convergence after every write attempt.
+          if (runtime) void runtime.syncOnce()
           return result
         }}
       />

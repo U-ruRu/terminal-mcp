@@ -14,6 +14,7 @@ class PersistentPolicyRequest(StrictRequest):
     duration_seconds: int | None = Field(default=None, ge=1)
     warning_after_seconds: int | None = Field(default=None, ge=1)
     alert_after_seconds: int | None = Field(default=None, ge=1)
+    rearm_after_seconds: int | None = Field(default=None, ge=1)
     legacy_admission_enabled: bool | None = None
 
     @model_validator(mode="after")
@@ -22,6 +23,7 @@ class PersistentPolicyRequest(StrictRequest):
             self.duration_seconds is None
             and self.warning_after_seconds is None
             and self.alert_after_seconds is None
+            and self.rearm_after_seconds is None
             and self.legacy_admission_enabled is None
         ):
             raise ValueError("at least one policy field is required")
@@ -105,6 +107,7 @@ def build_persistent_router(service, policy_controller=None) -> APIRouter:
                 duration_seconds=body.duration_seconds,
                 warning_after_seconds=body.warning_after_seconds,
                 alert_after_seconds=body.alert_after_seconds,
+                rearm_after_seconds=body.rearm_after_seconds,
                 legacy_admission_enabled=body.legacy_admission_enabled,
             )
         except PersistentPolicyError as exc:

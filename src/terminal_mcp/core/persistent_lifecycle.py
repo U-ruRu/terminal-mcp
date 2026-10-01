@@ -68,14 +68,18 @@ class PersistentLifecycleCoordinator:
         enabled: bool,
         authority_node_id: str,
         session_duration_seconds: int,
+        rearm_delay_seconds: int = 180,
         execution_fence: ExecutionFence | None = None,
     ):
         if session_duration_seconds < 1:
             raise ValueError("session_duration_seconds must be positive")
+        if rearm_delay_seconds < 1:
+            raise ValueError("rearm_delay_seconds must be positive")
         self.store = store
         self.enabled = bool(enabled)
         self.authority_node_id = authority_node_id or "local"
         self.session_duration_seconds = int(session_duration_seconds)
+        self.rearm_delay_seconds = int(rearm_delay_seconds)
         self.execution_fence = execution_fence or NoopExecutionFence()
         self._operation_locks: dict[str, asyncio.Lock] = {}
         self._policy_lock = asyncio.Lock()
@@ -104,6 +108,7 @@ class PersistentLifecycleCoordinator:
             return
         self._stopped.clear()
         await self.reconcile_expired()
+        await self.reconcile_rearms()
         self._reconcile_task = asyncio.create_task(
             self._reconcile_loop(max(0.2, float(interval_seconds))),
             name="persistent-session-reconciler",
@@ -122,6 +127,7 @@ class PersistentLifecycleCoordinator:
             try:
                 await asyncio.sleep(interval_seconds)
                 await self.reconcile_expired()
+                await self.reconcile_rearms()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -383,6 +389,11 @@ class PersistentLifecycleCoordinator:
                 session.session_epoch,
                 reason=reason,
                 terminal_state=terminal_state,
+                rearm_delay_seconds=(
+                    self.rearm_delay_seconds
+                    if terminal_state in {"ended", "expired"} and reason != "suspend"
+                    else None
+                ),
             )
         except PersistentStoreError as exc:
             self._raise_store(exc)
@@ -503,6 +514,56 @@ class PersistentLifecycleCoordinator:
             "from_logical_agent_id": from_logical_agent_id,
             "to_logical_agent_id": to_logical_agent_id,
         }
+
+    async def reconcile_rearms(self, *, now=None) -> list[dict]:
+        self._available()
+        current = now or utc_now()
+        stamp = utc_text(current)
+        reconciled: list[dict] = []
+        for pending in await self.store.due_rearms(now=stamp):
+            logical_agent_id = pending["logical_agent_id"]
+            async with self.operation_guard(logical_agent_id):
+                scheduled = await self.store.pending_rearm(logical_agent_id)
+                if scheduled is None or scheduled["work_session_id"] != pending["work_session_id"]:
+                    continue
+                slot = await self.store.get_slot(logical_agent_id)
+                if slot is None or slot.state in {"deleted", "deleting"}:
+                    await self.store.cancel_rearm(logical_agent_id, now=stamp)
+                    continue
+                if slot.authority_node_id != self.authority_node_id:
+                    continue
+                if slot.state in {"armed", "active", "stopping"}:
+                    await self.store.complete_rearm(
+                        logical_agent_id, pending["work_session_id"], now=stamp
+                    )
+                    continue
+                if slot.state != "suspended":
+                    continue
+                try:
+                    armed, arm = await self.store.arm_slot(
+                        logical_agent_id,
+                        self.session_duration_seconds,
+                        expected_revision=slot.slot_revision,
+                        now=stamp,
+                        cancel_pending_rearm=False,
+                    )
+                except PersistentStoreError as exc:
+                    if exc.code != "revision_conflict":
+                        self._raise_store(exc)
+                    continue
+                await self.store.complete_rearm(
+                    logical_agent_id, pending["work_session_id"], now=stamp
+                )
+                reconciled.append(
+                    {
+                        "ok": True,
+                        "auto_rearmed": True,
+                        "slot": asdict(armed),
+                        "arm": asdict(arm),
+                        "server_now": stamp,
+                    }
+                )
+        return reconciled
 
     async def reconcile_expired(self, *, now=None) -> list[dict]:
         self._available()

@@ -275,6 +275,15 @@ class SqliteRepository:
                     session_epoch INTEGER, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
                     FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
                 );
+                CREATE TABLE IF NOT EXISTS logical_agent_rearms(
+                    logical_agent_id TEXT PRIMARY KEY, work_session_id TEXT NOT NULL,
+                    rearm_at TEXT NOT NULL, created_at TEXT NOT NULL,
+                    cancelled_at TEXT, rearmed_at TEXT,
+                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT,
+                    FOREIGN KEY(work_session_id) REFERENCES logical_agent_work_sessions(work_session_id) ON DELETE RESTRICT
+                );
+                CREATE INDEX IF NOT EXISTS idx_logical_agent_rearms_due
+                    ON logical_agent_rearms(cancelled_at,rearmed_at,rearm_at);
                 CREATE TABLE IF NOT EXISTS persistent_idempotency(
                     logical_agent_id TEXT NOT NULL, operation TEXT NOT NULL, idempotency_key TEXT NOT NULL,
                     request_fingerprint TEXT NOT NULL,

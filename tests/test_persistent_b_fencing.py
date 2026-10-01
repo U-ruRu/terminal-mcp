@@ -207,6 +207,7 @@ def test_persistent_session_thresholds_are_ordered():
         persistent_session_alert_after_sec=90,
     )
     assert valid.persistent_session_duration_sec == 120
+    assert valid.persistent_session_rearm_after_sec == 180
 
     with pytest.raises(ValidationError, match="warning_after_sec"):
         Settings(
@@ -232,6 +233,16 @@ def test_persistent_session_thresholds_are_ordered():
             persistent_session_duration_sec=120,
             persistent_session_warning_after_sec=60,
             persistent_session_alert_after_sec=60,
+        )
+
+    with pytest.raises(ValidationError, match="rearm_after_sec"):
+        Settings(
+            _env_file=None,
+            persistent_agents_enabled=True,
+            persistent_session_duration_sec=120,
+            persistent_session_warning_after_sec=60,
+            persistent_session_alert_after_sec=90,
+            persistent_session_rearm_after_sec=0,
         )
 
 
