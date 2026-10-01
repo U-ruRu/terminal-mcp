@@ -58,7 +58,7 @@ test('unpaired projected task detail loads through Fleet ingress', async () => {
       authStatus: 'unpaired',
       realtime: instance.runtime.realtime
         ? { ...instance.runtime.realtime, snapshot: { ...snapshot, tasks: [] } }
-        : undefined,
+        : null,
     },
   }
   const loaded: TaskReadModel = { ...task, key: 'console/T-9', taskId: 'T-9', title: 'Remote cold detail' }

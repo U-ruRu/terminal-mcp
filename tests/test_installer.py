@@ -64,10 +64,15 @@ def test_installer_persists_console_origin_allowlist():
     script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
 
     assert (
-        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-}"'
+        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-$CANONICAL_CONSOLE_ORIGINS}"'
         in script
     )
-    assert 'ensure_env TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS' in script
+    assert (
+        'CANONICAL_CONSOLE_ORIGINS='
+        '${TERMINAL_MCP_CANONICAL_CONSOLE_ORIGINS:-https://localhost}'
+        in script
+    )
+    assert 'ensure_console_origins' in script
 
 
 
@@ -118,8 +123,23 @@ def _run_doctor_with_ingress_status(tmp_path, ingress_status: str):
     (fake_bin / "curl").write_text(
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$FAKE_CURL_LOG\"\n"
+        "header_file=''\n"
+        "previous=''\n"
+        "for arg in \"$@\"; do\n"
+        "  if [ \"$previous\" = '-D' ]; then header_file=$arg; fi\n"
+        "  previous=$arg\n"
+        "done\n"
         "case \"$*\" in\n"
         "  */internal/fleet/identities*) printf '%s' \"$FAKE_INGRESS_STATUS\" ;;\n"
+        "  *'/actions/console/snapshot'*)\n"
+        "    [ -z \"$header_file\" ] || "
+        "printf 'HTTP/1.1 204 No Content\\r\\n"
+        "Access-Control-Allow-Origin: https://localhost\\r\\n\\r\\n' "
+        "> \"$header_file\"\n"
+        "    printf '204' ;;\n"
+        "  *'/connect'*) printf '200' ;;\n"
+        "  *'/console/ws-ticket'*) printf '401' ;;\n"
+        "  *'/console/fleet/v1/'*) printf '401' ;;\n"
         "esac\n"
         "exit 0\n"
     )
@@ -130,6 +150,7 @@ def _run_doctor_with_ingress_status(tmp_path, ingress_status: str):
     (env_dir / "terminal-mcp.env").write_text(
         'TERMINAL_MCP_OAUTH_ACCESS_TTL_SEC="2592000"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://server-a.example.invalid"\n'
+        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"\n'
         'TERMINAL_MCP_QUEUE_WORKERS="4"\n'
     )
     env = {
@@ -222,3 +243,191 @@ def test_update_stages_fixed_sqlite_before_backup_and_activation():
     )
     backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
     assert 'runtime_python "$release"' in backup_body
+
+
+def _run_ingress_config(tmp_path, *, reload_ok=True):
+    fake_bin = tmp_path / "fake-caddy-bin"
+    fake_bin.mkdir()
+    caddy_log = tmp_path / "caddy.log"
+    systemctl_log = tmp_path / "systemctl.log"
+
+    (fake_bin / "caddy").write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_CADDY_LOG\"\n"
+        "case \"$1\" in validate) exit 0 ;; esac\n"
+        "exit 99\n"
+    )
+    (fake_bin / "systemctl").write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_SYSTEMCTL_LOG\"\n"
+        + ("exit 0\n" if reload_ok else "exit 1\n")
+    )
+    for path in fake_bin.iterdir():
+        path.chmod(0o755)
+
+    env_dir = tmp_path / "etc"
+    env_dir.mkdir()
+    (env_dir / "terminal-mcp.env").write_text(
+        'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example.test"\n'
+        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"\n'
+    )
+    caddyfile = tmp_path / "Caddyfile"
+    original = (
+        "terminal.example.test {\n"
+        "    @legacy path /mcp /health/* /internal/fleet/*\n"
+        "    reverse_proxy @legacy 127.0.0.1:8080\n"
+        "}\n"
+    )
+    caddyfile.write_text(original)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_CADDY_LOG": str(caddy_log),
+        "FAKE_SYSTEMCTL_LOG": str(systemctl_log),
+        "TERMINAL_MCP_INSTALL_ROOT": str(tmp_path / "install"),
+        "TERMINAL_MCP_ENV_DIR": str(env_dir),
+        "TERMINAL_MCP_DATA_DIR": str(tmp_path / "data"),
+        "TERMINAL_MCP_CACHE_DIR": str(tmp_path / "cache"),
+        "TERMINAL_MCP_BACKUP_DIR": str(tmp_path / "backups"),
+        "TERMINAL_MCP_CADDYFILE": str(caddyfile),
+        "TERMINAL_MCP_CADDY_BIN": str(fake_bin / "caddy"),
+        "TERMINAL_MCP_CADDY_SERVICE": "caddy",
+        "TERMINAL_MCP_CADDY_MANAGE_MODE": "required",
+        "TERMINAL_MCP_SYSTEMCTL": str(fake_bin / "systemctl"),
+    }
+    result = subprocess.run(
+        ["bash", "deploy/install.sh", "ingress"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, caddyfile, original, caddy_log, systemctl_log, tmp_path / "backups"
+
+
+def test_ingress_command_validates_backs_up_reloads_and_is_idempotent(tmp_path):
+    result, caddyfile, original, caddy_log, systemctl_log, backups = _run_ingress_config(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    configured = caddyfile.read_text()
+    assert configured != original
+    assert "# BEGIN terminal-mcp managed console ingress" in configured
+    assert "/actions/console/*" in configured
+    assert "/console/*" in configured
+    assert "validate --config" in caddy_log.read_text()
+    assert systemctl_log.read_text().splitlines() == ["reload caddy"]
+    backup_files = list(backups.glob("caddy-*.Caddyfile"))
+    assert len(backup_files) == 1
+    assert backup_files[0].read_text() == original
+
+    second = subprocess.run(
+        ["bash", "deploy/install.sh", "ingress"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path / 'fake-caddy-bin'}:{os.environ['PATH']}",
+            "FAKE_CADDY_LOG": str(caddy_log),
+            "FAKE_SYSTEMCTL_LOG": str(systemctl_log),
+            "TERMINAL_MCP_INSTALL_ROOT": str(tmp_path / "install"),
+            "TERMINAL_MCP_ENV_DIR": str(tmp_path / "etc"),
+            "TERMINAL_MCP_DATA_DIR": str(tmp_path / "data"),
+            "TERMINAL_MCP_CACHE_DIR": str(tmp_path / "cache"),
+            "TERMINAL_MCP_BACKUP_DIR": str(backups),
+            "TERMINAL_MCP_CADDYFILE": str(caddyfile),
+            "TERMINAL_MCP_CADDY_BIN": str(tmp_path / "fake-caddy-bin" / "caddy"),
+            "TERMINAL_MCP_CADDY_SERVICE": "caddy",
+            "TERMINAL_MCP_CADDY_MANAGE_MODE": "required",
+            "TERMINAL_MCP_SYSTEMCTL": str(tmp_path / "fake-caddy-bin" / "systemctl"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert second.returncode == 0
+    assert systemctl_log.read_text().splitlines() == ["reload caddy"]
+
+
+def test_ingress_command_restores_caddyfile_when_reload_fails(tmp_path):
+    result, caddyfile, original, _caddy_log, systemctl_log, backups = _run_ingress_config(
+        tmp_path, reload_ok=False
+    )
+
+    assert result.returncode != 0
+    assert "restoring" in result.stderr
+    assert caddyfile.read_text() == original
+    assert len(list(backups.glob("caddy-*.Caddyfile"))) == 1
+    assert systemctl_log.read_text().splitlines() == ["reload caddy", "reload caddy"]
+
+
+def test_doctor_probes_console_fallback_and_read_v2_surfaces(tmp_path):
+    result, curl_log = _run_doctor_with_ingress_status(tmp_path, "401")
+
+    assert result.returncode == 0, result.stderr
+    for route in (
+        "/connect",
+        "/actions/console/snapshot",
+        "/console/ws-ticket",
+        "/console/fleet/v1/probe",
+        "/console/fleet/v1/snapshot",
+        "/console/fleet/v1/activity",
+        "/console/fleet/v1/query/tasks",
+        "/console/fleet/v1/detail/tasks?entity_id=ingress-probe",
+        "/console/fleet/v1/namespaces",
+        "/console/fleet/v1/task-graph?namespace=ingress-probe&task_id=ingress-probe",
+        "/console/fleet/v1/ws-ticket",
+    ):
+        assert route in curl_log
+
+
+def _run_ingress_defaults(tmp_path, origin_line: str):
+    env_dir = tmp_path / "etc-origins"
+    env_dir.mkdir()
+    env_file = env_dir / "terminal-mcp.env"
+    env_file.write_text(
+        'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example.test"\n'
+        + origin_line
+        + "\n"
+    )
+    result = subprocess.run(
+        ["bash", "deploy/install.sh", "ingress"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "TERMINAL_MCP_INSTALL_ROOT": str(tmp_path / "install-origins"),
+            "TERMINAL_MCP_ENV_DIR": str(env_dir),
+            "TERMINAL_MCP_DATA_DIR": str(tmp_path / "data-origins"),
+            "TERMINAL_MCP_CACHE_DIR": str(tmp_path / "cache-origins"),
+            "TERMINAL_MCP_BACKUP_DIR": str(tmp_path / "backups-origins"),
+            "TERMINAL_MCP_CADDY_MANAGE_MODE": "off",
+            "TERMINAL_MCP_SYSTEMCTL": "/bin/true",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, env_file.read_text()
+
+
+def test_ingress_repairs_empty_console_origin_for_existing_install(tmp_path):
+    result, env_text = _run_ingress_defaults(
+        tmp_path, 'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS=""'
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert 'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://localhost"' in env_text
+
+
+def test_ingress_preserves_custom_origin_and_adds_canonical_origin_once(tmp_path):
+    result, env_text = _run_ingress_defaults(
+        tmp_path,
+        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="https://ops.example.invalid"',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS='
+        '"https://ops.example.invalid,https://localhost"'
+        in env_text
+    )

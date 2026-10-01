@@ -230,6 +230,7 @@ test('unpaired projected slot can load audit through Fleet ingress while mutatio
     id: 99,
     eventType: 'session_start',
     principalId: 'fleet-ingress',
+    payload: {},
     createdAt: '2026-09-30T12:01:00Z',
   }])
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
