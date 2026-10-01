@@ -37,6 +37,9 @@ class Fence:
         self.revocations.append((logical_agent_id, work_session_id, session_epoch, reason))
         return list(self.session_blockers)
 
+    async def blockers_for_session(self, logical_agent_id, work_session_id, session_epoch):
+        return list(self.session_blockers)
+
     async def blockers_for_slot(self, logical_agent_id):
         return list(self.slot_blockers)
 
@@ -346,3 +349,194 @@ async def test_foreign_node_cannot_mutate_or_authorize_home_slot(tmp_path):
     after = parse_utc(session["hard_expires_at"]) + timedelta(seconds=1)
     assert await foreign.reconcile_expired(now=after) == []
     assert (await store.get_work_session(session["work_session_id"])).state == "active"
+
+
+@pytest.mark.asyncio
+async def test_session_end_gracefully_drains_without_revoking_commands(tmp_path):
+    fence = Fence()
+    _, store, _, lifecycle = await setup(tmp_path, duration=90, rearm=5, fence=fence)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    session = started["work_session"]
+    hard_expires_at = session["hard_expires_at"]
+    fence.session_blockers = [
+        {"kind": "queued_command", "command_hash": "queued001"},
+        {"kind": "running_command", "command_hash": "running1"},
+    ]
+
+    stopping = await lifecycle.session_end(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=admission(),
+    )
+    assert stopping["stopping"] is True
+    assert {item["kind"] for item in stopping["blockers"]} == {
+        "queued_command",
+        "running_command",
+    }
+    assert fence.revocations == []
+    current = await store.get_work_session(session["work_session_id"])
+    assert current.state == "stopping"
+    assert current.hard_expires_at == hard_expires_at
+    with pytest.raises(PersistentLifecycleError, match="session_not_active"):
+        await lifecycle.authorize_session(
+            logical_agent_id,
+            session["work_session_id"],
+            session["session_epoch"],
+            admission=admission(),
+        )
+
+    repeated = await lifecycle.session_end(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=admission(),
+    )
+    assert repeated["stopping"] is True
+    assert fence.revocations == []
+
+    fence.session_blockers = []
+    before_hard_expiry = parse_utc(session["started_at"]) + timedelta(seconds=1)
+    reconciled = await lifecycle.reconcile_expired(now=before_hard_expiry)
+    assert len(reconciled) == 1
+    ended = reconciled[0]
+    assert ended["stopping"] is False
+    assert ended["work_session"]["state"] == "ended"
+    assert ended["work_session"]["hard_expires_at"] == hard_expires_at
+    assert fence.revocations == []
+    pending = await store.pending_rearm(logical_agent_id)
+    assert pending is not None
+
+
+@pytest.mark.asyncio
+async def test_session_interrupt_revokes_commands_before_finalize(tmp_path):
+    fence = Fence()
+    _, store, _, lifecycle = await setup(tmp_path, duration=90, fence=fence)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    session = started["work_session"]
+    fence.session_blockers = [{"kind": "running_command", "command_hash": "running1"}]
+
+    stopping = await lifecycle.session_interrupt(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=admission(),
+    )
+    assert stopping["stopping"] is True
+    assert fence.revocations == [
+        (
+            logical_agent_id,
+            session["work_session_id"],
+            session["session_epoch"],
+            "session_interrupt",
+        )
+    ]
+    assert (await store.get_work_session(session["work_session_id"])).state == "stopping"
+
+    fence.session_blockers = []
+    ended = await lifecycle.session_interrupt(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=admission(),
+    )
+    assert ended["stopping"] is False
+    assert ended["work_session"]["state"] == "ended"
+    assert len(fence.revocations) == 2
+
+
+@pytest.mark.asyncio
+async def test_stopping_session_reconciles_on_restart_without_second_end(tmp_path):
+    fence = Fence()
+    _, store, _, lifecycle = await setup(tmp_path, duration=90, rearm=5, fence=fence)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    session = started["work_session"]
+    fence.session_blockers = [{"kind": "queued_command", "command_hash": "queued001"}]
+    first = await lifecycle.session_end(
+        logical_agent_id,
+        session["work_session_id"],
+        session["session_epoch"],
+        admission=admission(),
+    )
+    assert first["stopping"] is True
+    fence.session_blockers = []
+
+    restarted = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=90,
+        rearm_delay_seconds=5,
+        execution_fence=fence,
+    )
+    await restarted.start(interval_seconds=60)
+    try:
+        ended = await store.get_work_session(session["work_session_id"])
+        assert ended.state == "ended"
+        assert ended.end_reason == "session_end"
+        assert fence.revocations == []
+        assert await store.pending_rearm(logical_agent_id) is not None
+    finally:
+        await restarted.stop()
+
+
+@pytest.mark.asyncio
+async def test_stopping_session_keeps_graceful_drain_until_hard_expiry(tmp_path):
+    fence = Fence()
+    _, store, _, lifecycle = await setup(tmp_path, duration=90, fence=fence)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+    )
+    session = started["work_session"]
+    fence.session_blockers = [{"kind": "running_command", "command_hash": "running1"}]
+    assert (
+        await lifecycle.session_end(
+            logical_agent_id,
+            session["work_session_id"],
+            session["session_epoch"],
+            admission=admission(),
+        )
+    )["stopping"] is True
+
+    before = parse_utc(session["hard_expires_at"]) - timedelta(seconds=1)
+    still_stopping = await lifecycle.reconcile_expired(now=before)
+    assert len(still_stopping) == 1
+    assert still_stopping[0]["stopping"] is True
+    assert fence.revocations == []
+
+    after = parse_utc(session["hard_expires_at"]) + timedelta(seconds=1)
+    expired = await lifecycle.reconcile_expired(now=after)
+    assert len(expired) == 1
+    assert fence.revocations[-1][-1] == "hard_duration"
+    fence.session_blockers = []
+    finished = await lifecycle.reconcile_expired(now=after)
+    assert len(finished) == 1
+    record = await store.get_work_session(session["work_session_id"])
+    assert record.state == "expired"
+    assert record.end_reason == "hard_duration"

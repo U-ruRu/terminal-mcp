@@ -129,7 +129,7 @@ async def test_task_context_timer_has_canonical_name_and_compatibility_alias(tmp
 
 
 @pytest.mark.asyncio
-async def test_operational_status_is_derived_from_live_claim_lifecycle(tmp_path):
+async def test_operational_status_is_explicit_and_claim_lifecycle_is_independent(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     try:
         agent = await register(service, "status-owner")
@@ -151,7 +151,17 @@ async def test_operational_status_is_derived_from_live_claim_lifecycle(tmp_path)
             claim_intent="work the task",
         )
         assert claimed["task"]["state"] == "ready"
-        assert claimed["task"]["operational_status"] == "in_progress"
+        assert claimed["task"]["operational_status"] == "ready"
+
+        started = await service.task(
+            agent,
+            action="state",
+            namespace="status",
+            task_id="WORK",
+            state="in_progress",
+        )
+        assert started["task"]["state"] == "in_progress"
+        assert started["task"]["operational_status"] == "in_progress"
 
         blocked = await service.task(
             agent,
@@ -167,13 +177,18 @@ async def test_operational_status_is_derived_from_live_claim_lifecycle(tmp_path)
         assert ref["operational_status"] == "blocked"
 
         resumed = await service.task(
-            agent, action="state", namespace="status", task_id="WORK", state="ready"
+            agent, action="state", namespace="status", task_id="WORK", state="in_progress"
         )
         assert resumed["task"]["operational_status"] == "in_progress"
 
         filtered = await service.tasks(operational_status="in_progress")
         assert [item["task_id"] for item in filtered["tasks"]] == ["WORK"]
         assert filtered["summary"]["by_operational_status"] == {"in_progress": 1}
+
+        ready_again = await service.task(
+            agent, action="state", namespace="status", task_id="WORK", state="ready"
+        )
+        assert ready_again["task"]["operational_status"] == "ready"
 
         released = await service.task(
             agent,

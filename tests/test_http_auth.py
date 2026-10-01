@@ -26,6 +26,10 @@ def settings(tmp_path, **overrides):
         runtime_config_path=tmp_path / "runtime.env",
         log_path=tmp_path / "terminal-mcp.log",
         metrics_port=0,
+        fleet_v1_source_enabled=False,
+        fleet_v1_authority_enabled=False,
+        fleet_v1_projection_enabled=False,
+        fleet_v1_public_enabled=False,
         persistent_agents_enabled=False,
         legacy_agent_admission_enabled=True,
         cwd=tmp_path,
@@ -66,7 +70,13 @@ def file_oauth_credentials(monkeypatch):
 
 
 def test_oauth_access_ttl_default_is_30_days():
-    assert Settings(_env_file=None).oauth_access_ttl_sec == 30 * 24 * 60 * 60
+    assert Settings(
+        _env_file=None,
+        fleet_v1_source_enabled=False,
+        fleet_v1_authority_enabled=False,
+        fleet_v1_projection_enabled=False,
+        fleet_v1_public_enabled=False,
+    ).oauth_access_ttl_sec == 30 * 24 * 60 * 60
 
 def start_agent(client, headers):
     plan = {
@@ -260,6 +270,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         ]
         assert tasks_request["properties"]["state"]["anyOf"][0]["enum"] == [
             "ready",
+            "in_progress",
             "blocked",
             "deferred",
             "done",
@@ -318,7 +329,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert "durable handoff history" in task_request_props["release_reason"]["description"]
 
         task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
-        assert task_card["state"]["enum"] == ["ready", "blocked", "deferred", "done"]
+        assert task_card["state"]["enum"] == ["ready", "in_progress", "blocked", "deferred", "done"]
         assert "isolation_hint" in task_card
         assert "blocking_dependencies" in task_card
         assert "open dependencies is blocked" in task_card["operational_status"]["description"]

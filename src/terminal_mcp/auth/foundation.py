@@ -13,6 +13,8 @@ from terminal_mcp.storage.sqlite_observability import (
     open_observed_connection,
 )
 
+AUTH_SCHEMA_VERSION = 3
+
 
 class AuthFoundationError(RuntimeError):
     pass
@@ -47,13 +49,14 @@ def _string_set(values, label: str) -> list[str]:
 class AuthFoundationStore:
     """Canonical identity/grant foundation kept outside the runtime rollback DB."""
 
-    def __init__(self, path: Path, *, access_code_secret: str | bytes | None = None):
+    def __init__(self, path: Path, *, access_key_path: Path | None = None):
         self.path = Path(path)
         self.passwords = PasswordHasher()
         self.sqlite_diagnostics = SqliteDiagnostics("auth")
         from terminal_mcp.auth.access_authority import AccessCodeAuthority
 
-        self.access = AccessCodeAuthority(self, access_code_secret)
+        key_path = access_key_path or self.path.with_name(self.path.name + ".access-key")
+        self.access = AccessCodeAuthority(self, key_path)
 
     def configure_observability(self, events, metrics):
         self.sqlite_diagnostics.configure(events, metrics)
@@ -79,9 +82,10 @@ class AuthFoundationStore:
         try:
             schema_row = await (await db.execute("PRAGMA user_version")).fetchone()
             schema_version = int(schema_row[0]) if schema_row else 0
-            if schema_version > 2:
+            if schema_version > AUTH_SCHEMA_VERSION:
                 raise AuthFoundationError(
-                    f"auth schema version {schema_version} is newer than supported version 2"
+                    f"auth schema version {schema_version} is newer than supported version "
+                    f"{AUTH_SCHEMA_VERSION}"
                 )
             await db.executescript(
                 """
@@ -154,7 +158,7 @@ class AuthFoundationStore:
                 """
             )
             await self.access.initialize(db)
-            await db.execute("PRAGMA user_version=2")
+            await db.execute(f"PRAGMA user_version={AUTH_SCHEMA_VERSION}")
             now = _utc_now()
             await db.execute(
                 "INSERT OR IGNORE INTO auth_security_state(singleton,generation,updated_at) "
@@ -646,6 +650,9 @@ class AuthFoundationStore:
 
     async def access_slot(self, logical_agent_id: str) -> dict | None:
         return await self.access.get_slot(logical_agent_id)
+
+    async def access_slot_by_public_name(self, public_name: str) -> dict | None:
+        return await self.access.get_slot_by_public_name(public_name)
 
     async def access_slots(self, *, include_deleted: bool = False) -> list[dict]:
         return await self.access.list_slots(include_deleted=include_deleted)

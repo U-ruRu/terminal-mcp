@@ -12,13 +12,14 @@ from terminal_mcp.core.orchestration import (
     utc_text,
 )
 from terminal_mcp.storage.tasks import (
+    TaskAgentBusy,
     TaskClaimConflict,
     TaskRelationConflict,
     TaskRevisionConflict,
 )
 
 LANES = ("implementation", "review", "release", "integration", "general")
-STATES = ("ready", "blocked", "deferred", "done")
+STATES = ("ready", "in_progress", "blocked", "deferred", "done")
 OPERATIONAL_STATUSES = ("ready", "in_progress", "blocked", "deferred", "done")
 PRIORITIES = ("P0", "P1", "P2", "P3")
 ACTIONS = (
@@ -38,9 +39,7 @@ REVIEW_DIMENSIONS = ("A", "C", "R")  # legacy read-only review history
 PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 VALUE_PRIORITY = {value: key for key, value in PRIORITY_VALUE.items()}
 PRESSURE_WEIGHT = {"P0": 8, "P1": 4, "P2": 2, "P3": 1}
-SAFE_PARTICIPANT_FIELDS = frozenset(
-    {"title", "description", "next_action", "tags"}
-)
+SAFE_PARTICIPANT_FIELDS = frozenset({"title", "description", "next_action", "tags"})
 
 
 def _warning(code: str, message: str, *, task_id=None, severity="warning", **context):
@@ -284,10 +283,9 @@ class TaskCoordinator:
 
     @staticmethod
     def _operational_status(task, claims, blocking_dependencies=None):
+        # Execution state is explicit and independent from claim ownership.
         if task["state"] != "ready":
             return task["state"]
-        if claims:
-            return "in_progress"
         return "blocked" if blocking_dependencies else "ready"
 
     def _claim_view(self, item, role, *, reveal_agent_id=False):
@@ -518,7 +516,9 @@ class TaskCoordinator:
                 "ok": task is not None,
                 "task": await self._decorate(
                     task, details=show_details, reveal_agent_ids=reveal_agent_ids
-                ) if task else None,
+                )
+                if task
+                else None,
                 "error": None if task else "task not found",
             }
 
@@ -611,9 +611,7 @@ class TaskCoordinator:
             for item in page:
                 stored = await self.store.get_task(item["namespace"], item["task_id"])
                 tasks.append(
-                    await self._decorate(
-                        stored, details=True, reveal_agent_ids=reveal_agent_ids
-                    )
+                    await self._decorate(stored, details=True, reveal_agent_ids=reveal_agent_ids)
                 )
         else:
             tasks = page
@@ -828,6 +826,24 @@ class TaskCoordinator:
                 dependency_override=dependency_override,
                 now=now,
             )
+        except TaskAgentBusy as exc:
+            warning = _warning(
+                "agent_busy",
+                "Slot already owns another live managed-task claim.",
+                task_id=task_id,
+                current_namespace=exc.namespace,
+                current_task_id=exc.task_id,
+                current_claimed_at=exc.claimed_at,
+            )
+            result = await self._result(
+                namespace,
+                task_id,
+                [warning],
+                ok=False,
+                error=f"task.claim: agent_busy on {exc.namespace}/{exc.task_id}",
+            )
+            result["code"] = "agent_busy"
+            return result
         except TaskClaimConflict as exc:
             warning = _warning(
                 "already_claimed",

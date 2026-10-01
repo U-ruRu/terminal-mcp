@@ -74,14 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output_prune_rows=settings.output_retention_prune_rows,
     )
     oauth_store = OAuthStore(settings.database_path)
-    auth_foundation = AuthFoundationStore(
-        settings.auth_database_path,
-        access_code_secret=(
-            settings.admin_session_secret.strip()
-            or settings.oauth_signing_secret.strip()
-            or settings.fleet_signing_private_key.strip()
-        ),
-    )
+    auth_foundation = AuthFoundationStore(settings.auth_database_path)
     pairing_store = PairingStore(settings.database_path)
     ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     fleet_ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
@@ -358,7 +351,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
         if persistent_fleet:
-            app.include_router(build_persistent_fleet_router(fleet_replication, persistent_fleet))
+            app.include_router(
+                build_persistent_fleet_router(
+                    fleet_replication, persistent_fleet, service.persistent
+                )
+            )
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(
         build_console_events_router(

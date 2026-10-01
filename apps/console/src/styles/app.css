@@ -273,3 +273,7 @@ h2 { font-size: clamp(1.6rem, 4vw, 2.4rem); }
   display: block;
   margin-top: 0.2rem;
 }
+
+.access-code-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: var(--space-6); background: color-mix(in srgb, var(--color-bg) 72%, transparent); }
+.access-code-dialog { width: min(32rem, 100%); }
+.access-code-value { display: block; margin: var(--space-5) 0; font-size: clamp(2rem, 8vw, 3.5rem); font-weight: 800; letter-spacing: 0.18em; text-align: center; }

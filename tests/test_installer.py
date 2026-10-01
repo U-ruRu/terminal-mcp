@@ -1,7 +1,11 @@
 import os
+import sqlite3
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 
 def test_failed_stage_never_activates_incomplete_release(tmp_path):
@@ -225,9 +229,51 @@ def test_installer_separates_durable_auth_database_from_runtime_backup():
     assert 'TERMINAL_MCP_AUTH_DATABASE_PATH="$DATA/auth.sqlite3"' in script
     assert 'ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"' in script
     assert 'chmod 0600 "$DATA/auth.sqlite3"' in script
-    backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
+    backup_body = script.split("backup(){", 1)[1].split("schema_rollback_safe(){", 1)[0]
     assert "terminal-mcp.sqlite3" in backup_body
     assert "auth.sqlite3" not in backup_body
+
+def test_installer_blocks_rollback_to_binary_with_older_auth_schema(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "deploy" / "install.sh").read_text()
+    function = "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
+        "\n}\n\ninstall_cli_link(){", 1
+    )[0] + "\n}"
+
+    data = tmp_path / "data"
+    data.mkdir()
+    auth_db = data / "auth.sqlite3"
+    with sqlite3.connect(auth_db) as db:
+        db.execute("PRAGMA user_version=3")
+    assert not (data / "terminal-mcp.sqlite3").exists()
+
+    old_release = tmp_path / "old-release"
+    package = old_release / "terminal_mcp" / "auth"
+    package.mkdir(parents=True)
+    (old_release / "terminal_mcp" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "foundation.py").write_text("AUTH_SCHEMA_VERSION = 2\n")
+
+    runner = tmp_path / "schema-check.sh"
+    runner.write_text(
+        "#!/bin/bash\n"
+        f"DATA={str(data)!r}\n"
+        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
+        + function
+        + "\n"
+        + f"schema_rollback_safe {str(old_release)!r}\n"
+    )
+    result = subprocess.run(
+        ["bash", str(runner)],
+        env={**os.environ, "PYTHON": sys.executable},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 43
+    assert "Refusing auth schema downgrade 3->2" in result.stderr
+    assert "rollback-excluded Access security state" in result.stderr
+
 
 def test_installer_pins_isolated_fixed_sqlite_runtime():
     script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
@@ -260,7 +306,7 @@ def test_update_stages_fixed_sqlite_before_backup_and_activation():
         < update.index('backup "$STAGED_RELEASE"')
         < update.index("activate")
     )
-    backup_body = script.split("backup(){", 1)[1].split("install_cli_link(){", 1)[0]
+    backup_body = script.split("backup(){", 1)[1].split("schema_rollback_safe(){", 1)[0]
     assert 'runtime_python "$release"' in backup_body
 
 
@@ -461,3 +507,152 @@ def test_ingress_preserves_custom_origin_and_adds_canonical_origin_once(tmp_path
         '"https://ops.example.invalid,https://localhost"'
         in env_text
     )
+
+
+def _schema_guard_function() -> str:
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+    return "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
+        "\n}\n\ninstall_cli_link(){", 1
+    )[0] + "\n}"
+
+
+def _run_runtime_schema_guard(tmp_path, *, current_version: int, target_version: int, legacy=False):
+    data = tmp_path / f"data-{current_version}-{target_version}-{int(legacy)}"
+    data.mkdir()
+    runtime_db = data / "terminal-mcp.sqlite3"
+    with sqlite3.connect(runtime_db) as db:
+        if legacy:
+            db.executescript(
+                """
+                CREATE TABLE work_items(namespace TEXT, task_id TEXT, state TEXT);
+                CREATE TABLE work_claims(namespace TEXT, task_id TEXT, owner_kind TEXT);
+                INSERT INTO work_items VALUES('legacy','T1','ready');
+                INSERT INTO work_claims VALUES('legacy','T1','legacy_session');
+                """
+            )
+        db.execute(f"PRAGMA user_version={current_version}")
+
+    release = tmp_path / f"release-{target_version}-{int(legacy)}"
+    package = release / "terminal_mcp" / "storage"
+    package.mkdir(parents=True)
+    (release / "terminal_mcp" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "sqlite.py").write_text(f"SCHEMA_VERSION = {target_version}\n")
+
+    runner = tmp_path / f"schema-runtime-{current_version}-{target_version}-{int(legacy)}.sh"
+    runner.write_text(
+        "#!/bin/bash\n"
+        f"DATA={str(data)!r}\n"
+        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
+        + _schema_guard_function()
+        + "\n"
+        + f"schema_rollback_safe {str(release)!r}\n"
+    )
+    return subprocess.run(
+        ["bash", str(runner)],
+        env={**os.environ, "PYTHON": sys.executable},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_installer_blocks_runtime_schema_rollback_without_persistent_rows(tmp_path):
+    result = _run_runtime_schema_guard(tmp_path, current_version=18, target_version=17)
+    assert result.returncode == 42
+    assert "Refusing runtime schema downgrade 18->17" in result.stderr
+    assert "cannot restore a compatible runtime database" in result.stderr
+
+
+def test_installer_blocks_runtime_schema_rollback_with_legacy_claims(tmp_path):
+    result = _run_runtime_schema_guard(
+        tmp_path, current_version=18, target_version=17, legacy=True
+    )
+    assert result.returncode == 42
+    assert "Refusing runtime schema downgrade 18->17" in result.stderr
+
+
+@pytest.mark.parametrize("target_version", [18, 19])
+def test_installer_allows_runtime_schema_when_target_is_compatible(tmp_path, target_version):
+    result = _run_runtime_schema_guard(
+        tmp_path, current_version=18, target_version=target_version
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_health_failure_never_switches_to_schema_incompatible_old_release():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+    activate = script.split("activate(){", 1)[1].split("\n}\nmkdir -p", 1)[0]
+    guard = 'if schema_rollback_safe "$old"; then'
+    restore = 'ln -sfn "$old" "$ROOT/current"'
+    assert guard in activate
+    assert restore in activate
+    assert activate.index(guard) < activate.index(restore)
+
+
+def _run_auth_upgrade_guard(tmp_path, *, with_access_state: bool):
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+    function = "schema_rollback_safe(){" + script.split("schema_rollback_safe(){", 1)[1].split(
+        "\n}\n\ninstall_cli_link(){", 1
+    )[0] + "\n}"
+    data = tmp_path / ("auth-upgrade-state" if with_access_state else "auth-upgrade-empty")
+    data.mkdir()
+    auth_db = data / "auth.sqlite3"
+    with sqlite3.connect(auth_db) as db:
+        if with_access_state:
+            db.executescript(
+                """
+                CREATE TABLE auth_access_slots(logical_agent_id TEXT PRIMARY KEY);
+                CREATE TABLE auth_access_codes(code_index TEXT PRIMARY KEY);
+                CREATE TABLE auth_access_code_tombstones(code_index TEXT PRIMARY KEY);
+                INSERT INTO auth_access_slots VALUES('la_legacy');
+                """
+            )
+        db.execute("PRAGMA user_version=2")
+
+    release = tmp_path / ("release-v3-state" if with_access_state else "release-v3-empty")
+    package = release / "terminal_mcp" / "auth"
+    package.mkdir(parents=True)
+    (release / "terminal_mcp" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "foundation.py").write_text("AUTH_SCHEMA_VERSION = 3\n")
+    runner = tmp_path / ("auth-upgrade-state.sh" if with_access_state else "auth-upgrade-empty.sh")
+    runner.write_text(
+        "#!/bin/bash\n"
+        f"DATA={str(data)!r}\n"
+        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
+        + function
+        + "\n"
+        + f"schema_rollback_safe {str(release)!r}\n"
+    )
+    result = subprocess.run(
+        ["bash", str(runner)],
+        env={**os.environ, "PYTHON": sys.executable},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    with sqlite3.connect(auth_db) as db:
+        version_after = db.execute("PRAGMA user_version").fetchone()[0]
+        slot_rows = (
+            db.execute("SELECT COUNT(*) FROM auth_access_slots").fetchone()[0]
+            if with_access_state
+            else 0
+        )
+    return result, version_after, slot_rows
+
+
+def test_installer_refuses_v2_to_v3_with_existing_access_verifier_state(tmp_path):
+    result, version_after, slot_rows = _run_auth_upgrade_guard(tmp_path, with_access_state=True)
+    assert result.returncode == 44
+    assert "Refusing auth schema upgrade 2->3" in result.stderr
+    assert "cannot be safely re-keyed automatically" in result.stderr
+    assert version_after == 2
+    assert slot_rows == 1
+
+
+def test_installer_allows_v2_to_v3_when_access_state_is_empty(tmp_path):
+    result, version_after, slot_rows = _run_auth_upgrade_guard(tmp_path, with_access_state=False)
+    assert result.returncode == 0, result.stderr
+    assert version_after == 2
+    assert slot_rows == 0

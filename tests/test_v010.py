@@ -104,6 +104,24 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
             title="cooperative",
             cooperative=True,
         )
+        busy = await service.task(
+            one,
+            action="claim",
+            namespace="ns",
+            task_id="COOP",
+            claim_intent="must respect one-task WIP",
+        )
+        assert busy["ok"] is False
+        assert busy["code"] == "agent_busy"
+        assert (
+            await service.task(
+                one,
+                action="release",
+                namespace="ns",
+                task_id="EXCLUSIVE",
+                release_reason="move to cooperative task",
+            )
+        )["ok"]
         assert (
             await service.task(
                 one,
@@ -124,6 +142,15 @@ async def test_claim_contracts_dependency_force_and_audit(tmp_path):
         )["ok"]
         coop = await service.tasks(namespace="ns", task_id="COOP", show_details=True)
         assert len(coop["task"]["claims"]) == 2
+        for owner in (one, two):
+            released = await service.task(
+                owner,
+                action="release",
+                namespace="ns",
+                task_id="COOP",
+                release_reason="continue contract coverage",
+            )
+            assert released["ok"] is True
 
         await service.task(
             one,
@@ -452,23 +479,33 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
                 title=task_id,
                 cooperative=True,
             )
-            await service.task(
-                agent,
-                action="claim",
-                namespace="ns",
-                task_id=task_id,
-                claim_intent=f"running scoped command for {task_id}",
-            )
+        first_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="ns",
+            task_id="T1",
+            claim_intent="running scoped command for T1",
+        )
+        assert first_claim["ok"] is True
+        second_claim = await service.task(
+            agent,
+            action="claim",
+            namespace="ns",
+            task_id="T2",
+            claim_intent="WIP must reject second task",
+        )
+        assert second_claim["ok"] is False
+        assert second_claim["code"] == "agent_busy"
 
         overview = await service.agents(agent_id=agent)
-        assert set(overview["task_scope_options"]) == {"none", "all", "ns/T1", "ns/T2"}
+        assert set(overview["task_scope_options"]) == {"none", "all", "ns/T1"}
 
         with sqlite3.connect(repo.path) as db:
             before = db.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
         missing = await service.run("printf should-not-queue", agent_id=agent)
         assert missing["ok"] is False
         assert missing["task_targets"] == []
-        assert set(missing["task_scope_options"]) == {"none", "all", "ns/T1", "ns/T2"}
+        assert set(missing["task_scope_options"]) == {"none", "all", "ns/T1"}
         with sqlite3.connect(repo.path) as db:
             assert db.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == before
 
@@ -518,7 +555,7 @@ async def test_run_task_scope_is_explicit_and_no_automatic_fanout(tmp_path):
         assert none["cmd_hash"] not in command_hashes(details["T1"])
         assert none["cmd_hash"] not in command_hashes(details["T2"])
         assert all_run["cmd_hash"] in command_hashes(details["T1"])
-        assert all_run["cmd_hash"] in command_hashes(details["T2"])
+        assert all_run["cmd_hash"] not in command_hashes(details["T2"])
         assert one["cmd_hash"] in command_hashes(details["T1"])
         assert one["cmd_hash"] not in command_hashes(details["T2"])
         assert ad_hoc["cmd_hash"] not in command_hashes(details["T1"])
@@ -721,7 +758,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 18
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(
@@ -759,12 +796,11 @@ def test_mcp_schema_has_unified_task_contract():
 
     mcp = build_mcp(FakeService())
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    task = tools["task"].parameters["properties"]
-    tasks = tools["tasks"].parameters["properties"]
-    run = tools["run"].parameters["properties"]
-    message = tools["message"].parameters["properties"]
+    assert set(tools) == {"session", "observe", "message", "task", "cmd", "context", "health"}
 
-    assert set(task["action"]["enum"]) == {
+    task = tools["task"].parameters
+    assert task["required"] == ["code", "action", "namespace"]
+    assert set(task["properties"]["action"]["enum"]) == {
         "create",
         "claim",
         "release",
@@ -777,22 +813,33 @@ def test_mcp_schema_has_unified_task_contract():
         "done",
         "archive",
     }
-    assert "review_requirements" not in task
-    assert "dimensions" not in task
-    assert "verdict" not in task
-    assert "evidence" not in task
-    assert "tags" in task
-    assert "force" in task
-    assert "force_reason" in task
-    assert "tags" in tasks
-    assert "task_scope" in run
-    assert "task_scope" in tools["run"].parameters["required"]
-    assert "broadcast" in tools["message"].description
-    assert "explicit" in tools["message"].description.lower()
-    assert "alert=true requires" in tools["message"].description.lower()
-    assert "broadcast" in str(message["target"])
-    assert "force" in tools["task"].description.lower()
-    assert "dependenc" in tools["task"].description.lower()
+    assert task["properties"]["code"]["minLength"] == 4
+    assert task["properties"]["code"]["maxLength"] == 4
+
+    observe = tools["observe"].parameters["properties"]
+    assert observe["subject"]["enum"] == ["sessions", "tasks"]
+    assert "code" not in observe
+    assert observe["state"]["anyOf"][0]["enum"] == [
+        "ready", "in_progress", "blocked", "deferred", "done"
+    ]
+    assert observe["operational_status"]["anyOf"][0]["enum"] == [
+        "ready", "in_progress", "blocked", "deferred", "done"
+    ]
+    assert "tags" in observe
+
+    cmd = tools["cmd"].parameters
+    mapping = cmd["properties"]["request"]["discriminator"]["mapping"]
+    assert set(mapping) == {"read", "run", "cancel", "recovery"}
+    run = cmd["$defs"]["CmdRunRequest"]
+    assert {"action", "code", "command"} <= set(run["required"])
+    assert "task_scope" in run["properties"]
+    assert "code" not in cmd["$defs"]["CmdReadRequest"]["properties"]
+
+    message = tools["message"].parameters
+    assert message["required"] == ["sender"]
+    assert "code" not in message["properties"]
+    assert "active unified session" in tools["message"].description
+    assert "No Access code" in tools["message"].description
 
 
 @pytest.mark.asyncio
@@ -1009,6 +1056,14 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
         assert missing_reason["ok"] is False
         assert missing_reason["code"] == "dependency_open"
         assert "force_reason" in missing_reason["error"]
+        released_direct = await service.task(
+            agent,
+            action="release",
+            namespace="deps",
+            task_id="DIRECT",
+            release_reason="continue dependency coverage",
+        )
+        assert released_direct["ok"] is True
 
         await service.task(
             agent,
@@ -1040,6 +1095,14 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
         assert claimed_done["ok"] is False
         assert claimed_done["code"] == "dependency_open"
         assert claimed_done["task"]["state"] == "ready"
+        released_claimed = await service.task(
+            agent,
+            action="release",
+            namespace="deps",
+            task_id="CLAIMED",
+            release_reason="continue dependency coverage",
+        )
+        assert released_claimed["ok"] is True
 
         await service.task(
             agent,
@@ -1070,6 +1133,14 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
         assert missing["ok"] is False
         assert missing["code"] == "dependency_open"
         assert missing["blocking_dependencies"][0]["state"] == "missing"
+        released_missing = await service.task(
+            agent,
+            action="release",
+            namespace="deps",
+            task_id="MISSING",
+            release_reason="continue dependency coverage",
+        )
+        assert released_missing["ok"] is True
 
         create_done = await service.task(
             agent,
@@ -1121,6 +1192,17 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
         assert create_overrides[0]["payload"]["force_reason"] == (
             "External completion must be represented immediately"
         )
+
+        reclaim_direct = await service.task(
+            agent,
+            action="claim",
+            namespace="deps",
+            task_id="DIRECT",
+            claim_intent="record explicit forced completion",
+            force=True,
+            force_reason="Dependency override is tested at completion",
+        )
+        assert reclaim_direct["ok"] is True
 
         forced_done = await service.task(
             agent,

@@ -5,6 +5,7 @@ import hmac
 import secrets
 from collections.abc import Iterable
 
+from terminal_mcp.auth.access_key import AccessVerifierKeyStore
 from terminal_mcp.auth.foundation import (
     AuthConflictError,
     AuthFoundationError,
@@ -57,13 +58,10 @@ class AccessCodeAuthority:
     domain-separated keyed digests and tombstones, never the plaintext code.
     """
 
-    def __init__(self, foundation, secret: str | bytes | None):
+    def __init__(self, foundation, key_path):
         self.foundation = foundation
-        if isinstance(secret, str):
-            secret = secret.encode("utf-8")
-        self._key = (
-            hashlib.sha256(b"terminal-mcp/access-code/v1\x00" + secret).digest() if secret else None
-        )
+        self.key_store = AccessVerifierKeyStore(key_path)
+        self._key: bytes | None = None
 
     def _require_key(self) -> bytes:
         if self._key is None:
@@ -93,7 +91,7 @@ class AccessCodeAuthority:
             """
             CREATE TABLE IF NOT EXISTS auth_access_slots(
                 logical_agent_id TEXT PRIMARY KEY,
-                public_name TEXT NOT NULL UNIQUE,
+                public_name TEXT NOT NULL,
                 slot_kind TEXT NOT NULL CHECK(slot_kind IN ('persistent','legacy')),
                 display_suffix TEXT,
                 authority_node_id TEXT NOT NULL,
@@ -122,10 +120,77 @@ class AccessCodeAuthority:
             );
             CREATE INDEX IF NOT EXISTS ix_auth_access_codes_slot
                 ON auth_access_codes(logical_agent_id,generation);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_access_slots_live_name
+                ON auth_access_slots(public_name) WHERE status='active';
             CREATE INDEX IF NOT EXISTS ix_auth_access_slots_authority
                 ON auth_access_slots(authority_node_id,status,public_name);
             """
         )
+        await self._migrate_live_name_uniqueness(db)
+        state_count = int(
+            (
+                await (
+                    await db.execute(
+                        "SELECT (SELECT COUNT(*) FROM auth_access_slots) + "
+                        "(SELECT COUNT(*) FROM auth_access_codes) + "
+                        "(SELECT COUNT(*) FROM auth_access_code_tombstones)"
+                    )
+                ).fetchone()
+            )[0]
+        )
+        self._key = self.key_store.load_or_create(allow_create=state_count == 0)
+
+    async def _migrate_live_name_uniqueness(self, db) -> None:
+        row = await (
+            await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='auth_access_slots'"
+            )
+        ).fetchone()
+        sql = (row[0] or "") if row else ""
+        if "public_name TEXT NOT NULL UNIQUE" not in sql:
+            return
+        await db.execute("PRAGMA foreign_keys=OFF")
+        try:
+            await db.executescript(
+                """
+                BEGIN IMMEDIATE;
+                DROP TABLE IF EXISTS auth_access_slots_v3;
+                CREATE TABLE auth_access_slots_v3(
+                    logical_agent_id TEXT PRIMARY KEY,
+                    public_name TEXT NOT NULL,
+                    slot_kind TEXT NOT NULL CHECK(slot_kind IN ('persistent','legacy')),
+                    display_suffix TEXT,
+                    authority_node_id TEXT NOT NULL,
+                    access_generation INTEGER NOT NULL DEFAULT 0 CHECK(access_generation >= 0),
+                    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','deleted')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    deleted_at TEXT
+                );
+                INSERT INTO auth_access_slots_v3(
+                    logical_agent_id,public_name,slot_kind,display_suffix,authority_node_id,
+                    access_generation,status,created_at,updated_at,deleted_at
+                )
+                SELECT logical_agent_id,public_name,slot_kind,display_suffix,authority_node_id,
+                       access_generation,status,created_at,updated_at,deleted_at
+                FROM auth_access_slots;
+                DROP TABLE auth_access_slots;
+                ALTER TABLE auth_access_slots_v3 RENAME TO auth_access_slots;
+                CREATE UNIQUE INDEX ux_auth_access_slots_live_name
+                    ON auth_access_slots(public_name) WHERE status='active';
+                CREATE INDEX IF NOT EXISTS ix_auth_access_slots_authority
+                    ON auth_access_slots(authority_node_id,status,public_name);
+                COMMIT;
+                """
+            )
+        except Exception:
+            try:
+                await db.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        finally:
+            await db.execute("PRAGMA foreign_keys=ON")
 
     @staticmethod
     def _slot(row) -> dict | None:
@@ -153,6 +218,24 @@ class AccessCodeAuthority:
                     "authority_node_id,access_generation,status,created_at,updated_at,deleted_at "
                     "FROM auth_access_slots WHERE logical_agent_id=?",
                     (logical_agent_id,),
+                )
+            ).fetchone()
+            return self._slot(row)
+        finally:
+            await db.close()
+
+    async def get_slot_by_public_name(self, public_name: str) -> dict | None:
+        name = (public_name or "").strip()
+        if not name:
+            return None
+        db = await self.foundation._connect()
+        try:
+            row = await (
+                await db.execute(
+                    "SELECT logical_agent_id,public_name,slot_kind,display_suffix,"
+                    "authority_node_id,access_generation,status,created_at,updated_at,deleted_at "
+                    "FROM auth_access_slots WHERE public_name=? AND status='active'",
+                    (name,),
                 )
             ).fetchone()
             return self._slot(row)
@@ -207,7 +290,9 @@ class AccessCodeAuthority:
             used = {
                 row[0]
                 for row in await (
-                    await db.execute("SELECT public_name FROM auth_access_slots")
+                    await db.execute(
+                        "SELECT public_name FROM auth_access_slots WHERE status='active'"
+                    )
                 ).fetchall()
             }
             ordinal = 1

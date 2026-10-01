@@ -106,8 +106,44 @@ class PersistentFleetBridge:
         self.access_authority = access_authority
         self.execution_fence = None
         self._permit_deadlines: dict[str, float] = {}
+        self._draining_sessions: dict[tuple[str, str, int], str] = {}
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
+
+    @staticmethod
+    def _session_key(
+        logical_agent_id: str, work_session_id: str, session_epoch: int
+    ) -> tuple[str, str, int]:
+        return logical_agent_id, work_session_id, int(session_epoch)
+
+    def _prune_draining_sessions(self) -> None:
+        now = utc_now()
+        for key, hard_expires_at in list(self._draining_sessions.items()):
+            try:
+                expired = now >= parse_utc(hard_expires_at)
+            except Exception:
+                expired = True
+            if expired:
+                self._draining_sessions.pop(key, None)
+
+    def _mark_session_draining(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        hard_expires_at: str,
+    ) -> None:
+        self._prune_draining_sessions()
+        self._draining_sessions[
+            self._session_key(logical_agent_id, work_session_id, session_epoch)
+        ] = hard_expires_at
+
+    def _session_is_draining(
+        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+    ) -> bool:
+        self._prune_draining_sessions()
+        key = self._session_key(logical_agent_id, work_session_id, session_epoch)
+        return key in self._draining_sessions
 
     def _default_client(self):
         return httpx.AsyncClient(timeout=self.config.request_timeout_seconds)
@@ -152,6 +188,24 @@ class PersistentFleetBridge:
         data = await self._remote_access_call("resolve", {"access_code": access_code})
         return dict(data["access"])
 
+    async def list_access_slots(self) -> list[dict]:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("list", {})
+            return [dict(item) for item in data.get("access", [])]
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.access_slots()
+
+    async def get_access_slot_by_public_name(self, public_name: str) -> dict | None:
+        control_id = self._access_control_node_id()
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("by-name", {"public_name": public_name})
+            return dict(data["access"]) if data.get("access") is not None else None
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        return await self.access_authority.access_slot_by_public_name(public_name)
+
     async def get_access_slot(self, logical_agent_id: str) -> dict | None:
         control_id = self._access_control_node_id()
         if control_id != self.config.instance_id:
@@ -184,12 +238,13 @@ class PersistentFleetBridge:
         *,
         display_suffix: str | None = None,
         forbidden_codes=(),
+        slot_kind: str = "persistent",
     ) -> dict:
         control_id = self._access_control_node_id()
         payload = {
             "logical_agent_id": logical_agent_id,
             "authority_node_id": authority_node_id,
-            "slot_kind": "persistent",
+            "slot_kind": slot_kind,
             "display_suffix": display_suffix,
             "forbidden_codes": list(forbidden_codes),
         }
@@ -202,7 +257,7 @@ class PersistentFleetBridge:
         slot = await self.access_authority.register_access_slot(
             logical_agent_id,
             authority_node_id,
-            slot_kind="persistent",
+            slot_kind=slot_kind,
             display_suffix=display_suffix,
         )
         if int(slot["access_generation"]) == 0:
@@ -229,6 +284,43 @@ class PersistentFleetBridge:
         if self.access_authority is None:
             raise PersistentStoreError("authority_unavailable")
         return await self.access_authority.retire_access_slot(logical_agent_id)
+
+    async def unified_session_call(
+        self, authority_node_id: str, operation: str, payload: dict
+    ) -> dict:
+        if authority_node_id == self.config.instance_id:
+            raise PersistentStoreError("policy_incompatible")
+        peer = self.config.peers_by_id.get(authority_node_id)
+        if peer is None:
+            raise PersistentStoreError("authority_unavailable")
+        body = {**payload, "requesting_instance_id": self.config.instance_id}
+        try:
+            from terminal_mcp.core.persistent_admission import current_admission_context
+
+            admission = current_admission_context(required=False)
+        except Exception:
+            admission = None
+        if admission is not None:
+            body["forwarded_admission"] = {
+                "principal_id": admission.principal_id,
+                "credential_id": admission.credential_id,
+                "scopes": sorted(admission.scopes),
+                "auth_generation": admission.auth_generation,
+                "transport": admission.transport,
+                "auth_mode": admission.auth_mode,
+            }
+        async with self.client_factory() as client:
+            response = await client.post(
+                f"{peer.origin}/internal/fleet/persistent/unified-session/{operation}",
+                headers=self._headers(peer),
+                json=body,
+            )
+        if response.status_code >= 400:
+            raise PersistentStoreError("authority_unavailable")
+        data = response.json()
+        if not data.get("ok"):
+            raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+        return dict(data["result"])
 
     async def route_info(self, logical_agent_id: str) -> dict | None:
         if self.control_store is None:
@@ -589,7 +681,7 @@ class PersistentFleetBridge:
         operation: str | None = None,
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
-        if scope not in {"run", "cancel"}:
+        if scope not in {"run", "cancel", "task", "recovery"}:
             raise PersistentStoreError("policy_incompatible")
         if requesting_instance_id not in self.config.peers_by_id:
             raise PersistentStoreError("authority_unavailable")
@@ -663,6 +755,22 @@ class PersistentFleetBridge:
                 authority_epoch=session.authority_epoch,
                 hard_expires_at=session.hard_expires_at,
             )
+            try:
+                session = await self.store.assert_session_authority(
+                    logical_agent_id, work_session_id, session_epoch
+                )
+                if session.authority_node_id != self.config.instance_id:
+                    raise PersistentStoreError("wrong_authority")
+                if session.auth_principal_id and session.auth_principal_id != principal_id:
+                    raise PersistentStoreError("persistent_auth_required")
+            except Exception:
+                await self.store.revoke_node_attachment(attachment["node_attachment_id"])
+                raise
+            now = utc_now()
+            hard_expiry = parse_utc(session.hard_expires_at)
+            if now >= hard_expiry:
+                await self.store.revoke_node_attachment(attachment["node_attachment_id"])
+                raise PersistentStoreError("session_expired")
             remaining_ms = max(1, int((hard_expiry - now).total_seconds() * 1000))
             ttl_ms = min(self.permit_ttl_ms, remaining_ms)
             permit_expiry = min(now + timedelta(milliseconds=ttl_ms), hard_expiry)
@@ -713,6 +821,8 @@ class PersistentFleetBridge:
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
         operation = str(operation or scope).strip() or scope
+        if self._session_is_draining(logical_agent_id, work_session_id, session_epoch):
+            raise PersistentStoreError("session_not_active")
         request_id = request_id or ("fr_" + secrets.token_urlsafe(12))
         request_started = time.monotonic()
         payload = {
@@ -799,18 +909,79 @@ class PersistentFleetBridge:
                         and time.monotonic() < deadline
                     )
                     if valid:
+                        if self._session_is_draining(
+                            logical_agent_id, work_session_id, session_epoch
+                        ):
+                            raise PersistentStoreError("session_not_active")
                         self._permit_deadlines[permit.signature] = deadline
                         return permit
+                except PersistentStoreError as exc:
+                    if exc.code in {"session_not_active", "session_expired"}:
+                        raise
+                    continue
                 except Exception:
                     continue
         raise PersistentStoreError("authority_unavailable")
 
     def ensure_permit_valid(self, permit: PersistentCommandPermit) -> None:
+        if self._session_is_draining(
+            permit.logical_agent_id, permit.work_session_id, permit.session_epoch
+        ):
+            raise PersistentStoreError("session_not_active")
         deadline = self._permit_deadlines.get(permit.signature)
         if deadline is None or time.monotonic() >= deadline:
             raise PersistentStoreError("permit_expired")
         if utc_now() >= parse_utc(permit.hard_expires_at):
             raise PersistentStoreError("session_expired")
+
+    async def blockers_for_session(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+    ) -> list[dict]:
+        attachments = await self.store.attachments_for_session(
+            logical_agent_id, work_session_id, session_epoch, active_only=True
+        )
+        blockers = []
+        if not attachments:
+            return blockers
+        async with self.client_factory() as client:
+            for attachment in attachments:
+                peer = self.config.peers_by_id.get(attachment["node_instance_id"])
+                if peer is None:
+                    blockers.append(
+                        {
+                            "kind": "authority_unreachable",
+                            "node_instance_id": attachment["node_instance_id"],
+                        }
+                    )
+                    continue
+                try:
+                    response = await client.post(
+                        f"{peer.origin}/internal/fleet/persistent/drain",
+                        headers=self._headers(peer),
+                        json={
+                            "logical_agent_id": logical_agent_id,
+                            "work_session_id": work_session_id,
+                            "session_epoch": session_epoch,
+                            "authority_node_id": self.config.instance_id,
+                            "hard_expires_at": attachment["hard_expires_at"],
+                        },
+                    )
+                    response.raise_for_status()
+                    remote = response.json().get("blockers") or []
+                    if remote:
+                        blockers.extend(remote)
+                    else:
+                        await self.store.revoke_node_attachment(
+                            attachment["node_attachment_id"]
+                        )
+                except Exception:
+                    blockers.append(
+                        {"kind": "authority_unreachable", "node_instance_id": peer.instance_id}
+                    )
+        return blockers
 
     async def revoke_session(
         self,
@@ -860,6 +1031,23 @@ class PersistentFleetBridge:
                         {"kind": "authority_unreachable", "node_instance_id": peer.instance_id}
                     )
         return blockers
+
+    async def receive_drain(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        hard_expires_at: str,
+    ) -> list[dict]:
+        self._mark_session_draining(
+            logical_agent_id, work_session_id, session_epoch, hard_expires_at
+        )
+        if self.execution_fence is None:
+            return [{"kind": "runtime_unavailable", "node_instance_id": self.config.instance_id}]
+        return await self.execution_fence.blockers_for_session(
+            logical_agent_id, work_session_id, session_epoch
+        )
 
     async def receive_revoke(
         self,

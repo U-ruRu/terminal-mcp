@@ -102,7 +102,7 @@ export type TaskReadModel = {
   title: string
   lane: 'implementation' | 'review' | 'release' | 'integration' | 'general'
   priority: 'P0' | 'P1' | 'P2' | 'P3'
-  state: 'ready' | 'blocked' | 'deferred' | 'done'
+  state: 'ready' | 'in_progress' | 'blocked' | 'deferred' | 'done'
   operationalStatus: 'ready' | 'in_progress' | 'blocked' | 'deferred' | 'done'
   active: boolean
   archived: boolean
@@ -201,6 +201,12 @@ export type PersistentWorkSessionReadModel = {
   originInstanceId?: string
 }
 
+export type PersistentAccessReadModel = {
+  publicName: string
+  accessGeneration: number
+  status: string
+}
+
 export type PersistentSlotReadModel = {
   logicalAgentId: string
   displayName: string
@@ -211,6 +217,7 @@ export type PersistentSlotReadModel = {
   selector: string
   selectorGeneration: number
   authGeneration: number
+  access?: PersistentAccessReadModel
   createdAt: string
   updatedAt: string
   serverNow: string

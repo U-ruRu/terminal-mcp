@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 
-from terminal_mcp.core.orchestration import normalize_preview
+from terminal_mcp.core.orchestration import normalize_preview, utc_text
 from terminal_mcp.core.persistent_admission import (
     PersistentAdmissionError,
     current_admission_context,
@@ -146,7 +147,13 @@ class PersistentBackend:
             raise PersistentLifecycleError(exc.code, blockers=exc.blockers) from exc
         return None, permit
 
-    async def _access_ensure(self, logical_agent_id: str, *, display_suffix: str | None = None):
+    async def _access_ensure(
+        self,
+        logical_agent_id: str,
+        *,
+        display_suffix: str | None = None,
+        slot_kind: str = "persistent",
+    ):
         selectors = await self.lifecycle.store.all_selectors()
         slot = await self.lifecycle.store.get_slot(logical_agent_id)
         if slot is None:
@@ -157,6 +164,7 @@ class PersistentBackend:
                 slot.authority_node_id,
                 display_suffix=display_suffix,
                 forbidden_codes=selectors,
+                slot_kind=slot_kind,
             )
         if self.access_authority is None:
             raise PersistentLifecycleError("authority_unavailable")
@@ -171,6 +179,396 @@ class PersistentBackend:
             issued = await self.access_authority.issue_access_code(logical_agent_id)
             return {**access, **issued}
         return access
+
+    async def _resolve_access_name(self, public_name: str) -> dict:
+        if self.fleet_bridge is not None:
+            access = await self.fleet_bridge.get_access_slot_by_public_name(public_name)
+        elif self.access_authority is not None:
+            access = await self.access_authority.access_slot_by_public_name(public_name)
+        else:
+            raise PersistentStoreError("authority_unavailable")
+        if access is None:
+            raise PersistentStoreError("access_identity_not_found")
+        return access
+
+    async def _resolve_access(self, access_code: str) -> dict:
+        try:
+            if self.fleet_bridge is not None:
+                return await self.fleet_bridge.resolve_access_code(access_code)
+            if self.access_authority is None:
+                raise PersistentStoreError("authority_unavailable")
+            access = await self.access_authority.resolve_access_code(access_code)
+            if access is None:
+                raise PersistentStoreError("access_denied")
+            return access
+        except ValueError as exc:
+            raise PersistentStoreError("access_denied") from exc
+
+    async def _local_access_session(
+        self,
+        access: dict,
+        *,
+        require_active: bool = True,
+        allow_stopping: bool = False,
+    ):
+        logical_agent_id = access["logical_agent_id"]
+        if access["authority_node_id"] != self.lifecycle.authority_node_id:
+            raise PersistentStoreError("authority_unavailable")
+        session = await self.lifecycle.store.active_session_for_slot(logical_agent_id)
+        if session is None:
+            if require_active:
+                raise PersistentStoreError("session_not_found")
+            return None
+        if session.state != "active":
+            if not (allow_stopping and session.state == "stopping"):
+                raise PersistentStoreError("session_stopping")
+            return session
+        try:
+            await self.lifecycle.authorize_session(
+                logical_agent_id, session.work_session_id, session.session_epoch
+            )
+        except PersistentLifecycleError as exc:
+            raise PersistentStoreError(exc.code, blockers=exc.blockers) from exc
+        return session
+
+    @staticmethod
+    def _session_result(access: dict, session, *, access_code: str | None = None) -> dict:
+        result = {
+            "ok": True,
+            "mode": access["slot_kind"],
+            "public_name": access["public_name"],
+            "display_suffix": access.get("display_suffix"),
+            "session_ref": session.work_session_id,
+            "session_epoch": session.session_epoch,
+            "hard_expires_at": session.hard_expires_at,
+        }
+        if access_code is not None:
+            result["access_code"] = access_code
+        return result
+
+    async def _local_session_start_resolved(self, access: dict) -> dict:
+        logical_agent_id = access["logical_agent_id"]
+        active = await self.lifecycle.store.active_session_for_slot(logical_agent_id)
+        if active is not None and active.state == "active":
+            await self.lifecycle.authorize_session(
+                logical_agent_id, active.work_session_id, active.session_epoch
+            )
+            return self._session_result(access, active)
+        slot = await self.lifecycle.store.get_slot(logical_agent_id)
+        if slot is None or slot.state == "deleted":
+            raise PersistentStoreError("slot_not_found")
+        selector = await self.lifecycle.store.active_selector(logical_agent_id)
+        if selector is None:
+            raise PersistentStoreError("selector_not_found")
+        if slot.state != "armed":
+            raise PersistentStoreError("slot_not_armed")
+        try:
+            started = await self.lifecycle.session_start(
+                selector["selector"], expected_revision=slot.slot_revision
+            )
+        except PersistentLifecycleError as exc:
+            raise PersistentStoreError(exc.code, blockers=exc.blockers) from exc
+        return self._session_result(access, started["work_session"])
+
+    async def access_session_start(
+        self, *, mode: str, access_code: str | None = None, display_name: str | None = None
+    ) -> dict:
+        if mode not in {"persistent", "legacy"}:
+            return {"ok": False, "code": "invalid_mode", "error": "invalid_mode"}
+        try:
+            if mode == "persistent":
+                if not access_code:
+                    raise PersistentStoreError("access_code_required")
+                access = await self._resolve_access(access_code)
+                if access["slot_kind"] != "persistent":
+                    raise PersistentStoreError("access_mode_mismatch")
+                if access["authority_node_id"] != self.lifecycle.authority_node_id:
+                    if self.fleet_bridge is None:
+                        raise PersistentStoreError("authority_unavailable")
+                    return await self.fleet_bridge.unified_session_call(
+                        access["authority_node_id"], "start", {"access_code": access_code}
+                    )
+                return await self._local_session_start_resolved(access)
+
+            created = await self.lifecycle.create_slot(
+                (display_name or "Legacy").strip() or "Legacy"
+            )
+            logical_agent_id = created["slot"]["logical_agent_id"]
+            try:
+                access = await self._access_ensure(
+                    logical_agent_id, display_suffix=display_name, slot_kind="legacy"
+                )
+                access_code = access.get("access_code")
+                if not access_code:
+                    raise PersistentStoreError("access_issue_failed")
+                slot = await self.lifecycle.store.get_slot(logical_agent_id)
+                armed = await self.lifecycle.play(
+                    logical_agent_id, expected_revision=slot.slot_revision
+                )
+                selector = await self.lifecycle.store.active_selector(logical_agent_id)
+                started = await self.lifecycle.session_start(
+                    selector["selector"], expected_revision=armed["slot"]["slot_revision"]
+                )
+                return self._session_result(
+                    access, started["work_session"], access_code=access_code
+                )
+            except Exception:
+                slot = await self.lifecycle.store.get_slot(logical_agent_id)
+                if slot is not None and slot.state not in {"active", "deleted"}:
+                    try:
+                        await self.lifecycle.delete(
+                            logical_agent_id, expected_revision=slot.slot_revision
+                        )
+                    except Exception:
+                        pass
+                raise
+        except PersistentStoreError as exc:
+            return {
+                "ok": False,
+                "code": exc.code,
+                "error": exc.code,
+                "blockers": exc.blockers or None,
+            }
+        except PersistentLifecycleError as exc:
+            return self._error(exc)
+
+    async def access_identity(self, access_code: str) -> dict:
+        try:
+            access = await self._resolve_access(access_code)
+            if access["authority_node_id"] != self.lifecycle.authority_node_id:
+                if self.fleet_bridge is None:
+                    raise PersistentStoreError("authority_unavailable")
+                return await self.fleet_bridge.unified_session_call(
+                    access["authority_node_id"], "status", {"access_code": access_code}
+                )
+            session = await self._local_access_session(access)
+            return {
+                **self._session_result(access, session),
+                "logical_agent_id": access["logical_agent_id"],
+                "work_session_id": session.work_session_id,
+            }
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code, "error": exc.code}
+
+    async def access_sender_identity(self, public_name: str) -> dict:
+        try:
+            access = await self._resolve_access_name(public_name)
+            if access["authority_node_id"] != self.lifecycle.authority_node_id:
+                if self.fleet_bridge is None:
+                    raise PersistentStoreError("authority_unavailable")
+                result = await self.fleet_bridge.unified_session_call(
+                    access["authority_node_id"], "status-name", {"public_name": public_name}
+                )
+                return result
+            session = await self._local_access_session(access)
+            return {
+                **self._session_result(access, session),
+                "logical_agent_id": access["logical_agent_id"],
+                "work_session_id": session.work_session_id,
+            }
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code, "error": exc.code}
+
+    async def access_message(
+        self,
+        sender_public_name: str,
+        *,
+        text: str | None = None,
+        target: str | None = None,
+        message_hash: str | None = None,
+        require_reply: bool = False,
+        alert: bool = False,
+        namespace: str | None = None,
+        task_id: str | None = None,
+    ) -> dict:
+        sender = await self.access_sender_identity(sender_public_name)
+        if not sender.get("ok"):
+            return sender
+        sender_id = sender["logical_agent_id"]
+        coordinator = self.service.agent_coordinator
+        if coordinator is None:
+            return {"ok": False, "code": "message_unavailable", "error": "message_unavailable"}
+        require_reply = bool(require_reply or alert)
+        if message_hash is not None:
+            original = await coordinator.store.message_record(message_hash)
+            if original is None:
+                return {"ok": False, "code": "message_not_found", "error": "message_not_found"}
+            recipient = await coordinator.store.recipient_record(message_hash, sender_id)
+            if text is None:
+                if recipient is not None:
+                    await coordinator.store.acknowledge_message(message_hash, sender_id, utc_text())
+                elif original["sender_agent_id"] != sender_id:
+                    return {"ok": False, "code": "message_forbidden", "error": "message_forbidden"}
+                receipts = await coordinator.store.message_receipts(message_hash)
+                return {
+                    "ok": True,
+                    "sender": sender_public_name,
+                    "message_hash": message_hash,
+                    "read_by_count": sum(1 for item in receipts if item["read"]),
+                    "replied_by_count": sum(1 for item in receipts if item["replied"]),
+                }
+            if recipient is None:
+                return {"ok": False, "code": "message_forbidden", "error": "message_forbidden"}
+            recipient_ids = [original["sender_agent_id"]]
+            reply_hash = await coordinator._create_message(
+                sender_id,
+                text,
+                None,
+                recipient_ids,
+                False,
+                False,
+                task_namespace=original.get("task_namespace"),
+                task_id=original.get("task_id"),
+            )
+            await coordinator.store.mark_replied(message_hash, sender_id, reply_hash, utc_text())
+            return {
+                "ok": True,
+                "sender": sender_public_name,
+                "message_hash": reply_hash,
+                "reply_to": message_hash,
+            }
+
+        if not text:
+            return {"ok": False, "code": "message_text_required", "error": "message_text_required"}
+        recipients: list[tuple[str, str]] = []
+        if namespace is not None or task_id is not None:
+            if not namespace or not task_id:
+                return {"ok": False, "code": "invalid_task_target", "error": "invalid_task_target"}
+            task = await self.task_store.get_task(namespace, task_id)
+            if task is None:
+                return {"ok": False, "code": "task_not_found", "error": "task_not_found"}
+            for claim in await self.task_store.active_claims(namespace, task_id):
+                rid = claim.get("owner_id") or claim["agent_id"]
+                if rid == sender_id:
+                    continue
+                access = await self._access_get(rid)
+                if access and access.get("status") == "active":
+                    recipients.append((rid, access["public_name"]))
+        elif target:
+            access = await self._resolve_access_name(target)
+            if access["logical_agent_id"] != sender_id:
+                recipients.append((access["logical_agent_id"], access["public_name"]))
+        else:
+            return {
+                "ok": False,
+                "code": "message_target_required",
+                "error": "message_target_required",
+            }
+        if not recipients:
+            return {"ok": False, "code": "no_active_recipients", "error": "no_active_recipients"}
+        allocated = await coordinator._create_message(
+            sender_id,
+            text,
+            target,
+            [rid for rid, _ in recipients],
+            require_reply,
+            alert,
+            task_namespace=namespace,
+            task_id=task_id,
+        )
+        if namespace and task_id:
+            await self.task_store.add_event(
+                namespace,
+                task_id,
+                "message",
+                agent_id=sender_id,
+                payload={
+                    "message_hash": allocated,
+                    "text": text,
+                    "delivered_to": [name for _, name in recipients],
+                },
+            )
+        return {
+            "ok": True,
+            "sender": sender_public_name,
+            "message_hash": allocated,
+            "delivered_to": [name for _, name in recipients],
+            "namespace": namespace,
+            "task_id": task_id,
+        }
+
+    async def access_observe_slots(self) -> dict:
+        try:
+            if self.fleet_bridge is not None:
+                slots = await self.fleet_bridge.list_access_slots()
+            elif self.access_authority is not None:
+                slots = await self.access_authority.access_slots()
+            else:
+                raise PersistentStoreError("authority_unavailable")
+            public = []
+            for item in slots:
+                view = {
+                    "public_name": item["public_name"],
+                    "mode": item["slot_kind"],
+                    "display_suffix": item.get("display_suffix"),
+                    "authority_node_id": item["authority_node_id"],
+                    "access_generation": item["access_generation"],
+                }
+                if item["authority_node_id"] == self.lifecycle.authority_node_id:
+                    session = await self.lifecycle.store.active_session_for_slot(
+                        item["logical_agent_id"]
+                    )
+                    if session is not None:
+                        view.update(
+                            session_ref=session.work_session_id,
+                            session_epoch=session.session_epoch,
+                            session_state=session.state,
+                            hard_expires_at=session.hard_expires_at,
+                        )
+                    else:
+                        view["session_state"] = "inactive"
+                public.append(view)
+            return {"ok": True, "sessions": public}
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code, "error": exc.code}
+
+    async def _cleanup_legacy_access(self, access: dict) -> None:
+        logical_agent_id = access["logical_agent_id"]
+        await self.task_store.release_owner_claims(owner=ClaimOwner.logical_agent(logical_agent_id))
+        slot = await self.lifecycle.store.get_slot(logical_agent_id)
+        if slot is not None and slot.state != "deleted":
+            await self.lifecycle.delete(logical_agent_id, expected_revision=slot.slot_revision)
+        if self.fleet_bridge is not None:
+            await self.fleet_bridge.retire_access_slot(logical_agent_id)
+        elif self.access_authority is not None:
+            await self.access_authority.retire_access_slot(logical_agent_id)
+
+    async def access_session_stop(self, access_code: str, *, interrupt: bool = False) -> dict:
+        try:
+            access = await self._resolve_access(access_code)
+            if access["authority_node_id"] != self.lifecycle.authority_node_id:
+                if self.fleet_bridge is None:
+                    raise PersistentStoreError("authority_unavailable")
+                return await self.fleet_bridge.unified_session_call(
+                    access["authority_node_id"],
+                    "interrupt" if interrupt else "end",
+                    {"access_code": access_code},
+                )
+            async with self.lifecycle.operation_guard(access["logical_agent_id"]):
+                session = await self._local_access_session(access, allow_stopping=True)
+                stop = (
+                    self.lifecycle.session_interrupt
+                    if interrupt
+                    else self.lifecycle.session_end
+                )
+                result = await stop(
+                    access["logical_agent_id"], session.work_session_id, session.session_epoch
+                )
+            if access["slot_kind"] == "legacy" and not result.get("stopping"):
+                await self._cleanup_legacy_access(access)
+            return {
+                "ok": True,
+                "mode": access["slot_kind"],
+                "public_name": access["public_name"],
+                "session_ref": session.work_session_id,
+                "interrupted": bool(interrupt),
+                "stopping": bool(result.get("stopping")),
+                "blockers": result.get("blockers") or [],
+            }
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code, "error": exc.code}
+        except PersistentLifecycleError as exc:
+            return self._error(exc)
 
     async def slot_migrate_access(self, logical_agent_id: str):
         try:
@@ -563,6 +961,75 @@ class PersistentBackend:
         except Exception as exc:
             return {"ok": False, "code": "run_failed", "error": str(exc)}
 
+    async def recovery(
+        self,
+        cmd: str,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+    ):
+        if not cmd:
+            return {"ok": False, "code": "invalid_command", "error": "command is required"}
+        command = None
+        try:
+            async with self.lifecycle.operation_guard(logical_agent_id):
+                session, permit = await self._execution_authority(
+                    logical_agent_id, work_session_id, session_epoch, scope="recovery"
+                )
+                if permit is not None and self.fleet_bridge is not None:
+                    self.fleet_bridge.ensure_permit_valid(permit)
+                for _ in range(32):
+                    try:
+                        command = await self.repo.create(
+                            cmd,
+                            status="running",
+                            cmd_hash=secrets.token_hex(4),
+                            agent_id=logical_agent_id,
+                            command_type="persistent_recovery",
+                            command_preview=normalize_preview(
+                                cmd, self.service.agent_policy.command_preview_chars
+                            ),
+                            queue_id=None,
+                            logical_agent_id=logical_agent_id,
+                            work_session_id=work_session_id,
+                            session_epoch=session_epoch,
+                            persistent_permit=permit.as_dict() if permit is not None else None,
+                        )
+                        break
+                    except Exception as exc:
+                        if exc.__class__.__name__ != "IntegrityError":
+                            raise
+                if command is None:
+                    raise RuntimeError("unable to allocate unique command hash")
+            duration_ms = await self.terminal.recovery(command, timeout_seconds=20)
+            current = await self.repo.get(command.cmd_hash) or command
+            total = await self.repo.count_lines(command.cmd_hash)
+            start = max(total - 500, 0)
+            lines = await self.repo.read_command_lines(command.cmd_hash, 500, start)
+            output_status = await self.repo.output_status(command.cmd_hash)
+            return {
+                "ok": current.error is None and current.status in {"completed", "failed"},
+                "cmd_hash": command.cmd_hash,
+                "lines": self.service._render(lines, scoped=True),
+                "overall_lines_count": total,
+                "displayed_lines_count": len(lines),
+                "exit_code": current.exit_code,
+                "error": current.error,
+                "duration_ms": duration_ms,
+                **output_status,
+            }
+        except asyncio.CancelledError:
+            raise
+        except PersistentLifecycleError as exc:
+            return self._error(exc)
+        except Exception as exc:
+            if command is not None:
+                await self.terminal.finalize_running(
+                    command, "failed", command.exit_code, f"recovery.execute: {exc}"
+                )
+            return {"ok": False, "code": "recovery_failed", "error": str(exc)}
+
     async def cancel(
         self,
         cmd_hash: str,
@@ -641,9 +1108,11 @@ class PersistentBackend:
             return {"ok": False, "code": "task_unavailable", "error": "task unavailable"}
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
-                await self.lifecycle.authorize_session(
-                    logical_agent_id, work_session_id, session_epoch
+                _session, permit = await self._execution_authority(
+                    logical_agent_id, work_session_id, session_epoch, scope="task"
                 )
+                if permit is not None and self.fleet_bridge is not None:
+                    self.fleet_bridge.ensure_permit_valid(permit)
                 result = await self.task_coordinator.mutate(
                     logical_agent_id,
                     action=action,

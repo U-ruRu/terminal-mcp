@@ -21,6 +21,10 @@ def make_settings(tmp_path):
         auth_mode="bearer",
         bearer_tokens="api-token",
         metrics_port=0,
+        fleet_v1_source_enabled=False,
+        fleet_v1_authority_enabled=False,
+        fleet_v1_projection_enabled=False,
+        fleet_v1_public_enabled=False,
         persistent_agents_enabled=False,
         legacy_agent_admission_enabled=True,
     )

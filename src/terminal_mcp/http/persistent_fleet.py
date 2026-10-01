@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException
 
+from terminal_mcp.core.persistent_admission import (
+    VerifiedAdmissionContext,
+    bind_admission_context,
+    reset_admission_context,
+)
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
 
-def build_persistent_fleet_router(replication, bridge) -> APIRouter:
+def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRouter:
     router = APIRouter()
 
     def authenticate(peer_id: str, authorization: str):
@@ -47,6 +52,41 @@ def build_persistent_fleet_router(replication, bridge) -> APIRouter:
         except (PersistentStoreError, ValueError) as exc:
             code = exc.code if isinstance(exc, PersistentStoreError) else "access_denied"
             return {"ok": False, "code": code}
+        return {"ok": True, "access": access}
+
+    @router.post("/internal/fleet/persistent/access/list", include_in_schema=False)
+    async def access_list(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        return {"ok": True, "access": await bridge.access_authority.access_slots()}
+
+    @router.post("/internal/fleet/persistent/access/by-name", include_in_schema=False)
+    async def access_by_name(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if (
+            bridge.access_authority is None
+            or bridge._access_control_node_id() != bridge.config.instance_id
+        ):
+            return {"ok": False, "code": "authority_unavailable"}
+        access = await bridge.access_authority.access_slot_by_public_name(
+            str(payload.get("public_name") or "")
+        )
         return {"ok": True, "access": access}
 
     @router.post("/internal/fleet/persistent/access/get", include_in_schema=False)
@@ -169,6 +209,148 @@ def build_persistent_fleet_router(replication, bridge) -> APIRouter:
         except Exception:
             return {"ok": False, "code": "access_retire_failed"}
         return {"ok": True, "access": access}
+
+    def _forwarded_admission(payload: dict):
+        raw = payload.get("forwarded_admission") or {}
+        if not raw:
+            return None
+        return VerifiedAdmissionContext(
+            principal_id=str(raw.get("principal_id") or ""),
+            credential_id=str(raw.get("credential_id") or ""),
+            scopes=frozenset(str(item) for item in (raw.get("scopes") or [])),
+            auth_generation=int(raw.get("auth_generation") or 0),
+            transport=str(raw.get("transport") or "fleet-forward"),
+            auth_mode=str(raw.get("auth_mode") or "none"),
+        )
+
+    async def _unified_session_guard(payload: dict, peer):
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if backend is None:
+            return None, {"ok": False, "code": "authority_unavailable"}
+        try:
+            access = await backend._resolve_access(str(payload.get("access_code") or ""))
+        except PersistentStoreError as exc:
+            return None, {"ok": False, "code": exc.code}
+        if access["authority_node_id"] != bridge.config.instance_id:
+            return None, {"ok": False, "code": "authority_unavailable"}
+        return access, None
+
+    @router.post("/internal/fleet/persistent/unified-session/status-name", include_in_schema=False)
+    async def unified_session_status_name(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        if backend is None:
+            return {"ok": False, "code": "authority_unavailable"}
+        try:
+            access = await backend._resolve_access_name(str(payload.get("public_name") or ""))
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code}
+        if access["authority_node_id"] != bridge.config.instance_id:
+            return {"ok": False, "code": "authority_unavailable"}
+        token = None
+        forwarded = _forwarded_admission(payload)
+        if forwarded is not None:
+            token = bind_admission_context(forwarded)
+        try:
+            session = await backend._local_access_session(access)
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code}
+        finally:
+            if token is not None:
+                reset_admission_context(token)
+        return {
+            "ok": True,
+            "result": {
+                **backend._session_result(access, session),
+                "logical_agent_id": access["logical_agent_id"],
+                "work_session_id": session.work_session_id,
+            },
+        }
+
+    @router.post("/internal/fleet/persistent/unified-session/status", include_in_schema=False)
+    async def unified_session_status(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        access, failure = await _unified_session_guard(payload, peer)
+        if failure:
+            return failure
+        token = None
+        forwarded = _forwarded_admission(payload)
+        if forwarded is not None:
+            token = bind_admission_context(forwarded)
+        try:
+            session = await backend._local_access_session(access)
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code}
+        finally:
+            if token is not None:
+                reset_admission_context(token)
+        result = {
+            **backend._session_result(access, session),
+            "logical_agent_id": access["logical_agent_id"],
+            "work_session_id": session.work_session_id,
+        }
+        return {"ok": True, "result": result}
+
+    @router.post("/internal/fleet/persistent/unified-session/start", include_in_schema=False)
+    async def unified_session_start(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        access, failure = await _unified_session_guard(payload, peer)
+        if failure:
+            return failure
+        token = None
+        forwarded = _forwarded_admission(payload)
+        if forwarded is not None:
+            token = bind_admission_context(forwarded)
+        try:
+            result = await backend._local_session_start_resolved(access)
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code}
+        finally:
+            if token is not None:
+                reset_admission_context(token)
+        return {"ok": True, "result": result}
+
+    @router.post("/internal/fleet/persistent/unified-session/{operation}", include_in_schema=False)
+    async def unified_session_stop(
+        operation: str,
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        if operation not in {"end", "interrupt"}:
+            raise HTTPException(status_code=404, detail="unknown operation")
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        _access, failure = await _unified_session_guard(payload, peer)
+        if failure:
+            return failure
+        token = None
+        forwarded = _forwarded_admission(payload)
+        if forwarded is not None:
+            token = bind_admission_context(forwarded)
+        try:
+            result = await backend.access_session_stop(
+                str(payload.get("access_code") or ""), interrupt=operation == "interrupt"
+            )
+        finally:
+            if token is not None:
+                reset_admission_context(token)
+        if not result.get("ok"):
+            return {"ok": False, "code": result.get("code", "session_stop_failed")}
+        return {"ok": True, "result": result}
 
     @router.post("/internal/fleet/persistent/permit", include_in_schema=False)
     async def issue_permit(
@@ -320,6 +502,26 @@ def build_persistent_fleet_router(replication, bridge) -> APIRouter:
         except PersistentStoreError as exc:
             raise_store_error(exc)
         return {"ok": True, **result}
+
+    @router.post("/internal/fleet/persistent/drain", include_in_schema=False)
+    async def drain(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("authority_node_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="authority instance mismatch")
+        try:
+            blockers = await bridge.receive_drain(
+                logical_agent_id=str(payload.get("logical_agent_id") or ""),
+                work_session_id=str(payload.get("work_session_id") or ""),
+                session_epoch=int(payload.get("session_epoch") or 0),
+                hard_expires_at=str(payload.get("hard_expires_at") or ""),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": not blockers, "blockers": blockers}
 
     @router.post("/internal/fleet/persistent/revoke", include_in_schema=False)
     async def revoke(
