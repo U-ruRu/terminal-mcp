@@ -26,7 +26,7 @@ function instance(instanceId: string, displayName: string, cursor: number): Flee
       status: 'live',
       authStatus: 'connected',
       reconnectAttempt: 0,
-      realtime: { status: 'live', snapshot: null, cursor, highWaterSeq: cursor, socketConnected: true, reconnectAttempt: 0 },
+      realtime: { status: 'live', snapshot: null, cursor, highWaterSeq: cursor, socketConnected: true, reconnectAttempt: 0, freshness: 'fresh', catchingUpScopes: [] },
     },
   }
 }

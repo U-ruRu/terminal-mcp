@@ -154,6 +154,8 @@ function realtime(
     highWaterSeq: value?.highWaterSeq ?? 0,
     socketConnected: status === 'live',
     reconnectAttempt: options.reconnectAttempt ?? 0,
+    freshness: status === 'live' ? 'fresh' : 'stale',
+    catchingUpScopes: [],
     lastError: options.lastError,
     staleReason: options.staleReason,
     lastEvent: options.lastEventAt

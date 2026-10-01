@@ -188,6 +188,40 @@ test('steady catch-up drains multiple event pages without snapshot recovery', as
   expect(runtime.getState().projectionSeq).toBe(12)
 })
 
+
+test('concurrent sync requests share one flight and coalesce to one trailing catch-up pass', async () => {
+  const cache = new MemoryFleetProjectionCache()
+  const runtime = new FleetAdaptiveReadRuntime(cache)
+  const a = endpoint('a')
+  await runtime.start([a])
+  let release!: () => void
+  let first = true
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  a.events = vi.fn(async (since): Promise<FleetProjectionEventPage> => {
+    if (first) {
+      first = false
+      await gate
+    }
+    return {
+      projectionEpoch: 3,
+      projectionSeq: since,
+      resetRequired: false,
+      events: [],
+      oldestProjectionSeq: since,
+      newestProjectionSeq: since,
+    }
+  })
+
+  const one = runtime.syncOnce()
+  const two = runtime.syncOnce()
+  const three = runtime.syncOnce()
+  await vi.waitFor(() => expect(a.events).toHaveBeenCalledTimes(1))
+  release()
+  await Promise.all([one, two, three])
+  expect(a.events).toHaveBeenCalledTimes(2)
+  expect(runtime.getState().status).toBe('live')
+})
+
 test('query plane coalesces identical in-flight requests and fails closed offline', async () => {
   const cache = new MemoryFleetProjectionCache()
   const runtime = new FleetAdaptiveReadRuntime(cache)

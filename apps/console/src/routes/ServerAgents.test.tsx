@@ -56,7 +56,7 @@ const snapshot: ConsoleSnapshotReadModel = {
 function instance(status: 'live' | 'offline' = 'live'): FleetInstanceView {
   return {
     profile: { instanceId: 'alpha', origin: 'https://alpha.example', displayName: 'Alpha', credentialRef: 'cred-alpha', metadata: { deviceId: 'd', clientId: 'c', deviceLabel: 'Console', scope: 'terminal:read', pairedAt: 1 }, createdAt: 1, updatedAt: 1 },
-    runtime: { instanceId: 'alpha', status, authStatus: 'connected', reconnectAttempt: 0, realtime: { status, snapshot, cursor: 2, highWaterSeq: 2, socketConnected: status === 'live', reconnectAttempt: 0 } },
+    runtime: { instanceId: 'alpha', status, authStatus: 'connected', reconnectAttempt: 0, realtime: { status, snapshot, cursor: 2, highWaterSeq: 2, socketConnected: status === 'live', reconnectAttempt: 0, freshness: status === 'live' ? 'fresh' : 'stale', catchingUpScopes: [] } },
   }
 }
 

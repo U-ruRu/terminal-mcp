@@ -59,6 +59,8 @@ export class FleetAdaptiveReadRuntime {
   private state!: FleetAdaptiveRuntimeState
   private active: FleetIngressEndpoint | null = null
   private recovery: Promise<void> | null = null
+  private syncFlight: Promise<void> | null = null
+  private syncAgain = false
   private readonly queryFlights = new Map<string, Promise<unknown>>()
   private catchupWarning?: string
 
@@ -128,6 +130,28 @@ export class FleetAdaptiveReadRuntime {
   }
 
   async syncOnce(): Promise<void> {
+    if (!this.active) return
+    if (this.syncFlight) {
+      this.syncAgain = true
+      return this.syncFlight
+    }
+    const flight = this.syncLoop()
+    this.syncFlight = flight
+    try {
+      await flight
+    } finally {
+      if (this.syncFlight === flight) this.syncFlight = null
+    }
+  }
+
+  private async syncLoop(): Promise<void> {
+    do {
+      this.syncAgain = false
+      await this.syncPass()
+    } while (this.active && this.syncAgain)
+  }
+
+  private async syncPass(): Promise<void> {
     if (!this.active) return
     try {
       await this.catchUp(this.active)

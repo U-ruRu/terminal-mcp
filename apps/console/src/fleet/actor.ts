@@ -143,7 +143,7 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
       throw new Error('instance_not_connected:' + this.instanceId)
     }
     const result = await this.client.persistentMutation(path, body)
-    if (this.engine) await this.engine.refreshNow()
+    this.engine?.applyPersistentMutation(result)
     return result
   }
 

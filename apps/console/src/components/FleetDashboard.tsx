@@ -54,6 +54,7 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
 
   const freshness = (value: FleetServerReadModel['freshness']) => {
     if (value === 'fresh') return t('status.fresh')
+    if (value === 'catching_up') return t('status.catchingUp')
     if (value === 'stale') return t('status.stale')
     return t('status.offline')
   }

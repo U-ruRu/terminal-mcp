@@ -19,7 +19,7 @@ const model: FleetReadModel = {
       { id: 1, summary: 'Primary rules', content: 'Do the important thing.', primary: true },
       { id: 2, summary: 'Extra note', content: 'Optional detail.', primary: false },
     ],
-    reconnectAttempt: 0, activeAgentCount: 0, activeIntents: [],
+    reconnectAttempt: 0, catchingUpScopes: [], activeAgentCount: 0, activeIntents: [],
     taskCounts: { ready: 0, inProgress: 0, blocked: 0, deferred: 0, done: 0, highPriorityOpen: 0 },
     communication: { unread: 0, replyRequired: 0, alerts: 0 }, blockerCount: 0, snapshotAvailable: true,
   }],
