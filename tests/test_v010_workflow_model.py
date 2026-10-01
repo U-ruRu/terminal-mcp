@@ -1477,14 +1477,11 @@ async def test_archive_is_lifecycle_dimension_and_preserves_workflow_state(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_agent_observation_shows_multiple_claim_contexts_and_finish_releases_them(tmp_path):
+async def test_agent_observation_enforces_single_wip_and_finish_releases_claim(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
-        agent = await register(service, "multi claim agent")
-        for task_id, intent in (
-            ("ONE", "implementing first slice"),
-            ("TWO", "waiting for review on second slice"),
-        ):
+        agent = await register(service, "single WIP agent")
+        for task_id in ("ONE", "TWO"):
             await service.task(
                 agent,
                 action="create",
@@ -1493,14 +1490,24 @@ async def test_agent_observation_shows_multiple_claim_contexts_and_finish_releas
                 task_id=task_id,
                 title=task_id,
             )
-            claimed = await service.task(
-                agent,
-                action="claim",
-                namespace="wf",
-                task_id=task_id,
-                claim_intent=intent,
-            )
-            assert claimed["ok"] is True
+
+        first = await service.task(
+            agent,
+            action="claim",
+            namespace="wf",
+            task_id="ONE",
+            claim_intent="implementing first slice",
+        )
+        assert first["ok"] is True
+        second = await service.task(
+            agent,
+            action="claim",
+            namespace="wf",
+            task_id="TWO",
+            claim_intent="must wait for first slice release",
+        )
+        assert second["ok"] is False
+        assert second["code"] == "agent_busy"
 
         first_task = await detail(service, "wf", "ONE")
         assert first_task["owner"]["agent_name"] == public_agent_name(agent)
@@ -1508,13 +1515,12 @@ async def test_agent_observation_shows_multiple_claim_contexts_and_finish_releas
 
         fleet = await service.agents(agent_id=agent)
         refs = {item["task_id"]: item for item in fleet["self"]["managed_tasks"]}
-        assert set(refs) == {"ONE", "TWO"}
+        assert set(refs) == {"ONE"}
         assert refs["ONE"]["claim_intent"] == "implementing first slice"
-        assert refs["TWO"]["claim_intent"] == "waiting for review on second slice"
-        for item in refs.values():
-            assert item["role"] == "owner"
-            assert item["claimed_at"]
-            assert item["claim_age_seconds"] >= 0
+        assert refs["ONE"]["role"] == "owner"
+        assert refs["ONE"]["claimed_at"]
+        assert refs["ONE"]["claim_age_seconds"] >= 0
+        assert set(fleet["task_scope_options"]) == {"none", "all", "wf/ONE"}
 
         finished = await service.agent_finish(agent)
         assert finished["ok"] is True
@@ -1633,7 +1639,7 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 18
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {
             "archived_at",
@@ -1778,7 +1784,7 @@ async def test_dependency_blockers_project_operational_status_and_claimability(t
             force_reason="Parallel preparation is explicitly required",
         )
         assert forced["ok"] is True
-        assert forced["task"]["operational_status"] == "in_progress"
+        assert forced["task"]["operational_status"] == "blocked"
         assert forced["task"]["blocking_dependencies"][0]["task_id"] == "DEP"
 
         listing = await service.tasks(namespace="status-deps")
@@ -1787,11 +1793,10 @@ async def test_dependency_blockers_project_operational_status_and_claimability(t
         assert cards["MISSING"]["operational_status"] == "blocked"
         assert cards["READY"]["operational_status"] == "ready"
         assert cards["SAT"]["operational_status"] == "ready"
-        assert cards["FORCED"]["operational_status"] == "in_progress"
+        assert cards["FORCED"]["operational_status"] == "blocked"
         assert listing["summary"]["by_operational_status"] == {
-            "blocked": 2,
+            "blocked": 3,
             "ready": 3,
-            "in_progress": 1,
         }
         assert listing["summary"]["missing_dependency_count"] == 1
         assert listing["summary"]["claimable_count"] == 3
@@ -1800,7 +1805,7 @@ async def test_dependency_blockers_project_operational_status_and_claimability(t
         assert listing["recommended"]["operational_status"] == "ready"
 
         blocked = await service.tasks(namespace="status-deps", operational_status="blocked")
-        assert {item["task_id"] for item in blocked["tasks"]} == {"OPEN", "MISSING"}
+        assert {item["task_id"] for item in blocked["tasks"]} == {"OPEN", "MISSING", "FORCED"}
         assert blocked["summary"]["claimable_count"] == 0
         assert blocked["summary"]["pressure"] == {}
 
