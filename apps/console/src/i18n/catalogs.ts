@@ -245,6 +245,10 @@ export const en = {
   'slots.policyInvalid': 'D/W/A must satisfy 0 < W < A < D.',
   'slots.legacyToggle': 'Allow Legacy agent admission',
   'slots.legacyHint': 'Controls new Legacy admissions. Existing Legacy sessions may finish normally.',
+  'slots.policyScope': 'Policy scope',
+  'slots.policyScopeManaged': 'Managed mesh',
+  'slots.policyScopeLocal': 'Local server',
+  'slots.policyScopeUnknown': 'Unknown / control unavailable',
   'slots.reassignClaim': 'Reassign',
   'slots.reassignTarget': 'Reassign target',
   'slots.releaseClaim': 'Release',
@@ -342,6 +346,11 @@ export const en = {
   'connections.trustRevision': 'Trust revision',
   'connections.policyRevision': 'Policy revision',
   'connections.manageHint': 'Pairing only adds a connection. Mesh membership changes explicitly here.',
+  'connections.unknown': 'Unknown',
+  'connections.confirmed': 'Confirmed',
+  'connections.failed': 'Failed',
+  'connections.controlState': 'Control state',
+  'connections.stale': 'Stale',
 
 
 } as const
@@ -596,6 +605,10 @@ export const ru: Catalog = {
   'slots.policyInvalid': 'Для D/W/A должно выполняться 0 < W < A < D.',
   'slots.legacyToggle': 'Разрешить Legacy-допуск агентов',
   'slots.legacyHint': 'Меняет допуск новых Legacy-сессий. Уже запущенные Legacy-сессии могут завершиться штатно.',
+  'slots.policyScope': 'Область policy',
+  'slots.policyScopeManaged': 'Управляемая Mesh',
+  'slots.policyScopeLocal': 'Локальный сервер',
+  'slots.policyScopeUnknown': 'Неизвестно / control-plane недоступен',
   'slots.reassignClaim': 'Передать',
   'slots.reassignTarget': 'Кому передать',
   'slots.releaseClaim': 'Освободить',
@@ -693,6 +706,11 @@ export const ru: Catalog = {
   'connections.trustRevision': 'Ревизия trust',
   'connections.policyRevision': 'Ревизия policy',
   'connections.manageHint': 'Pairing только добавляет подключение. Членство в mesh меняется здесь отдельным действием.',
+  'connections.unknown': 'Неизвестно',
+  'connections.confirmed': 'Подтверждено',
+  'connections.failed': 'Ошибка',
+  'connections.controlState': 'Состояние control-plane',
+  'connections.stale': 'Устаревшее',
 
 
 }
@@ -944,6 +962,10 @@ export const ka: Catalog = {
   'slots.policyInvalid': 'საჭიროა 0 < W < A < D.',
   'slots.legacyToggle': 'Legacy აგენტების დაშვება',
   'slots.legacyHint': 'მართავს ახალ Legacy სესიებს; მიმდინარე სესიები ჩვეულებრივ სრულდება.',
+  'slots.policyScope': 'Policy-ის არე',
+  'slots.policyScopeManaged': 'მართვადი Mesh',
+  'slots.policyScopeLocal': 'ლოკალური სერვერი',
+  'slots.policyScopeUnknown': 'უცნობია / control-plane მიუწვდომელია',
   'slots.reassignClaim': 'გადაცემა',
   'slots.reassignTarget': 'გადაცემის სამიზნე',
   'slots.releaseClaim': 'გათავისუფლება',
@@ -1041,6 +1063,11 @@ export const ka: Catalog = {
   'connections.trustRevision': 'Trust რევიზია',
   'connections.policyRevision': 'Policy რევიზია',
   'connections.manageHint': 'Pairing მხოლოდ კავშირს ამატებს. Mesh წევრობა აქ ცალკე მოქმედებით იცვლება.',
+  'connections.unknown': 'უცნობი',
+  'connections.confirmed': 'დადასტურებულია',
+  'connections.failed': 'ვერ შესრულდა',
+  'connections.controlState': 'Control-plane მდგომარეობა',
+  'connections.stale': 'მოძველებული',
 
 
 }
@@ -1292,6 +1319,10 @@ export const es: Catalog = {
   'slots.policyInvalid': 'D/W/A debe cumplir 0 < W < A < D.',
   'slots.legacyToggle': 'Permitir admisión Legacy',
   'slots.legacyHint': 'Controla nuevas admisiones Legacy. Las sesiones existentes pueden terminar normalmente.',
+  'slots.policyScope': 'Ámbito de la política',
+  'slots.policyScopeManaged': 'Mesh gestionada',
+  'slots.policyScopeLocal': 'Servidor local',
+  'slots.policyScopeUnknown': 'Desconocido / control plane no disponible',
   'slots.reassignClaim': 'Reasignar',
   'slots.reassignTarget': 'Destino de reasignación',
   'slots.releaseClaim': 'Liberar',
@@ -1389,6 +1420,11 @@ export const es: Catalog = {
   'connections.trustRevision': 'Revisión de trust',
   'connections.policyRevision': 'Revisión de policy',
   'connections.manageHint': 'El pairing solo añade una conexión. La pertenencia a mesh se cambia aquí de forma explícita.',
+  'connections.unknown': 'Desconocido',
+  'connections.confirmed': 'Confirmado',
+  'connections.failed': 'Fallido',
+  'connections.controlState': 'Estado del control plane',
+  'connections.stale': 'Obsoleto',
 
 
 }
