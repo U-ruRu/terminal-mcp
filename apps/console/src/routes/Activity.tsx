@@ -97,6 +97,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const [searchParams, setSearchParams] = useSearchParams()
   const [category, setCategory] = useState<ActivityCategory>('all')
   const [feeds, setFeeds] = useState<Record<string, FeedState>>({})
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
   const pendingHistoryHeight = useRef<number | null>(null)
@@ -125,21 +126,36 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       const top = node.getBoundingClientRect().top
       const bottomNavigation = document.querySelector<HTMLElement>('.mobile-bottom-navigation')
       const navigationTop = bottomNavigation?.getBoundingClientRect().top ?? 0
-      const viewportHeight = window.visualViewport?.height ?? window.innerHeight
-      const visibleBottom = navigationTop > 0 ? Math.min(navigationTop, viewportHeight) : viewportHeight
+      const visualViewport = window.visualViewport
+      const viewportBottom = visualViewport
+        ? visualViewport.offsetTop + visualViewport.height
+        : window.innerHeight
+      const visibleBottom = navigationTop > 0 ? Math.min(navigationTop, viewportBottom) : viewportBottom
       const available = Math.max(120, Math.floor(visibleBottom - top))
       node.style.height = `${available}px`
       node.style.maxHeight = `${available}px`
     }
 
     fitChatToViewport()
+    const frame = window.requestAnimationFrame(fitChatToViewport)
+    const bottomNavigation = document.querySelector<HTMLElement>('.mobile-bottom-navigation')
+    const filterBar = node.parentElement?.querySelector<HTMLElement>('.filter-bar')
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(fitChatToViewport)
+    if (bottomNavigation) resizeObserver?.observe(bottomNavigation)
+    if (filterBar) resizeObserver?.observe(filterBar)
     window.addEventListener('resize', fitChatToViewport)
+    window.addEventListener('orientationchange', fitChatToViewport)
     window.visualViewport?.addEventListener('resize', fitChatToViewport)
+    window.visualViewport?.addEventListener('scroll', fitChatToViewport)
     return () => {
+      window.cancelAnimationFrame(frame)
+      resizeObserver?.disconnect()
       window.removeEventListener('resize', fitChatToViewport)
+      window.removeEventListener('orientationchange', fitChatToViewport)
       window.visualViewport?.removeEventListener('resize', fitChatToViewport)
+      window.visualViewport?.removeEventListener('scroll', fitChatToViewport)
     }
-  }, [selectedId])
+  }, [selectedId, feed.initialized, feed.error, feed.gap, requestedAgentId])
 
   useEffect(() => {
     if (!selectedId || !loadActivity || feed.initialized) return
@@ -249,12 +265,6 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     next.delete('agent')
     setSearchParams(next, { replace: true })
   }
-  const runtimeStatus = selected?.runtime.status === 'live' ? t('status.live')
-    : selected?.runtime.status === 'offline' ? t('status.offline')
-      : selected?.runtime.status === 'stale' ? t('status.stale')
-        : selected?.runtime.status === 'reconnecting' ? t('status.reconnecting')
-          : selected?.runtime.status === 'connecting' ? t('status.connecting') : ''
-
   return (
     <section className="activity-screen" aria-label={t('nav.activity')}>
       <div className="filter-bar">
@@ -262,10 +272,11 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           <label className="ui-field">{t('common.server')}<select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}><option value="">{t('activity.chooseServer')}</option>{instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}</select></label>
           <label className="ui-field">{t('common.category')}<select aria-label={t('common.category')} value={category} onChange={(event) => setCategory(event.target.value as ActivityCategory)}>{categories.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}</select></label>
         </div>
-        <div className="filter-status">
-          {selected && <span className={'status status-' + selected.runtime.status}>{runtimeStatus}</span>}
-          {selectedId && requestedAgentId && <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>}
-        </div>
+        {selectedId && requestedAgentId ? (
+          <div className="filter-status">
+            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>
+          </div>
+        ) : null}
       </div>
       {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
       {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
@@ -292,32 +303,60 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                 </strong>
                 <time dateTime={event.createdAt}>{activityTimestamp(event.createdAt)}</time>
               </div>
-              {event.message ? (
-                <p className="activity-message">{event.message.text}</p>
-              ) : (
-                <p className="activity-semantic-content">{semanticEventContent(event, t)}</p>
-              )}
-              {event.message?.taskNamespace && event.message.taskId ? (
-                <Link className="activity-context-link text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>
-                  {t('common.task')} {event.message.taskId}
-                </Link>
-              ) : null}
-              <details className="activity-payload">
-                <summary aria-label={t('activity.rawDetails')}>
-                  <span className="activity-chevron-collapsed" aria-hidden="true">⌄</span>
-                  <span className="activity-chevron-expanded" aria-hidden="true">⌃</span>
-                </summary>
-                <pre>{JSON.stringify({
-                  seq: event.seq,
-                  eventType: event.eventType,
-                  entityType: event.entityType,
-                  entityId: event.entityId,
-                  actorId: event.actorId,
-                  actorName: event.actorName,
-                  payload: event.payload,
-                  message: event.message,
-                }, null, 2)}</pre>
-              </details>
+              {(() => {
+                const eventKey = selectedId + ':' + event.seq
+                const expanded = expandedEvents.has(eventKey)
+                const detailsId = 'activity-details-' + selectedId.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + event.seq
+                return (
+                  <>
+                    <div className="activity-event-main">
+                      <div className="activity-event-copy">
+                        {event.message ? (
+                          <p className="activity-message">{event.message.text}</p>
+                        ) : (
+                          <p className="activity-semantic-content">{semanticEventContent(event, t)}</p>
+                        )}
+                        {event.message?.taskNamespace && event.message.taskId ? (
+                          <Link className="activity-context-link text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>
+                            {t('common.task')} {event.message.taskId}
+                          </Link>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="activity-details-toggle"
+                        aria-label={t('activity.rawDetails')}
+                        aria-expanded={expanded}
+                        aria-controls={detailsId}
+                        onClick={() => {
+                          setExpandedEvents((current) => {
+                            const next = new Set(current)
+                            if (next.has(eventKey)) next.delete(eventKey)
+                            else next.add(eventKey)
+                            return next
+                          })
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} />
+                        </svg>
+                      </button>
+                    </div>
+                    {expanded ? (
+                      <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
+                        seq: event.seq,
+                        eventType: event.eventType,
+                        entityType: event.entityType,
+                        entityId: event.entityId,
+                        actorId: event.actorId,
+                        actorName: event.actorName,
+                        payload: event.payload,
+                        message: event.message,
+                      }, null, 2)}</pre>
+                    ) : null}
+                  </>
+                )
+              })()}
             </article>
           ))}
           {feed.initialized && visible.length === 0 && <FeedbackState variant="empty" title={t('activity.noMatches')} />}

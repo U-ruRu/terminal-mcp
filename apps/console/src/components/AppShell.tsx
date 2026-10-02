@@ -188,7 +188,7 @@ export function AppShell({
   }
 
   return (
-    <div className="app-shell">
+    <div className={'app-shell' + (current === 'activity' ? ' app-shell-activity' : '')}>
       <header className={'topbar app-bar app-bar-' + appBarVariant} data-variant={appBarVariant}>
         <div className="app-bar-leading">
           {contextual ? (
@@ -303,7 +303,7 @@ export function AppShell({
           {menuOpen && servers.length === 0 ? <p className="navigation-hint">{t('nav.chooseServerHint')}</p> : null}
         </nav>
 
-        <main className="content">
+        <main className={'content' + (current === 'activity' ? ' content-activity' : '')}>
           {children}
         </main>
       </div>

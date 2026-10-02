@@ -62,6 +62,7 @@ test('switches servers, filters messages and renders direct task navigation', as
   expect(screen.queryByRole('link', { name: 'Server Alpha' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', '/servers/alpha/agents/Alpha-1111')
   expect(screen.getByText(/28\.09\.2026 \d{2}:00:02/)).toBeInTheDocument()
+  expect(document.querySelector('.activity-screen .filter-status .status')).not.toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
   expect(screen.getByText('Ship it')).toBeInTheDocument()
   expect(screen.queryByText('task.updated')).not.toBeInTheDocument()
@@ -109,8 +110,13 @@ test('filters duplicate public names by exact agent session identity', async () 
 test('mobile chat viewport ends above the fixed bottom navigation', async () => {
   const width = window.innerWidth
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+  let activityMeasurements = 0
   const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this.classList.contains('activity-chat')) return { top: 300, bottom: 700, left: 0, right: 390, width: 390, height: 400, x: 0, y: 300, toJSON: () => ({}) } as DOMRect
+    if (this.classList.contains('activity-chat')) {
+      activityMeasurements += 1
+      const top = activityMeasurements === 1 ? 360 : 300
+      return { top, bottom: 700, left: 0, right: 390, width: 390, height: 700 - top, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    }
     if (this.classList.contains('mobile-bottom-navigation')) return { top: 700, bottom: 760, left: 0, right: 390, width: 390, height: 60, x: 0, y: 700, toJSON: () => ({}) } as DOMRect
     return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   })
@@ -124,7 +130,9 @@ test('mobile chat viewport ends above the fixed bottom navigation', async () => 
   )
 
   await screen.findByText('Ship it')
-  expect(document.querySelector('.activity-chat')).toHaveStyle({ height: '400px', maxHeight: '400px' })
+  window.dispatchEvent(new Event('resize'))
+  await waitFor(() => expect(document.querySelector('.activity-chat')).toHaveStyle({ height: '400px', maxHeight: '400px' }))
+  expect(activityMeasurements).toBeGreaterThan(1)
   rect.mockRestore()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
 })
@@ -138,14 +146,13 @@ test('loads a concise latest window and keeps raw payload collapsed', async () =
   )
 
   await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
-  const summary = screen.getByLabelText('Technical details')
-  const details = summary.closest('details')
-  expect(details).not.toHaveAttribute('open')
-  expect(summary).toHaveTextContent('⌄')
-  await userEvent.click(summary)
-  expect(details).toHaveAttribute('open')
-  expect(summary).toHaveTextContent('⌃')
-  expect(details).toHaveTextContent('"ok": true')
+  const toggle = screen.getByRole('button', { name: 'Technical details' })
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByText(/"ok": true/)).not.toBeInTheDocument()
+  expect(toggle.querySelector('svg')).toBeInTheDocument()
+  await userEvent.click(toggle)
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByText(/"ok": true/)).toBeInTheDocument()
 })
 
 
