@@ -1364,3 +1364,9 @@ async def test_message_permit_is_fenced_by_the_same_persistent_session(tmp_path)
 
     active = await store.active_session_for_slot(logical_agent_id)
     assert active is None
+
+
+@pytest.mark.asyncio
+async def test_fleet_bridge_starts_with_empty_remote_obligation_cache(tmp_path):
+    _, _, _, bridge, _, started, _, _ = await authority_fixture(tmp_path)
+    assert bridge.cached_obligations(started["logical_agent_id"]) == []

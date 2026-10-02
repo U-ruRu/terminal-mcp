@@ -106,6 +106,7 @@ class PersistentFleetBridge:
         self.access_authority = access_authority
         self.execution_fence = None
         self._permit_deadlines: dict[str, float] = {}
+        self._remote_obligations: dict[str, dict] = {}
         self._draining_sessions: dict[tuple[str, str, int], str] = {}
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
