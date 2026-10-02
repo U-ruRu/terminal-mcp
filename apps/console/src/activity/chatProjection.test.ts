@@ -107,3 +107,41 @@ test('renders an unattributed command as a service operation instead of Unknown 
   expect(items[0]).toMatchObject({ kind: 'service', content: 'Secondary: persistent run · Running…' })
   expect(items[0].actorName).toBeUndefined()
 })
+
+test('deduplicates message mirrors by message hash and resolves internal recipient identity', () => {
+  const message = {
+    messageHash: 'msg-1',
+    senderAgentId: 'la-oscar',
+    senderName: 'la-oscar',
+    target: 'la-coordinator',
+    text: 'Hello once',
+    requireReply: false,
+    alert: false,
+    recipients: [{ agentId: 'la-coordinator', name: 'la-coordinator', seen: true, read: false, replied: false }],
+  }
+  const items = projectActivity([
+    event(1, { eventType: 'message.created', entityType: 'message', entityId: 'msg-1', actorId: 'la-oscar', actorName: 'la-oscar', message }),
+    event(2, { eventType: 'message.receipt', entityType: 'message', entityId: 'msg-1', actorId: 'la-coordinator', actorName: undefined, message }),
+  ], 'ru', 'Tokyo', { 'la-oscar': 'Oscar', 'la-coordinator': 'Coordinator' })
+  expect(items).toHaveLength(1)
+  expect(items[0]).toMatchObject({ key: 'message:msg-1', actorName: 'Oscar', content: 'Hello once', secondary: '→ Coordinator' })
+  expect(items[0].events).toHaveLength(2)
+})
+
+test('coalesces mirrored session lifecycle transitions within two seconds', () => {
+  const items = projectActivity([
+    event(1, { eventType: 'logical_agent.changed', entityType: 'logical_agent', entityId: 'la-a', actorId: undefined, actorName: undefined, payload: { display_name: 'Alpha', state: 'armed' }, createdAt: '2026-10-02T10:00:00.000Z' }),
+    event(2, { eventType: 'work_session.created', entityType: 'work_session', entityId: 'ws-a', actorId: undefined, actorName: undefined, payload: { logical_agent_id: 'la-a', state: 'active' }, createdAt: '2026-10-02T10:00:01.000Z' }),
+    event(3, { eventType: 'logical_agent.changed', entityType: 'logical_agent', entityId: 'la-a', actorId: undefined, actorName: undefined, payload: { display_name: 'Alpha', state: 'active' }, createdAt: '2026-10-02T10:00:01.100Z' }),
+  ], 'ru', 'Main', { 'la-a': 'Alpha' })
+  expect(items).toHaveLength(1)
+  expect(items[0]).toMatchObject({ actorName: 'Alpha', content: 'Начал сессию' })
+  expect(items[0].events).toHaveLength(3)
+})
+
+test('never treats raw logical ids as public actor names', () => {
+  const items = projectActivity([
+    event(1, { actorId: 'la-private', actorName: 'la-private', entityId: 'la-private' }),
+  ], 'ru', 'Main')
+  expect(items[0].actorName).toMatch(/^Агент · [A-Z0-9]{4}$/)
+})

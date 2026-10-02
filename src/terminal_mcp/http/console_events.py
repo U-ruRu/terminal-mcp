@@ -127,6 +127,18 @@ async def _project_activity_event(service, event: dict) -> dict:
                         projected["event_type"] = "agent.detached"
                 elif reason == "max_session_duration":
                     projected["event_type"] = "agent.expired"
+    if event["entity_type"] == "command" and service.agent_store:
+        command = await service.agent_store.command_detail(event["entity_id"])
+        if command is not None:
+            projected["payload"] = {
+                **projected["payload"],
+                "command": command.get("cmd"),
+                "command_type": command.get("command_type"),
+                "logical_agent_id": command.get("logical_agent_id"),
+                "work_session_id": command.get("work_session_id"),
+                "status": projected["payload"].get("status") or command.get("status"),
+                "error": command.get("error"),
+            }
     if event["entity_type"] == "message" and service.agent_store:
         message = await service.agent_store.message_record(event["entity_id"])
         if message is not None:
