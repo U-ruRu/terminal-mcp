@@ -289,9 +289,9 @@ export function Connections() {
 
   useEffect(() => {
     const preferred = eligibleControlProfiles[0]?.instanceId ?? ''
-    if (!newMeshControlInstanceId || !eligibleControlProfiles.some((profile) => profile.instanceId === newMeshControlInstanceId)) {
-      setNewMeshControlInstanceId(preferred)
-    }
+    if (newMeshControlInstanceId && eligibleControlProfiles.some((profile) => profile.instanceId === newMeshControlInstanceId)) return
+    const handle = window.setTimeout(() => setNewMeshControlInstanceId(preferred), 0)
+    return () => window.clearTimeout(handle)
   }, [eligibleControlProfiles, newMeshControlInstanceId])
 
   const mutateControl = useCallback(
@@ -467,7 +467,7 @@ export function Connections() {
     setMeshMutationPhase(result.ok ? 'confirmed' : 'failed')
   }
 
-  async function addToMesh(instanceId: string, meshId: string): Promise<ManagedFleetMutationResult> {
+  const addToMesh = useCallback(async (instanceId: string, meshId: string): Promise<ManagedFleetMutationResult> => {
     const targetAuthority = authorityForMesh(meshId)
     if (!targetAuthority?.control.managed) return { ok: false, error: 'control_write_unavailable' }
     const targetApi = client(instanceId)
@@ -506,8 +506,7 @@ export function Connections() {
       setControlError(failure.error)
       return failure
     }
-  }
-
+    }, [authorityForMesh, client, mutateControl])
   async function detachFromMesh(instanceId: string): Promise<ManagedFleetMutationResult> {
     const profile = profiles.find((item) => item.instanceId === instanceId)
     if (!profile) return { ok: false, error: 'membership_unknown' }
