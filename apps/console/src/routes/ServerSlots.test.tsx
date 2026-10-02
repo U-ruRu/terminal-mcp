@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 import type { ConsoleSnapshotReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
+import { saveCachedFleetControl } from '../connections/controlState'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerSlots, type FleetControlLoader, type FleetControlMutator, type PersistentMutator } from './ServerSlots'
 
@@ -108,6 +109,55 @@ function instance(status: 'live' | 'offline', item: PersistentSlotReadModel): Fl
         catchingUpScopes: [],
       },
     },
+  }
+}
+
+
+function managedControl(legacyAdmissionEnabled = false, revision = 4): ManagedFleetControlReadModel {
+  return {
+    schemaVersion: 3,
+    fleetId: 'fleet-a',
+    nodeId: 'secondary',
+    controlNodeId: 'main',
+    managed: true,
+    mesh: {
+      meshId: 'mesh-prod',
+      displayName: 'Production',
+      adopted: true,
+      adoptedAt: '2026-10-02T05:00:00Z',
+      updatedAt: '2026-10-02T06:00:00Z',
+    },
+    meshes: [{
+      meshId: 'mesh-prod',
+      displayName: 'Production',
+      adopted: true,
+      adoptedAt: '2026-10-02T05:00:00Z',
+      updatedAt: '2026-10-02T06:00:00Z',
+    }],
+    nodes: [{
+      nodeId: 'secondary',
+      origin: 'https://alpha.example',
+      meshId: 'mesh-prod',
+      state: 'active',
+      desiredTopologyRevision: 2,
+      appliedTopologyRevision: 2,
+      desiredTrustRevision: 2,
+      appliedTrustRevision: 2,
+      desiredPolicyRevision: revision,
+      appliedPolicyRevision: revision,
+      updatedAt: '2026-10-02T06:00:00Z',
+    }],
+    policy: {
+      durationSeconds: 1380,
+      warningAfterSeconds: 1200,
+      alertAfterSeconds: 1320,
+      rearmAfterSeconds: 180,
+      legacyAdmissionEnabled,
+      revision,
+      updatedAt: '2026-10-02T06:00:00Z',
+    },
+    revisions: { routing: 1, topology: 2, trust: 2, accessPolicy: revision },
+    updatedAt: '2026-10-02T06:00:00Z',
   }
 }
 
@@ -445,4 +495,53 @@ test('existing Access generation without a local code offers rotation and stores
 
   expect(screen.getByText('9007')).toBeInTheDocument()
   expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_alpha')).toContain('9007')
+})
+
+
+test('cached managed policy stays mesh-wide when the fresh control read is unavailable', async () => {
+  const user = userEvent.setup()
+  saveCachedFleetControl('alpha', managedControl(false), 100)
+  const persistentMutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+  const loadControl = vi.fn(async (): Promise<ManagedFleetControlReadModel> => { throw new Error('control_unavailable') }) as FleetControlLoader
+  const mutateControl = vi.fn(async (_instanceId: string, _path: string, body: Record<string, unknown>): Promise<ManagedFleetMutationResult> => ({
+    ok: true,
+    control: managedControl(Boolean(body.legacy_admission_enabled), 5),
+  })) as FleetControlMutator
+
+  renderSlots([instance('live', slot())], persistentMutate, undefined, loadControl, mutateControl)
+
+  const toggle = await screen.findByRole('checkbox', { name: 'Allow Legacy agent admission' })
+  await waitFor(() => expect(screen.getByText('Policy scope: Managed mesh · Production · Stale')).toBeInTheDocument())
+  expect(toggle).not.toBeChecked()
+  await user.click(toggle)
+
+  expect(mutateControl).toHaveBeenCalledWith('alpha', '/actions/fleet/control/policy', expect.objectContaining({
+    legacy_admission_enabled: true,
+    expected_revision: 4,
+  }))
+  expect(persistentMutate).not.toHaveBeenCalled()
+  await waitFor(() => expect(toggle).toBeChecked())
+})
+
+test('Legacy toggle is optimistic and rolls back visibly when authoritative mutation is rejected', async () => {
+  const user = userEvent.setup()
+  let resolveMutation: ((value: ManagedFleetMutationResult) => void) | undefined
+  const mutateControl = vi.fn(() => new Promise<ManagedFleetMutationResult>((resolve) => { resolveMutation = resolve })) as FleetControlMutator
+  const loadControl = vi.fn(async () => managedControl(false)) as FleetControlLoader
+  const persistentMutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+
+  renderSlots([instance('live', slot())], persistentMutate, undefined, loadControl, mutateControl)
+
+  const toggle = await screen.findByRole('checkbox', { name: 'Allow Legacy agent admission' })
+  await waitFor(() => expect(toggle).toBeEnabled())
+  expect(toggle).not.toBeChecked()
+
+  await user.click(toggle)
+  expect(toggle).toBeChecked()
+  expect(screen.getByText('Pending')).toBeInTheDocument()
+
+  resolveMutation?.({ ok: false, code: 'revision_conflict' })
+  await waitFor(() => expect(toggle).not.toBeChecked())
+  expect(screen.getByText('Failed')).toBeInTheDocument()
+  expect(persistentMutate).not.toHaveBeenCalled()
 })

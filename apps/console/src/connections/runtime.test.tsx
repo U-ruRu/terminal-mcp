@@ -4,10 +4,12 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 import { PairingTransport } from '../auth/transport'
 import type { StoredConnection } from '../auth/types'
+import type { ManagedFleetControlReadModel } from '../api/models'
 import type { KeyValueStorage } from '../auth/vault'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { Connections } from '../routes/Connections'
 import { BrowserConnectionRegistry } from './registry'
+import { saveCachedFleetControl } from './controlState'
 import { ConnectionRuntimeProvider } from './runtime'
 
 class MemoryStorage implements KeyValueStorage {
@@ -87,7 +89,7 @@ test('restores every stored profile into app runtime and removes only the select
   expect(registry.credential('beta')?.refreshToken).toBe('refresh-beta-next')
 })
 
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); localStorage.clear() })
 
 test('can expose stored profiles without independently rotating refresh tokens', async () => {
   const storage = new MemoryStorage()
@@ -114,6 +116,100 @@ test('can expose stored profiles without independently rotating refresh tokens',
   expect(registry.credential('alpha')?.refreshToken).toBe('refresh-alpha')
 })
 
+
+
+test('cold start preserves last authoritative Production membership while control observation is unavailable', async () => {
+  const storage = new MemoryStorage()
+  let nextId = 0
+  const ids = ['main-profile', 'bacloud-profile', 'firstbyte-profile', 'tokyo-profile']
+  const registry = new BrowserConnectionRegistry(storage, () => 10_000, () => ids[nextId++] ?? 'fallback')
+  registry.add(connection('https://main.example', 'main'), 'Main')
+  registry.add(connection('https://bacloud.example', 'bacloud'), 'BacLOUD')
+  registry.add(connection('https://firstbyte.example', 'firstbyte'), 'Firstbyte')
+  registry.add(connection('https://tokyo.example', 'tokyo'), 'Tokyo')
+
+  const control: ManagedFleetControlReadModel = {
+    schemaVersion: 3,
+    fleetId: 'fleet-prod',
+    nodeId: 'main',
+    controlNodeId: 'main',
+    managed: true,
+    mesh: { meshId: 'mesh-prod', displayName: 'Production', adopted: true, updatedAt: '2026-10-02T06:00:00Z' },
+    meshes: [{ meshId: 'mesh-prod', displayName: 'Production', adopted: true, updatedAt: '2026-10-02T06:00:00Z' }],
+    nodes: [
+      ['main', 'https://main.example'],
+      ['bacloud', 'https://bacloud.example'],
+      ['firstbyte', 'https://firstbyte.example'],
+      ['tokyo', 'https://tokyo.example'],
+    ].map(([nodeId, origin]) => ({
+      nodeId,
+      origin,
+      meshId: 'mesh-prod',
+      state: 'active' as const,
+      desiredTopologyRevision: 8,
+      appliedTopologyRevision: 8,
+      desiredTrustRevision: 5,
+      appliedTrustRevision: 5,
+      desiredPolicyRevision: 4,
+      appliedPolicyRevision: 4,
+      updatedAt: '2026-10-02T06:00:00Z',
+    })),
+    policy: {
+      durationSeconds: 1380,
+      warningAfterSeconds: 1200,
+      alertAfterSeconds: 1320,
+      rearmAfterSeconds: 180,
+      legacyAdmissionEnabled: false,
+      revision: 4,
+      updatedAt: '2026-10-02T06:00:00Z',
+    },
+    revisions: { routing: 3, topology: 8, trust: 5, accessPolicy: 4 },
+    updatedAt: '2026-10-02T06:00:00Z',
+  }
+  saveCachedFleetControl('main-profile', control, 1_000)
+
+  render(
+    <I18nProvider>
+      <ConnectionRuntimeProvider
+        registry={registry}
+        transport={new PairingTransport(vi.fn())}
+        restoreOnMount={false}
+      >
+        <Connections />
+      </ConnectionRuntimeProvider>
+    </I18nProvider>,
+  )
+
+  for (const name of ['Main', 'BacLOUD', 'Firstbyte', 'Tokyo']) {
+    const card = screen.getByRole('heading', { name }).closest('article')!
+    expect(within(card).getByText('Mesh: Production · Stale')).toBeInTheDocument()
+  }
+  expect(screen.queryByRole('heading', { name: 'Standalone' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Unknown' })).not.toBeInTheDocument()
+})
+
+test('missing control observation is Unknown rather than Standalone', () => {
+  const storage = new MemoryStorage()
+  const registry = new BrowserConnectionRegistry(storage, () => 10_000, () => 'alpha')
+  registry.add(connection('https://alpha.example', 'alpha'), 'Alpha')
+
+  render(
+    <I18nProvider>
+      <ConnectionRuntimeProvider
+        registry={registry}
+        transport={new PairingTransport(vi.fn())}
+        restoreOnMount={false}
+      >
+        <Connections />
+      </ConnectionRuntimeProvider>
+    </I18nProvider>,
+  )
+
+  const card = screen.getByRole('heading', { name: 'Alpha' }).closest('article')!
+  expect(within(card).getByText('Mesh: Unknown')).toBeInTheDocument()
+  expect(screen.getAllByRole('heading', { name: 'Unknown' }).length).toBeGreaterThan(0)
+  expect(screen.queryByRole('heading', { name: 'Standalone' })).not.toBeInTheDocument()
+})
 
 test('managed mesh membership supports standalone attach move and detach with explicit writes', async () => {
   const storage = new MemoryStorage()
@@ -356,4 +452,140 @@ test('managed mesh membership supports standalone attach move and detach with ex
       ([input]) => new URL(String(input)).pathname.endsWith('/trust/rotate'),
     )).toHaveLength(1)
   })
+})
+
+test('rejected managed membership mutation rolls the optimistic projection back and stays failed', async () => {
+  const storage = new MemoryStorage()
+  let nextId = 0
+  const registry = new BrowserConnectionRegistry(
+    storage,
+    () => 10_000,
+    () => ['alpha', 'beta'][nextId++] ?? 'fallback',
+  )
+  registry.add(connection('https://alpha.example', 'alpha'), 'Alpha')
+  registry.add(connection('https://beta.example', 'beta'), 'Beta')
+
+  const nodes = [
+    {
+      node_id: 'alpha',
+      origin: 'https://alpha.example',
+      mesh_id: 'mesh-a',
+      state: 'active',
+      desired_topology_revision: 2,
+      applied_topology_revision: 2,
+      desired_trust_revision: 2,
+      applied_trust_revision: 2,
+      desired_policy_revision: 4,
+      applied_policy_revision: 4,
+      updated_at: '2026-10-02T06:00:00Z',
+    },
+    {
+      node_id: 'beta',
+      origin: 'https://beta.example',
+      mesh_id: null,
+      state: 'active',
+      desired_topology_revision: 2,
+      applied_topology_revision: 2,
+      desired_trust_revision: 2,
+      applied_trust_revision: 2,
+      desired_policy_revision: 4,
+      applied_policy_revision: 4,
+      updated_at: '2026-10-02T06:00:00Z',
+    },
+  ]
+  const mesh = {
+    mesh_id: 'mesh-a',
+    display_name: 'Production',
+    adopted: true,
+    adopted_at: '2026-10-02T05:00:00Z',
+    updated_at: '2026-10-02T06:00:00Z',
+  }
+  const envelope = (nodeId: string) => ({
+    ok: true,
+    control: {
+      schema_version: 3,
+      fleet_id: 'fleet-a',
+      node_id: nodeId,
+      control_node_id: 'alpha',
+      managed: true,
+      mesh: nodeId === 'alpha' ? mesh : null,
+      meshes: [mesh],
+      nodes,
+      policy: {
+        duration_seconds: 1380,
+        warning_after_seconds: 1200,
+        alert_after_seconds: 1320,
+        rearm_after_seconds: 180,
+        legacy_admission_enabled: false,
+        revision: 4,
+        updated_at: '2026-10-02T06:00:00Z',
+      },
+      revisions: { routing: 1, topology: 2, trust: 2, access_policy: 4 },
+      updated_at: '2026-10-02T06:00:00Z',
+    },
+  })
+
+  let rejectUpsert: ((response: Response) => void) | undefined
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input))
+    const nodeId = url.origin.includes('alpha') ? 'alpha' : 'beta'
+    if (url.pathname.includes('oauth') || url.pathname.includes('token')) {
+      return new Response(JSON.stringify({
+        access_token: 'access-' + nodeId,
+        token_type: 'Bearer',
+        expires_in: 120,
+        refresh_token: 'refresh-' + nodeId + '-next',
+        scope: 'terminal:read terminal:execute',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control' && (!init?.method || init.method === 'GET')) {
+      return new Response(JSON.stringify(envelope(nodeId)), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control/enrollment' && (!init?.method || init.method === 'GET')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        enrollment: {
+          node_id: nodeId,
+          origin: `https://${nodeId}.example`,
+          public_key: 'public-' + nodeId,
+          auth_token: 'ingress-' + nodeId,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control/nodes/upsert' && init?.method === 'POST') {
+      return await new Promise<Response>((resolve) => { rejectUpsert = resolve })
+    }
+    return new Response(JSON.stringify({ error: 'unexpected_request' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  render(
+    <I18nProvider>
+      <ConnectionRuntimeProvider registry={registry} transport={new PairingTransport(fetcher)}>
+        <Connections />
+      </ConnectionRuntimeProvider>
+    </I18nProvider>,
+  )
+
+  const betaCard = () => screen.getByRole('heading', { name: 'Beta' }).closest('article')!
+  const membership = () => within(betaCard()).getByLabelText('Mesh membership')
+  await waitFor(() => expect(membership()).toBeEnabled())
+  expect(membership()).toHaveValue('')
+
+  await userEvent.selectOptions(membership(), 'mesh-a')
+  await waitFor(() => expect(membership()).toHaveValue('mesh-a'))
+  expect(within(betaCard()).getByText('Pending')).toBeInTheDocument()
+
+  rejectUpsert?.(new Response(JSON.stringify({
+    ok: false,
+    code: 'revision_conflict',
+    error: 'revision_conflict',
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+  await waitFor(() => expect(membership()).toHaveValue(''))
+  expect(within(betaCard()).getByText('Failed: revision_conflict')).toBeInTheDocument()
+  expect(within(betaCard()).getByText('Mesh: Standalone')).toBeInTheDocument()
 })

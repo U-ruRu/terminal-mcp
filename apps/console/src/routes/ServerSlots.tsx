@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentAuditReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
 import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
+import { loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
 import { serverRoute, slotRoute, slotsRoute, taskRoute } from '../navigation/routes'
@@ -22,15 +23,37 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   const [accessCodeRevision, setAccessCodeRevision] = useState(0)
   const [policyDraft, setPolicyDraft] = useState<{ key: string; duration: string; warning: string; alert: string; rearm: string } | null>(null)
   const [loadedAudit, setLoadedAudit] = useState<{ key: string; values?: PersistentAuditReadModel[]; error?: string }>({ key: '' })
-  const [fleetControl, setFleetControl] = useState<ManagedFleetControlReadModel | null>(null)
+  const [fleetControl, setFleetControl] = useState<ManagedFleetControlReadModel | null>(() => loadCachedFleetControl(instanceId)?.control ?? null)
+  const [fleetControlFreshness, setFleetControlFreshness] = useState<FleetControlFreshness>(() => loadCachedFleetControl(instanceId) ? 'stale' : 'unknown')
+  const [legacyOverride, setLegacyOverride] = useState<{ value: boolean; phase: 'pending' | 'confirmed' | 'failed' } | null>(null)
   useEffect(() => {
-    if (!loadFleetControl || instance?.runtime.authStatus !== 'connected') return
     let cancelled = false
-    void loadFleetControl(instanceId)
-      .then((control) => { if (!cancelled) setFleetControl(control) })
-      .catch(() => { /* preserve last known managed policy if refresh fails */ })
-    return () => { cancelled = true }
+    const handle = window.setTimeout(() => {
+      const cached = loadCachedFleetControl(instanceId)
+      setFleetControl(cached?.control ?? null)
+      setFleetControlFreshness(cached ? 'stale' : 'unknown')
+      setLegacyOverride(null)
+      if (!loadFleetControl || instance?.runtime.authStatus !== 'connected') return
+      void loadFleetControl(instanceId)
+        .then((control) => {
+          if (cancelled) return
+          const observedAt = Date.now()
+          saveCachedFleetControl(instanceId, control, observedAt)
+          propagateCachedFleetControl(control, observedAt)
+          setFleetControl(control)
+          setFleetControlFreshness('fresh')
+        })
+        .catch(() => {
+          if (cancelled) return
+          setFleetControl((current) => {
+            setFleetControlFreshness(current ? 'stale' : 'unknown')
+            return current
+          })
+        })
+    }, 0)
+    return () => { cancelled = true; window.clearTimeout(handle) }
   }, [instance?.runtime.authStatus, instanceId, loadFleetControl])
+
   const selectedLogicalAgentId = selected?.logicalAgentId
   useEffect(() => {
     if (!selectedLogicalAgentId || !loadSlotAudit) return
@@ -59,13 +82,25 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
   const authorityNowMs = anchor.server ? anchor.serverMs + (clock - anchor.localMs) : clock
   const managedPolicy = fleetControl?.managed ? fleetControl.policy : undefined
-  const effectivePolicy = managedPolicy ?? persistent?.policy
+  const standaloneConfirmed = fleetControl ? !fleetControl.managed : !loadFleetControl
+  const effectivePolicy = managedPolicy ?? (standaloneConfirmed ? persistent?.policy : undefined)
+  const effectiveLegacyAdmission = legacyOverride && legacyOverride.phase !== 'failed'
+    ? legacyOverride.value
+    : effectivePolicy?.legacyAdmissionEnabled
+  const managedMeshName = fleetControl?.mesh?.displayName
+    ?? (fleetControl?.managed
+      ? fleetControl.nodes.find((node) => node.nodeId === fleetControl.nodeId)?.meshId
+        ? fleetControl.meshes.find((mesh) => mesh.meshId === fleetControl.nodes.find((node) => node.nodeId === fleetControl.nodeId)?.meshId)?.displayName
+        : undefined
+      : undefined)
   const policyKey = effectivePolicy ? [effectivePolicy.durationSeconds, effectivePolicy.warningAfterSeconds, effectivePolicy.alertAfterSeconds, effectivePolicy.rearmAfterSeconds].join(':') : ''
   const draft = policyDraft?.key === policyKey ? policyDraft : { key: policyKey, duration: String(effectivePolicy?.durationSeconds ?? ''), warning: String(effectivePolicy?.warningAfterSeconds ?? ''), alert: String(effectivePolicy?.alertAfterSeconds ?? ''), rearm: String(effectivePolicy?.rearmAfterSeconds ?? '') }
   // Read freshness and write reachability are separate planes. A cached projection must not
   // suppress an authenticated direct-authority mutation attempt.
   const canMutate = Boolean(mutatePersistent && persistent?.enabled && instance?.runtime.authStatus === 'connected')
-  const policyCanMutate = managedPolicy ? Boolean(mutateFleetControl && instance?.runtime.authStatus === 'connected') : canMutate
+  const policyCanMutate = managedPolicy
+    ? Boolean(mutateFleetControl && instance?.runtime.authStatus === 'connected')
+    : standaloneConfirmed ? canMutate : false
   const mutation = async (key: string, path: string, body: Record<string, unknown>) => { if (!canMutate || !mutatePersistent) { setMessage(t('slots.liveRequired')); return false } setBusy(key); setMessage(''); try { const result = await mutatePersistent(instanceId, path, body); if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return false } setMessage(t('slots.mutationApplied')); return true } catch (error) { setMessage(error instanceof Error ? error.message : t('slots.mutationFailed')); return false } finally { setBusy('') } }
   const managedPolicyMutation = async (key: string, path: string, body: Record<string, unknown>) => {
     if (!mutateFleetControl || instance?.runtime.authStatus !== 'connected') { setMessage(t('slots.liveRequired')); return false }
@@ -73,7 +108,13 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     try {
       const result = await mutateFleetControl(instanceId, path, body)
       if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return false }
-      if (result.control) setFleetControl(result.control)
+      if (result.control) {
+        const observedAt = Date.now()
+        saveCachedFleetControl(instanceId, result.control, observedAt)
+        propagateCachedFleetControl(result.control, observedAt)
+        setFleetControl(result.control)
+        setFleetControlFreshness('fresh')
+      }
       setMessage(t('slots.mutationApplied'))
       return true
     } catch (error) { setMessage(error instanceof Error ? error.message : t('slots.mutationFailed')); return false }
@@ -100,20 +141,26 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     await mutation('policy', '/actions/persistent/policy', { duration_seconds: durationSeconds, warning_after_seconds: warningAfterSeconds, alert_after_seconds: alertAfterSeconds, rearm_after_seconds: rearmAfterSeconds })
   }
   const toggleLegacy = async () => {
-    if (!effectivePolicy) return
+    if (!effectivePolicy || effectiveLegacyAdmission === undefined) return
+    const previous = effectivePolicy.legacyAdmissionEnabled
+    const target = !effectiveLegacyAdmission
+    setLegacyOverride({ value: target, phase: 'pending' })
+    let ok = false
     if (managedPolicy) {
-      await managedPolicyMutation('legacy-policy', '/actions/fleet/control/policy', {
+      ok = await managedPolicyMutation('legacy-policy', '/actions/fleet/control/policy', {
         duration_seconds: managedPolicy.durationSeconds,
         warning_after_seconds: managedPolicy.warningAfterSeconds,
         alert_after_seconds: managedPolicy.alertAfterSeconds,
         rearm_after_seconds: managedPolicy.rearmAfterSeconds,
-        legacy_admission_enabled: !managedPolicy.legacyAdmissionEnabled,
+        legacy_admission_enabled: target,
         expected_revision: managedPolicy.revision,
       })
-      return
+    } else if (persistent && standaloneConfirmed) {
+      ok = await mutation('legacy-policy', '/actions/persistent/policy', { legacy_admission_enabled: target })
     }
-    if (!persistent) return
-    await mutation('legacy-policy', '/actions/persistent/policy', { legacy_admission_enabled: !persistent.policy.legacyAdmissionEnabled })
+    setLegacyOverride(ok
+      ? { value: target, phase: 'confirmed' }
+      : { value: previous, phase: 'failed' })
   }
   const resetManagedPolicy = async () => {
     if (!managedPolicy) return
@@ -179,7 +226,8 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     {persistent && !persistent.enabled && <FeedbackState variant="empty" title={t('slots.disabled')} />}
     {persistent?.enabled && !persistent.available && <FeedbackState variant="error" title={t('slots.unavailable')} detail={persistent.error ?? undefined} />}
     {message && <div className="attention-strip" role="status"><span>{message}</span></div>}
-    {persistent?.enabled && (persistent.policy.policyControlSupported || managedPolicy) && <article className="panel policy-controls"><div className="section-heading"><div><p className="eyebrow">{t('slots.policy')}</p><h3>{t('slots.policyControls')}</h3></div></div><div className="policy-controls-grid"><label className="ui-field"><span>{t('slots.durationSeconds')}</span><input aria-label={t('slots.durationSeconds')} inputMode="numeric" type="number" min="1" value={draft.duration} onChange={(event) => setPolicyDraft({ ...draft, duration: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.warningAfterSeconds')}</span><input aria-label={t('slots.warningAfterSeconds')} inputMode="numeric" type="number" min="1" value={draft.warning} onChange={(event) => setPolicyDraft({ ...draft, warning: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.alertAfterSeconds')}</span><input aria-label={t('slots.alertAfterSeconds')} inputMode="numeric" type="number" min="1" value={draft.alert} onChange={(event) => setPolicyDraft({ ...draft, alert: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.rearmAfterSeconds')}</span><input aria-label={t('slots.rearmAfterSeconds')} inputMode="numeric" type="number" min="1" value={draft.rearm} onChange={(event) => setPolicyDraft({ ...draft, rearm: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label></div><div className="server-actions"><button type="button" disabled={!policyCanMutate || Boolean(busy)} onClick={() => void saveTimingPolicy()}>{t('slots.savePolicy')}</button>{managedPolicy && <button type="button" className="secondary-action" disabled={!policyCanMutate || Boolean(busy)} onClick={() => void resetManagedPolicy()}>{t('slots.resetPolicy')}</button>}</div>{!managedPolicy && timingPolicyLocked && <p className="muted">{t('slots.policyLocked')}</p>}<label className="policy-toggle"><input aria-label={t('slots.legacyToggle')} type="checkbox" checked={effectivePolicy?.legacyAdmissionEnabled ?? false} disabled={!policyCanMutate || Boolean(busy)} onChange={() => void toggleLegacy()} /><span><strong>{t('slots.legacyToggle')}</strong><small>{t('slots.legacyHint')}</small></span></label></article>}
+    {persistent?.enabled && loadFleetControl && !fleetControl && <div className="attention-strip" role="status">{t('slots.policyScope')}: {t('slots.policyScopeUnknown')}</div>}
+    {persistent?.enabled && effectivePolicy && (persistent.policy.policyControlSupported || managedPolicy) && <article className="panel policy-controls"><div className="section-heading"><div><p className="eyebrow">{t('slots.policy')}</p><h3>{t('slots.policyControls')}</h3><p className="muted">{t('slots.policyScope')}: {managedPolicy ? `${t('slots.policyScopeManaged')}${managedMeshName ? ` · ${managedMeshName}` : ''}${fleetControlFreshness === 'stale' ? ` · ${t('connections.stale')}` : ''}` : t('slots.policyScopeLocal')}</p></div></div><div className="policy-controls-grid"><label className="ui-field"><span>{t('slots.durationSeconds')}</span><input aria-label={t('slots.durationSeconds')} inputMode="numeric" type="number" min="1" value={draft.duration} onChange={(event) => setPolicyDraft({ ...draft, duration: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.warningAfterSeconds')}</span><input aria-label={t('slots.warningAfterSeconds')} inputMode="numeric" type="number" min="1" value={draft.warning} onChange={(event) => setPolicyDraft({ ...draft, warning: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.alertAfterSeconds')}</span><input aria-label={t('slots.alertAfterSeconds')} inputMode="numeric" type="number" min="1" value={draft.alert} onChange={(event) => setPolicyDraft({ ...draft, alert: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.rearmAfterSeconds')}</span><input aria-label={t('slots.rearmAfterSeconds')} inputMode="numeric" type="number" min="1" value={draft.rearm} onChange={(event) => setPolicyDraft({ ...draft, rearm: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label></div><div className="server-actions"><button type="button" disabled={!policyCanMutate || Boolean(busy)} onClick={() => void saveTimingPolicy()}>{t('slots.savePolicy')}</button>{managedPolicy && <button type="button" className="secondary-action" disabled={!policyCanMutate || Boolean(busy)} onClick={() => void resetManagedPolicy()}>{t('slots.resetPolicy')}</button>}</div>{!managedPolicy && timingPolicyLocked && <p className="muted">{t('slots.policyLocked')}</p>}<label className="policy-toggle"><input aria-label={t('slots.legacyToggle')} type="checkbox" checked={effectiveLegacyAdmission ?? false} disabled={!policyCanMutate || Boolean(busy)} onChange={() => void toggleLegacy()} /><span><strong>{t('slots.legacyToggle')}</strong><small>{t('slots.legacyHint')}</small></span></label>{legacyOverride ? <p className={legacyOverride.phase === 'failed' ? 'connection-error' : 'muted'} role="status">{legacyOverride.phase === 'pending' ? t('connections.pending') : legacyOverride.phase === 'confirmed' ? t('connections.confirmed') : t('connections.failed')}</p> : null}</article>}
     {persistent?.enabled && <form className="slot-create panel" onSubmit={(event) => { event.preventDefault(); const displayName = createName.trim(); if (!displayName) return; void mutation('create', '/actions/persistent/slots/create', { display_name: displayName }).then((ok) => { if (ok) setCreateName('') }) }}><label className="ui-field"><span>{t('slots.createName')}</span><input value={createName} onChange={(event) => setCreateName(event.target.value)} maxLength={120} /></label><button type="submit" disabled={!canMutate || busy === 'create'}>{t('slots.create')}</button></form>}
     {selected && persistent && <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{selected.displayName}</h3></div><span className="chip">{selected.state}</span></div><dl className="slot-details-grid"><div><dt>{t('slots.legacySelector')}</dt><dd><code>{selected.selector}</code></dd></div><div><dt>{t('slots.selectorGeneration')}</dt><dd>{selected.selectorGeneration}</dd></div><div><dt>{t('slots.authGeneration')}</dt><dd>{selected.authGeneration}</dd></div><div><dt>{t('slots.accessPublicName')}</dt><dd>{selected.access?.publicName ?? storedAccessCode(selected)?.publicName ?? selected.displayName}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.access?.accessGeneration ?? 0}</dd></div><div><dt>{t('slots.accessCodeTitle')}</dt><dd>{storedAccessCode(selected) ? <span className="access-code-inline"><code>{storedAccessCode(selected)?.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + selected.displayName} onClick={() => void copyAccessCode(storedAccessCode(selected)!.code)}>{t('slots.copyAccessCode')}</button></span> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.authorityNodeId} · e{selected.authorityEpoch}</dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slotRevision}</dd></div><div><dt>{t('slots.session')}</dt><dd>{activeSession ? <code>{activeSession.workSessionId}</code> : t('slots.noSession')}</dd></div><div><dt>{t('slots.sessionEpoch')}</dt><dd>{activeSession?.sessionEpoch ?? '—'}</dd></div><div><dt>{t('slots.hardExpiresAt')}</dt><dd>{activeSession?.hardExpiresAt ?? '—'}</dd></div><div><dt>{t('slots.policy')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : <>D {duration(persistent.policy.durationSeconds)} · W {duration(persistent.policy.warningAfterSeconds)} · A {duration(persistent.policy.alertAfterSeconds)} · R {duration(persistent.policy.rearmAfterSeconds)}</>}</dd></div><div><dt>{t('slots.manualRearm')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.manualRearm ? t('slots.yes') : t('slots.no')}</dd></div><div><dt>{t('slots.admissionMode')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.admissionMode}</dd></div><div><dt>{t('slots.legacyAdmission')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.legacyAdmissionEnabled ? t('slots.yes') : t('slots.no')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.createdAt}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.updatedAt}</dd></div></dl><div className="server-actions">{!accessReady && <button type="button" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateAccess(selected, 'setup')}>{t('slots.setupAccessCode')}</button>}{accessReady && <button type="button" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateAccess(selected, 'rotate')}>{t('slots.rotateAccessCode')}</button>}</div>
       <div className="slot-subsection"><h3>{t('slots.claims')}</h3>{selected.claims.length ? selected.claims.map((claim) => <div className="slot-claim" key={`${claim.namespace}/${claim.taskId}`}><Link className="text-link" to={taskRoute(instanceId, claim.namespace, claim.taskId)}>{claim.namespace}/{claim.taskId}</Link><span>{claim.priority} · {claim.state}</span>{activeSession && <div className="server-actions"><button type="button" disabled={!canMutate || Boolean(busy)} onClick={() => void mutation(`release:${claim.namespace}/${claim.taskId}`, '/actions/persistent/claims/release', { namespace: claim.namespace, task_id: claim.taskId, logical_agent_id: selected.logicalAgentId, work_session_id: activeSession.workSessionId, session_epoch: activeSession.sessionEpoch })}>{t('slots.releaseClaim')}</button>{otherSlots.length > 0 && <><select aria-label={t('slots.reassignTarget')} value={reassignTarget} onChange={(event) => setReassignTarget(event.target.value)}><option value="">{t('slots.chooseTarget')}</option>{otherSlots.map((slot) => <option key={slot.logicalAgentId} value={slot.logicalAgentId}>{slot.displayName}</option>)}</select><button type="button" disabled={!canMutate || !reassignTarget || Boolean(busy)} onClick={() => void mutation(`reassign:${claim.namespace}/${claim.taskId}`, '/actions/persistent/claims/reassign', { namespace: claim.namespace, task_id: claim.taskId, logical_agent_id: selected.logicalAgentId, to_logical_agent_id: reassignTarget, work_session_id: activeSession.workSessionId, session_epoch: activeSession.sessionEpoch, expected_revision: selected.slotRevision, idempotency_key: idempotencyKey() })}>{t('slots.reassignClaim')}</button></>}</div>}</div>) : <FeedbackState variant="empty" title={t('slots.noClaims')} />}</div>
