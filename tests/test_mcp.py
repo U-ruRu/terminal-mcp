@@ -274,7 +274,8 @@ def test_mcp_tools_advertise_canonical_access_surface():
 
     message = tools["message"].parameters
     assert message["required"] == ["sender"]
-    assert "code" not in message["properties"]
+    assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
+    assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
     assert "active unified session" in tools["message"].description
 
     task = tools["task"].parameters
