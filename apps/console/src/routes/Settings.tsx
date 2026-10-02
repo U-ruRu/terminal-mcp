@@ -14,39 +14,42 @@ export function Settings() {
         </div>
       </div>
 
-      <article className="panel" aria-labelledby="appearance-title">
-        <div>
-          <p className="eyebrow">{t('settings.appearance')}</p>
-          <h3 id="appearance-title">{t('settings.theme')}</h3>
-        </div>
-        <p className="muted">{t('settings.themeHint')}</p>
-        <ThemeSelect />
-      </article>
+      <div className="settings-list">
+        <section className="settings-row" aria-labelledby="appearance-title">
+          <div className="settings-row-copy">
+            <h3 id="appearance-title">{t('settings.theme')}</h3>
+            <p className="muted">{t('settings.themeHint')}</p>
+          </div>
+          <ThemeSelect />
+        </section>
 
-      <article className="panel" aria-labelledby="language-title">
-        <h3 id="language-title">{t('settings.language')}</h3>
-        <p className="muted">{t('settings.languageHint')}</p>
-        <label className="ui-field">
-          <span className="ui-field-label">{t('settings.language')}</span>
-          <select
-            aria-label={t('settings.language')}
-            value={locale}
-            onChange={(event) => setLocale(event.target.value as Locale)}
-          >
-            {supportedLocales.map((item) => (
-              <option key={item} value={item}>
-                {t(
-                  ('locale.' + item) as
-                    | 'locale.en'
-                    | 'locale.ru'
-                    | 'locale.ka'
-                    | 'locale.es',
-                )}
-              </option>
-            ))}
-          </select>
-        </label>
-      </article>
+        <section className="settings-row" aria-labelledby="language-title">
+          <div className="settings-row-copy">
+            <h3 id="language-title">{t('settings.language')}</h3>
+            <p className="muted">{t('settings.languageHint')}</p>
+          </div>
+          <label className="ui-field settings-control">
+            <span className="ui-field-label">{t('settings.language')}</span>
+            <select
+              aria-label={t('settings.language')}
+              value={locale}
+              onChange={(event) => setLocale(event.target.value as Locale)}
+            >
+              {supportedLocales.map((item) => (
+                <option key={item} value={item}>
+                  {t(
+                    ('locale.' + item) as
+                      | 'locale.en'
+                      | 'locale.ru'
+                      | 'locale.ka'
+                      | 'locale.es',
+                  )}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+      </div>
     </section>
   )
 }
