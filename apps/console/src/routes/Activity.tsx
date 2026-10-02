@@ -227,6 +227,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
       {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}
       {feed.error && <FeedbackState variant="error" title={t('activity.unavailable')} detail={feed.error} />}
+      {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
       <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
         {visible.map((event) => (
           <article className="panel activity-event" key={selectedId + ':' + event.seq}>
@@ -247,7 +248,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
             </div>
           </article>
         ))}
-        {selectedId && visible.length === 0 && !feed.error && <div className="panel"><p className="muted">{t('activity.noMatches')}</p></div>}
+        {selectedId && feed.initialized && visible.length === 0 && !feed.error && <FeedbackState variant="empty" title={t('activity.noMatches')} />}
       </div>
     </section>
   )

@@ -142,3 +142,16 @@ test('loads a concise latest window and keeps raw payload collapsed', async () =
   expect(details).not.toHaveAttribute('open')
   expect(details).toHaveTextContent('"ok": true')
 })
+
+
+test('shows loading feedback before the first activity page resolves', () => {
+  const load = vi.fn(() => new Promise<ActivityFeedReadModel>(() => {}))
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+
+  expect(screen.getByText('Catching up')).toBeInTheDocument()
+  expect(screen.queryByText('No activity matches this filter.')).not.toBeInTheDocument()
+})
