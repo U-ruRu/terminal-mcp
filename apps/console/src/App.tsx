@@ -44,6 +44,8 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
         <Route path="/meshes/:meshId" element={<Connections />} />
+        <Route path="/meshes/:meshId/persistent" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
+        <Route path="/meshes/:meshId/persistent/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/ui-kit" element={<UiKitShowcase />} />
         <Route path="/connect" element={<Connections />} />
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} loadFleetControl={loadFleetControl} />} />

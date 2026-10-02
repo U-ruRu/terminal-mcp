@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, ManagedFleetMeshReadModel, ManagedFleetMutationResult, ManagedFleetNodeReadModel } from '../api/models'
 import { useConnectionRuntime } from '../connections/runtime'
@@ -8,7 +8,7 @@ import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
-import { meshRoute } from '../navigation/routes'
+import { meshPersistentRoute, meshRoute } from '../navigation/routes'
 
 function statusLabel(status: string | undefined, t: (key: MessageKey) => string): string {
   switch (status) {
@@ -696,6 +696,11 @@ export function Connections() {
           ) : null}
         </div>
         <p className="muted">{t('connections.manageHint')}</p>
+        {selectedMesh && routeMeshId ? (
+          <div className="connection-actions">
+            <Link className="nav-link" to={meshPersistentRoute(selectedMesh.meshId)}>{t('nav.slots')}</Link>
+          </div>
+        ) : null}
         {authoritative?.managed ? (
           <div className="mesh-revisions">
             <span>{t('connections.topologyRevision')}: {number(authoritative.revisions.topology)}</span>

@@ -52,3 +52,11 @@ export function settingsRoute(instanceId?: string): string {
 export function meshRoute(meshId: string): string {
   return `/meshes/${part(meshId)}`
 }
+
+export function meshPersistentRoute(meshId: string): string {
+  return `${meshRoute(meshId)}/persistent`
+}
+
+export function meshPersistentSlotRoute(meshId: string, logicalAgentId: string): string {
+  return `${meshPersistentRoute(meshId)}/${part(logicalAgentId)}`
+}
