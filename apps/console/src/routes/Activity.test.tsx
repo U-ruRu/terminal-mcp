@@ -72,6 +72,28 @@ test('switches servers, filters messages and renders direct task navigation', as
   expect(await screen.findByText('Beta is online again')).toBeInTheDocument()
 })
 
+
+test('uses the native scroll API without recursion when Activity anchors to the bottom', async () => {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo')
+  const scrollTo = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo })
+
+  try {
+    render(
+      <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+        <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={activityLoader()} />
+      </MemoryRouter></I18nProvider>,
+    )
+
+    expect(await screen.findByText('Ship it')).toBeInTheDocument()
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled())
+    expect(scrollTo.mock.calls.length).toBeLessThan(10)
+  } finally {
+    if (original) Object.defineProperty(HTMLElement.prototype, 'scrollTo', original)
+    else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
+  }
+})
+
 test('does not silently choose a server when activity has no server context', async () => {
   const load = activityLoader()
   render(
