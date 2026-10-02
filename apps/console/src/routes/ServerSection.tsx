@@ -48,6 +48,7 @@ export function ServerSection({
   const server = model.servers.find((item) => item.instanceId === instanceId)
   const [, setDiagnosticRevision] = useState(0)
   const [copied, setCopied] = useState(false)
+  const [contextQuery, setContextQuery] = useState('')
   const [loadedContexts, setLoadedContexts] = useState<{
     instanceId: string
     values?: ContextReadModel[]
@@ -81,6 +82,13 @@ export function ServerSection({
   const contextError = loadedContexts.instanceId === server.instanceId
     ? loadedContexts.error
     : undefined
+  const visibleContexts = contexts
+    .filter((context) => {
+      const query = contextQuery.trim().toLocaleLowerCase()
+      if (!query) return true
+      return context.summary.toLocaleLowerCase().includes(query) || (context.content ?? '').toLocaleLowerCase().includes(query)
+    })
+    .sort((left, right) => Number(right.primary) - Number(left.primary) || left.summary.localeCompare(right.summary))
 
   async function copyDiagnostics() {
     if (!diagnostics) return
@@ -132,16 +140,29 @@ export function ServerSection({
           </>
         ) : section === 'context' ? (
           <>
-            <h3>{title} {t('section.on')} {server.displayName}</h3>
-            {contexts.length === 0 ? <FeedbackState variant="empty" title={t('context.empty')} /> : (
-              <div className="stack context-list">
-                {contexts.map((context) => (
-                  <section className="context-entry" key={context.id}>
+            <div className="context-heading">
+              <h3>{title} {t('section.on')} {server.displayName}</h3>
+              <label className="context-search">
+                <span className="visually-hidden">{t('context.search')}</span>
+                <input type="search" value={contextQuery} onChange={(event) => setContextQuery(event.target.value)} placeholder={t('context.search')} />
+              </label>
+            </div>
+            {contexts.length === 0 ? <FeedbackState variant="empty" title={t('context.empty')} /> : visibleContexts.length === 0 ? (
+              <FeedbackState variant="empty" title={t('context.noMatches')} />
+            ) : (
+              <div className="context-list">
+                {visibleContexts.map((context) => (
+                  <section className={`context-entry ${context.primary ? 'context-entry-primary' : ''}`} key={context.id}>
                     <div className="section-heading">
                       <strong>{context.summary}</strong>
                       <span className="chip">{context.primary ? t('context.primary') : t('context.additional')}</span>
                     </div>
-                    {context.content ? <pre>{context.content}</pre> : null}
+                    {context.content ? (
+                      <details className="context-content">
+                        <summary>{t('context.content')}</summary>
+                        <pre>{context.content}</pre>
+                      </details>
+                    ) : null}
                   </section>
                 ))}
               </div>
