@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 import { PairingTransport } from '../auth/transport'
 import type { StoredConnection } from '../auth/types'
@@ -170,19 +171,23 @@ test('cold start preserves last authoritative Production membership while contro
 
   render(
     <I18nProvider>
-      <ConnectionRuntimeProvider
-        registry={registry}
-        transport={new PairingTransport(vi.fn())}
-        restoreOnMount={false}
-      >
-        <Connections />
-      </ConnectionRuntimeProvider>
+      <MemoryRouter initialEntries={['/meshes/mesh-prod']}>
+        <ConnectionRuntimeProvider
+          registry={registry}
+          transport={new PairingTransport(vi.fn())}
+          restoreOnMount={false}
+        >
+          <Routes>
+            <Route path="/meshes/:meshId" element={<Connections />} />
+          </Routes>
+        </ConnectionRuntimeProvider>
+      </MemoryRouter>
     </I18nProvider>,
   )
 
   for (const name of ['Main', 'BacLOUD', 'Firstbyte', 'Tokyo']) {
     const card = screen.getByRole('heading', { name }).closest('article')!
-    expect(within(card).getByText('Mesh: Production · Stale')).toBeInTheDocument()
+    expect(card).toHaveTextContent('Mesh: Production · Stale')
     expect(within(card).getByText('Synchronization: Unavailable')).toBeInTheDocument()
   }
   expect(screen.getByText('Mesh state: Unavailable')).toBeInTheDocument()
@@ -413,7 +418,9 @@ test('managed mesh membership supports standalone attach move and detach with ex
   render(
     <I18nProvider>
       <ConnectionRuntimeProvider registry={registry} transport={new PairingTransport(fetcher)}>
-        <Connections />
+        <MemoryRouter initialEntries={['/meshes/mesh-a']}>
+          <Routes><Route path="/meshes/:meshId" element={<Connections />} /></Routes>
+        </MemoryRouter>
       </ConnectionRuntimeProvider>
     </I18nProvider>,
   )
@@ -568,7 +575,9 @@ test('rejected managed membership mutation rolls the optimistic projection back 
   render(
     <I18nProvider>
       <ConnectionRuntimeProvider registry={registry} transport={new PairingTransport(fetcher)}>
-        <Connections />
+        <MemoryRouter initialEntries={['/meshes/mesh-a']}>
+          <Routes><Route path="/meshes/:meshId" element={<Connections />} /></Routes>
+        </MemoryRouter>
       </ConnectionRuntimeProvider>
     </I18nProvider>,
   )
@@ -697,7 +706,7 @@ test('creates a second mesh on an independently selected standalone control node
     </I18nProvider>,
   )
 
-  await waitFor(() => expect(screen.getByRole('heading', { name: 'Production' })).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByRole('link', { name: 'Production' })).toHaveAttribute('href', '/meshes/mesh-a'))
   await waitFor(() => expect(screen.getByLabelText('Control node')).toBeEnabled())
   await userEvent.selectOptions(screen.getByLabelText('Control node'), 'beta')
   await userEvent.clear(screen.getByLabelText('New mesh name'))
@@ -709,7 +718,7 @@ test('creates a second mesh on an independently selected standalone control node
       new URL(String(input)).pathname === '/actions/fleet/control/adopt' && init?.method === 'POST'
     ))).toBe(true)
   })
-  await waitFor(() => expect(screen.getAllByRole('option', { name: 'Staging' }).length).toBeGreaterThan(0))
+  await waitFor(() => expect(screen.getByRole('link', { name: 'Staging' })).toBeInTheDocument())
 })
 
 test('moves a member between meshes with different authorities via detach then join', async () => {
@@ -825,7 +834,9 @@ test('moves a member between meshes with different authorities via detach then j
   render(
     <I18nProvider>
       <ConnectionRuntimeProvider registry={registry} transport={new PairingTransport(fetcher)}>
-        <Connections />
+        <MemoryRouter initialEntries={['/meshes/mesh-a']}>
+          <Routes><Route path="/meshes/:meshId" element={<Connections />} /></Routes>
+        </MemoryRouter>
       </ConnectionRuntimeProvider>
     </I18nProvider>,
   )

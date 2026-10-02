@@ -539,9 +539,7 @@ class PersistentAgentStore:
                         raise PersistentStoreError("arm_expired")
                     if int(arm_row[4]) != int(row[5]) or int(arm_row[5]) != int(row[6]):
                         raise PersistentStoreError("policy_incompatible")
-                    hard_expires_at = utc_text(
-                        current + timedelta(seconds=int(arm_row[3]))
-                    )
+                    hard_expires_at = utc_text(current + timedelta(seconds=int(arm_row[3])))
                 elif row[1] == "suspended":
                     pending_rearm = await (
                         await db.execute(
@@ -1532,7 +1530,9 @@ class PersistentAgentStore:
             rows = await (
                 await db.execute(
                     "SELECT message_ref,sender_agent_id,text,require_reply,alert,"
-                    "gate_revision,created_at FROM persistent_message_obligations "
+                    "gate_revision,created_at,first_seen_at,last_seen_at,seen_count,"
+                    "read_at,replied_at,reply_message_ref,resolved_at,resolution "
+                    "FROM persistent_message_obligations "
                     "WHERE logical_agent_id=? AND resolved_at IS NULL "
                     "ORDER BY created_at,message_ref",
                     (logical_agent_id,),
@@ -1546,6 +1546,14 @@ class PersistentAgentStore:
             "alert",
             "gate_revision",
             "created_at",
+            "first_seen_at",
+            "last_seen_at",
+            "seen_count",
+            "read_at",
+            "replied_at",
+            "reply_message_ref",
+            "resolved_at",
+            "resolution",
         )
         result = []
         for row in rows:
@@ -1553,8 +1561,138 @@ class PersistentAgentStore:
             item["require_reply"] = bool(item["require_reply"])
             item["alert"] = bool(item["alert"])
             item["gate_revision"] = int(item["gate_revision"])
+            item["seen_count"] = int(item["seen_count"] or 0)
             result.append(item)
         return result
+
+    async def message_inbox(
+        self,
+        logical_agent_id: str,
+        *,
+        recent_cutoff: str | None = None,
+        show_all: bool = False,
+        limit: int = 50,
+    ) -> list[dict]:
+        condition = "logical_agent_id=?"
+        params: list[object] = [logical_agent_id]
+        if not show_all:
+            condition += " AND (resolved_at IS NULL"
+            if recent_cutoff is not None:
+                condition += " OR (last_seen_at IS NOT NULL AND last_seen_at>=?)"
+                params.append(recent_cutoff)
+            condition += ")"
+        params.append(max(1, min(int(limit), 500)))
+        async with self._connect("persistent_message_inbox") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT message_ref,sender_agent_id,text,require_reply,alert,"
+                    "gate_revision,created_at,first_seen_at,last_seen_at,seen_count,"
+                    "read_at,replied_at,reply_message_ref,resolved_at,resolution "
+                    "FROM persistent_message_obligations "
+                    f"WHERE {condition} ORDER BY created_at DESC,message_ref DESC LIMIT ?",
+                    params,
+                )
+            ).fetchall()
+        keys = (
+            "message_ref",
+            "sender_agent_id",
+            "text",
+            "require_reply",
+            "alert",
+            "gate_revision",
+            "created_at",
+            "first_seen_at",
+            "last_seen_at",
+            "seen_count",
+            "read_at",
+            "replied_at",
+            "reply_message_ref",
+            "resolved_at",
+            "resolution",
+        )
+        result = []
+        for row in rows:
+            item = dict(zip(keys, row, strict=True))
+            item["require_reply"] = bool(item["require_reply"])
+            item["alert"] = bool(item["alert"])
+            item["gate_revision"] = int(item["gate_revision"])
+            item["seen_count"] = int(item["seen_count"] or 0)
+            result.append(item)
+        return result
+
+    async def surface_message_obligations(
+        self,
+        logical_agent_id: str,
+        message_refs: list[str],
+        node_instance_id: str,
+        *,
+        seen_at: str | None = None,
+        retention_calls: int = 5,
+    ) -> list[dict]:
+        refs = list(dict.fromkeys(str(ref) for ref in message_refs if ref))
+        if not refs:
+            return []
+        stamp = seen_at or utc_text()
+        async with self._connect("persistent_message_surface") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                for message_ref in refs:
+                    row = await (
+                        await db.execute(
+                            "SELECT require_reply,alert,seen_count,resolved_at "
+                            "FROM persistent_message_obligations "
+                            "WHERE message_ref=? AND logical_agent_id=?",
+                            (message_ref, logical_agent_id),
+                        )
+                    ).fetchone()
+                    if row is None or row[3] is not None:
+                        continue
+                    require_ack = bool(row[0])
+                    alert = bool(row[1])
+                    seen_count = int(row[2] or 0) + 1
+                    notify = not require_ack and not alert
+                    resolve = notify and seen_count >= max(1, int(retention_calls))
+                    await db.execute(
+                        "UPDATE persistent_message_obligations SET "
+                        "first_seen_at=COALESCE(first_seen_at,?),last_seen_at=?,seen_count=?,"
+                        "read_at=CASE WHEN ? THEN COALESCE(read_at,?) ELSE read_at END,"
+                        "resolved_at=CASE WHEN ? THEN COALESCE(resolved_at,?) ELSE resolved_at END,"
+                        "resolution=CASE WHEN ? THEN COALESCE(resolution,'retention') "
+                        "ELSE resolution END "
+                        "WHERE message_ref=? AND logical_agent_id=?",
+                        (
+                            stamp,
+                            stamp,
+                            seen_count,
+                            int(notify),
+                            stamp,
+                            int(resolve),
+                            stamp,
+                            int(resolve),
+                            message_ref,
+                            logical_agent_id,
+                        ),
+                    )
+                    await db.execute(
+                        "INSERT INTO persistent_message_receipts("
+                        "message_ref,node_instance_id,seen_at,read_at,replied_at,"
+                        "reply_message_ref) "
+                        "VALUES(?,?,?,?,NULL,NULL) "
+                        "ON CONFLICT(message_ref,node_instance_id) DO UPDATE SET "
+                        "seen_at=COALESCE(persistent_message_receipts.seen_at,excluded.seen_at),"
+                        "read_at=COALESCE(persistent_message_receipts.read_at,excluded.read_at)",
+                        (message_ref, node_instance_id, stamp, stamp if notify else None),
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.message_inbox(
+            logical_agent_id,
+            recent_cutoff=None,
+            show_all=False,
+            limit=max(len(refs), 1) * 2,
+        )
 
     async def merge_message_receipt(
         self,
@@ -1610,19 +1748,41 @@ class PersistentAgentStore:
                     "replied_at=excluded.replied_at,reply_message_ref=excluded.reply_message_ref",
                     (message_ref, node_instance_id, *merged),
                 )
-                should_resolve = bool(replied_at) and bool(obligation[1] or obligation[2])
+                await db.execute(
+                    "UPDATE persistent_message_obligations SET "
+                    "first_seen_at=COALESCE(first_seen_at,?),"
+                    "last_seen_at=COALESCE(?,last_seen_at),"
+                    "read_at=COALESCE(read_at,?),"
+                    "replied_at=COALESCE(replied_at,?),"
+                    "reply_message_ref=COALESCE(reply_message_ref,?) "
+                    "WHERE message_ref=?",
+                    (merged[0], merged[0], merged[1], merged[2], merged[3], message_ref),
+                )
+                require_ack = bool(obligation[1])
+                alert = bool(obligation[2])
+                should_resolve = (
+                    (alert and bool(replied_at))
+                    or (require_ack and not alert and bool(read_at))
+                    or (not require_ack and not alert and bool(read_at))
+                )
                 if should_resolve and obligation[3] is None:
                     await db.execute(
                         "UPDATE persistent_message_obligations "
-                        "SET resolved_at=?,resolution='reply' "
+                        "SET resolved_at=?,resolution=? "
                         "WHERE message_ref=? AND resolved_at IS NULL",
-                        (replied_at, message_ref),
+                        (
+                            replied_at or read_at,
+                            "reply" if replied_at else "read",
+                            message_ref,
+                        ),
                     )
                     remaining = await (
                         await db.execute(
-                            "SELECT COUNT(*) FROM persistent_message_obligations "
-                            "WHERE logical_agent_id=? AND resolved_at IS NULL "
-                            "AND (require_reply=1 OR alert=1)",
+                            "SELECT "
+                            "SUM(CASE WHEN alert=1 THEN 1 ELSE 0 END),"
+                            "SUM(CASE WHEN alert=0 AND require_reply=1 THEN 1 ELSE 0 END) "
+                            "FROM persistent_message_obligations "
+                            "WHERE logical_agent_id=? AND resolved_at IS NULL",
                             (obligation[0],),
                         )
                     ).fetchone()
@@ -1634,7 +1794,16 @@ class PersistentAgentStore:
                         )
                     ).fetchone()
                     revision = (int(gate[0]) if gate else 1) + 1
-                    blocked = int(int(remaining[0]) > 0)
+                    alert_count = int((remaining or (0, 0))[0] or 0)
+                    ack_count = int((remaining or (0, 0))[1] or 0)
+                    blocked = int(alert_count > 0 or ack_count > 0)
+                    reason = (
+                        "message_alert"
+                        if alert_count > 0
+                        else "message_ack"
+                        if ack_count > 0
+                        else None
+                    )
                     await db.execute(
                         "INSERT INTO persistent_fleet_gates("
                         "logical_agent_id,gate_revision,blocked,reason,updated_at) "
@@ -1646,8 +1815,8 @@ class PersistentAgentStore:
                             obligation[0],
                             revision,
                             blocked,
-                            "message_obligation" if blocked else None,
-                            replied_at,
+                            reason,
+                            replied_at or read_at or seen_at or utc_text(),
                         ),
                     )
                 await db.commit()

@@ -54,7 +54,8 @@ function activeKey(pathname: string): NavigationItem['key'] {
   if (pathname === '/') return 'fleet'
   if (pathname === '/activity') return 'activity'
   if (pathname === '/settings') return 'settings'
-  if (pathname === '/connections' || pathname.startsWith('/meshes/')) return 'connections'
+  if (pathname === '/connections' || pathname === '/connect') return 'connections'
+  if (pathname.startsWith('/meshes/') && pathname.includes('/persistent')) return 'slots'
   if (pathname === '/agents' || pathname.endsWith('/agents')) return 'agents'
   if (pathname === '/slots' || pathname.includes('/slots')) return 'slots'
   if (pathname === '/tasks' || pathname.includes('/tasks')) return 'tasks'
@@ -66,27 +67,33 @@ function activeKey(pathname: string): NavigationItem['key'] {
 
 type ContextNavigation = {
   to: string
-  labelKey: 'nav.backToFleet' | 'nav.backToServer' | 'nav.backToTasks' | 'nav.backToConnections'
-  ariaKey: 'nav.goBackToFleet' | 'nav.goBackToServer' | 'nav.goBackToTasks' | 'nav.goBackToConnections'
-  titleKey: 'title.server' | 'title.serverSlots' | 'title.slotDetail' | 'title.serverTasks' | 'title.taskDetail' | 'title.activity' | 'title.mesh'
+  ariaKey: MessageKey
+  titleKey: MessageKey
 }
 
 function contextNavigation(pathname: string, search: string): ContextNavigation | null {
   const parts = pathname.split('/').filter(Boolean)
   if (parts[0] === 'servers' && parts[1]) {
-    const serverPath = '/servers/' + encodeURIComponent(parts[1])
-    if (parts[2] === 'slots' && parts.length >= 4) return { to: serverPath + '/slots', labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.slotDetail' }
-    if (parts[2] === 'slots') return { to: serverPath, labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.serverSlots' }
-    if (parts[2] === 'tasks' && parts.length >= 5) return { to: serverPath + '/tasks', labelKey: 'nav.backToTasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
-    if (parts[2] === 'tasks') return { to: serverPath, labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
-    return { to: '/', labelKey: 'nav.backToFleet', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
+    const serverPath = '/servers/' + parts[1]
+    if (parts[2] === 'slots' && parts.length >= 4) return { to: serverPath + '/slots', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
+    if (parts[2] === 'slots') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'title.serverSlots' }
+    if (parts[2] === 'tasks' && parts.length >= 5) return { to: serverPath + '/tasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
+    if (parts[2] === 'tasks') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
+    if (parts[2] === 'agents' && parts.length >= 4) return { to: serverPath + '/agents', ariaKey: 'agents.backToAgents', titleKey: 'nav.agents' }
+    if (parts[2] === 'agents') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.agents' }
+    if (parts[2] === 'context') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.context' }
+    if (parts[2] === 'health') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.health' }
+    return { to: '/', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
   }
   if (parts[0] === 'meshes' && parts[1]) {
-    return { to: '/connections', labelKey: 'nav.backToConnections', ariaKey: 'nav.goBackToConnections', titleKey: 'title.mesh' }
+    const meshPath = '/meshes/' + parts[1]
+    if (parts[2] === 'persistent' && parts.length >= 4) return { to: meshPath + '/persistent', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
+    if (parts[2] === 'persistent') return { to: meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.serverSlots' }
+    return { to: '/connections', ariaKey: 'nav.goBackToConnections', titleKey: 'title.mesh' }
   }
   if (pathname === '/activity') {
     const server = new URLSearchParams(search).get('server')
-    if (server) return { to: '/servers/' + encodeURIComponent(server), labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.activity' }
+    if (server) return { to: '/servers/' + encodeURIComponent(server), ariaKey: 'nav.goBackToServer', titleKey: 'title.activity' }
   }
   return null
 }
@@ -109,6 +116,12 @@ export function AppShell({
     const candidate = pathServer(location.pathname) ?? params.get('server') ?? undefined
     return candidate ? servers.find((server) => server.instanceId === candidate) : undefined
   }, [location.pathname, location.search, servers])
+
+  const selectedMeshId = useMemo(() => {
+    const match = /^\/meshes\/([^/]+)/.exec(location.pathname)
+    if (!match) return undefined
+    try { return decodeURIComponent(match[1]) } catch { return match[1] }
+  }, [location.pathname])
 
 
   useEffect(() => {
@@ -135,17 +148,18 @@ export function AppShell({
   const serverState = selectedServer ? serverVisualState(selectedServer) : undefined
   const problemCount = servers.filter(needsAttention).length
   const isServerOverview = /^\/servers\/[^/]+\/?$/.test(location.pathname)
-  const appBarVariant = isServerOverview ? 'detail' : contextual ? 'secondary' : 'root'
+  const isMeshOverview = /^\/meshes\/[^/]+\/?$/.test(location.pathname)
+  const appBarVariant = isServerOverview || isMeshOverview ? 'detail' : contextual ? 'secondary' : 'root'
   const appBarTitle = isServerOverview
     ? selectedServer?.displayName ?? t('title.server')
     : contextual
       ? t(contextual.titleKey)
       : t('app.console')
-  const appBarEyebrow = selectedServer?.displayName ?? 'Terminal MCP'
+  const appBarEyebrow = selectedServer?.displayName ?? (selectedMeshId ? t('title.mesh') + ' · ' + selectedMeshId : 'Terminal MCP')
   const bottomNavigation = globalNavigation.filter((item) => bottomNavigationKeys.has(item.key))
   const isGlobalActive = (key: NavigationItem['key']) => {
     if (key === 'fleet') return location.pathname === '/'
-    if (key === 'connections') return location.pathname === '/connections' || location.pathname.startsWith('/meshes/')
+    if (key === 'connections') return location.pathname === '/connections' || location.pathname === '/connect'
     if (key === 'settings') return location.pathname === '/settings'
     return false
   }
@@ -272,6 +286,17 @@ export function AppShell({
                   {t(item.labelKey)}
                 </Link>
               ))}
+            </div>
+          ) : null}
+
+          {selectedMeshId ? (
+            <div className="navigation-context-group" aria-label={t('title.mesh') + ' · ' + selectedMeshId}>
+              <Link className={isMeshOverview ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId)} onClick={() => setMenuOpen(false)}>
+                {t('nav.overview')}
+              </Link>
+              <Link className={location.pathname.includes('/persistent') ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId) + '/persistent'} onClick={() => setMenuOpen(false)}>
+                {t('nav.slots')}
+              </Link>
             </div>
           ) : null}
 

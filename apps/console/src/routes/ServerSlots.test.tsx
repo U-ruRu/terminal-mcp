@@ -194,14 +194,20 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test('server-scoped slots derive Server context from the route without a second selector', () => {
+  renderSlots([instance('live', slot())])
+  expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
+})
+
 test('cached/offline read state does not disable a healthy authenticated write route', async () => {
   const user = userEvent.setup()
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
   renderSlots([instance('offline', slot())], mutate)
-  expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
+  expect(screen.getByText('Paused')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Make available' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('status')).toHaveTextContent('cached')
-  await user.click(screen.getByRole('button', { name: 'Play' }))
+  await user.click(screen.getByRole('button', { name: 'Make available' }))
   expect(mutate).toHaveBeenCalledWith(
     'alpha',
     '/actions/persistent/slots/play',
@@ -241,6 +247,7 @@ test('expanded slot detail exposes session, generations and admission policy', a
   const user = userEvent.setup()
   renderSlots([instance('live', slot('active', '2026-09-30T12:02:00Z'))])
   await user.click(screen.getByRole('link', { name: 'Details' }))
+  expect(screen.getByText('Technical details')).toBeInTheDocument()
 
   expect(screen.getByText('Legacy selector')).toBeInTheDocument()
   expect(screen.getByText('Selector generation')).toBeInTheDocument()
@@ -263,14 +270,14 @@ test('policy controls mutate D/W/A/R and Legacy through the authenticated write 
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
   renderSlots([instance('live', slot())], mutate)
 
-  const duration = screen.getByRole('spinbutton', { name: 'Hard session duration (seconds)' })
-  const warning = screen.getByRole('spinbutton', { name: 'Warning point (seconds)' })
-  const alert = screen.getByRole('spinbutton', { name: 'Alert point (seconds)' })
-  const rearm = screen.getByRole('spinbutton', { name: 'Automatic rearm delay (seconds)' })
-  await user.clear(duration); await user.type(duration, '180')
-  await user.clear(warning); await user.type(warning, '60')
-  await user.clear(alert); await user.type(alert, '120')
-  await user.clear(rearm); await user.type(rearm, '15')
+  const duration = screen.getByRole('textbox', { name: 'Session duration' })
+  const warning = screen.getByRole('textbox', { name: 'Warning time' })
+  const alert = screen.getByRole('textbox', { name: 'Alert time' })
+  const rearm = screen.getByRole('textbox', { name: 'Rearm delay' })
+  await user.clear(duration); await user.type(duration, '3 min')
+  await user.clear(warning); await user.type(warning, '1 min')
+  await user.clear(alert); await user.type(alert, '2 min')
+  await user.clear(rearm); await user.type(rearm, '15 sec')
   await user.click(screen.getByRole('button', { name: 'Save session policy' }))
   expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { duration_seconds: 180, warning_after_seconds: 60, alert_after_seconds: 120, rearm_after_seconds: 15 })
 
@@ -364,16 +371,16 @@ test('managed AccessPolicy uses Fleet control authority for timing, Legacy and r
 
   renderSlots([instance('offline', slot('active', '2026-09-30T12:02:00Z')), authorityInstance()], persistentMutate, undefined, loadControl, mutateControl)
   await waitFor(() => expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeEnabled())
-  expect(screen.queryByText(/Suspend or cancel every armed\/active slot/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/Suspend or pause every ready or active Slot/)).not.toBeInTheDocument()
 
-  const duration = screen.getByRole('spinbutton', { name: 'Hard session duration (seconds)' })
-  const warning = screen.getByRole('spinbutton', { name: 'Warning point (seconds)' })
-  const alert = screen.getByRole('spinbutton', { name: 'Alert point (seconds)' })
-  const rearm = screen.getByRole('spinbutton', { name: 'Automatic rearm delay (seconds)' })
-  await user.clear(duration); await user.type(duration, '180')
-  await user.clear(warning); await user.type(warning, '60')
-  await user.clear(alert); await user.type(alert, '120')
-  await user.clear(rearm); await user.type(rearm, '15')
+  const duration = screen.getByRole('textbox', { name: 'Session duration' })
+  const warning = screen.getByRole('textbox', { name: 'Warning time' })
+  const alert = screen.getByRole('textbox', { name: 'Alert time' })
+  const rearm = screen.getByRole('textbox', { name: 'Rearm delay' })
+  await user.clear(duration); await user.type(duration, '3 min')
+  await user.clear(warning); await user.type(warning, '1 min')
+  await user.clear(alert); await user.type(alert, '2 min')
+  await user.clear(rearm); await user.type(rearm, '15 sec')
   await user.click(screen.getByRole('button', { name: 'Save session policy' }))
 
   expect(mutateControl).toHaveBeenNthCalledWith(1, 'main', '/actions/fleet/control/policy', {
@@ -406,10 +413,10 @@ test('old server snapshots do not expose policy mutation controls', () => {
 test('stale active state remains informative but does not client-side fence policy writes', () => {
   renderSlots([instance('live', slot('active', '2026-09-30T12:02:00Z'))], vi.fn(async () => ({ ok: true, payload: { ok: true } })) as PersistentMutator)
   expect(screen.getByRole('button', { name: 'Save session policy' })).toBeEnabled()
-  expect(screen.getByRole('spinbutton', { name: 'Hard session duration (seconds)' })).toBeEnabled()
+  expect(screen.getByRole('textbox', { name: 'Session duration' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('checkbox', { name: 'Allow Legacy agent admission' })).toBeEnabled()
-  expect(screen.getByText(/Suspend or cancel every armed\/active slot/)).toBeInTheDocument()
+  expect(screen.getByText(/Suspend or pause every ready or active Slot/)).toBeInTheDocument()
 })
 
 
@@ -432,7 +439,7 @@ test('unpaired projected slot can load audit through Fleet ingress while mutatio
 
   await waitFor(() => expect(loadAudit).toHaveBeenCalledWith('fleet-source-node-b', 'la_alpha'))
   expect(screen.getByText('session_start')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Make available' })).toBeDisabled()
   expect(mutate).not.toHaveBeenCalled()
 })
 
@@ -594,8 +601,18 @@ test('managed Mesh exposes Persistent slots without a physical-server switcher',
     </I18nProvider>,
   )
 
-  expect(screen.getByText('Production')).toBeInTheDocument()
   expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Alpha Slot' })).toHaveAttribute('href', '/meshes/mesh-prod/persistent/la_alpha')
-  expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/meshes/mesh-prod')
+  expect(screen.queryByRole('link', { name: 'Mesh' })).not.toBeInTheDocument()
+})
+
+test('unknown Persistent state has a human fallback while raw state stays diagnostic', async () => {
+  const user = userEvent.setup()
+  renderSlots([instance('live', slot('future_backend_state'))])
+  expect(screen.getByText('State unavailable')).toBeInTheDocument()
+  expect(screen.queryByText('future_backend_state')).not.toBeInTheDocument()
+
+  await user.click(screen.getByRole('link', { name: 'Details' }))
+  expect(screen.getByText('Technical details')).toBeInTheDocument()
+  expect(screen.getByText('future_backend_state')).toBeInTheDocument()
 })

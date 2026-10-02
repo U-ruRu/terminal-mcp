@@ -2124,3 +2124,25 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .fleet-mesh-row strong, .fleet-mesh-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fleet-mesh-row small { color: var(--color-muted); font-size: var(--font-caption-size); }
 .fleet-mesh-row:hover, .fleet-mesh-row:focus-visible { background: var(--color-surface-raised); outline-offset: -2px; }
+
+/* Persistent human-facing hierarchy */
+.slot-more-actions,
+.technical-details { min-width: 0; }
+.slot-more-actions > summary,
+.technical-details > summary {
+  min-height: var(--touch-target);
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+.slot-more-actions[open] > summary,
+.technical-details[open] > summary { margin-bottom: var(--space-2); }
+.technical-details { margin-top: var(--space-3); border-top: 1px solid var(--color-border); padding-top: var(--space-2); }
+.slot-more-actions .server-actions { padding-top: var(--space-1); }
+@media (max-width: 700px) {
+  .slot-more-actions { width: 100%; }
+  .slot-more-actions > summary { width: 100%; }
+  .slot-more-actions .server-actions { grid-template-columns: 1fr; }
+}

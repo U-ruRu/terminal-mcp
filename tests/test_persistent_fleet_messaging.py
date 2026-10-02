@@ -58,6 +58,37 @@ class FakeFleetBridge:
     async def list_access_slots(self):
         return list(self.slots)
 
+    async def surface_obligations(
+        self,
+        *,
+        logical_agent_id,
+        work_session_id,
+        session_epoch,
+        obligations,
+        retention_calls=5,
+    ):
+        refs = {item["message_ref"] for item in obligations}
+        for item in self.inbox:
+            if item.get("message_ref") not in refs:
+                continue
+            item["seen_count"] = int(item.get("seen_count") or 0) + 1
+            item["first_seen_at"] = item.get("first_seen_at") or "2026-10-02T00:00:01Z"
+            item["last_seen_at"] = "2026-10-02T00:00:01Z"
+            if not item.get("require_reply") and not item.get("alert"):
+                item["read_at"] = item.get("read_at") or "2026-10-02T00:00:01Z"
+
+    async def message_inbox(
+        self,
+        logical_agent_id,
+        *,
+        work_session_id,
+        session_epoch,
+        show_all=False,
+        recent_seconds=300,
+        limit=50,
+    ):
+        return list(self.inbox)[:limit]
+
 
 def make_backend():
     service = SimpleNamespace(
@@ -307,13 +338,22 @@ async def test_roaming_inbox_preserves_logical_sender_identity():
     result = await backend.access_message("Sender", access_code="0042")
 
     assert result["ok"] is True
-    assert result["pending_messages"] == [
+    assert result["messages"] == [
         {
             "message_hash": "home:msg:1",
             "sender": "Recipient",
             "text": "back",
-            "require_reply": False,
-            "alert": False,
+            "mode": "notify",
+            "state": "read",
             "created_at": "2026-10-02T00:00:00Z",
+            "first_seen_at": "2026-10-02T00:00:01Z",
+            "last_seen_at": "2026-10-02T00:00:01Z",
+            "seen_count": 1,
+            "read_at": "2026-10-02T00:00:01Z",
+            "replied_at": None,
+            "reply_message_hash": None,
+            "namespace": None,
+            "task_id": None,
         }
     ]
+    assert result["inbox"] == result["messages"]

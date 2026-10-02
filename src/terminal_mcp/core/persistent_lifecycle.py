@@ -362,7 +362,7 @@ class PersistentLifecycleCoordinator:
         access_code_verified: bool = False,
     ):
         self._available()
-        verified = self._admission(admission)
+        verified = None if access_code_verified else self._admission(admission)
         try:
             session = await self.store.assert_session_authority(
                 logical_agent_id, work_session_id, session_epoch, now=now
@@ -374,6 +374,7 @@ class PersistentLifecycleCoordinator:
         if (
             not access_code_verified
             and session.auth_principal_id
+            and verified is not None
             and session.auth_principal_id != verified.principal_id
         ):
             raise PersistentLifecycleError("persistent_auth_required")

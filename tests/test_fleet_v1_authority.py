@@ -272,7 +272,7 @@ async def test_request_dedup_and_message_gate_share_one_home_obligation(tmp_path
         require_reply=True,
         alert=False,
     )
-    with pytest.raises(PersistentStoreError, match="coordination_blocked"):
+    with pytest.raises(PersistentStoreError, match="coordination_ack_required"):
         await bridge.issue_permit(
             logical_agent_id=started["logical_agent_id"],
             work_session_id=ws["work_session_id"],
@@ -849,8 +849,11 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
     created = await home.adopt(mesh_id="mesh-a", display_name="Before")
     assert [node["node_id"] for node in created["nodes"]] == ["home"]
     await home.upsert_node(
-        node_id="remote", mesh_id="mesh-a", origin="https://remote.example",
-        public_key=remote_public, auth_token="remote-token",
+        node_id="remote",
+        mesh_id="mesh-a",
+        origin="https://remote.example",
+        public_key=remote_public,
+        auth_token="remote-token",
         expected_topology_revision=created["revisions"]["topology"],
     )
 
@@ -1046,18 +1049,23 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
             raise RuntimeError("offline")
         return _FakeResponse({"ok": True, "control": body["state"]})
 
+    runtime_target = type("RuntimeTarget", (), {"config": config})()
     control = ManagedFleetControl(
         store,
         config,
         _PolicyStub(),
         public_base_url="https://home.example",
+        runtime_targets=(runtime_target,),
         client_factory=lambda: _FakeClient(handler),
     )
     created = await control.adopt(mesh_id="mesh-a", display_name="Fleet")
     assert [node["node_id"] for node in created["nodes"]] == ["home"]
     await control.upsert_node(
-        node_id="remote", mesh_id="mesh-a", origin="https://remote.example",
-        public_key=remote_public, auth_token="remote-token",
+        node_id="remote",
+        mesh_id="mesh-a",
+        origin="https://remote.example",
+        public_key=remote_public,
+        auth_token="remote-token",
         expected_topology_revision=created["revisions"]["topology"],
     )
     state = await control.snapshot()
@@ -1074,8 +1082,15 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
     assert remote["desired_trust_revision"] == remote["applied_trust_revision"]
     assert remote["desired_policy_revision"] == remote["applied_policy_revision"]
 
+    bootstrap_config = config
+    control.config = bootstrap_config
+    runtime_target.config = bootstrap_config
+    assert runtime_target.config.local_auth_token is None
+
     await control.reconcile_pending()
     assert attempts == first_attempts + 1
+    assert control.config.local_auth_token
+    assert runtime_target.config.local_auth_token == control.config.local_auth_token
 
 
 @pytest.mark.asyncio
@@ -1335,6 +1350,7 @@ async def test_multi_mesh_membership_supports_standalone_attach_move_and_detach(
     assert node_b["state"] == "active"
     assert node_b["mesh_id"] is None
 
+
 @pytest.mark.asyncio
 async def test_control_authority_rehome_is_persisted_and_requires_standalone(tmp_path):
     path = tmp_path / "rehome-control.sqlite3"
@@ -1384,6 +1400,7 @@ async def test_control_authority_rehome_is_persisted_and_requires_standalone(tmp
     with pytest.raises(FleetControlError, match="control_authority_rehome_requires_standalone"):
         await restarted.claim_local_control_authority()
 
+
 @pytest.mark.asyncio
 async def test_message_permit_is_fenced_by_the_same_persistent_session(tmp_path):
     _, store, life, bridge, _, started, ctx, _ = await authority_fixture(tmp_path)
@@ -1432,3 +1449,203 @@ async def test_message_permit_is_fenced_by_the_same_persistent_session(tmp_path)
 async def test_fleet_bridge_starts_with_empty_remote_obligation_cache(tmp_path):
     _, _, _, bridge, _, started, _, _ = await authority_fixture(tmp_path)
     assert bridge.cached_obligations(started["logical_agent_id"]) == []
+
+
+@pytest.mark.asyncio
+async def test_notify_message_surfaces_five_times_then_leaves_auto_inbox(tmp_path):
+    _, store, _, _, _, started, _, _ = await authority_fixture(tmp_path)
+    logical_agent_id = started["logical_agent_id"]
+    message_ref = "home:msg:notify-five"
+    await store.create_message_obligation(
+        message_ref=message_ref,
+        logical_agent_id=logical_agent_id,
+        sender_agent_id="manager",
+        text="FYI",
+        require_reply=False,
+        alert=False,
+    )
+
+    for expected in range(1, 6):
+        open_before = await store.open_message_obligations(logical_agent_id)
+        assert any(item["message_ref"] == message_ref for item in open_before)
+        await store.surface_message_obligations(
+            logical_agent_id,
+            [message_ref],
+            "home",
+            retention_calls=5,
+        )
+        history = await store.message_inbox(logical_agent_id, show_all=True)
+        current = next(item for item in history if item["message_ref"] == message_ref)
+        assert current["seen_count"] == expected
+        assert current["read_at"] is not None
+
+    assert all(
+        item["message_ref"] != message_ref
+        for item in await store.open_message_obligations(logical_agent_id)
+    )
+    history = await store.message_inbox(logical_agent_id, show_all=True)
+    current = next(item for item in history if item["message_ref"] == message_ref)
+    assert current["resolution"] == "retention"
+    assert current["resolved_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_ack_message_blocks_only_run_until_explicit_read_ack(tmp_path):
+    _, store, _, bridge, _, started, ctx, _ = await authority_fixture(tmp_path)
+    logical_agent_id = started["logical_agent_id"]
+    ws = started["work_session"]
+    message_ref = "home:msg:ack-required"
+    await store.create_message_obligation(
+        message_ref=message_ref,
+        logical_agent_id=logical_agent_id,
+        sender_agent_id="manager",
+        text="Please acknowledge",
+        require_reply=True,
+        alert=False,
+    )
+    await store.surface_message_obligations(
+        logical_agent_id,
+        [message_ref],
+        "remote",
+        retention_calls=5,
+    )
+
+    with pytest.raises(PersistentStoreError, match="coordination_ack_required"):
+        await bridge.issue_permit(
+            logical_agent_id=logical_agent_id,
+            work_session_id=ws["work_session_id"],
+            session_epoch=ws["session_epoch"],
+            requesting_instance_id="remote",
+            scope="run",
+            operation="run",
+            request_id="ack-run-blocked",
+            principal_id=ctx.principal_id,
+        )
+
+    read_permit = await bridge.issue_permit(
+        logical_agent_id=logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+        requesting_instance_id="remote",
+        scope="read",
+        operation="read",
+        request_id="ack-read-allowed",
+        principal_id=ctx.principal_id,
+    )
+    assert read_permit.scope == "read"
+
+    await store.merge_message_receipt(
+        message_ref,
+        "remote",
+        read_at=utc_text(),
+    )
+    run_permit = await bridge.issue_permit(
+        logical_agent_id=logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+        requesting_instance_id="remote",
+        scope="run",
+        operation="run",
+        request_id="ack-run-after-read",
+        principal_id=ctx.principal_id,
+    )
+    assert run_permit.scope == "run"
+
+
+@pytest.mark.asyncio
+async def test_alert_requires_reply_but_cancel_remains_available(tmp_path):
+    _, store, _, bridge, _, started, ctx, _ = await authority_fixture(tmp_path)
+    logical_agent_id = started["logical_agent_id"]
+    ws = started["work_session"]
+    message_ref = "home:msg:alert-reply"
+    await store.create_message_obligation(
+        message_ref=message_ref,
+        logical_agent_id=logical_agent_id,
+        sender_agent_id="manager",
+        text="Stop and reply",
+        require_reply=True,
+        alert=True,
+    )
+
+    with pytest.raises(PersistentStoreError, match="coordination_alert"):
+        await bridge.issue_permit(
+            logical_agent_id=logical_agent_id,
+            work_session_id=ws["work_session_id"],
+            session_epoch=ws["session_epoch"],
+            requesting_instance_id="remote",
+            scope="read",
+            operation="read",
+            request_id="alert-read-blocked",
+            principal_id=ctx.principal_id,
+        )
+
+    cancel_permit = await bridge.issue_permit(
+        logical_agent_id=logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+        requesting_instance_id="remote",
+        scope="cancel",
+        operation="cancel",
+        request_id="alert-cancel-allowed",
+        principal_id=ctx.principal_id,
+    )
+    assert cancel_permit.scope == "cancel"
+
+    await store.merge_message_receipt(message_ref, "remote", read_at=utc_text())
+    assert any(
+        item["message_ref"] == message_ref
+        for item in await store.open_message_obligations(logical_agent_id)
+    )
+    with pytest.raises(PersistentStoreError, match="coordination_alert"):
+        await bridge.issue_permit(
+            logical_agent_id=logical_agent_id,
+            work_session_id=ws["work_session_id"],
+            session_epoch=ws["session_epoch"],
+            requesting_instance_id="remote",
+            scope="task",
+            operation="task",
+            request_id="alert-task-after-ack",
+            principal_id=ctx.principal_id,
+        )
+
+    stamp = utc_text()
+    await store.merge_message_receipt(
+        message_ref,
+        "remote",
+        read_at=stamp,
+        replied_at=stamp,
+        reply_message_ref="home:msg:reply",
+    )
+    assert all(
+        item["message_ref"] != message_ref
+        for item in await store.open_message_obligations(logical_agent_id)
+    )
+
+
+@pytest.mark.asyncio
+async def test_authoritative_inbox_prunes_resolved_attachment_cache(tmp_path):
+    _, _, _, bridge, _, started, _, _ = await authority_fixture(tmp_path)
+    logical_agent_id = started["logical_agent_id"]
+    ws = started["work_session"]
+    bridge._remote_obligations["home:msg:resolved"] = {
+        "home_node_id": "home",
+        "logical_agent_id": logical_agent_id,
+        "message_ref": "home:msg:resolved",
+        "sender_agent_id": "manager",
+        "text": "already resolved",
+        "require_reply": False,
+        "alert": False,
+        "gate_revision": 1,
+        "created_at": "2026-10-02T00:00:00Z",
+        "work_session_id": ws["work_session_id"],
+        "session_epoch": ws["session_epoch"],
+    }
+
+    inbox = await bridge.inbox_obligations(
+        logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+    )
+
+    assert inbox == []
+    assert bridge.cached_obligations(logical_agent_id) == []

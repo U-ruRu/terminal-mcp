@@ -700,15 +700,15 @@ export function Connections() {
   ].filter((group) => group.profiles.length > 0)
 
   return (
-    <section className="stack" aria-labelledby="connections-title">
-      <div className="page-heading">
+    <section className="stack" aria-label={routeMeshId ? t('title.mesh') : t('connections.title')}>
+      {!routeMeshId ? <div className="page-heading">
         <div>
           <p className="eyebrow">{t('connections.fleetAccess')}</p>
-          <h2 id="connections-title">{t('connections.title')}</h2>
+          <h2>{t('connections.title')}</h2>
           <p className="muted">{t('connections.restoreHint')}</p>
         </div>
         <span className="environment-badge">{number(profiles.length)} {t('connections.saved')}</span>
-      </div>
+      </div> : null}
 
       {!routeMeshId ? <form className="panel connection-form" onSubmit={onSubmit}>
         <div>
@@ -749,27 +749,27 @@ export function Connections() {
         <div className="connection-card-heading">
           <div>
             <p className="eyebrow">{t('connections.mesh')}</p>
-            <h3>{selectedMesh?.displayName ?? (authoritative ? t('connections.standalone') : t('connections.unknown'))}</h3>
+            <h3>{routeMeshId ? selectedMesh?.displayName ?? t('connections.unknown') : t('fleet.meshes')}</h3>
           </div>
-          {selectedMesh ? (
+          {routeMeshId && selectedMesh ? (
             <span className={'status mesh-state-' + meshOperationalState}>
               {operationalLabel(meshOperationalState, t)}
             </span>
           ) : null}
         </div>
-        <p className="muted">{t('connections.manageHint')}</p>
+        <p className="muted">{routeMeshId ? t('connections.manageHint') : t('fleet.meshesHint')}</p>
         {selectedMesh && routeMeshId ? (
           <div className="connection-actions">
             <Link className="nav-link" to={meshPersistentRoute(selectedMesh.meshId)}>{t('nav.slots')}</Link>
           </div>
         ) : null}
-        {selectedMesh ? (
+        {routeMeshId && selectedMesh ? (
           <div className="mesh-operational-summary">
             <span>{t('connections.meshState')}: {operationalLabel(meshOperationalState, t)}</span>
             <span>{t('connections.members')}: {number(selectedMembers.length)}</span>
           </div>
         ) : null}
-        {authoritative?.managed ? (
+        {routeMeshId && authoritative?.managed ? (
           <details className="mesh-technical-details">
             <summary>{t('connections.technicalDetails')}</summary>
             <div className="mesh-revisions">
@@ -787,7 +787,7 @@ export function Connections() {
           </details>
         ) : null}
 
-        {meshes.length > 0 ? (
+        {!routeMeshId && meshes.length > 0 ? (
           <nav className="mesh-entity-list" aria-label={t('connections.mesh')}>
             {meshes.map((mesh) => (
               <a key={mesh.meshId} className={selectedMesh?.meshId === mesh.meshId ? 'chip active' : 'chip'} href={meshRoute(mesh.meshId)}>
@@ -797,26 +797,8 @@ export function Connections() {
           </nav>
         ) : null}
 
-        {meshes.length > 0 && !routeMeshId ? (
-          <label className="ui-field">
-            <span>{t('connections.mesh')}</span>
-            <select
-              value={selectedMesh?.meshId ?? ''}
-              onChange={(event) => {
-                const mesh = meshes.find((item) => item.meshId === event.target.value)
-                if (!mesh) return
-                setSelectedMeshId(mesh.meshId)
-                setMeshName(mesh.displayName)
-              }}
-            >
-              {meshes.map((mesh) => (
-                <option key={mesh.meshId} value={mesh.meshId}>{mesh.displayName}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
 
-        {selectedMesh ? (
+        {routeMeshId && selectedMesh ? (
           <>
             <label className="ui-field">
               <span>{t('connections.meshName')}</span>
@@ -888,7 +870,7 @@ export function Connections() {
                 : t('connections.failed')}
           </p>
         ) : null}
-        {authoritativeFreshness !== 'fresh' ? (
+        {routeMeshId && authoritativeFreshness !== 'fresh' ? (
           <p className="muted" role="status">
             {t('connections.syncState')}: {t('connections.unavailable')}
           </p>
@@ -900,7 +882,7 @@ export function Connections() {
         {profiles.length === 0 ? (
           <FeedbackState variant="empty" title={t('connections.noPairedServers')} detail={t('connections.usePairingLink')} />
         ) : (
-          connectionGroups.filter((group) => !routeMeshId || group.key === routeMeshId).map((group) => (
+          connectionGroups.map((group) => (
             <section className="connection-group" key={group.key}>
               <div className="connection-group-heading">
                 <h3>{group.label}</h3>
@@ -939,7 +921,9 @@ export function Connections() {
                       <p className="muted">{t('connections.device')}: {profile.metadata.deviceLabel}</p>
                       <div className="connection-fleet-status">
                         <span>
-                          {t('connections.mesh')}: {membershipLabel}{membership.freshness === 'stale' ? ' · ' + t('connections.stale') : ''}
+                          {t('connections.mesh')}: {membership.kind === 'mesh' && membership.meshId && !routeMeshId
+                            ? <a className="text-link" href={meshRoute(membership.meshId)}>{membershipLabel}</a>
+                            : membershipLabel}{membership.freshness === 'stale' ? ' · ' + t('connections.stale') : ''}
                         </span>
                         <span>{t('connections.reachability')}: {statusLabel(state?.status, t)}</span>
                         {membership.kind === 'mesh' || membershipMutation ? (
@@ -948,7 +932,7 @@ export function Connections() {
                           </span>
                         ) : null}
                       </div>
-                      {membership.kind !== 'unknown' && meshes.length > 0 ? (
+                      {routeMeshId && membership.kind !== 'unknown' && meshes.length > 0 ? (
                         <label className="mesh-membership-control ui-field">
                           <span>{t('connections.membership')}</span>
                           <select
@@ -985,12 +969,12 @@ export function Connections() {
                         </p>
                       ) : null}
                       <div className="connection-actions">
-                        {state?.status === 'error' && state.retryable ? (
+                        {!routeMeshId && state?.status === 'error' && state.retryable ? (
                           <button type="button" onClick={() => void retry(profile.instanceId)}>
                             {t('connections.retry')}
                           </button>
                         ) : null}
-                        {observed?.control?.managed ? (
+                        {routeMeshId && observed?.control?.managed ? (
                           <button
                             type="button"
                             disabled={controlBusy || state?.status !== 'connected'}
@@ -999,13 +983,13 @@ export function Connections() {
                             {t('connections.rotateTrust')}
                           </button>
                         ) : null}
-                        <button
+                        {!routeMeshId ? <button
                           type="button"
                           className="destructive-action"
                           onClick={() => disconnect(profile.instanceId)}
                         >
                           {t('connections.remove')}
-                        </button>
+                        </button> : null}
                       </div>
                     </article>
                   )
