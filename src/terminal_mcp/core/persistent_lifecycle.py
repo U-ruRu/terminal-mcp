@@ -321,6 +321,7 @@ class PersistentLifecycleCoordinator:
         expected_revision: int,
         admission: VerifiedAdmissionContext | None = None,
         origin_instance_id: str | None = None,
+        now: str | None = None,
     ) -> dict:
         self._available()
         verified = self._admission(admission)
@@ -333,6 +334,8 @@ class PersistentLifecycleCoordinator:
                 auth_generation=verified.auth_generation,
                 authority_node_id=self.authority_node_id,
                 origin_instance_id=origin_instance_id or self.authority_node_id,
+                session_duration_seconds=self.session_duration_seconds,
+                now=now,
             )
         except PersistentStoreError as exc:
             self._raise_store(exc)
@@ -384,6 +387,7 @@ class PersistentLifecycleCoordinator:
         reason: str,
         terminal_state: str,
         cancel_commands: bool = True,
+        now: str | None = None,
     ) -> dict:
         try:
             await self.store.begin_session_stop(
@@ -391,6 +395,7 @@ class PersistentLifecycleCoordinator:
                 session.work_session_id,
                 session.session_epoch,
                 reason=reason,
+                now=now,
             )
         except PersistentStoreError as exc:
             self._raise_store(exc)
@@ -422,16 +427,36 @@ class PersistentLifecycleCoordinator:
                     if terminal_state in {"ended", "expired"} and reason != "suspend"
                     else None
                 ),
+                now=now,
             )
         except PersistentStoreError as exc:
             self._raise_store(exc)
-        return {
+        response_now = ended.ended_at or now or utc_text()
+        remaining_d_seconds = max(
+            0,
+            int((parse_utc(ended.hard_expires_at) - parse_utc(response_now)).total_seconds()),
+        )
+        roaming_available = (
+            reason == "session_end"
+            and terminal_state == "ended"
+            and remaining_d_seconds > 0
+        )
+        result = {
             "ok": True,
             "stopping": False,
             "slot": asdict(slot),
             "work_session": asdict(ended),
-            "server_now": utc_text(),
+            "hard_expires_at": ended.hard_expires_at,
+            "remaining_d_seconds": remaining_d_seconds,
+            "roaming_available": roaming_available,
+            "server_now": response_now,
         }
+        if roaming_available:
+            result["roaming_message"] = (
+                "This session identity can be reopened on any eligible Fleet server "
+                "within the remaining D window."
+            )
+        return result
 
     async def _authorize_stop_session(
         self,
@@ -478,6 +503,7 @@ class PersistentLifecycleCoordinator:
         *,
         admission: VerifiedAdmissionContext | None = None,
         access_code_verified: bool = False,
+        now: str | None = None,
     ) -> dict:
         session = await self._authorize_stop_session(
             logical_agent_id,
@@ -492,6 +518,7 @@ class PersistentLifecycleCoordinator:
             reason="session_end",
             terminal_state="ended",
             cancel_commands=False,
+            now=now,
         )
 
     async def session_interrupt(

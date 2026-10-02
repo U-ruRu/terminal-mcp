@@ -554,6 +554,9 @@ async def test_access_session_start_accepts_fresh_lifecycle_mapping(tmp_path):
     token = bind_admission_context(ctx)
     try:
         result = await backend.access_session_start(mode="persistent", access_code="0042")
+        duplicate = await backend.access_session_start(mode="persistent", access_code="0042")
+        ended = await backend.access_session_stop("0042")
+        reopened = await backend.access_session_start(mode="persistent", access_code="0042")
     finally:
         reset_admission_context(token)
 
@@ -563,6 +566,15 @@ async def test_access_session_start_accepts_fresh_lifecycle_mapping(tmp_path):
     assert result["session_ref"].startswith("ws_")
     assert result["session_epoch"] == 1
     assert result["hard_expires_at"]
+    assert duplicate["ok"] is False
+    assert duplicate["code"] == "session_already_active"
+    assert ended["ok"] is True
+    assert ended["remaining_d_seconds"] > 0
+    assert ended["roaming_available"] is True
+    assert "any eligible Fleet server" in ended["roaming_message"]
+    assert reopened["ok"] is True
+    assert reopened["session_epoch"] == 2
+    assert reopened["hard_expires_at"] == result["hard_expires_at"]
 
 
 @pytest.mark.asyncio

@@ -709,7 +709,7 @@ def build_mcp(
     @mcp.tool(
         structured_output=False,
         annotations=_SAFE_OPERATION,
-        description="Start or end one immutable Persistent work session. Starting requires an Armed slot plus verified authenticated admission.",
+        description="Start or end one immutable Persistent work session. Start accepts an Armed slot or a reopenable D-window after normal end, with verified authenticated admission.",
     )
     async def persistent_session(
         action: Literal["start", "end"],
