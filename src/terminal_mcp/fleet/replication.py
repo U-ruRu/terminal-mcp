@@ -550,7 +550,7 @@ class FleetReplicationService:
 
     def _headers(self, peer: FleetPeer) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {peer.auth_token}",
+            "Authorization": f"Bearer {self.config.outbound_auth_token(peer)}",
             "X-Terminal-MCP-Peer": self.config.instance_id,
         }
 

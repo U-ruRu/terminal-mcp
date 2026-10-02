@@ -270,6 +270,7 @@ class ManagedFleetControl:
                     self.config.peers,
                     self.config.replication_interval_seconds,
                     self.config.request_timeout_seconds,
+                    self.config.local_auth_token,
                 )
             )
         return identity
@@ -285,6 +286,7 @@ class ManagedFleetControl:
                 self.config.peers,
                 self.config.replication_interval_seconds,
                 self.config.request_timeout_seconds,
+                self.config.local_auth_token,
             )
         )
         return identity
@@ -613,6 +615,7 @@ class ManagedFleetControl:
             self.bootstrap_config.peers if use_peers else (),
             self.bootstrap_config.replication_interval_seconds,
             self.bootstrap_config.request_timeout_seconds,
+            None,
         )
         self._replace_runtime_config(config)
 
@@ -669,12 +672,14 @@ class ManagedFleetControl:
             for node_id in sorted(material)
             if any(node["node_id"] == node_id for node in active_nodes)
         )
+        identity = await self._ensure_local_identity()
         new_config = FleetConfig(
             self.config.instance_id,
             self.config.signing_private_key,
             peers,
             self.config.replication_interval_seconds,
             self.config.request_timeout_seconds,
+            str(identity["ingress_token"]),
         )
         self._replace_runtime_config(new_config)
         await self.store.mark_managed_applied(

@@ -75,7 +75,7 @@ class FleetProjectionService:
 
     def _headers(self, peer) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {peer.auth_token}",
+            "Authorization": f"Bearer {self.config.outbound_auth_token(peer)}",
             "X-Terminal-MCP-Peer": self.config.instance_id,
         }
 
