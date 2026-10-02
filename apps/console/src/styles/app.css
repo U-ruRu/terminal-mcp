@@ -1109,3 +1109,14 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
     grid-template-columns: 1fr;
   }
 }
+
+
+.destructive-action {
+  border-color: color-mix(in srgb, var(--color-danger) 72%, var(--color-border)) !important;
+  background: color-mix(in srgb, var(--color-danger) 14%, var(--color-surface)) !important;
+  color: var(--color-danger) !important;
+}
+.destructive-action:hover:not(:disabled),
+.destructive-action:focus-visible:not(:disabled) {
+  border-color: var(--color-danger) !important;
+}
