@@ -1,25 +1,20 @@
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
-import type { FleetReadModel, FleetServerReadModel } from '../fleet/readModel'
+import { ResourceMetric } from '../components/ResourceMetric'
+import { StatusBadge } from '../components/StatusBadge'
+import { serverVisualState, type ServerVisualState } from '../components/serverPresentation'
+import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
 import { activityRoute, agentRoute, contextRoute, healthRoute, taskRoute, tasksRoute } from '../navigation/routes'
 
-function percent(value: number | undefined, unavailable: string) {
-  return value === undefined ? unavailable : Math.round(value) + '%'
-}
 
-function resourceValue(server: FleetServerReadModel, kind: 'cpu' | 'memory' | 'filesystem', unavailable: string, loadLabel: string) {
-  const resources = server.resources
-  if (!resources) return unavailable
-  if (kind === 'cpu') {
-    if (resources.cpu.status !== 'available') return unavailable
-    return resources.cpu.usagePercent === undefined
-      ? resources.cpu.load1m === undefined ? unavailable : loadLabel + ' ' + resources.cpu.load1m.toFixed(2)
-      : percent(resources.cpu.usagePercent, unavailable)
-  }
-  const item = kind === 'memory' ? resources.memory : resources.filesystem
-  return item.status === 'available' ? percent(item.usedPercent, unavailable) : unavailable
+function statusLabel(state: ServerVisualState, t: ReturnType<typeof useI18n>['t']): string {
+  if (state === 'healthy') return t('status.live')
+  if (state === 'stale') return t('status.stale')
+  if (state === 'offline') return t('status.offline')
+  if (state === 'loading') return t('status.catchingUp')
+  return t('fleet.needsAttention')
 }
 
 function duration(seconds: number | undefined): string {
@@ -44,6 +39,7 @@ export function ServerWorkspace({
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
   if (!server) return <Navigate to="/" replace />
 
+  const visualState = serverVisualState(server)
   const snapshot = instance?.runtime.realtime?.snapshot
   const agents = snapshot?.agents.filter((agent) => agent.status === 'active') ?? []
   const tasks = snapshot?.tasks ?? []
@@ -58,7 +54,7 @@ export function ServerWorkspace({
         </div>
         <div className="page-tools">
           <label className="server-switcher"><span>{t('server.switch')}</span><select aria-label={t('aria.switchServer')} value={server.instanceId} onChange={(event) => navigate('/servers/' + encodeURIComponent(event.target.value))}>{model.servers.map((item) => <option key={item.instanceId} value={item.instanceId}>{item.displayName}</option>)}</select></label>
-          <span className={'status fleet-status-' + server.freshness}>{server.freshness}</span>
+          <StatusBadge state={visualState} label={statusLabel(visualState, t)} />
         </div>
       </div>
 
@@ -84,9 +80,9 @@ export function ServerWorkspace({
           <h3>{t('server.lastTelemetry')}</h3>
         </div>
         <dl className="resource-grid">
-          <div><dt>{t('common.cpu')}</dt><dd>{resourceValue(server, 'cpu', t('common.unavailable'), t('fleet.load'))}</dd></div>
-          <div><dt>{t('common.ram')}</dt><dd>{resourceValue(server, 'memory', t('common.unavailable'), t('fleet.load'))}</dd></div>
-          <div><dt>{t('common.disk')}</dt><dd>{resourceValue(server, 'filesystem', t('common.unavailable'), t('fleet.load'))}</dd></div>
+          <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
+          <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
+          <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
         </dl>
         <p className="muted">
           {server.lastSeenAt ? t('server.lastActivity') + ' ' + dateTime(server.lastSeenAt) : t('server.noActivityTimestamp')}
