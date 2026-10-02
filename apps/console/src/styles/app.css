@@ -33,8 +33,23 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .fleet-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-3); }
 .fleet-summary .card { padding: var(--space-4); }
 .fleet-filter { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.fleet-filter button { border: 1px solid var(--color-border); border-radius: 999px; background: transparent; color: var(--color-muted); padding: 8px 12px; cursor: pointer; }
+.fleet-filter button {
+  min-height: var(--touch-target);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-muted);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.fleet-filter button:hover,
+.fleet-filter button:focus-visible {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  outline: none;
+}
 .fleet-filter button[aria-pressed="true"] { background: var(--color-surface-raised); color: var(--color-text); border-color: var(--color-accent); }
+.fleet-filter button:disabled { color: var(--color-disabled); cursor: not-allowed; opacity: 0.6; }
 .fleet-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .fleet-server { border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); padding: var(--space-6); display: grid; gap: var(--space-4); min-width: 0; }
 .fleet-server-offline { border-style: dashed; }
@@ -179,6 +194,21 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .filter-controls label { display: grid; gap: 4px; min-width: 0; color: var(--color-muted); font-size: 0.78rem; }
 .filter-controls select { width: 100%; min-width: 0; max-width: none; }
 .filter-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.filter-status button {
+  min-height: var(--touch-target);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.filter-status button:hover,
+.filter-status button:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-surface-raised);
+  outline: none;
+}
 
 @media (max-width: 700px) {
   .app-shell { padding-bottom: calc(64px + env(safe-area-inset-bottom)); overflow-x: clip; }
