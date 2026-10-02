@@ -33,8 +33,8 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
   expect(bottom).toBeInTheDocument()
   expect(bottom).not.toBe(document.querySelector('.global-navigation'))
-  expect(within(bottom).getAllByRole('link')).toHaveLength(5)
-  expect(within(bottom).getByRole('link', { name: /Servers/ })).toBeInTheDocument()
+  expect(within(bottom).getAllByRole('link')).toHaveLength(3)
+  expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
 })
 
@@ -44,4 +44,11 @@ test('root app bar exposes fleet status without duplicating server context', () 
   expect(appBar).toHaveAttribute('data-variant', 'root')
   expect(within(appBar).getByRole('heading', { name: 'Console' })).toBeInTheDocument()
   expect(screen.getByText('Live 0')).toBeInTheDocument()
+})
+
+test('Mesh entity route has deterministic return to Connections', () => {
+  renderShell('/meshes/mesh-1')
+  const appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('link', { name: 'Go back to connections' })).toHaveAttribute('href', '/connections')
+  expect(appBar).toHaveTextContent('Mesh')
 })

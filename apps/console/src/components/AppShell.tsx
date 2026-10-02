@@ -8,63 +8,29 @@ import { StatusBadge } from './StatusBadge'
 import { needsAttention, serverVisualState, type ServerVisualState } from './serverPresentation'
 
 type NavigationItem = {
-  key: 'fleet' | 'servers' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
+  key: 'fleet' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
   labelKey: MessageKey
   globalPath: string
   icon: string
   serverPath?: (instanceId: string) => string
 }
 
-const navigation: NavigationItem[] = [
+const globalNavigation: NavigationItem[] = [
   { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: '⌂' },
-  { key: 'servers', labelKey: 'nav.servers', globalPath: '/servers', icon: '▦' },
   { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: '◌' },
-  {
-    key: 'agents',
-    icon: '◎',
-    labelKey: 'nav.agents',
-    globalPath: '/agents',
-    serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents',
-  },
-  {
-    key: 'slots',
-    icon: '◇',
-    labelKey: 'nav.slots',
-    globalPath: '/slots',
-    serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots',
-  },
-  {
-    key: 'tasks',
-    icon: '✓',
-    labelKey: 'nav.tasks',
-    globalPath: '/tasks',
-    serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks',
-  },
-  {
-    key: 'activity',
-    icon: '↕',
-    labelKey: 'nav.activity',
-    globalPath: '/activity',
-    serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId),
-  },
-  {
-    key: 'context',
-    icon: '◫',
-    labelKey: 'nav.context',
-    globalPath: '/context',
-    serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context',
-  },
-  {
-    key: 'health',
-    icon: '＋',
-    labelKey: 'nav.health',
-    globalPath: '/health',
-    serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health',
-  },
   { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings', icon: '⚙' },
 ]
 
-const bottomNavigationKeys = new Set<NavigationItem['key']>(['servers', 'tasks', 'activity', 'context', 'settings'])
+const serverNavigation: NavigationItem[] = [
+  { key: 'agents', icon: '◎', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
+  { key: 'slots', icon: '◇', labelKey: 'nav.slots', globalPath: '/slots', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots' },
+  { key: 'tasks', icon: '✓', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
+  { key: 'activity', icon: '↕', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
+  { key: 'context', icon: '◫', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
+  { key: 'health', icon: '＋', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
+]
+
+const bottomNavigationKeys = new Set<NavigationItem['key']>(['fleet', 'connections', 'settings'])
 
 function serverStatusLabel(state: ServerVisualState, t: (key: MessageKey) => string): string {
   if (state === 'healthy') return t('status.live')
@@ -86,30 +52,23 @@ function pathServer(pathname: string): string | undefined {
 
 function activeKey(pathname: string): NavigationItem['key'] {
   if (pathname === '/') return 'fleet'
-  if (pathname === '/servers') return 'servers'
   if (pathname === '/activity') return 'activity'
   if (pathname === '/settings') return 'settings'
-  if (pathname === '/connections') return 'connections'
+  if (pathname === '/connections' || pathname.startsWith('/meshes/')) return 'connections'
   if (pathname === '/agents' || pathname.endsWith('/agents')) return 'agents'
   if (pathname === '/slots' || pathname.includes('/slots')) return 'slots'
   if (pathname === '/tasks' || pathname.includes('/tasks')) return 'tasks'
   if (pathname === '/context' || pathname.endsWith('/context')) return 'context'
   if (pathname === '/health' || pathname.endsWith('/health')) return 'health'
-  if (/^\/servers\/[^/]+\/?$/.test(pathname)) return 'servers'
+  if (/^\/servers\/[^/]+\/?$/.test(pathname)) return 'fleet'
   return 'fleet'
-}
-
-function withContext(path: string, instanceId: string | undefined): string {
-  if (!instanceId || path === '/activity') return path
-  const separator = path.includes('?') ? '&' : '?'
-  return path + separator + 'server=' + encodeURIComponent(instanceId)
 }
 
 type ContextNavigation = {
   to: string
-  labelKey: 'nav.backToFleet' | 'nav.backToServer' | 'nav.backToTasks'
-  ariaKey: 'nav.goBackToFleet' | 'nav.goBackToServer' | 'nav.goBackToTasks'
-  titleKey: 'title.server' | 'title.serverSlots' | 'title.slotDetail' | 'title.serverTasks' | 'title.taskDetail' | 'title.activity'
+  labelKey: 'nav.backToFleet' | 'nav.backToServer' | 'nav.backToTasks' | 'nav.backToConnections'
+  ariaKey: 'nav.goBackToFleet' | 'nav.goBackToServer' | 'nav.goBackToTasks' | 'nav.goBackToConnections'
+  titleKey: 'title.server' | 'title.serverSlots' | 'title.slotDetail' | 'title.serverTasks' | 'title.taskDetail' | 'title.activity' | 'title.mesh'
 }
 
 function contextNavigation(pathname: string, search: string): ContextNavigation | null {
@@ -121,6 +80,9 @@ function contextNavigation(pathname: string, search: string): ContextNavigation 
     if (parts[2] === 'tasks' && parts.length >= 5) return { to: serverPath + '/tasks', labelKey: 'nav.backToTasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
     if (parts[2] === 'tasks') return { to: serverPath, labelKey: 'nav.backToServer', ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
     return { to: '/', labelKey: 'nav.backToFleet', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
+  }
+  if (parts[0] === 'meshes' && parts[1]) {
+    return { to: '/connections', labelKey: 'nav.backToConnections', ariaKey: 'nav.goBackToConnections', titleKey: 'title.mesh' }
   }
   if (pathname === '/activity') {
     const server = new URLSearchParams(search).get('server')
@@ -180,12 +142,16 @@ export function AppShell({
       ? t(contextual.titleKey)
       : t('app.console')
   const appBarEyebrow = selectedServer?.displayName ?? 'Terminal MCP'
-  const bottomNavigation = navigation.filter((item) => bottomNavigationKeys.has(item.key))
-
-  const destination = (item: NavigationItem) => {
-    if (selectedId && item.serverPath) return item.serverPath(selectedId)
-    return withContext(item.globalPath, selectedId)
+  const bottomNavigation = globalNavigation.filter((item) => bottomNavigationKeys.has(item.key))
+  const isGlobalActive = (key: NavigationItem['key']) => {
+    if (key === 'fleet') return location.pathname === '/'
+    if (key === 'connections') return location.pathname === '/connections' || location.pathname.startsWith('/meshes/')
+    if (key === 'settings') return location.pathname === '/settings'
+    return false
   }
+
+  const destination = (item: NavigationItem) => item.globalPath
+  const serverDestination = (item: NavigationItem) => selectedId && item.serverPath ? item.serverPath(selectedId) : item.globalPath
 
   return (
     <div className={'app-shell' + (current === 'activity' ? ' app-shell-activity' : '')}>
@@ -274,17 +240,40 @@ export function AppShell({
             </button>
           </div>
 
-          {navigation.map((item) => (
+          {globalNavigation.map((item) => (
             <Link
               key={item.key}
               to={destination(item)}
-              aria-current={current === item.key ? 'page' : undefined}
-              className={current === item.key ? 'nav-link active' : 'nav-link'}
+              aria-current={isGlobalActive(item.key) ? 'page' : undefined}
+              className={isGlobalActive(item.key) ? 'nav-link active' : 'nav-link'}
               onClick={() => setMenuOpen(false)}
             >
               {t(item.labelKey)}
             </Link>
           ))}
+
+          {selectedServer ? (
+            <div className="navigation-context-group" aria-label={t('server.navigation')}>
+              <Link
+                className={/^\/servers\/[^/]+\/?$/.test(location.pathname) ? 'nav-link active' : 'nav-link'}
+                to={'/servers/' + encodeURIComponent(selectedServer.instanceId)}
+                onClick={() => setMenuOpen(false)}
+              >
+                {t('nav.overview')}
+              </Link>
+              {serverNavigation.map((item) => (
+                <Link
+                  key={item.key}
+                  to={serverDestination(item)}
+                  aria-current={current === item.key ? 'page' : undefined}
+                  className={current === item.key ? 'nav-link active' : 'nav-link'}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  {t(item.labelKey)}
+                </Link>
+              ))}
+            </div>
+          ) : null}
 
           {menuOpen ? (
             <div className="navigation-server-list" aria-label={t('nav.servers')}>
@@ -312,9 +301,9 @@ export function AppShell({
           <Link
             key={item.key}
             to={destination(item)}
-            aria-current={current === item.key ? 'page' : undefined}
+            aria-current={isGlobalActive(item.key) ? 'page' : undefined}
             aria-label={t(item.labelKey) + ' · ' + t('aria.bottomNavigation')}
-            className={current === item.key ? 'nav-link active' : 'nav-link'}
+            className={isGlobalActive(item.key) ? 'nav-link active' : 'nav-link'}
           >
             <span className="nav-icon" aria-hidden="true">{item.icon}</span>
             <span className="nav-label">{t(item.labelKey)}</span>

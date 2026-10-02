@@ -48,3 +48,7 @@ export function settingsRoute(instanceId?: string): string {
   if (!instanceId) return '/settings'
   return `/settings?server=${part(instanceId)}`
 }
+
+export function meshRoute(meshId: string): string {
+  return `/meshes/${part(meshId)}`
+}

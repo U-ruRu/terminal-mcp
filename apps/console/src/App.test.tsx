@@ -32,8 +32,7 @@ test('renders fixture-backed fleet overview shell', () => {
 })
 
 test('requires explicit server selection for server-scoped global routes', async () => {
-  renderApp()
-  await userEvent.click(screen.getByRole('link', { name: 'Tasks' }))
+  renderApp('/tasks')
   expect(screen.getByRole('heading', { name: 'Choose a server for Tasks' })).toBeInTheDocument()
   expect(screen.getByText(/Console will not pick one for you/)).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Server C/ })).toHaveAttribute('href', '/servers/server-c/tasks')
@@ -46,8 +45,10 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server C')
   expect(screen.queryByRole('heading', { name: 'Server C' })).not.toBeInTheDocument()
   expect(screen.getByText('https://server-c.example.invalid')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Back to fleet' })).toHaveAttribute('href', '/')
-  const serverNavigation = screen.getByLabelText('Server navigation')
+  expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
+  const serverNavigation = document.querySelector('.server-local-navigation') as HTMLElement
+  expect(within(serverNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
+  expect(within(serverNavigation).getByRole('link', { name: 'Slots' })).toHaveAttribute('href', '/servers/server-c/slots')
   expect(within(serverNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
   expect(within(serverNavigation).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/servers/server-c/health')
 })
@@ -68,14 +69,16 @@ test('direct route keeps offline server snapshot readable', () => {
   expect(screen.getByText('No active sessions in the cached snapshot.')).toBeInTheDocument()
 })
 
-test('global navigation preserves selected-server context on direct links', () => {
+test('global navigation stays global while current server destinations remain contextual', () => {
   renderApp('/servers/server-c/context')
   const nav = screen.getByRole('navigation', { name: 'Application navigation' })
   expect(within(nav).getByText('Server C')).toBeInTheDocument()
+  expect(within(nav).getByRole('link', { name: 'Fleet' })).toHaveAttribute('href', '/')
+  expect(within(nav).getByRole('link', { name: 'Connections' })).toHaveAttribute('href', '/connections')
+  expect(within(nav).getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
   expect(within(nav).getByRole('link', { name: 'Context' })).toHaveAttribute('aria-current', 'page')
   expect(within(nav).getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/servers/server-c/tasks')
   expect(within(nav).getByRole('link', { name: 'Activity' })).toHaveAttribute('href', '/activity?server=server-c')
-  expect(within(nav).getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings?server=server-c')
 })
 
 test('drawer closes predictably on Escape and browser Back', async () => {
@@ -128,12 +131,4 @@ test('applies persisted Spanish locale to explicit server chooser', () => {
   expect(screen.getByRole('heading', { name: 'Elige un servidor para Tareas' })).toBeInTheDocument()
   expect(screen.getByText(/la consola no elegirá uno por ti/i)).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Server C/ })).toHaveAttribute('href', '/servers/server-c/tasks')
-})
-
-
-test('switches server workspace without returning to fleet', async () => {
-  renderApp('/servers/server-b')
-  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server B')
-  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Switch server' }), 'server-a')
-  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server A')
 })

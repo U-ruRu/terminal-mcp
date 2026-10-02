@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { useParams } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, ManagedFleetMeshReadModel, ManagedFleetMutationResult, ManagedFleetNodeReadModel } from '../api/models'
 import { useConnectionRuntime } from '../connections/runtime'
@@ -7,6 +8,7 @@ import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
+import { meshRoute } from '../navigation/routes'
 
 function statusLabel(status: string | undefined, t: (key: MessageKey) => string): string {
   switch (status) {
@@ -97,6 +99,7 @@ function isConverged(
 
 export function Connections() {
   const { profiles, states, error, pair, retry, disconnect, client } = useConnectionRuntime()
+  const { meshId: routeMeshId } = useParams()
   const { t, number } = useI18n()
   const [pairingLink, setPairingLink] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -249,10 +252,10 @@ export function Connections() {
   }, [authorityViews])
   const meshes = optimisticMeshes ?? managedMeshes
 
-  const selectedMesh = useMemo(
-    () => meshes.find((mesh) => mesh.meshId === selectedMeshId) ?? meshes[0],
-    [meshes, selectedMeshId],
-  )
+  const selectedMesh = useMemo(() => {
+    const requested = routeMeshId ?? selectedMeshId
+    return meshes.find((mesh) => mesh.meshId === requested) ?? (routeMeshId ? undefined : meshes[0])
+  }, [meshes, routeMeshId, selectedMeshId])
   const selectedAuthority = authorityForMesh(selectedMesh?.meshId)
   const authoritative = selectedAuthority?.control
   const authoritativeFreshness = selectedAuthority?.freshness ?? 'unknown'
@@ -264,13 +267,13 @@ export function Connections() {
         if (selectedMeshId) setSelectedMeshId('')
         return
       }
-      if (selectedMeshId !== selectedMesh.meshId) {
+      if (!routeMeshId && selectedMeshId !== selectedMesh.meshId) {
         setSelectedMeshId(selectedMesh.meshId)
-        setMeshName(selectedMesh.displayName)
       }
+      setMeshName(selectedMesh.displayName)
     }, 0)
     return () => window.clearTimeout(handle)
-  }, [selectedMesh, selectedMeshId])
+  }, [routeMeshId, selectedMesh, selectedMeshId])
 
   const confirmedStandalone = useCallback((profile: ConnectionProfile): boolean => {
     const observed = controls[profile.instanceId]
@@ -647,7 +650,7 @@ export function Connections() {
         <span className="environment-badge">{number(profiles.length)} {t('connections.saved')}</span>
       </div>
 
-      <form className="panel connection-form" onSubmit={onSubmit}>
+      {!routeMeshId ? <form className="panel connection-form" onSubmit={onSubmit}>
         <div>
           <p className="eyebrow">{t('connections.addServer')}</p>
           <h3>{t('connections.pairTerminal')}</h3>
@@ -676,7 +679,11 @@ export function Connections() {
           {submitting ? t('connections.pairing') : t('connections.addServerAction')}
         </button>
         {error ? <p className="connection-error" role="alert">{error}</p> : null}
-      </form>
+      </form> : null}
+
+      {routeMeshId && !selectedMesh && meshes.length > 0 ? (
+        <FeedbackState variant="partial" title={t('connections.unknown')} detail={t('connections.controlState') + ': ' + t('connections.unknown')} />
+      ) : null}
 
       <article className="panel mesh-control">
         <div className="connection-card-heading">
@@ -698,6 +705,16 @@ export function Connections() {
         ) : null}
 
         {meshes.length > 0 ? (
+          <nav className="mesh-entity-list" aria-label={t('connections.mesh')}>
+            {meshes.map((mesh) => (
+              <a key={mesh.meshId} className={selectedMesh?.meshId === mesh.meshId ? 'chip active' : 'chip'} href={meshRoute(mesh.meshId)}>
+                {mesh.displayName}
+              </a>
+            ))}
+          </nav>
+        ) : null}
+
+        {meshes.length > 0 && !routeMeshId ? (
           <label className="ui-field">
             <span>{t('connections.mesh')}</span>
             <select
@@ -747,6 +764,7 @@ export function Connections() {
           </>
         ) : null}
 
+        {!routeMeshId ? <>
         <label className="ui-field">
           <span>{t('connections.newMeshName')}</span>
           <input
@@ -777,6 +795,7 @@ export function Connections() {
             {t('connections.createMesh')}
           </button>
         </div>
+        </> : null}
         {meshMutationPhase ? (
           <p className={meshMutationPhase === 'failed' ? 'connection-error' : 'muted'} role="status">
             {meshMutationPhase === 'pending'
@@ -798,7 +817,7 @@ export function Connections() {
         {profiles.length === 0 ? (
           <FeedbackState variant="empty" title={t('connections.noPairedServers')} detail={t('connections.usePairingLink')} />
         ) : (
-          connectionGroups.map((group) => (
+          connectionGroups.filter((group) => !routeMeshId || group.key === routeMeshId).map((group) => (
             <section className="connection-group" key={group.key}>
               <div className="connection-group-heading">
                 <h3>{group.label}</h3>
