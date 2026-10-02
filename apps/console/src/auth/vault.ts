@@ -8,6 +8,7 @@ export interface KeyValueStorage {
 
 const STORAGE_KEY = 'terminal-mcp.console.connection.v1'
 const CREDENTIAL_STORAGE_PREFIX = 'terminal-mcp.console.credential.v1.'
+const restoreFlights = new WeakMap<KeyValueStorage, Map<string, Promise<unknown>>>()
 
 function isStoredConnection(value: unknown): value is StoredConnection {
   if (!value || typeof value !== 'object') return false
@@ -28,6 +29,22 @@ function credentialStorageKey(reference: string): string {
     throw new Error('invalid_credential_reference')
   }
   return CREDENTIAL_STORAGE_PREFIX + reference
+}
+
+function sameConnection(
+  left: StoredConnection | null,
+  right: StoredConnection,
+): boolean {
+  return Boolean(
+    left
+    && left.origin === right.origin
+    && left.deviceId === right.deviceId
+    && left.clientId === right.clientId
+    && left.deviceLabel === right.deviceLabel
+    && left.scope === right.scope
+    && left.refreshToken === right.refreshToken
+    && left.pairedAt === right.pairedAt,
+  )
 }
 
 export class BrowserCredentialVault {
@@ -65,6 +82,39 @@ export class BrowserCredentialVault {
 
   clear(): void {
     this.storage.removeItem(this.storageKey)
+  }
+
+  replaceIfCurrent(expected: StoredConnection, replacement: StoredConnection): boolean {
+    if (!sameConnection(this.load(), expected)) return false
+    this.save(replacement)
+    return true
+  }
+
+  clearIfCurrent(expected: StoredConnection): boolean {
+    if (!sameConnection(this.load(), expected)) return false
+    this.clear()
+    return true
+  }
+
+  restoreSingleFlight<T>(operation: () => Promise<T>): Promise<T> {
+    let flights = restoreFlights.get(this.storage)
+    if (!flights) {
+      flights = new Map()
+      restoreFlights.set(this.storage, flights)
+    }
+
+    const active = flights.get(this.storageKey)
+    if (active) return active as Promise<T>
+
+    const flight = operation()
+    flights.set(this.storageKey, flight)
+    const cleanup = () => {
+      if (flights?.get(this.storageKey) !== flight) return
+      flights.delete(this.storageKey)
+      if (flights.size === 0) restoreFlights.delete(this.storage)
+    }
+    void flight.then(cleanup, cleanup)
+    return flight
   }
 }
 

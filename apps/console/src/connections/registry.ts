@@ -1,5 +1,6 @@
 import { generateDevicePublicKey } from '../auth/pairing'
-import { AuthTransportError, PairingTransport } from '../auth/transport'
+import { restoreCredential, type PublicStoredConnection } from '../auth/restore'
+import { PairingTransport } from '../auth/transport'
 import type { StoredConnection } from '../auth/types'
 import {
   BrowserCredentialVault,
@@ -55,6 +56,19 @@ function safeMetadata(connection: StoredConnection): ConnectionProfileMetadata {
     deviceLabel: connection.deviceLabel,
     scope: connection.scope,
     pairedAt: connection.pairedAt,
+  }
+}
+
+function assertCredentialMatchesProfile(
+  profile: ConnectionProfile,
+  connection: PublicStoredConnection,
+): void {
+  if (
+    canonicalOrigin(connection.origin) !== profile.origin
+    || connection.deviceId !== profile.metadata.deviceId
+    || connection.clientId !== profile.metadata.clientId
+  ) {
+    throw new ConnectionRegistryError('credential_profile_mismatch')
   }
 }
 
@@ -217,53 +231,35 @@ export class BrowserConnectionRegistry {
       profile.credentialRef,
       this.storage,
     )
-    const connection = credentialVault.load()
-    if (!connection) return { status: 'revoked', profile }
+    const restored = await restoreCredential(credentialVault, transport, this.now)
+    const currentProfile = this.get(instanceId)
+    if (!currentProfile) return { status: 'missing' }
 
-    if (
-      canonicalOrigin(connection.origin) !== profile.origin ||
-      connection.deviceId !== profile.metadata.deviceId ||
-      connection.clientId !== profile.metadata.clientId
-    ) {
-      throw new ConnectionRegistryError('credential_profile_mismatch')
+    if (restored.status === 'unpaired') {
+      return { status: 'unpaired', profile: currentProfile }
+    }
+    if (restored.connection) {
+      assertCredentialMatchesProfile(currentProfile, restored.connection)
     }
 
-    try {
-      const refreshed = await transport.refresh(
-        connection.origin,
-        connection.clientId,
-        connection.refreshToken,
-      )
-      const rotated: StoredConnection = {
-        ...connection,
-        scope: refreshed.scope,
-        refreshToken: refreshed.refresh_token,
-      }
-      credentialVault.save(rotated)
-      return {
-        status: 'connected',
-        profile,
-        accessToken: refreshed.access_token,
-        accessExpiresAt: this.now() + Math.max(0, refreshed.expires_in) * 1000,
-      }
-    } catch (error) {
-      const transportError =
-        error instanceof AuthTransportError
-          ? error
-          : new AuthTransportError(0, 'restore_failed')
-      if (transportError.revoked || transportError.expired) {
-        credentialVault.clear()
+    switch (restored.status) {
+      case 'connected':
         return {
-          status: transportError.revoked ? 'revoked' : 'expired',
-          profile,
+          status: 'connected',
+          profile: currentProfile,
+          accessToken: restored.accessToken,
+          accessExpiresAt: restored.accessExpiresAt,
         }
-      }
-      return {
-        status: 'error',
-        profile,
-        retryable: transportError.retryable,
-        message: transportError.message,
-      }
+      case 'revoked':
+      case 'expired':
+        return { status: restored.status, profile: currentProfile }
+      case 'error':
+        return {
+          status: 'error',
+          profile: currentProfile,
+          retryable: restored.retryable,
+          message: restored.message,
+        }
     }
   }
 

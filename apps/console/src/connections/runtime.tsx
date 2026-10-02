@@ -44,6 +44,8 @@ function stateFromRestore(result: ProfileRestoreResult): RuntimeProfileState | n
     case 'revoked':
     case 'expired':
       return { status: result.status }
+    case 'unpaired':
+      return null
     case 'error':
       return {
         status: 'error',

@@ -1,22 +1,10 @@
 import { AuthTransportError, PairingTransport } from './transport'
+import { publicConnection, restoreCredential } from './restore'
 import type { AccessSession, ConnectionState, StoredConnection } from './types'
 import { BrowserCredentialVault } from './vault'
 
 type BrowserLocation = Pick<Location, 'hash' | 'origin' | 'pathname' | 'search'>
 type BrowserHistory = Pick<History, 'replaceState'>
-
-function publicConnection(
-  connection: StoredConnection,
-): Omit<StoredConnection, 'refreshToken'> {
-  return {
-    origin: connection.origin,
-    deviceId: connection.deviceId,
-    clientId: connection.clientId,
-    deviceLabel: connection.deviceLabel,
-    scope: connection.scope,
-    pairedAt: connection.pairedAt,
-  }
-}
 
 function sessionFrom(
   connection: StoredConnection,
@@ -102,50 +90,41 @@ export class ConnectionManager {
   }
 
   async restore(): Promise<ConnectionState> {
-    const stored = this.vault.load()
-    if (!stored) {
+    const current = this.vault.load()
+    if (current) {
+      this.state = { status: 'restoring', connection: publicConnection(current) }
+    } else {
       this.state = { status: 'unpaired' }
-      return this.state
     }
 
-    const publicFields = publicConnection(stored)
-    this.state = { status: 'restoring', connection: publicFields }
-    try {
-      const refreshed = await this.transport.refresh(
-        stored.origin,
-        stored.clientId,
-        stored.refreshToken,
-      )
-      const rotated: StoredConnection = {
-        ...stored,
-        scope: refreshed.scope,
-        refreshToken: refreshed.refresh_token,
-      }
-      this.vault.save(rotated)
-      this.state = {
-        status: 'connected',
-        session: sessionFrom(rotated, refreshed.access_token, refreshed.expires_in, this.now()),
-      }
-    } catch (error) {
-      const transportError =
-        error instanceof AuthTransportError
-          ? error
-          : new AuthTransportError(0, 'restore_failed')
-      if (transportError.revoked) {
-        this.vault.clear()
-        this.state = { status: 'revoked', connection: publicFields }
-      } else if (transportError.expired) {
-        this.vault.clear()
-        this.state = { status: 'expired', connection: publicFields }
-      } else {
+    const restored = await restoreCredential(this.vault, this.transport, this.now)
+    switch (restored.status) {
+      case 'connected':
+        this.state = {
+          status: 'connected',
+          session: {
+            connection: restored.connection,
+            accessToken: restored.accessToken,
+            accessExpiresAt: restored.accessExpiresAt,
+          },
+        }
+        break
+      case 'unpaired':
+        this.state = { status: 'unpaired' }
+        break
+      case 'revoked':
+      case 'expired':
+        this.state = { status: restored.status, connection: restored.connection }
+        break
+      case 'error':
         this.state = {
           status: 'error',
           operation: 'restore',
-          retryable: transportError.retryable,
-          message: transportError.message,
-          connection: publicFields,
+          retryable: restored.retryable,
+          message: restored.message,
+          connection: restored.connection,
         }
-      }
+        break
     }
     return this.state
   }

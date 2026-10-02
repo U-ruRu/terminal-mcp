@@ -34,6 +34,7 @@ export type ProfileRestoreResult =
       accessExpiresAt: number
     }
   | { status: 'missing' }
+  | { status: 'unpaired'; profile: ConnectionProfile }
   | { status: 'revoked' | 'expired'; profile: ConnectionProfile }
   | {
       status: 'error'

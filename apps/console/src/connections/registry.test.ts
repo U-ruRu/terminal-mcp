@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest'
 
+import { ConnectionManager } from '../auth/pairing'
 import { PairingTransport } from '../auth/transport'
 import type { StoredConnection } from '../auth/types'
 import {
@@ -57,6 +58,13 @@ function ids(...values: string[]) {
   return () => values[index++] ?? 'fallback-' + index
 }
 
+function jsonResponse(body: object, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 test('migrates the M1 singleton connection into a stable local profile without leaking credential material', () => {
   const storage = new MemoryStorage()
   new BrowserCredentialVault(storage).save(
@@ -106,6 +114,58 @@ test('stores independent credentials for multiple profiles and restores them aft
   expect(reloaded.list()).toHaveLength(2)
   expect(reloaded.credential(alpha.instanceId)?.origin).toBe('https://alpha.example')
   expect(reloaded.credential(beta.instanceId)?.origin).toBe('https://beta.example')
+})
+
+test('coalesces concurrent refresh across registry and realtime auth consumers', async () => {
+  const storage = new MemoryStorage()
+  const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('alpha'))
+  const profile = registry.add(connection('https://alpha.example', 'refresh-a'), 'Alpha')
+  const vault = BrowserCredentialVault.forReference(profile.credentialRef, storage)
+
+  let releaseRefresh!: () => void
+  let markStarted!: () => void
+  const refreshStarted = new Promise<void>((resolve) => { markStarted = resolve })
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve })
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(init?.body)).toContain('refresh_token=refresh-a')
+    markStarted()
+    await refreshGate
+    return jsonResponse({
+      access_token: 'access-b',
+      token_type: 'Bearer',
+      expires_in: 120,
+      refresh_token: 'refresh-b',
+      scope: 'terminal:read',
+    })
+  })
+  const transport = new PairingTransport(fetcher)
+  const manager = new ConnectionManager(vault, transport, () => 5000)
+
+  const registryRestore = registry.restore(profile.instanceId, transport)
+  await refreshStarted
+  const actorRestore = manager.restore()
+  expect(fetcher).toHaveBeenCalledTimes(1)
+
+  releaseRefresh()
+  const [registryState, actorState] = await Promise.all([registryRestore, actorRestore])
+
+  expect(registryState.status).toBe('connected')
+  expect(actorState.status).toBe('connected')
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(vault.load()?.refreshToken).toBe('refresh-b')
+})
+
+test('reports a saved profile without local credentials as unpaired instead of revoked', async () => {
+  const storage = new MemoryStorage()
+  const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('alpha'))
+  const profile = registry.add(connection('https://alpha.example', 'refresh-a'), 'Alpha')
+  BrowserCredentialVault.forReference(profile.credentialRef, storage).clear()
+  const fetcher = vi.fn()
+
+  const restored = await registry.restore(profile.instanceId, new PairingTransport(fetcher))
+
+  expect(restored.status).toBe('unpaired')
+  expect(fetcher).not.toHaveBeenCalled()
 })
 
 test('rejects duplicate canonical origins before overwriting existing profile credentials', () => {

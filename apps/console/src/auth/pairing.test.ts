@@ -154,6 +154,57 @@ test('expired refresh material is distinguished from server-side device revoke',
   expect(vault.load()).toBeNull()
 })
 
+test('stale invalid_grant cannot clear a newer credential generation', async () => {
+  const storage = new MemoryStorage()
+  const vault = new BrowserCredentialVault(storage)
+  const initial = {
+    origin: 'https://terminal.example',
+    deviceId: 'dev_test',
+    clientId: 'device_test',
+    deviceLabel: 'Browser',
+    scope: 'terminal:read',
+    refreshToken: 'old-refresh',
+    pairedAt: 1000,
+  }
+  vault.save(initial)
+
+  let call = 0
+  let releaseFirst!: () => void
+  let markFirstStarted!: () => void
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve })
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    call += 1
+    const body = String(init?.body)
+    if (call === 1) {
+      expect(body).toContain('refresh_token=old-refresh')
+      markFirstStarted()
+      await firstGate
+      return jsonResponse({ error: 'invalid_grant' }, 400)
+    }
+    expect(body).toContain('refresh_token=newer-refresh')
+    return jsonResponse({
+      access_token: 'final-access',
+      token_type: 'Bearer',
+      expires_in: 600,
+      refresh_token: 'final-refresh',
+      scope: 'terminal:read',
+    })
+  })
+  const manager = new ConnectionManager(vault, new PairingTransport(fetcher), () => 5000)
+
+  const pending = manager.restore()
+  await firstStarted
+  vault.save({ ...initial, refreshToken: 'newer-refresh' })
+  releaseFirst()
+
+  const state = await pending
+
+  expect(state.status).toBe('connected')
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(vault.load()?.refreshToken).toBe('final-refresh')
+})
+
 test('transient restore failure preserves refresh material for explicit retry', async () => {
   const storage = new MemoryStorage()
   const vault = new BrowserCredentialVault(storage)
