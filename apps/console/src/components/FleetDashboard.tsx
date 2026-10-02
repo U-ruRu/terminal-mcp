@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react'
 import type { FleetReadModel } from '../fleet/readModel'
 import { useI18n } from '../i18n/useI18n'
 import { ServerCard } from './ServerCard'
+import { SegmentedControl } from './UiPrimitives'
 import { needsAttention, serverAlphaSort, serverProblemSort, serverVisualState } from './serverPresentation'
 
 type FleetFilter = 'all' | 'attention' | 'live'
@@ -78,17 +79,16 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
         <article className="card"><span>{t('fleet.alerts')}</span><strong>{number(model.summary.alerts)}</strong></article>
       </div>
 
-      <div className="fleet-filter" role="group" aria-label={t('fleet.filterServers')}>
-        <button type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>
-          {t('common.all')} ({number(model.summary.totalServers)})
-        </button>
-        <button type="button" aria-pressed={filter === 'attention'} onClick={() => setFilter('attention')}>
-          {t('fleet.needsAttention')}
-        </button>
-        <button type="button" aria-pressed={filter === 'live'} onClick={() => setFilter('live')}>
-          {t('fleet.live')}
-        </button>
-      </div>
+      <SegmentedControl
+        label={t('fleet.filterServers')}
+        value={filter}
+        onChange={(value) => setFilter(value as FleetFilter)}
+        options={[
+          { value: 'all', label: t('common.all') + ' (' + number(model.summary.totalServers) + ')' },
+          { value: 'attention', label: t('fleet.needsAttention') },
+          { value: 'live', label: t('fleet.live') },
+        ]}
+      />
 
       <div
         ref={serverListRef}

@@ -15,6 +15,7 @@ import { ServerSection } from './routes/ServerSection'
 import { ServerSlots } from './routes/ServerSlots'
 import { ServerTasks, type ServerTaskLoader } from './routes/ServerTasks'
 import { ServerWorkspace } from './routes/ServerWorkspace'
+import { UiKitShowcase } from './routes/UiKitShowcase'
 
 export type AppProps = {
   model: FleetReadModel
@@ -42,6 +43,7 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/health" element={<ServerChooser model={model} section="health" />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
+        <Route path="/ui-kit" element={<UiKitShowcase />} />
         <Route path="/connect" element={<Connections />} />
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />

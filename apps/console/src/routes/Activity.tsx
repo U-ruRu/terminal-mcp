@@ -7,6 +7,7 @@ import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 
 export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions) => Promise<ActivityFeedReadModel>
 
@@ -222,10 +223,10 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         </div>
       </div>
       {selected ? <p className="muted activity-provenance">{t('activity.serverJournal')} · {runtimeStatus}{feed.events.length ? ' · ' + dateTime(feed.events[feed.events.length - 1].createdAt) : ''}</p> : null}
-      {instances.length === 0 && <div className="panel"><p className="muted">{t('activity.noPairedServers')}</p></div>}
-      {instances.length > 0 && !selectedId && <div className="panel"><p className="muted">{t('activity.chooseToView')}</p></div>}
-      {feed.gap && <div className="panel"><strong>{t('activity.historyGap')}</strong><p className="muted">{t('activity.historyGapDescription')}</p></div>}
-      {feed.error && <div className="panel"><strong>{t('activity.unavailable')}</strong><p className="muted">{feed.error}</p></div>}
+      {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
+      {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
+      {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}
+      {feed.error && <FeedbackState variant="error" title={t('activity.unavailable')} detail={feed.error} />}
       <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
         {visible.map((event) => (
           <article className="panel activity-event" key={selectedId + ':' + event.seq}>
