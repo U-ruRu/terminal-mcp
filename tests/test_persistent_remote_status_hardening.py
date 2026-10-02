@@ -12,11 +12,7 @@ from fastapi import FastAPI
 
 from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.core.orchestration import utc_now, utc_text
-from terminal_mcp.core.persistent_admission import (
-    VerifiedAdmissionContext,
-    bind_admission_context,
-    reset_admission_context,
-)
+from terminal_mcp.core.persistent_admission import VerifiedAdmissionContext
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
@@ -212,11 +208,7 @@ async def test_remote_access_identity_tracks_authority_session_across_end_and_re
         access_authority=caller_auth,
     )
 
-    token = bind_admission_context(ctx)
-    try:
-        active = await caller_backend.access_identity("0042")
-    finally:
-        reset_admission_context(token)
+    active = await caller_backend.access_identity("0042")
 
     assert active["ok"] is True
     assert active["logical_agent_id"] == logical_agent_id
@@ -231,11 +223,7 @@ async def test_remote_access_identity_tracks_authority_session_across_end_and_re
         now=utc_text(t0 + timedelta(seconds=5)),
     )
 
-    token = bind_admission_context(ctx)
-    try:
-        fenced = await caller_backend.access_identity("0042")
-    finally:
-        reset_admission_context(token)
+    fenced = await caller_backend.access_identity("0042")
 
     assert fenced == {
         "ok": False,
@@ -252,13 +240,48 @@ async def test_remote_access_identity_tracks_authority_session_across_end_and_re
     )
     assert reopened["session_epoch"] == first["session_epoch"] + 1
 
-    token = bind_admission_context(ctx)
-    try:
-        resumed = await caller_backend.access_identity("0042")
-    finally:
-        reset_admission_context(token)
+    resumed = await caller_backend.access_identity("0042")
 
     assert resumed["ok"] is True
     assert resumed["logical_agent_id"] == logical_agent_id
     assert resumed["work_session_id"] == reopened["work_session_id"]
     assert resumed["session_epoch"] == reopened["session_epoch"]
+
+
+@pytest.mark.asyncio
+async def test_verified_access_code_authorizes_local_session_without_transport_admission(tmp_path):
+    repo = SqliteRepository(
+        tmp_path / "runtime.sqlite3",
+        tmp_path / "output.sqlite3",
+    )
+    await repo.initialize()
+    store = PersistentAgentStore(repo.path)
+    lifecycle = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="bacloud",
+        session_duration_seconds=1200,
+    )
+    ctx = _admission()
+    created = await lifecycle.create_slot("Sender", admission=ctx)
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(
+        logical_agent_id,
+        expected_revision=created["slot"]["slot_revision"],
+        admission=ctx,
+    )
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=ctx,
+    )
+
+    session = await lifecycle.authorize_session(
+        logical_agent_id,
+        started["work_session_id"],
+        started["session_epoch"],
+        access_code_verified=True,
+    )
+
+    assert session.logical_agent_id == logical_agent_id
+    assert session.work_session_id == started["work_session_id"]
