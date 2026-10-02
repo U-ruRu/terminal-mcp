@@ -442,3 +442,68 @@ h2 { font-size: clamp(1.6rem, 4vw, 2.4rem); }
     align-items: flex-start;
   }
 }
+
+
+/* M4 UI Kit: fleet status action */
+.fleet-status-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--control-large, 56px);
+  padding: var(--space-4);
+  border: var(--border-default, 1px) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.fleet-status-card:hover { background: var(--color-surface-raised); }
+.fleet-status-card:focus-visible {
+  outline: var(--border-emphasis, 2px) solid var(--color-focus);
+  outline-offset: 2px;
+}
+.fleet-status-card-healthy { border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-border)); }
+.fleet-status-card-attention { border-color: var(--color-warning); }
+.fleet-status-card-loading { border-color: var(--color-accent); }
+
+.fleet-status-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  font-weight: var(--font-weight-bold);
+  background: var(--color-surface-raised);
+}
+.fleet-status-card-healthy .fleet-status-icon { color: var(--color-success); }
+.fleet-status-card-attention .fleet-status-icon { color: var(--color-warning); }
+.fleet-status-card-loading .fleet-status-icon { color: var(--color-accent); }
+
+.fleet-status-card > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+.fleet-status-card strong {
+  font-size: var(--font-card-size, 16px);
+  line-height: var(--font-card-line, 24px);
+}
+.fleet-status-card small {
+  color: var(--color-muted);
+  font-size: var(--font-caption-size, 11px);
+  line-height: var(--font-caption-line, 16px);
+}
+.fleet-status-chevron {
+  color: var(--color-muted);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.fleet-grid:focus { outline: none; }
+.fleet-grid:focus-visible {
+  outline: var(--border-emphasis, 2px) solid var(--color-focus);
+  outline-offset: var(--space-2);
+}

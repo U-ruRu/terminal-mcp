@@ -1,15 +1,29 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import type { FleetReadModel } from '../fleet/readModel'
 import { useI18n } from '../i18n/useI18n'
 import { ServerCard } from './ServerCard'
-import { needsAttention, serverAlphaSort, serverProblemSort } from './serverPresentation'
+import { needsAttention, serverAlphaSort, serverProblemSort, serverVisualState } from './serverPresentation'
 
 type FleetFilter = 'all' | 'attention' | 'live'
 
 export function FleetDashboard({ model }: { model: FleetReadModel }) {
   const { t, number } = useI18n()
   const [filter, setFilter] = useState<FleetFilter>('all')
+  const serverListRef = useRef<HTMLDivElement>(null)
+  const problemCount = model.servers.filter(needsAttention).length
+  const fleetState = problemCount > 0
+    ? 'attention'
+    : model.servers.some((server) => serverVisualState(server) === 'loading')
+      ? 'loading'
+      : 'healthy'
+
+  const focusServerList = (nextFilter: FleetFilter) => {
+    setFilter(nextFilter)
+    serverListRef.current?.scrollIntoView?.({ block: 'start' })
+    serverListRef.current?.focus({ preventScroll: true })
+  }
+
   const servers = useMemo(() => {
     const visible =
       filter === 'attention'
@@ -30,6 +44,30 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
         </div>
         <span className="environment-badge">{number(model.summary.totalServers)} {t('fleet.servers')}</span>
       </div>
+
+      <button
+        type="button"
+        className={'fleet-status-card fleet-status-card-' + fleetState}
+        aria-label={
+          fleetState === 'attention'
+            ? t('fleet.needsAttention') + ': ' + number(problemCount) + ' ' + t('fleet.servers')
+            : fleetState === 'loading'
+              ? t('status.catchingUp')
+              : t('fleet.live') + ': ' + number(model.summary.totalServers) + ' ' + t('fleet.servers')
+        }
+        onClick={() => focusServerList(fleetState === 'attention' ? 'attention' : 'all')}
+      >
+        <span className="fleet-status-icon" aria-hidden="true">{fleetState === 'healthy' ? '✓' : fleetState === 'attention' ? '!' : '…'}</span>
+        <span>
+          <strong>{fleetState === 'attention' ? t('fleet.needsAttention') : fleetState === 'loading' ? t('status.catchingUp') : t('fleet.live')}</strong>
+          <small>
+            {fleetState === 'attention'
+              ? number(problemCount) + ' / ' + number(model.summary.totalServers) + ' ' + t('fleet.servers')
+              : number(model.summary.totalServers) + ' ' + t('fleet.servers')}
+          </small>
+        </span>
+        <span className="fleet-status-chevron" aria-hidden="true">›</span>
+      </button>
 
       <div className="fleet-summary" aria-label={t('fleet.totals')}>
         <article className="card"><span>{t('fleet.live')}</span><strong>{number(model.summary.liveServers)}</strong></article>
@@ -52,7 +90,12 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
         </button>
       </div>
 
-      <div className="fleet-grid fleet-grid-compact">
+      <div
+        ref={serverListRef}
+        className="fleet-grid fleet-grid-compact"
+        tabIndex={-1}
+        aria-label={t('nav.servers')}
+      >
         {servers.map((server) => <ServerCard key={server.instanceId} server={server} />)}
       </div>
 

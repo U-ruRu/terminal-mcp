@@ -30,6 +30,19 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
   expect(screen.getByRole('link', { name: 'Server C · Live' })).toHaveAttribute('href', '/servers/server-c')
 })
 
+
+test('fleet status action filters problem servers and focuses the compact list', async () => {
+  render(dashboard())
+
+  await userEvent.click(screen.getByRole('button', { name: 'Needs attention: 2 servers' }))
+
+  const list = screen.getByRole('generic', { name: 'Servers' })
+  expect(list).toHaveFocus()
+  expect(screen.getByRole('article', { name: 'Server A server' })).toBeInTheDocument()
+  expect(screen.getByRole('article', { name: 'Server B server' })).toBeInTheDocument()
+  expect(screen.queryByRole('article', { name: 'Server C server' })).not.toBeInTheDocument()
+})
+
 test('filters problem servers without refetching fleet state', async () => {
   render(dashboard())
 
