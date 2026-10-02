@@ -129,6 +129,7 @@ export function propagateCachedFleetControl(
   let changed = false
   for (const [instanceId, entry] of Object.entries(document.entries)) {
     if (entry.control.fleetId !== authoritative.fleetId) continue
+    if (entry.control.controlNodeId !== authoritative.controlNodeId) continue
     const nodeId = entry.control.nodeId
     const node = authoritative.nodes.find((candidate) => candidate.nodeId === nodeId)
     const mesh = node?.meshId

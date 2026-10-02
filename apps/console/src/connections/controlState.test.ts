@@ -62,6 +62,24 @@ describe('fleet control cache', () => {
     expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(true)
     expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(200)
   })
+  test('does not propagate one control authority over another authority in the same fleet', () => {
+    const firstbyteAuthority = {
+      ...control('firstbyte'),
+      controlNodeId: 'firstbyte',
+      mesh: { meshId: 'mesh-b', displayName: 'Staging', adopted: true, updatedAt: '2026-10-02T06:00:00Z' },
+      meshes: [{ meshId: 'mesh-b', displayName: 'Staging', adopted: true, updatedAt: '2026-10-02T06:00:00Z' }],
+    }
+    saveCachedFleetControl('main-profile', control('main'), 100)
+    saveCachedFleetControl('firstbyte-profile', firstbyteAuthority, 100)
+
+    propagateCachedFleetControl(control('main', true), 200)
+
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.controlNodeId).toBe('firstbyte')
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.mesh?.meshId).toBe('mesh-b')
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(false)
+    expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(100)
+  })
+
   test('projects a managed peer cache onto a profile by authoritative node origin', () => {
     saveCachedFleetControl('main-profile', control('main', true), 300)
 
