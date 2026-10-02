@@ -7,7 +7,7 @@ import type { ManagedFleetControlReadModel } from '../api/models'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
-import { activityRoute, agentRoute, agentsRoute, contextRoute, healthRoute, meshRoute, slotsRoute, taskRoute, tasksRoute } from '../navigation/routes'
+import { agentRoute, meshRoute, taskRoute } from '../navigation/routes'
 
 
 function duration(seconds: number | undefined): string {
@@ -114,14 +114,6 @@ export function ServerWorkspace({
         ) : <FeedbackState variant="empty" title={t('server.noActiveSessions')} />}
       </article>
 
-      <nav className="server-actions server-local-navigation" aria-label={t('server.navigation')}>
-        <Link className="nav-link" to={agentsRoute(server.instanceId)}>{t('nav.agents')}</Link>
-        <Link className="nav-link" to={slotsRoute(server.instanceId)}>{t('nav.slots')}</Link>
-        <Link className="nav-link" to={tasksRoute(server.instanceId)}>{t('nav.tasks')}</Link>
-        <Link className="nav-link" to={activityRoute(server.instanceId)}>{t('nav.activity')}</Link>
-        <Link className="nav-link" to={contextRoute(server.instanceId)}>{t('nav.context')}</Link>
-        <Link className="nav-link" to={healthRoute(server.instanceId)}>{t('nav.health')}</Link>
-      </nav>
     </section>
   )
 }

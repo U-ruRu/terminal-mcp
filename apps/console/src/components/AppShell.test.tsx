@@ -52,3 +52,18 @@ test('Mesh entity route has deterministic return to Connections', () => {
   expect(within(appBar).getByRole('link', { name: 'Go back to connections' })).toHaveAttribute('href', '/connections')
   expect(appBar).toHaveTextContent('Mesh')
 })
+
+
+test('nested Server and Mesh routes resolve through entity hierarchy', () => {
+  renderShell('/servers/server-a/agents/agent-1')
+  let appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('link', { name: 'Back to agents' })).toHaveAttribute('href', '/servers/server-a/agents')
+  cleanup()
+
+  renderShell('/meshes/mesh-1/persistent')
+  appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('link', { name: 'Go back to mesh' })).toHaveAttribute('href', '/meshes/mesh-1')
+  const contextualNav = document.querySelector('.navigation-context-group') as HTMLElement
+  expect(within(contextualNav).getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/meshes/mesh-1')
+  expect(within(contextualNav).getByRole('link', { name: 'Slots' })).toHaveAttribute('href', '/meshes/mesh-1/persistent')
+})

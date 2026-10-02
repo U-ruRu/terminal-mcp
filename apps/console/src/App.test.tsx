@@ -46,11 +46,12 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(screen.queryByRole('heading', { name: 'Server C' })).not.toBeInTheDocument()
   expect(screen.getByText('https://server-c.example.invalid')).toBeInTheDocument()
   expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
-  const serverNavigation = document.querySelector('.server-local-navigation') as HTMLElement
-  expect(within(serverNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
-  expect(within(serverNavigation).getByRole('link', { name: 'Slots' })).toHaveAttribute('href', '/servers/server-c/slots')
-  expect(within(serverNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
-  expect(within(serverNavigation).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/servers/server-c/health')
+  const applicationNavigation = screen.getByRole('navigation', { name: 'Application navigation' })
+  expect(within(applicationNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
+  expect(within(applicationNavigation).getByRole('link', { name: 'Slots' })).toHaveAttribute('href', '/servers/server-c/slots')
+  expect(within(applicationNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
+  expect(within(applicationNavigation).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/servers/server-c/health')
+  expect(document.querySelector('.server-local-navigation')).not.toBeInTheDocument()
 })
 
 test('direct route keeps stale cached server readable after reload', () => {
