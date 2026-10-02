@@ -105,6 +105,25 @@ export function Tabs({
   options: SegmentOption[]
   onChange: (value: string) => void
 }) {
+  const enabled = options.filter((option) => !option.disabled)
+
+  const moveFocus = (currentValue: string, direction: 'next' | 'previous' | 'first' | 'last', element: HTMLButtonElement) => {
+    if (enabled.length === 0) return
+    const currentIndex = Math.max(0, enabled.findIndex((option) => option.value === currentValue))
+    const nextIndex = direction === 'first'
+      ? 0
+      : direction === 'last'
+        ? enabled.length - 1
+        : direction === 'next'
+          ? (currentIndex + 1) % enabled.length
+          : (currentIndex - 1 + enabled.length) % enabled.length
+    const next = enabled[nextIndex]
+    onChange(next.value)
+    const container = element.closest('[role="tablist"]')
+    const buttons = Array.from(container?.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)') ?? [])
+    buttons[nextIndex]?.focus()
+  }
+
   return (
     <div className="ui-tabs" role="tablist" aria-label={label}>
       {options.map((option) => (
@@ -113,8 +132,24 @@ export function Tabs({
           type="button"
           role="tab"
           aria-selected={value === option.value}
+          tabIndex={value === option.value ? 0 : -1}
           disabled={option.disabled}
           onClick={() => onChange(option.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowRight') {
+              event.preventDefault()
+              moveFocus(option.value, 'next', event.currentTarget)
+            } else if (event.key === 'ArrowLeft') {
+              event.preventDefault()
+              moveFocus(option.value, 'previous', event.currentTarget)
+            } else if (event.key === 'Home') {
+              event.preventDefault()
+              moveFocus(option.value, 'first', event.currentTarget)
+            } else if (event.key === 'End') {
+              event.preventDefault()
+              moveFocus(option.value, 'last', event.currentTarget)
+            }
+          }}
         >
           {option.label}
         </button>
