@@ -28,7 +28,7 @@ test('renders fixture-backed fleet overview shell', () => {
   expect(screen.getByRole('heading', { name: 'Fleet overview' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
   expect(screen.getAllByText('0.10.1')).toHaveLength(2)
-  expect(screen.getByText('Local fleet')).toBeInTheDocument()
+  expect(screen.getByText('Needs attention 2')).toBeInTheDocument()
 })
 
 test('requires explicit server selection for server-scoped global routes', async () => {
