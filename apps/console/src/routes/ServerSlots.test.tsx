@@ -500,7 +500,7 @@ test('existing Access generation without a local code offers rotation and stores
 
 test('cached managed policy stays mesh-wide when the fresh control read is unavailable', async () => {
   const user = userEvent.setup()
-  saveCachedFleetControl('alpha', managedControl(false), 100)
+  saveCachedFleetControl('main-profile', managedControl(false), 100)
   const persistentMutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
   const loadControl = vi.fn(async (): Promise<ManagedFleetControlReadModel> => { throw new Error('control_unavailable') }) as FleetControlLoader
   const mutateControl = vi.fn(async (_instanceId: string, _path: string, body: Record<string, unknown>): Promise<ManagedFleetMutationResult> => ({

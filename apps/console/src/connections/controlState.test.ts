@@ -4,6 +4,7 @@ import type { ManagedFleetControlReadModel } from '../api/models'
 import {
   FLEET_CONTROL_CACHE_KEY,
   loadCachedFleetControl,
+  loadCachedFleetControlForProfile,
   propagateCachedFleetControl,
   saveCachedFleetControl,
 } from './controlState'
@@ -61,4 +62,15 @@ describe('fleet control cache', () => {
     expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(true)
     expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(200)
   })
+  test('projects a managed peer cache onto a profile by authoritative node origin', () => {
+    saveCachedFleetControl('main-profile', control('main', true), 300)
+
+    const projected = loadCachedFleetControlForProfile('firstbyte-profile', 'https://firstbyte.example/')
+
+    expect(projected?.control.nodeId).toBe('firstbyte')
+    expect(projected?.control.mesh?.meshId).toBe('mesh-prod')
+    expect(projected?.control.policy?.legacyAdmissionEnabled).toBe(true)
+    expect(projected?.observedAt).toBe(300)
+  })
+
 })

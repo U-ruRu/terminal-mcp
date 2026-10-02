@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentAuditReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
 import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
-import { loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
+import { loadCachedFleetControlForProfile, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
 import { serverRoute, slotRoute, slotsRoute, taskRoute } from '../navigation/routes'
@@ -23,13 +23,13 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   const [accessCodeRevision, setAccessCodeRevision] = useState(0)
   const [policyDraft, setPolicyDraft] = useState<{ key: string; duration: string; warning: string; alert: string; rearm: string } | null>(null)
   const [loadedAudit, setLoadedAudit] = useState<{ key: string; values?: PersistentAuditReadModel[]; error?: string }>({ key: '' })
-  const [fleetControl, setFleetControl] = useState<ManagedFleetControlReadModel | null>(() => loadCachedFleetControl(instanceId)?.control ?? null)
-  const [fleetControlFreshness, setFleetControlFreshness] = useState<FleetControlFreshness>(() => loadCachedFleetControl(instanceId) ? 'stale' : 'unknown')
+  const [fleetControl, setFleetControl] = useState<ManagedFleetControlReadModel | null>(() => loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)?.control ?? null)
+  const [fleetControlFreshness, setFleetControlFreshness] = useState<FleetControlFreshness>(() => loadCachedFleetControlForProfile(instanceId, instance?.profile.origin) ? 'stale' : 'unknown')
   const [legacyOverride, setLegacyOverride] = useState<{ value: boolean; phase: 'pending' | 'confirmed' | 'failed' } | null>(null)
   useEffect(() => {
     let cancelled = false
     const handle = window.setTimeout(() => {
-      const cached = loadCachedFleetControl(instanceId)
+      const cached = loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)
       setFleetControl(cached?.control ?? null)
       setFleetControlFreshness(cached ? 'stale' : 'unknown')
       setLegacyOverride(null)
@@ -52,7 +52,7 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
         })
     }, 0)
     return () => { cancelled = true; window.clearTimeout(handle) }
-  }, [instance?.runtime.authStatus, instanceId, loadFleetControl])
+  }, [instance?.profile.origin, instance?.runtime.authStatus, instanceId, loadFleetControl])
 
   const selectedLogicalAgentId = selected?.logicalAgentId
   useEffect(() => {

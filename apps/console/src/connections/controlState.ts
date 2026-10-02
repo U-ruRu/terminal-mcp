@@ -73,6 +73,44 @@ export function loadCachedFleetControl(instanceId: string): CachedFleetControl |
   return readDocument().entries[instanceId]
 }
 
+function normalizedOrigin(value: string | undefined): string {
+  return (value ?? '').replace(/\/+$/, '').toLowerCase()
+}
+
+export function loadCachedFleetControlForProfile(
+  instanceId: string,
+  origin: string | undefined,
+): CachedFleetControl | undefined {
+  const document = readDocument()
+  const direct = document.entries[instanceId]
+  if (direct) return direct
+  const expectedOrigin = normalizedOrigin(origin)
+  if (!expectedOrigin) return undefined
+
+  const candidates = Object.values(document.entries)
+    .filter((entry) => entry.control.managed)
+    .sort((a, b) => b.observedAt - a.observedAt)
+  for (const entry of candidates) {
+    const node = entry.control.nodes.find((candidate) => (
+      candidate.state !== 'detached'
+      && normalizedOrigin(candidate.origin) === expectedOrigin
+    ))
+    if (!node) continue
+    const mesh = node.meshId
+      ? entry.control.meshes.find((candidate) => candidate.meshId === node.meshId)
+      : undefined
+    return {
+      observedAt: entry.observedAt,
+      control: {
+        ...entry.control,
+        nodeId: node.nodeId,
+        mesh,
+      },
+    }
+  }
+  return undefined
+}
+
 export function saveCachedFleetControl(
   instanceId: string,
   control: ManagedFleetControlReadModel,
