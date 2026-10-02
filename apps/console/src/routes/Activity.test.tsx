@@ -169,3 +169,47 @@ test('shows loading feedback before the first activity page resolves', () => {
   expect(screen.getByText('Catching up')).toBeInTheDocument()
   expect(screen.queryByText('No activity matches this filter.')).not.toBeInTheDocument()
 })
+
+test('groups consecutive commands into one cascade and keeps raw details nested per command', async () => {
+  const load = vi.fn(async (_instanceId: string, options = {}) => {
+    const since = (options as { since?: number }).since ?? 0
+    return page(since, [
+      { seq: 21, eventType: 'command.created', entityType: 'command', entityId: 'cmd-a', actorId: 'Alpha-1111', actorName: 'Alpha', payload: { command: 'uptime', status: 'completed' }, createdAt: '2026-09-28T11:02:01Z' },
+      { seq: 22, eventType: 'command.created', entityType: 'command', entityId: 'cmd-b', actorId: 'Alpha-1111', actorName: 'Alpha', payload: { status: 'completed' }, createdAt: '2026-09-28T11:02:02Z' },
+    ], 22)
+  })
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 22)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+
+  await screen.findByText('Ran 2 commands')
+  expect(document.querySelectorAll('.activity-chat-message')).toHaveLength(1)
+  expect(screen.queryByText('$ uptime')).not.toBeInTheDocument()
+  expect(screen.queryByText('cmd-b')).not.toBeInTheDocument()
+
+  await userEvent.click(screen.getByRole('button', { name: 'Ran 2 commands' }))
+  expect(screen.getByText('$ uptime')).toBeInTheDocument()
+  expect(screen.getByText('Commands 2')).toBeInTheDocument()
+  expect(screen.queryByText(/"entityId": "cmd-b"/)).not.toBeInTheDocument()
+
+  const technical = screen.getAllByRole('button', { name: 'Technical details' })
+  await userEvent.click(technical[1])
+  expect(screen.getByText(/"entityId": "cmd-b"/)).toBeInTheDocument()
+})
+
+test('shows connection failures as a compact service row with nested technical code', async () => {
+  const load = vi.fn(async () => { throw new Error('direct_authority_auth_revoked') })
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+  expect(await screen.findByText('Activity unavailable')).toBeInTheDocument()
+  expect(screen.getByText('Authorization revoked.')).toBeInTheDocument()
+  expect(screen.queryByText('direct_authority_auth_revoked')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Technical details' }))
+  expect(screen.getByText('direct_authority_auth_revoked')).toBeInTheDocument()
+  expect(document.querySelector('.activity-error-state')).not.toBeInTheDocument()
+})

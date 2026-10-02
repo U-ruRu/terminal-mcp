@@ -62,6 +62,14 @@ const copyByLocale: Record<Locale, Copy> = {
   },
 }
 
+export type ActivityCommandEntry = {
+  key: string
+  createdAt: string
+  label?: string
+  status: string
+  events: ActivityEventReadModel[]
+}
+
 export type ActivityChatItem = {
   key: string
   kind: 'message' | 'service'
@@ -73,6 +81,7 @@ export type ActivityChatItem = {
   tone?: 'success' | 'stale' | 'critical' | 'neutral'
   taskNamespace?: string
   taskId?: string
+  commands?: ActivityCommandEntry[]
   events: ActivityEventReadModel[]
 }
 
@@ -118,19 +127,46 @@ function commandStatus(events: ActivityEventReadModel[], copy: Copy): string {
   return copy.queued
 }
 
+function commandSummary(count: number, locale: Locale): string {
+  if (count <= 1) {
+    if (locale === 'ru') return 'Вызвал команду'
+    if (locale === 'ka') return 'გამოიძახა ბრძანება'
+    if (locale === 'es') return 'Ejecutó un comando'
+    return 'Ran a command'
+  }
+  if (locale === 'ru') {
+    const mod100 = count % 100
+    const mod10 = count % 10
+    const noun = mod100 >= 11 && mod100 <= 14 ? 'команд' : mod10 === 1 ? 'команду' : mod10 >= 2 && mod10 <= 4 ? 'команды' : 'команд'
+    return 'Вызвал ' + count + ' ' + noun
+  }
+  if (locale === 'ka') return 'გამოიძახა ' + count + ' ბრძანება'
+  if (locale === 'es') return 'Ejecutó ' + count + ' comandos'
+  return 'Ran ' + count + ' commands'
+}
+
 function projectCommand(events: ActivityEventReadModel[], locale: Locale): ActivityChatItem {
   const copy = copyByLocale[locale]
   const first = events[0]
-  const actor = actorFor(first, copy)
-  const command = events.map((event) => textField(event.payload, 'command', 'cmd')).find(Boolean) ?? first.entityId
+  const actorEvent = events.find((event) => event.actorName || event.actorId || textField(event.payload, 'display_name', 'displayName', 'public_name', 'name')) ?? first
+  const actor = actorFor(actorEvent, copy)
+  const command = events.map((event) => textField(event.payload, 'command', 'cmd')).find(Boolean)
+  const correlation = textField(first.payload, 'command_id', 'commandId') ?? first.entityId
+  const entry: ActivityCommandEntry = {
+    key: 'command:' + correlation,
+    createdAt: first.createdAt,
+    label: command ? '$ ' + command : undefined,
+    status: commandStatus(events, copy),
+    events,
+  }
   return {
-    key: 'command:' + first.entityId,
+    key: 'command-batch:' + correlation,
     kind: 'message',
     createdAt: first.createdAt,
     actorId: actor.id,
     actorName: actor.name,
-    content: '$ ' + command,
-    secondary: commandStatus(events, copy),
+    content: commandSummary(1, locale),
+    commands: [entry],
     events,
   }
 }
@@ -217,7 +253,27 @@ export function projectActivity(events: ActivityEventReadModel[], locale: Locale
     }
     result.push(projectOne(event, locale, serverName))
   }
-  return result
+  const batched: ActivityChatItem[] = []
+  for (const item of result) {
+    const prior = batched.at(-1)
+    if (item.commands?.length && prior?.commands?.length) {
+      const priorActor = prior.actorId ?? prior.actorName
+      const currentActor = item.actorId ?? item.actorName
+      const delta = new Date(item.createdAt).getTime() - new Date(prior.commands.at(-1)?.createdAt ?? prior.createdAt).getTime()
+      if (priorActor === currentActor && delta >= 0 && delta <= 120_000) {
+        const commands = [...prior.commands, ...item.commands]
+        batched[batched.length - 1] = {
+          ...prior,
+          content: commandSummary(commands.length, locale),
+          commands,
+          events: [...prior.events, ...item.events],
+        }
+        continue
+      }
+    }
+    batched.push(item)
+  }
+  return batched
 }
 
 function localDay(value: string): string {

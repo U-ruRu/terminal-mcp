@@ -265,15 +265,24 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
       {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
       {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}
-      {feed.error ? (
-        <div className="activity-error-state">
-          <FeedbackState variant="error" title={t('activity.unavailable')} detail={userError(feed.error, t)} />
-          <details className="inline-technical-details">
-            <summary aria-label={t('activity.rawDetails')}><span aria-hidden="true">⌄</span></summary>
-            <code>{feed.error}</code>
-          </details>
-        </div>
-      ) : null}
+      {feed.error ? (() => {
+        const errorKey = 'activity-error:' + selectedId
+        const errorExpanded = expandedEvents.has(errorKey)
+        const errorDetailsId = 'activity-error-details-' + selectedId.replace(/[^a-zA-Z0-9_-]/g, '-')
+        return (
+          <div className="activity-error-service" role="alert">
+            <div>
+              <strong>{t('activity.unavailable')}</strong>
+              <span>{userError(feed.error, t)}</span>
+            </div>
+            <button type="button" className="activity-error-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={errorExpanded} aria-controls={errorDetailsId}
+              onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(errorKey)) next.delete(errorKey); else next.add(errorKey); return next })}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d={errorExpanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+            </button>
+            {errorExpanded ? <code id={errorDetailsId}>{feed.error}</code> : null}
+          </div>
+        )
+      })() : null}
       {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
       {selectedId && !feed.error ? (
         <div className="activity-timeline-wrap">
@@ -306,7 +315,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                   <div className="activity-identity-column">
                     {item.showIdentity ? <span className="activity-identity-marker" style={{ '--activity-actor-hue': actorHue(actorName) } as React.CSSProperties} aria-hidden="true">{actorName.charAt(0).toUpperCase()}</span> : null}
                   </div>
-                  <div className="activity-chat-content">
+                  <div className={'activity-chat-content' + (item.commands?.length ? ' activity-command-bubble' : '') + (item.commands?.length && expanded ? ' is-expanded' : '')}>
                     {item.showIdentity ? <div className="activity-chat-header">
                       {item.actorId ? <Link className="activity-actor-name" to={agentRoute(selectedId, item.actorId)}>{actorName}</Link> : <strong className="activity-actor-name">{actorName}</strong>}
                       <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
@@ -316,11 +325,36 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                       {item.secondary ? <small>{item.secondary}</small> : null}
                       {item.taskNamespace && item.taskId ? <Link className="activity-context-link text-link" to={taskRoute(selectedId, item.taskNamespace, item.taskId)}>{t('common.task')} {item.taskId}</Link> : null}
                     </div>
-                    <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
+                    <button type="button" className="activity-details-toggle" aria-label={item.commands?.length ? item.content : t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
                       onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
                     </button>
-                    {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
+                    {expanded && item.commands?.length ? (
+                      <div id={detailsId} className="activity-command-list">
+                        {item.commands.map((command, commandIndex) => {
+                          const commandKey = eventKey + ':' + command.key
+                          const commandExpanded = expandedEvents.has(commandKey)
+                          const commandDetailsId = 'activity-command-details-' + commandKey.replace(/[^a-zA-Z0-9_-]/g, '-')
+                          return (
+                            <div className="activity-command-row" key={command.key}>
+                              <div className="activity-command-summary">
+                                <span>{command.label ?? (item.commands!.length > 1 ? t('common.commands') + ' ' + (commandIndex + 1) : t('common.commands'))}</span>
+                                <time dateTime={command.createdAt}>{activityTime(command.createdAt)}</time>
+                                <small>{command.status}</small>
+                              </div>
+                              <button type="button" className="activity-command-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={commandExpanded} aria-controls={commandDetailsId}
+                                onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(commandKey)) next.delete(commandKey); else next.add(commandKey); return next })}>
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={commandExpanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+                              </button>
+                              {commandExpanded ? <pre id={commandDetailsId} className="activity-technical-payload">{JSON.stringify({
+                                timestamp: activityFullTimestamp(command.createdAt),
+                                events: command.events,
+                              }, null, 2)}</pre> : null}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
                       timestamp: activityFullTimestamp(item.createdAt), eventType: first.eventType, entityType: first.entityType,
                       entityId: first.entityId, actorId: first.actorId, actorName: first.actorName, events: item.events,
                     }, null, 2)}</pre> : null}
