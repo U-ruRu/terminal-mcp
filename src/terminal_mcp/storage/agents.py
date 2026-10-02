@@ -684,6 +684,7 @@ class AgentStore:
         recipient_ids,
         require_reply=False,
         alert=False,
+        delivery_mode="legacy",
         task_namespace=None,
         task_id=None,
     ):
@@ -691,7 +692,7 @@ class AgentStore:
             await db.execute(
                 "INSERT INTO coordination_messages("
                 "message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert,"
-                "task_namespace,task_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                "delivery_mode,task_namespace,task_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     message_hash,
                     sender_agent_id,
@@ -700,6 +701,7 @@ class AgentStore:
                     created_at,
                     int(bool(require_reply or alert)),
                     int(bool(alert)),
+                    str(delivery_mode or "legacy"),
                     task_namespace,
                     task_id,
                 ),
@@ -717,7 +719,7 @@ class AgentStore:
             row = await (
                 await db.execute(
                     "SELECT message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert,"
-                    "task_namespace,task_id FROM coordination_messages WHERE message_hash=?",
+                    "delivery_mode,task_namespace,task_id FROM coordination_messages WHERE message_hash=?",
                     (message_hash,),
                 )
             ).fetchone()
@@ -731,8 +733,9 @@ class AgentStore:
             "created_at": row[4],
             "require_reply": bool(row[5]),
             "alert": bool(row[6]),
-            "task_namespace": row[7],
-            "task_id": row[8],
+            "delivery_mode": row[7] or "legacy",
+            "task_namespace": row[8],
+            "task_id": row[9],
         }
 
     async def recipient_record(self, message_hash, agent_id):
@@ -761,13 +764,17 @@ class AgentStore:
             rows = await (
                 await db.execute(
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
-                    "m.require_reply,m.alert,m.task_namespace,m.task_id,"
+                    "m.require_reply,m.alert,m.delivery_mode,m.task_namespace,m.task_id,"
                     "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
                     "r.read_at,r.replied_at,r.reply_message_hash "
                     "FROM coordination_message_recipients r "
                     "JOIN coordination_messages m ON m.message_hash=r.message_hash "
-                    "WHERE r.recipient_agent_id=? AND (r.read_at IS NULL OR "
-                    "((m.require_reply=1 OR m.alert=1) AND r.replied_at IS NULL)) "
+                    "WHERE r.recipient_agent_id=? AND ("
+                    "(m.delivery_mode='notify' AND r.seen_count<5) OR "
+                    "(m.delivery_mode='ack' AND r.read_at IS NULL) OR "
+                    "(m.delivery_mode='alert' AND r.replied_at IS NULL) OR "
+                    "(m.delivery_mode='legacy' AND (r.read_at IS NULL OR "
+                    "((m.require_reply=1 OR m.alert=1) AND r.replied_at IS NULL)))) "
                     "ORDER BY m.alert DESC,m.created_at,m.rowid",
                     (agent_id,),
                 )
@@ -780,6 +787,7 @@ class AgentStore:
             "created_at",
             "require_reply",
             "alert",
+            "delivery_mode",
             "task_namespace",
             "task_id",
             "delivered_at",
@@ -810,7 +818,7 @@ class AgentStore:
             rows = await (
                 await db.execute(
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
-                    "m.require_reply,m.alert,m.task_namespace,m.task_id,"
+                    "m.require_reply,m.alert,m.delivery_mode,m.task_namespace,m.task_id,"
                     "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
                     "r.read_at,r.replied_at,r.reply_message_hash "
                     "FROM coordination_message_recipients r "
@@ -827,6 +835,7 @@ class AgentStore:
             "created_at",
             "require_reply",
             "alert",
+            "delivery_mode",
             "task_namespace",
             "task_id",
             "delivered_at",
@@ -907,9 +916,13 @@ class AgentStore:
             for message_hash in hashes:
                 await db.execute(
                     "UPDATE coordination_message_recipients SET "
-                    "first_seen_at=COALESCE(first_seen_at,?),last_seen_at=?,seen_count=seen_count+1 "
+                    "first_seen_at=COALESCE(first_seen_at,?),last_seen_at=?,seen_count=seen_count+1,"
+                    "read_at=CASE WHEN EXISTS("
+                    "SELECT 1 FROM coordination_messages m "
+                    "WHERE m.message_hash=? AND m.delivery_mode='notify'"
+                    ") THEN COALESCE(read_at,?) ELSE read_at END "
                     "WHERE message_hash=? AND recipient_agent_id=?",
-                    (seen_at, seen_at, message_hash, agent_id),
+                    (seen_at, seen_at, message_hash, seen_at, message_hash, agent_id),
                 )
             await db.commit()
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from datetime import timedelta
 
-from terminal_mcp.core.orchestration import normalize_preview, utc_text
+from terminal_mcp.core.orchestration import normalize_preview, parse_utc, utc_now, utc_text
 from terminal_mcp.core.persistent_admission import (
     PersistentAdmissionError,
     current_admission_context,
@@ -402,9 +403,28 @@ class PersistentBackend:
         message_hash: str | None = None,
         require_reply: bool = False,
         alert: bool = False,
+        mode: str | None = None,
+        show_all: bool = False,
+        limit: int = 50,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
+        normalized_mode = "notify"
+        if mode is not None:
+            normalized_mode = str(mode).strip().lower()
+            if normalized_mode not in {"notify", "ack", "alert"}:
+                return {
+                    "ok": False,
+                    "code": "invalid_message_mode",
+                    "error": "invalid_message_mode",
+                }
+            require_reply = normalized_mode in {"ack", "alert"}
+            alert = normalized_mode == "alert"
+        elif alert or require_reply:
+            # Backward compatibility: old reply-required messages map to the strict alert mode.
+            normalized_mode = "alert"
+            require_reply = True
+            alert = True
         if access_code is None:
             return await self._access_message_legacy(
                 sender_public_name,
@@ -413,6 +433,9 @@ class PersistentBackend:
                 message_hash=message_hash,
                 require_reply=require_reply,
                 alert=alert,
+                mode=normalized_mode,
+                show_all=show_all,
+                limit=limit,
                 namespace=namespace,
                 task_id=task_id,
             )
@@ -431,11 +454,15 @@ class PersistentBackend:
         if self.fleet_bridge is None:
             return await self._access_message_legacy(
                 str(sender["public_name"]),
+                sender_identity=sender,
                 text=text,
                 target=target,
                 message_hash=message_hash,
                 require_reply=require_reply,
                 alert=alert,
+                mode=normalized_mode,
+                show_all=show_all,
+                limit=limit,
                 namespace=namespace,
                 task_id=task_id,
             )
@@ -447,9 +474,137 @@ class PersistentBackend:
             message_hash=message_hash,
             require_reply=require_reply,
             alert=alert,
+            show_all=show_all,
+            limit=limit,
             namespace=namespace,
             task_id=task_id,
         )
+
+    async def _persistent_message_entry(self, item: dict) -> dict:
+        sender_id = str(item.get("sender_agent_id") or "")
+        sender_access = await self._access_get(sender_id) if sender_id else None
+        alert = bool(item.get("alert"))
+        require_ack = bool(item.get("require_reply")) and not alert
+        declared_mode = item.get("delivery_mode") or item.get("mode")
+        mode = (
+            str(declared_mode)
+            if declared_mode in {"notify", "ack", "alert"}
+            else "alert"
+            if alert
+            else "ack"
+            if require_ack
+            else "notify"
+        )
+        if item.get("replied_at"):
+            state = "replied"
+        elif item.get("read_at"):
+            state = "read"
+        elif item.get("first_seen_at"):
+            state = "seen"
+        else:
+            state = "delivered"
+        return {
+            "message_hash": item.get("message_ref") or item.get("message_hash"),
+            "sender": (
+                sender_access.get("public_name") if sender_access is not None else sender_id
+            ),
+            "text": item.get("text"),
+            "mode": mode,
+            "state": state,
+            "created_at": item.get("created_at"),
+            "first_seen_at": item.get("first_seen_at"),
+            "last_seen_at": item.get("last_seen_at"),
+            "seen_count": int(item.get("seen_count") or 0),
+            "read_at": item.get("read_at"),
+            "replied_at": item.get("replied_at"),
+            "reply_message_hash": item.get("reply_message_ref") or item.get("reply_message_hash"),
+            "namespace": item.get("task_namespace") or item.get("namespace"),
+            "task_id": item.get("task_id"),
+        }
+
+    async def message_state(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        surface: bool = False,
+    ) -> dict:
+        if self.fleet_bridge is None:
+            coordinator = self.service.agent_coordinator
+            if coordinator is None:
+                return {
+                    "messages": [],
+                    "pending_messages": [],
+                    "ack_required_pending": False,
+                    "alert_pending": False,
+                }
+            obligations = await coordinator.store.message_obligations(logical_agent_id)
+            visible = list(obligations)
+            if surface and visible:
+                await coordinator.store.mark_messages_seen(
+                    logical_agent_id,
+                    [item["message_hash"] for item in visible],
+                    utc_text(),
+                )
+            refreshed = await coordinator.store.message_obligations(logical_agent_id)
+            journal = await coordinator.store.message_journal(logical_agent_id, limit=500)
+            current = {item["message_hash"]: item for item in journal}
+            messages = [
+                await self._persistent_message_entry(current.get(item["message_hash"], item))
+                for item in visible
+            ]
+            return {
+                "messages": messages,
+                "pending_messages": messages,
+                "ack_required_pending": any(
+                    item["read_at"] is None
+                    or (
+                        item.get("delivery_mode") == "legacy"
+                        and item["require_reply"]
+                        and item["replied_at"] is None
+                    )
+                    for item in refreshed
+                ),
+                "alert_pending": any(
+                    (item["alert"] or item.get("delivery_mode") == "alert")
+                    and item["replied_at"] is None
+                    for item in refreshed
+                ),
+            }
+        obligations = await self.fleet_bridge.inbox_obligations(
+            logical_agent_id,
+            work_session_id=work_session_id,
+            session_epoch=session_epoch,
+        )
+        visible = list(obligations)
+        if surface and visible:
+            await self.fleet_bridge.surface_obligations(
+                logical_agent_id=logical_agent_id,
+                work_session_id=work_session_id,
+                session_epoch=session_epoch,
+                obligations=visible,
+                retention_calls=5,
+            )
+        messages = []
+        for item in visible:
+            view = dict(item)
+            if surface:
+                view["seen_count"] = int(view.get("seen_count") or 0) + 1
+                view["first_seen_at"] = view.get("first_seen_at") or utc_text()
+                view["last_seen_at"] = utc_text()
+                if not bool(view.get("require_reply")) and not bool(view.get("alert")):
+                    view["read_at"] = view.get("read_at") or view["last_seen_at"]
+            messages.append(await self._persistent_message_entry(view))
+        return {
+            "messages": messages,
+            "pending_messages": messages,
+            "ack_required_pending": any(
+                bool(item.get("require_reply")) and not bool(item.get("alert"))
+                for item in obligations
+            ),
+            "alert_pending": any(bool(item.get("alert")) for item in obligations),
+        }
 
     async def _fleet_access_message(
         self,
@@ -461,6 +616,8 @@ class PersistentBackend:
         message_hash: str | None,
         require_reply: bool,
         alert: bool,
+        show_all: bool,
+        limit: int,
         namespace: str | None,
         task_id: str | None,
     ) -> dict:
@@ -468,7 +625,6 @@ class PersistentBackend:
         sender_name = str(sender["public_name"])
         work_session_id = str(sender["work_session_id"])
         session_epoch = int(sender["session_epoch"])
-        require_reply = bool(require_reply or alert)
         try:
             _session, permit = await self._execution_authority(
                 sender_id,
@@ -495,6 +651,22 @@ class PersistentBackend:
                 (item for item in inbox if item.get("message_ref") == message_hash),
                 None,
             )
+            if original is None:
+                try:
+                    history = await self.fleet_bridge.message_inbox(
+                        sender_id,
+                        work_session_id=work_session_id,
+                        session_epoch=session_epoch,
+                        show_all=True,
+                        recent_seconds=300,
+                        limit=500,
+                    )
+                except PersistentStoreError as exc:
+                    return {"ok": False, "code": exc.code, "error": exc.code}
+                original = next(
+                    (item for item in history if item.get("message_ref") == message_hash),
+                    None,
+                )
             if original is None:
                 # Preserve pre-Fleet/local message hashes during the cutover.
                 return await self._access_message_legacy(
@@ -546,26 +718,37 @@ class PersistentBackend:
             }
 
         if text is None:
-            visible = []
-            for item in inbox:
-                sender_access = await self._access_get(str(item.get("sender_agent_id") or ""))
-                visible.append(
-                    {
-                        "message_hash": item["message_ref"],
-                        "sender": (
-                            sender_access.get("public_name")
-                            if sender_access is not None
-                            else item.get("sender_agent_id")
-                        ),
-                        "text": item.get("text"),
-                        "require_reply": bool(item.get("require_reply")),
-                        "alert": bool(item.get("alert")),
-                        "created_at": item.get("created_at"),
-                    }
+            try:
+                if inbox:
+                    await self.fleet_bridge.surface_obligations(
+                        logical_agent_id=sender_id,
+                        work_session_id=work_session_id,
+                        session_epoch=session_epoch,
+                        obligations=inbox,
+                        retention_calls=5,
+                    )
+                rows = await self.fleet_bridge.message_inbox(
+                    sender_id,
+                    work_session_id=work_session_id,
+                    session_epoch=session_epoch,
+                    show_all=show_all,
+                    recent_seconds=300,
+                    limit=max(1, min(int(limit), 500)),
                 )
-            return {"ok": True, "sender": sender_name, "pending_messages": visible}
+            except PersistentStoreError as exc:
+                return {"ok": False, "code": exc.code, "error": exc.code}
+            visible = [await self._persistent_message_entry(item) for item in rows]
+            return {
+                "ok": True,
+                "sender": sender_name,
+                "messages": visible,
+                "inbox": visible,
+                "show_all": bool(show_all),
+            }
 
         recipients: list[tuple[str, str]] = []
+        if target and target.casefold() == "broadcast":
+            target = None
         if namespace is not None or task_id is not None:
             if not namespace or not task_id:
                 return {"ok": False, "code": "invalid_task_target", "error": "invalid_task_target"}
@@ -669,15 +852,19 @@ class PersistentBackend:
         self,
         sender_public_name: str,
         *,
+        sender_identity: dict | None = None,
         text: str | None = None,
         target: str | None = None,
         message_hash: str | None = None,
         require_reply: bool = False,
         alert: bool = False,
+        mode: str = "notify",
+        show_all: bool = False,
+        limit: int = 50,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
-        sender = await self.access_sender_identity(sender_public_name)
+        sender = sender_identity or await self.access_sender_identity(sender_public_name)
         if not sender.get("ok"):
             return sender
         sender_id = sender["logical_agent_id"]
@@ -685,6 +872,7 @@ class PersistentBackend:
         if coordinator is None:
             return {"ok": False, "code": "message_unavailable", "error": "message_unavailable"}
         require_reply = bool(require_reply or alert)
+        mode = mode if mode in {"notify", "ack", "alert"} else "notify"
         if message_hash is not None:
             original = await coordinator.store.message_record(message_hash)
             if original is None:
@@ -725,8 +913,40 @@ class PersistentBackend:
             }
 
         if not text:
-            return {"ok": False, "code": "message_text_required", "error": "message_text_required"}
+            await self.message_state(
+                logical_agent_id=sender_id,
+                work_session_id=str(sender["work_session_id"]),
+                session_epoch=int(sender["session_epoch"]),
+                surface=True,
+            )
+            rows = await coordinator.store.message_journal(
+                sender_id,
+                limit=max(1, min(int(limit), 500)),
+            )
+            if not show_all:
+                cutoff = utc_now() - timedelta(seconds=300)
+                open_hashes = {
+                    item["message_hash"]
+                    for item in await coordinator.store.message_obligations(sender_id)
+                }
+                rows = [
+                    item
+                    for item in rows
+                    if item["message_hash"] in open_hashes
+                    or (item.get("last_seen_at") and parse_utc(item["last_seen_at"]) >= cutoff)
+                ]
+            messages = [await self._persistent_message_entry(item) for item in rows]
+            return {
+                "ok": True,
+                "sender": sender_public_name,
+                "messages": messages,
+                "inbox": messages,
+                "show_all": bool(show_all),
+                "scope": "local",
+            }
         recipients: list[tuple[str, str]] = []
+        if target and target.casefold() == "broadcast":
+            target = None
         if namespace is not None or task_id is not None:
             if not namespace or not task_id:
                 return {"ok": False, "code": "invalid_task_target", "error": "invalid_task_target"}
@@ -741,15 +961,50 @@ class PersistentBackend:
                 if access and access.get("status") == "active":
                     recipients.append((rid, access["public_name"]))
         elif target:
-            access = await self._resolve_access_name(target)
-            if access["logical_agent_id"] != sender_id:
-                recipients.append((access["logical_agent_id"], access["public_name"]))
+            try:
+                access = await self._resolve_access_name(target)
+            except PersistentStoreError as exc:
+                code = (
+                    "recipient_not_found" if exc.code == "access_identity_not_found" else exc.code
+                )
+                return {"ok": False, "code": code, "error": code}
+            if access["logical_agent_id"] == sender_id:
+                return {
+                    "ok": False,
+                    "code": "no_active_recipients",
+                    "error": "no_active_recipients",
+                }
+            session = await self.lifecycle.store.active_session_for_slot(access["logical_agent_id"])
+            if (
+                session is None
+                or session.state != "active"
+                or utc_now() >= parse_utc(session.hard_expires_at)
+            ):
+                return {
+                    "ok": False,
+                    "code": "recipient_not_active",
+                    "error": "recipient_not_active",
+                }
+            recipients.append((access["logical_agent_id"], access["public_name"]))
         else:
-            return {
-                "ok": False,
-                "code": "message_target_required",
-                "error": "message_target_required",
-            }
+            if self.access_authority is None:
+                return {
+                    "ok": False,
+                    "code": "no_active_recipients",
+                    "error": "no_active_recipients",
+                }
+            for access in await self.access_authority.access_slots():
+                rid = str(access.get("logical_agent_id") or "")
+                if not rid or rid == sender_id or access.get("status") != "active":
+                    continue
+                session = await self.lifecycle.store.active_session_for_slot(rid)
+                if (
+                    session is None
+                    or session.state != "active"
+                    or utc_now() >= parse_utc(session.hard_expires_at)
+                ):
+                    continue
+                recipients.append((rid, str(access["public_name"])))
         if not recipients:
             return {"ok": False, "code": "no_active_recipients", "error": "no_active_recipients"}
         allocated = await coordinator._create_message(
@@ -759,6 +1014,7 @@ class PersistentBackend:
             [rid for rid, _ in recipients],
             require_reply,
             alert,
+            delivery_mode=mode,
             task_namespace=namespace,
             task_id=task_id,
         )
@@ -779,6 +1035,8 @@ class PersistentBackend:
             "sender": sender_public_name,
             "message_hash": allocated,
             "delivered_to": [name for _, name in recipients],
+            "scope": "direct" if target or (namespace and task_id) else "local",
+            "mode": mode,
             "namespace": namespace,
             "task_id": task_id,
         }

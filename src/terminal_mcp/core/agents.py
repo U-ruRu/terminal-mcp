@@ -112,9 +112,7 @@ class AgentCoordinator:
             "return_to_chat": True,
             "session_status": resolution.get("state") or "forced",
             "session_started_at": resolution.get("session_started_at"),
-            "session_end_reason": reason
-            or resolution.get("end_reason")
-            or "max_session_duration",
+            "session_end_reason": reason or resolution.get("end_reason") or "max_session_duration",
             "error": "agent session has ended; return to chat before starting new work",
         }
 
@@ -241,9 +239,7 @@ class AgentCoordinator:
         if resolution.get("state") != "active":
             return None, self._foreign_terminal(agent_id, resolution)
         if now_dt >= parse_utc(expires_at):
-            return None, self._foreign_terminal(
-                agent_id, resolution, reason="max_session_duration"
-            )
+            return None, self._foreign_terminal(agent_id, resolution, reason="max_session_duration")
         task_summary = resolution.get("task_summary")
         intent = resolution.get("intent")
         details = list(resolution.get("details") or [])
@@ -326,9 +322,7 @@ class AgentCoordinator:
             current = await self.store.get_session(agent_id)
             if current is not None:
                 current = await self._enforce_session(current)
-                current, foreign_terminal = await self._reconcile_foreign_session(
-                    agent_id, current
-                )
+                current, foreign_terminal = await self._reconcile_foreign_session(agent_id, current)
                 if foreign_terminal:
                     return foreign_terminal
                 if current["state"] != "active":
@@ -348,9 +342,7 @@ class AgentCoordinator:
                 if gate.get("blocked"):
                     return gate["response"]
                 if not plan_supplied:
-                    return await self.overview(
-                        agent_id=agent_id, touch=False, reveal_self_id=False
-                    )
+                    return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=False)
 
                 resolved_details = current["details"] if details is None else details
                 if not resolved_details:
@@ -373,9 +365,7 @@ class AgentCoordinator:
                     local_instance_id=self.local_instance_id,
                 )
                 self._inc("terminal_mcp_agent_plan_updates_total")
-                return await self.overview(
-                    agent_id=agent_id, touch=False, reveal_self_id=False
-                )
+                return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=False)
 
             if not is_agent_id(agent_id):
                 return {
@@ -395,9 +385,7 @@ class AgentCoordinator:
                 attached, error = await self._attach_foreign(agent_id)
                 if error:
                     return error
-                return await self.overview(
-                    agent_id=agent_id, touch=False, reveal_self_id=True
-                )
+                return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=True)
 
             missing = self._missing_registration_field(task_summary, intent, details)
             if missing:
@@ -418,9 +406,7 @@ class AgentCoordinator:
                     raced = await self._enforce_session(raced)
                     if raced["state"] != "active":
                         return self.expired_result(agent_id, raced)
-                    return await self.overview(
-                        agent_id=agent_id, touch=False, reveal_self_id=False
-                    )
+                    return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=False)
                 proposal = await self.store.proposal(agent_id, proposal_cutoff)
                 if proposal is None:
                     return self._foreign_unavailable(
@@ -428,9 +414,7 @@ class AgentCoordinator:
                     )
                 now_dt = utc_now()
                 now = utc_text(now_dt)
-                expires_at = utc_text(
-                    now_dt + timedelta(seconds=self.max_session_seconds)
-                )
+                expires_at = utc_text(now_dt + timedelta(seconds=self.max_session_seconds))
                 try:
                     await self.store.create_session(
                         agent_id,
@@ -459,9 +443,7 @@ class AgentCoordinator:
                     existing = await self.store.get_session(agent_id)
                     if existing is None or existing["state"] != "active":
                         return self.expired_result(agent_id, existing)
-                    return await self.overview(
-                        agent_id=agent_id, touch=False, reveal_self_id=False
-                    )
+                    return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=False)
 
             self._inc("terminal_mcp_agent_sessions_total")
             return await self.overview(agent_id=agent_id, touch=False, reveal_self_id=True)
@@ -728,6 +710,7 @@ class AgentCoordinator:
                 "pending_messages": [],
                 "alert_messages": [],
                 "reply_required_messages": [],
+                "messages": [],
                 "unread_message_pending": False,
                 "reply_required_pending": False,
                 "alert_pending": False,
@@ -750,7 +733,11 @@ class AgentCoordinator:
         for item in messages:
             if item["read_at"] is None:
                 unread = True
-            if item["require_reply"] and item["replied_at"] is None:
+            if (
+                item["delivery_mode"] != "ack"
+                and item["require_reply"]
+                and item["replied_at"] is None
+            ):
                 reply_required = True
             if item["alert"] and item["replied_at"] is None:
                 alert_pending = True
@@ -758,12 +745,17 @@ class AgentCoordinator:
             pending.append(line)
             if item["alert"] and item["replied_at"] is None:
                 alerts.append(line)
-            if item["require_reply"] and item["replied_at"] is None:
+            if (
+                item["delivery_mode"] != "ack"
+                and item["require_reply"]
+                and item["replied_at"] is None
+            ):
                 replies.append(line)
         return {
             "pending_messages": pending,
             "alert_messages": alerts,
             "reply_required_messages": replies,
+            "messages": [self._message_obligation_record(item) for item in messages],
             "unread_message_pending": unread,
             "reply_required_pending": reply_required,
             "alert_pending": alert_pending,
@@ -786,6 +778,13 @@ class AgentCoordinator:
             "text": item["text"],
             "require_reply": item["require_reply"],
             "alert": item["alert"],
+            "mode": (
+                item.get("delivery_mode")
+                if item.get("delivery_mode") in {"notify", "ack", "alert"}
+                else "alert"
+                if item["alert"]
+                else "legacy"
+            ),
             "namespace": item.get("task_namespace"),
             "task_id": item.get("task_id"),
             "created_at": item["created_at"],
@@ -796,15 +795,16 @@ class AgentCoordinator:
         }
 
     def _format_message(self, item, now):
+        mode = item.get("delivery_mode") or "legacy"
         if item["replied_at"]:
             state = "REPLIED"
         elif item["read_at"]:
-            state = "READ · REPLY REQUIRED"
+            state = "READ" if mode in {"notify", "ack"} else "READ · REPLY REQUIRED"
         elif item["first_seen_at"]:
-            state = "SEEN · READ ACK REQUIRED"
+            state = "SEEN" if mode == "notify" else "SEEN · READ ACK REQUIRED"
         else:
-            state = "DELIVERED · READ ACK REQUIRED"
-        prefix = "ALERT · " if item["alert"] else ""
+            state = "DELIVERED" if mode == "notify" else "DELIVERED · READ ACK REQUIRED"
+        prefix = "ALERT · " if item["alert"] or mode == "alert" else ""
         sender = public_agent_name(item["sender_agent_id"])
         if item.get("task_namespace") and item.get("task_id"):
             target = f"task {item['task_namespace']}/{item['task_id']}"
@@ -819,7 +819,7 @@ class AgentCoordinator:
             )
         body = item["text"] if full else "message reminder"
         actions = f"ack: message({item['message_hash']})"
-        if item["require_reply"] and item["replied_at"] is None:
+        if mode != "ack" and item["require_reply"] and item["replied_at"] is None:
             actions += f" | reply: message({item['message_hash']}, text=...)"
         return (
             f"{prefix}{state} · {short_time(item['created_at'])} {item['message_hash']} "
@@ -886,9 +886,7 @@ class AgentCoordinator:
             session = await self.store.get_session(row["agent_id"])
             session = await self._enforce_session(session, now)
             if session:
-                session, _ = await self._reconcile_foreign_session(
-                    row["agent_id"], session
-                )
+                session, _ = await self._reconcile_foreign_session(row["agent_id"], session)
             if not session or session["state"] != "active":
                 continue
             marker = row["last_command_hash"] or "started"
@@ -1270,6 +1268,7 @@ class AgentCoordinator:
         require_reply,
         alert,
         *,
+        delivery_mode="legacy",
         task_namespace=None,
         task_id=None,
     ):
@@ -1286,6 +1285,7 @@ class AgentCoordinator:
                     recipient_ids,
                     require_reply=require_reply,
                     alert=alert,
+                    delivery_mode=delivery_mode,
                     task_namespace=task_namespace,
                     task_id=task_id,
                 )
@@ -1430,9 +1430,7 @@ class AgentCoordinator:
         for session in sessions:
             current = await self._enforce_session(session, now)
             if current:
-                current, _ = await self._reconcile_foreign_session(
-                    current["agent_id"], current
-                )
+                current, _ = await self._reconcile_foreign_session(current["agent_id"], current)
             if current:
                 normalized.append(current)
         sessions = normalized
@@ -1596,9 +1594,7 @@ class AgentCoordinator:
         self_payload = None
         if own:
             own_scopes, own_local_intent_status = self._intent_scope_views(own, now)
-            own_idle = max(
-                0, int((now - parse_utc(own["last_activity_at"])).total_seconds())
-            )
+            own_idle = max(0, int((now - parse_utc(own["last_activity_at"])).total_seconds()))
             self_payload = {
                 "name": public_agent_name(agent_id),
                 "ttl_seconds": self.ttl_seconds,
@@ -1610,9 +1606,7 @@ class AgentCoordinator:
                 "details": own["details"],
                 "current_step": own["current_step"],
                 "preferred_queue_id": own["preferred_queue_id"],
-                "logical_session_status": (
-                    "active" if own["state"] == "active" else own["state"]
-                ),
+                "logical_session_status": ("active" if own["state"] == "active" else own["state"]),
                 "logical_last_activity_at": own["last_activity_at"],
                 "logical_idle_seconds": own_idle,
                 "intent_scopes": own_scopes,

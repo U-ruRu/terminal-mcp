@@ -289,7 +289,8 @@ def test_mcp_tools_advertise_canonical_access_surface():
     mapping = cmd["properties"]["request"]["discriminator"]["mapping"]
     assert set(mapping) == {"run", "read", "cancel", "recovery"}
     read_schema = cmd["$defs"]["CmdReadRequest"]
-    assert "code" not in read_schema["properties"]
+    assert "code" in read_schema["properties"]
+    assert "code" not in read_schema["required"]
     assert read_schema["required"] == ["action", "cmd_hash"]
     for name in ("CmdRunRequest", "CmdCancelRequest", "CmdRecoveryRequest"):
         assert "code" in cmd["$defs"][name]["required"]

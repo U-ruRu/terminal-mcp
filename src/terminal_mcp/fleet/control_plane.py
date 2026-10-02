@@ -71,6 +71,12 @@ class ManagedFleetControl:
 
     async def reconcile_pending(self) -> dict:
         state = await self.snapshot()
+        if state.get("managed"):
+            # Durable managed state is also the source of truth for the live
+            # runtime config. Re-apply it even when remote revisions are
+            # already converged so a restarted/drifted runtime cannot fall
+            # back to bootstrap peer credentials indefinitely.
+            await self._apply_local(state)
         if not self.is_control_node or not state.get("managed"):
             return state
         pending = any(
@@ -159,8 +165,12 @@ class ManagedFleetControl:
 
     async def _management_peer(self, node_id: str) -> FleetPeer | None:
         material = await self.store.managed_node(node_id)
-        if material is not None and material.get("state") != "detached" and all(
-            (material.get("origin"), material.get("public_key"), material.get("auth_token"))
+        if (
+            material is not None
+            and material.get("state") != "detached"
+            and all(
+                (material.get("origin"), material.get("public_key"), material.get("auth_token"))
+            )
         ):
             return FleetPeer(
                 node_id,
@@ -322,11 +332,13 @@ class ManagedFleetControl:
         # Bootstrap peers are transport hints only. Creating a managed Mesh must never
         # turn configured peers into members implicitly; membership is an explicit
         # control-plane mutation.
-        return [{
-            "node_id": self.config.instance_id,
-            "origin": self.public_base_url,
-            "public_key": self._local_public_key(),
-        }]
+        return [
+            {
+                "node_id": self.config.instance_id,
+                "origin": self.public_base_url,
+                "public_key": self._local_public_key(),
+            }
+        ]
 
     async def snapshot(self) -> dict:
         return await self.store.control_state(include_secrets=False)
