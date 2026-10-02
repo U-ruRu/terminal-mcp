@@ -704,6 +704,7 @@ class PersistentFleetBridge:
         requesting_instance_id: str,
         scope: str,
         principal_id: str,
+        access_code: str | None = None,
         operation: str | None = None,
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
@@ -726,7 +727,16 @@ class PersistentFleetBridge:
                     }
                 ],
             )
-        if session.auth_principal_id and session.auth_principal_id != principal_id:
+        access_generation = 0
+        if access_code is not None:
+            access = await self.resolve_access_code(access_code)
+            if (
+                access["logical_agent_id"] != logical_agent_id
+                or access["authority_node_id"] != self.config.instance_id
+            ):
+                raise PersistentStoreError("access_denied")
+            access_generation = int(access["access_generation"])
+        elif session.auth_principal_id and session.auth_principal_id != principal_id:
             raise PersistentStoreError("persistent_auth_required")
         await self.publish_authority(
             logical_agent_id,
@@ -758,6 +768,7 @@ class PersistentFleetBridge:
             "scope": scope,
             "operation": operation,
             "principal_id": principal_id,
+            "access_generation": access_generation,
             "gate_revision": int(gate["gate_revision"]),
         }
         fingerprint = self.store.idempotency_fingerprint(request_payload)
@@ -787,7 +798,11 @@ class PersistentFleetBridge:
                 )
                 if session.authority_node_id != self.config.instance_id:
                     raise PersistentStoreError("wrong_authority")
-                if session.auth_principal_id and session.auth_principal_id != principal_id:
+                if (
+                    access_code is None
+                    and session.auth_principal_id
+                    and session.auth_principal_id != principal_id
+                ):
                     raise PersistentStoreError("persistent_auth_required")
             except Exception:
                 await self.store.revoke_node_attachment(attachment["node_attachment_id"])
@@ -843,6 +858,7 @@ class PersistentFleetBridge:
         session_epoch: int,
         scope: str,
         principal_id: str,
+        access_code: str | None = None,
         operation: str | None = None,
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
@@ -861,6 +877,8 @@ class PersistentFleetBridge:
             "request_id": request_id,
             "principal_id": principal_id,
         }
+        if access_code is not None:
+            payload["access_code"] = access_code
         peers_by_id = self.config.peers_by_id
         route = await self.route_info(logical_agent_id)
         candidates = list(self.config.peers)
@@ -1000,9 +1018,7 @@ class PersistentFleetBridge:
                     if remote:
                         blockers.extend(remote)
                     else:
-                        await self.store.revoke_node_attachment(
-                            attachment["node_attachment_id"]
-                        )
+                        await self.store.revoke_node_attachment(attachment["node_attachment_id"])
                 except Exception:
                     blockers.append(
                         {"kind": "authority_unreachable", "node_instance_id": peer.instance_id}

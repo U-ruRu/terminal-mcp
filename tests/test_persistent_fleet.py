@@ -111,6 +111,27 @@ async def test_signed_permit_is_exact_node_bound_and_tamper_evident(tmp_path):
             principal_id="wrong-client",
         )
 
+    async def resolve_access_code(code):
+        assert code == "0042"
+        return {
+            "logical_agent_id": permit.logical_agent_id,
+            "authority_node_id": "bacloud",
+            "access_generation": 3,
+        }
+
+    bridge.resolve_access_code = resolve_access_code
+    cross_connector = await bridge.issue_permit(
+        logical_agent_id=permit.logical_agent_id,
+        work_session_id=permit.work_session_id,
+        session_epoch=permit.session_epoch,
+        requesting_instance_id="firstbyte",
+        scope="run",
+        principal_id="connector-on-firstbyte",
+        access_code="0042",
+    )
+    assert cross_connector.principal_id == "connector-on-firstbyte"
+    assert verify_permit(cross_connector, bc_pub)
+
 
 class Resp:
     status_code = 200

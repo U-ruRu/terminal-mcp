@@ -580,6 +580,91 @@ def test_installer_allows_runtime_schema_when_target_is_compatible(tmp_path, tar
     assert result.returncode == 0, result.stderr
 
 
+
+
+def _run_fleet_control_schema_guard(tmp_path, *, current_version: int, target_version: int):
+    data = tmp_path / f"fleet-control-{current_version}-{target_version}"
+    data.mkdir()
+    control_db = data / "fleet-control.sqlite3"
+    with sqlite3.connect(control_db) as db:
+        db.executescript(
+            """
+            CREATE TABLE control_schema(
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                version INTEGER NOT NULL
+            );
+            """
+        )
+        db.execute("INSERT INTO control_schema(singleton,version) VALUES(1,?)", (current_version,))
+
+    release = tmp_path / f"fleet-control-release-{target_version}"
+    package = release / "terminal_mcp" / "fleet"
+    package.mkdir(parents=True)
+    (release / "terminal_mcp" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "control_storage.py").write_text(
+        "class FleetControlStore:\n"
+        f"    SCHEMA_VERSION = {target_version}\n"
+    )
+
+    runner = tmp_path / f"fleet-control-guard-{current_version}-{target_version}.sh"
+    runner.write_text(
+        "#!/bin/bash\n"
+        f"DATA={str(data)!r}\n"
+        f"ENV_FILE={str(data / 'missing.env')!r}\n"
+        "runtime_python(){ local release=$1; shift; PYTHONPATH=\"$release\" \"$PYTHON\" \"$@\"; }\n"
+        + _schema_guard_function()
+        + "\n"
+        + f"schema_rollback_safe {str(release)!r}\n"
+    )
+    return subprocess.run(
+        ["bash", str(runner)],
+        env={**os.environ, "PYTHON": sys.executable},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("current_version", "target_version"),
+    [(2, 1), (3, 2)],
+)
+def test_installer_blocks_fleet_control_schema_downgrade(
+    tmp_path,
+    current_version,
+    target_version,
+):
+    result = _run_fleet_control_schema_guard(
+        tmp_path,
+        current_version=current_version,
+        target_version=target_version,
+    )
+    assert result.returncode == 45
+    assert (
+        f"Refusing fleet-control schema downgrade {current_version}->{target_version}"
+        in result.stderr
+    )
+    assert "managed topology/trust/AccessPolicy state" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("current_version", "target_version"),
+    [(2, 2), (2, 3), (3, 3)],
+)
+def test_installer_allows_compatible_fleet_control_schema(
+    tmp_path,
+    current_version,
+    target_version,
+):
+    result = _run_fleet_control_schema_guard(
+        tmp_path,
+        current_version=current_version,
+        target_version=target_version,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_health_failure_never_switches_to_schema_incompatible_old_release():
     script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
     activate = script.split("activate(){", 1)[1].split("\n}\nmkdir -p", 1)[0]

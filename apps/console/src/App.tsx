@@ -4,7 +4,7 @@ import { AppShell } from './components/AppShell'
 import type { BrowserDiagnosticJournal } from './diagnostics/journal'
 import type { FleetReadModel } from './fleet/readModel'
 import type { FleetInstanceView } from './fleet/types'
-import type { ContextReadModel, PersistentAuditReadModel, PersistentMutationResult } from './api/models'
+import type { ContextReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentAuditReadModel, PersistentMutationResult } from './api/models'
 import { Activity, type ActivityLoader } from './routes/Activity'
 import { Connections } from './routes/Connections'
 import { Overview } from './routes/Overview'
@@ -24,10 +24,12 @@ export type AppProps = {
   loadContexts?: (instanceId: string) => Promise<ContextReadModel[]>
   loadSlotAudit?: (instanceId: string, logicalAgentId: string) => Promise<PersistentAuditReadModel[]>
   mutatePersistent?: (instanceId: string, path: string, body: Record<string, unknown>) => Promise<PersistentMutationResult>
+  loadFleetControl?: (instanceId: string) => Promise<ManagedFleetControlReadModel>
+  mutateFleetControl?: (instanceId: string, path: string, body: Record<string, unknown>) => Promise<ManagedFleetMutationResult>
   diagnostics?: BrowserDiagnosticJournal
 }
 
-export function App({ model, instances, loadActivity, loadTask, loadContexts, loadSlotAudit, mutatePersistent, diagnostics }: AppProps) {
+export function App({ model, instances, loadActivity, loadTask, loadContexts, loadSlotAudit, mutatePersistent, loadFleetControl, mutateFleetControl, diagnostics }: AppProps) {
   return (
     <AppShell servers={model.servers}>
       <Routes>
@@ -44,8 +46,8 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />
-        <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} />} />
-        <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} />} />
+        <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
+        <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" diagnostics={diagnostics} loadContexts={loadContexts} />} />
         <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" diagnostics={diagnostics} />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />

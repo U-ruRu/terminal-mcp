@@ -348,7 +348,7 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
 
     session = _text_json(
         await tools["session"].run(
-            {"action": "start", "mode": "persistent", "code": "ABCD"},
+            {"action": "start", "mode": "persistent", "code": "1234"},
             convert_result=True,
         )
     )
@@ -356,7 +356,7 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
 
     task = _text_json(
         await tools["task"].run(
-            {"code": "ABCD", "action": "claim", "namespace": "project", "task_id": "REV-1"},
+            {"code": "1234", "action": "claim", "namespace": "project", "task_id": "REV-1"},
             convert_result=True,
         )
     )
@@ -364,7 +364,7 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
 
     cmd = _text_json(
         await tools["cmd"].run(
-            {"request": {"action": "run", "code": "ABCD", "command": "printf ok"}},
+            {"request": {"action": "run", "code": "1234", "command": "printf ok"}},
             convert_result=True,
         )
     )

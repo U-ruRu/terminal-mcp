@@ -24,6 +24,7 @@ from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinato
 from terminal_mcp.core.persistent_policy import PersistentPolicyController
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.fleet.config import build_fleet_config
+from terminal_mcp.fleet.control_plane import ManagedFleetControl
 from terminal_mcp.fleet.control_storage import FleetControlStore
 from terminal_mcp.fleet.projection import FleetProjectionService
 from terminal_mcp.fleet.projection_storage import FleetProjectionStore
@@ -39,6 +40,7 @@ from terminal_mcp.http.console import build_console_router
 from terminal_mcp.http.console_events import WebSocketTicketStore, build_console_events_router
 from terminal_mcp.http.console_fleet import build_console_fleet_router
 from terminal_mcp.http.fleet import build_fleet_router
+from terminal_mcp.http.fleet_control import build_fleet_control_router
 from terminal_mcp.http.fleet_v1 import (
     build_fleet_v1_projection_router,
     build_fleet_v1_source_router,
@@ -247,6 +249,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     persistent_policy_controller = PersistentPolicyController(
         settings, service, persistent_lifecycle
     )
+    managed_fleet_control = (
+        ManagedFleetControl(
+            fleet_control,
+            fleet_config,
+            persistent_policy_controller,
+            public_base_url=settings.public_base_url,
+            runtime_targets=(
+                fleet_replication,
+                fleet_projection_service,
+                persistent_fleet,
+            ),
+        )
+        if fleet_control and fleet_config and fleet_replication
+        else None
+    )
     auth = AuthService(settings, oauth_store, credentials)
     mcp = build_mcp(
         service,
@@ -285,6 +302,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     settings.fleet_projection_owner_node_id,
                     settings.fleet_projection_follower_node_id,
                 )
+            if managed_fleet_control:
+                await managed_fleet_control.reconcile_local()
         await service.reconcile_agent_sessions()
         await oauth_store.initialize()
         await auth_foundation.initialize()
@@ -296,12 +315,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await fleet_projection_service.start()
         if persistent_fleet:
             await persistent_fleet.start()
+        if managed_fleet_control:
+            await managed_fleet_control.start()
         await persistent_lifecycle.start()
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
             await persistent_lifecycle.stop()
+            if managed_fleet_control:
+                await managed_fleet_control.stop()
             if persistent_fleet:
                 await persistent_fleet.stop()
             if fleet_projection_service:
@@ -332,6 +355,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.fleet_node_meta = fleet_node_meta
     app.state.fleet_source = fleet_source
     app.state.fleet_control = fleet_control
+    app.state.managed_fleet_control = managed_fleet_control
     app.state.fleet_projection = fleet_projection
     app.state.fleet_projection_service = fleet_projection_service
     app.state.persistent_backend = service.persistent
@@ -356,6 +380,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     fleet_replication, persistent_fleet, service.persistent
                 )
             )
+        if managed_fleet_control:
+            app.include_router(build_fleet_control_router(managed_fleet_control, fleet_replication))
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(
         build_console_events_router(

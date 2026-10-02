@@ -360,10 +360,10 @@ async def test_persistent_fence_observes_session_blockers_without_cancelling(tmp
     terminal._release_claimed(running.cmd_hash)
 
 
-def _persistent_admission():
+def _persistent_admission(principal_id: str = "client-1"):
     return VerifiedAdmissionContext(
-        principal_id="client-1",
-        credential_id="oauth:client-1",
+        principal_id=principal_id,
+        credential_id=f"oauth:{principal_id}",
         scopes=frozenset({"terminal:read", "terminal:execute"}),
         auth_generation=1,
         transport="mcp",
@@ -437,6 +437,88 @@ async def test_persistent_recovery_has_exact_session_attribution_and_is_fenced(t
 
 
 @pytest.mark.asyncio
+async def test_unified_access_code_can_cross_connector_principals_without_weakening_direct_auth(
+    tmp_path,
+):
+    repo = SqliteRepository(
+        tmp_path / "cross-principal.sqlite3", tmp_path / "cross-principal-out.sqlite3"
+    )
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    service = TerminalService(repo, terminal, 5000, persistent_agents_enabled=True)
+    store = PersistentAgentStore(repo.path)
+    lifecycle = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=90,
+        execution_fence=PersistentExecutionFence(repo, terminal, service.task_store),
+    )
+    backend = PersistentBackend(service, lifecycle)
+    owner = _persistent_admission("connector-a")
+    created = await lifecycle.create_slot("Alpha", admission=owner)
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=owner)
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=owner,
+    )
+    session = started["work_session"]
+    other = _persistent_admission("connector-b")
+    token = bind_admission_context(other)
+    try:
+        with pytest.raises(Exception, match="persistent_auth_required"):
+            await backend._local_access_session(
+                {
+                    "logical_agent_id": logical_agent_id,
+                    "authority_node_id": "node-a",
+                }
+            )
+        authorized = await backend._local_access_session(
+            {
+                "logical_agent_id": logical_agent_id,
+                "authority_node_id": "node-a",
+            },
+            access_code_verified=True,
+        )
+    finally:
+        reset_admission_context(token)
+    assert authorized.work_session_id == session["work_session_id"]
+
+
+@pytest.mark.asyncio
+async def test_unified_legacy_start_obeys_effective_legacy_policy_without_side_effects(tmp_path):
+    repo = SqliteRepository(tmp_path / "legacy-off.sqlite3", tmp_path / "legacy-off-out.sqlite3")
+    await repo.initialize()
+    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
+    service = TerminalService(
+        repo,
+        terminal,
+        5000,
+        persistent_agents_enabled=True,
+        legacy_agent_admission_enabled=False,
+    )
+    store = PersistentAgentStore(repo.path)
+    lifecycle = PersistentLifecycleCoordinator(
+        store,
+        enabled=True,
+        authority_node_id="node-a",
+        session_duration_seconds=90,
+        execution_fence=PersistentExecutionFence(repo, terminal, service.task_store),
+    )
+    backend = PersistentBackend(service, lifecycle)
+    token = bind_admission_context(_persistent_admission())
+    try:
+        result = await backend.access_session_start(mode="legacy", display_name="Blocked")
+    finally:
+        reset_admission_context(token)
+    assert result["ok"] is False
+    assert result["code"] == "legacy_admission_disabled"
+    assert await store.list_slots() == []
+
+
+@pytest.mark.asyncio
 async def test_access_session_start_accepts_fresh_lifecycle_mapping(tmp_path):
     repo = SqliteRepository(
         tmp_path / "access-start.sqlite3", tmp_path / "access-start-output.sqlite3"
@@ -471,7 +553,7 @@ async def test_access_session_start_accepts_fresh_lifecycle_mapping(tmp_path):
     backend._resolve_access = resolve_access
     token = bind_admission_context(ctx)
     try:
-        result = await backend.access_session_start(mode="persistent", access_code="ABCD")
+        result = await backend.access_session_start(mode="persistent", access_code="0042")
     finally:
         reset_admission_context(token)
 

@@ -13,7 +13,7 @@ from terminal_mcp.auth.foundation import (
     _utc_now,
 )
 
-_ACCESS_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_ACCESS_DIGITS = "0123456789"
 _NATO = (
     "Alpha",
     "Bravo",
@@ -45,9 +45,9 @@ _NATO = (
 
 
 def normalize_access_code(value: str) -> str:
-    code = (value or "").strip().upper()
-    if len(code) != 4 or any(ch not in _ACCESS_ALPHABET for ch in code):
-        raise ValueError("access code must be exactly 4 Crockford Base32 characters")
+    code = (value or "").strip()
+    if len(code) != 4 or any(ch not in _ACCESS_DIGITS for ch in code):
+        raise ValueError("access code must be exactly 4 decimal digits")
     return code
 
 
@@ -424,7 +424,7 @@ class AccessCodeAuthority:
                 value = (
                     normalize_access_code(candidate)
                     if candidate is not None
-                    else "".join(secrets.choice(_ACCESS_ALPHABET) for _ in range(4))
+                    else f"{secrets.randbelow(10_000):04d}"
                 )
                 if value in forbidden:
                     if requested_code is not None:

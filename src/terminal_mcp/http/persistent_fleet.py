@@ -288,7 +288,7 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
         if forwarded is not None:
             token = bind_admission_context(forwarded)
         try:
-            session = await backend._local_access_session(access)
+            session = await backend._local_access_session(access, access_code_verified=True)
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code}
         finally:
@@ -369,6 +369,11 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
                 requesting_instance_id=peer.instance_id,
                 scope=str(payload.get("scope") or ""),
                 principal_id=str(payload.get("principal_id") or ""),
+                access_code=(
+                    str(payload.get("access_code"))
+                    if payload.get("access_code") is not None
+                    else None
+                ),
                 operation=str(payload.get("operation") or payload.get("scope") or ""),
                 request_id=str(payload.get("request_id") or "") or None,
             )

@@ -139,6 +139,36 @@ class PersistentPolicyController:
 
             return self.snapshot()
 
+    async def apply_managed(
+        self,
+        *,
+        duration_seconds: int,
+        warning_after_seconds: int,
+        alert_after_seconds: int,
+        rearm_after_seconds: int,
+        legacy_admission_enabled: bool,
+    ) -> dict:
+        """Apply authoritative managed policy in memory without rewriting bootstrap env."""
+        duration = int(duration_seconds)
+        warning = int(warning_after_seconds)
+        alert = int(alert_after_seconds)
+        rearm = int(rearm_after_seconds)
+        legacy = bool(legacy_admission_enabled)
+        self._validate_thresholds(duration, warning, alert)
+        if rearm <= 0:
+            raise PersistentPolicyError("policy_invalid_rearm")
+
+        async with self._lock, self.lifecycle.policy_guard():
+            self.settings.persistent_session_duration_sec = duration
+            self.settings.persistent_session_warning_after_sec = warning
+            self.settings.persistent_session_alert_after_sec = alert
+            self.settings.persistent_session_rearm_after_sec = rearm
+            self.settings.legacy_agent_admission_enabled = legacy
+            self.lifecycle.session_duration_seconds = duration
+            self.lifecycle.rearm_delay_seconds = rearm
+            self.service.legacy_agent_admission_enabled = legacy
+            return self.snapshot()
+
     @staticmethod
     def _validate_thresholds(duration: int, warning: int, alert: int) -> None:
         if duration <= 0:

@@ -318,3 +318,70 @@ export type TaskCollectionReadModel = {
 export type ContextCollectionReadModel = {
   contexts: ContextReadModel[]
 }
+
+export type ManagedFleetNodeReadModel = {
+  nodeId: string
+  origin?: string
+  publicKey?: string
+  meshId?: string
+  state: 'active' | 'draining' | 'offline' | 'detached'
+  desiredTopologyRevision: number
+  appliedTopologyRevision: number
+  desiredTrustRevision: number
+  appliedTrustRevision: number
+  desiredPolicyRevision: number
+  appliedPolicyRevision: number
+  lastError?: string
+  updatedAt: string
+}
+
+export type ManagedAccessPolicyReadModel = {
+  durationSeconds: number
+  warningAfterSeconds: number
+  alertAfterSeconds: number
+  rearmAfterSeconds: number
+  legacyAdmissionEnabled: boolean
+  revision: number
+  updatedAt: string
+}
+
+export type ManagedFleetMeshReadModel = {
+  meshId: string
+  displayName: string
+  adopted: boolean
+  adoptedAt?: string
+  updatedAt: string
+}
+
+export type ManagedFleetControlReadModel = {
+  schemaVersion: number
+  fleetId: string
+  nodeId: string
+  controlNodeId: string
+  managed: boolean
+  mesh?: ManagedFleetMeshReadModel
+  meshes: ManagedFleetMeshReadModel[]
+  nodes: ManagedFleetNodeReadModel[]
+  policy?: ManagedAccessPolicyReadModel
+  revisions: {
+    routing: number
+    topology: number
+    trust: number
+    accessPolicy: number
+  }
+  updatedAt: string
+}
+
+export type ManagedFleetEnrollment = {
+  nodeId: string
+  origin: string
+  publicKey: string
+  authToken: string
+}
+
+export type ManagedFleetMutationResult = {
+  ok: boolean
+  code?: string
+  error?: string
+  control?: ManagedFleetControlReadModel
+}
