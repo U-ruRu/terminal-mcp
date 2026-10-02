@@ -522,8 +522,6 @@ async def test_control_store_v1_migrates_in_place_to_managed_v3_without_losing_r
     }
 
 
-
-
 @pytest.mark.asyncio
 async def test_control_store_v2_migrates_single_mesh_membership_to_v3(tmp_path):
     import sqlite3
@@ -632,6 +630,7 @@ async def test_control_store_v2_migrates_single_mesh_membership_to_v3(tmp_path):
     assert identity["ingress_token"]
     restarted_identity = await store.ensure_managed_identity(legacy_private)
     assert restarted_identity["ingress_token"] == identity["ingress_token"]
+
 
 @pytest.mark.asyncio
 async def test_control_store_future_schema_fails_closed_before_creating_v2_tables(tmp_path):
@@ -985,9 +984,7 @@ async def test_non_bootstrap_node_enrolls_and_forwards_through_durable_managed_t
         expected_topology_revision=home_attached["revisions"]["topology"],
     )
     remote_state = await remote.snapshot()
-    remote_node = next(
-        node for node in remote_state["nodes"] if node["node_id"] == "remote"
-    )
+    remote_node = next(node for node in remote_state["nodes"] if node["node_id"] == "remote")
     assert remote_node["mesh_id"] == "mesh-a"
     assert "_peer_material" not in remote_state
     assert remote_state["nodes"][0].get("auth_token") is None
@@ -1066,6 +1063,7 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
 
     await control.reconcile_pending()
     assert attempts == first_attempts + 1
+
 
 @pytest.mark.asyncio
 async def test_managed_trust_rotation_keeps_private_key_local_and_survives_restart(tmp_path):
@@ -1146,7 +1144,9 @@ async def test_forwarded_trust_rotation_can_only_publish_authenticated_peer_key(
         control_node_id="home",
     )
     await store.initialize()
-    control = ManagedFleetControl(store, config, _PolicyStub(), public_base_url="https://home.example")
+    control = ManagedFleetControl(
+        store, config, _PolicyStub(), public_base_url="https://home.example"
+    )
     await control.adopt(mesh_id="mesh-a", display_name="Fleet")
     state = await control.snapshot()
 
@@ -1160,6 +1160,7 @@ async def test_forwarded_trust_rotation_can_only_publish_authenticated_peer_key(
             },
             authenticated_peer_id="remote",
         )
+
 
 @pytest.mark.asyncio
 async def test_detach_is_delivered_before_revocation_and_does_not_restore_stale_bootstrap_peers(
@@ -1235,9 +1236,7 @@ async def test_detach_is_delivered_before_revocation_and_does_not_restore_stale_
     )
     remote_state = await remote.snapshot()
     assert detached["managed"] is True
-    remote_member = next(
-        node for node in detached["nodes"] if node["node_id"] == "remote"
-    )
+    remote_member = next(node for node in detached["nodes"] if node["node_id"] == "remote")
     assert remote_member["state"] == "active"
     assert remote_member["mesh_id"] is None
     assert remote_state["managed"] is True
@@ -1321,3 +1320,47 @@ async def test_multi_mesh_membership_supports_standalone_attach_move_and_detach(
     node_b = next(node for node in detached["nodes"] if node["node_id"] == "node-b")
     assert node_b["state"] == "active"
     assert node_b["mesh_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_message_permit_is_fenced_by_the_same_persistent_session(tmp_path):
+    _, store, life, bridge, _, started, ctx, _ = await authority_fixture(tmp_path)
+    logical_agent_id = started["logical_agent_id"]
+    ws = started["work_session"]
+
+    permit = await bridge.issue_permit(
+        logical_agent_id=logical_agent_id,
+        work_session_id=ws["work_session_id"],
+        session_epoch=ws["session_epoch"],
+        requesting_instance_id="remote",
+        scope="message",
+        operation="message",
+        request_id="message-request-1",
+        principal_id=ctx.principal_id,
+    )
+    assert permit.logical_agent_id == logical_agent_id
+    assert permit.work_session_id == ws["work_session_id"]
+    assert permit.session_epoch == ws["session_epoch"]
+    assert permit.scope == "message"
+
+    await life.session_end(
+        logical_agent_id,
+        ws["work_session_id"],
+        ws["session_epoch"],
+        admission=ctx,
+    )
+
+    with pytest.raises(PersistentStoreError, match="session_not_active"):
+        await bridge.issue_permit(
+            logical_agent_id=logical_agent_id,
+            work_session_id=ws["work_session_id"],
+            session_epoch=ws["session_epoch"],
+            requesting_instance_id="remote",
+            scope="message",
+            operation="message",
+            request_id="message-request-ended",
+            principal_id=ctx.principal_id,
+        )
+
+    active = await store.active_session_for_slot(logical_agent_id)
+    assert active is None

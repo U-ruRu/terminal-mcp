@@ -396,6 +396,279 @@ class PersistentBackend:
         self,
         sender_public_name: str,
         *,
+        access_code: str | None = None,
+        text: str | None = None,
+        target: str | None = None,
+        message_hash: str | None = None,
+        require_reply: bool = False,
+        alert: bool = False,
+        namespace: str | None = None,
+        task_id: str | None = None,
+    ) -> dict:
+        if access_code is None:
+            return await self._access_message_legacy(
+                sender_public_name,
+                text=text,
+                target=target,
+                message_hash=message_hash,
+                require_reply=require_reply,
+                alert=alert,
+                namespace=namespace,
+                task_id=task_id,
+            )
+        sender = await self.access_identity(access_code)
+        if not sender.get("ok"):
+            return sender
+        if (
+            sender_public_name
+            and sender_public_name.casefold() != str(sender["public_name"]).casefold()
+        ):
+            return {
+                "ok": False,
+                "code": "sender_not_authorized",
+                "error": "sender_not_authorized",
+            }
+        if self.fleet_bridge is None:
+            return await self._access_message_legacy(
+                str(sender["public_name"]),
+                text=text,
+                target=target,
+                message_hash=message_hash,
+                require_reply=require_reply,
+                alert=alert,
+                namespace=namespace,
+                task_id=task_id,
+            )
+        return await self._fleet_access_message(
+            sender,
+            access_code=access_code,
+            text=text,
+            target=target,
+            message_hash=message_hash,
+            require_reply=require_reply,
+            alert=alert,
+            namespace=namespace,
+            task_id=task_id,
+        )
+
+    async def _fleet_access_message(
+        self,
+        sender: dict,
+        *,
+        access_code: str,
+        text: str | None,
+        target: str | None,
+        message_hash: str | None,
+        require_reply: bool,
+        alert: bool,
+        namespace: str | None,
+        task_id: str | None,
+    ) -> dict:
+        sender_id = str(sender["logical_agent_id"])
+        sender_name = str(sender["public_name"])
+        work_session_id = str(sender["work_session_id"])
+        session_epoch = int(sender["session_epoch"])
+        require_reply = bool(require_reply or alert)
+        try:
+            _session, permit = await self._execution_authority(
+                sender_id,
+                work_session_id,
+                session_epoch,
+                scope="message",
+                access_code=access_code,
+            )
+            if permit is not None:
+                self.fleet_bridge.ensure_permit_valid(permit)
+        except PersistentLifecycleError as exc:
+            return self._error(exc)
+
+        try:
+            inbox = await self.fleet_bridge.inbox_obligations(
+                sender_id,
+                work_session_id=work_session_id,
+                session_epoch=session_epoch,
+            )
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code, "error": exc.code}
+        if message_hash is not None:
+            original = next(
+                (item for item in inbox if item.get("message_ref") == message_hash),
+                None,
+            )
+            if original is None:
+                # Preserve pre-Fleet/local message hashes during the cutover.
+                return await self._access_message_legacy(
+                    sender_name,
+                    text=text,
+                    target=target,
+                    message_hash=message_hash,
+                    require_reply=require_reply,
+                    alert=alert,
+                    namespace=namespace,
+                    task_id=task_id,
+                )
+            reply_ref = None
+            if text is not None:
+                recipient_id = str(original.get("sender_agent_id") or "")
+                if not recipient_id or recipient_id == sender_id:
+                    return {
+                        "ok": False,
+                        "code": "no_active_recipients",
+                        "error": "no_active_recipients",
+                    }
+                try:
+                    delivered = await self.fleet_bridge.deliver_message(
+                        logical_agent_id=recipient_id,
+                        sender_agent_id=sender_id,
+                        text=text,
+                        require_reply=False,
+                        alert=False,
+                    )
+                except PersistentStoreError as exc:
+                    return {"ok": False, "code": exc.code, "error": exc.code}
+                reply_ref = str(delivered["message_ref"])
+            try:
+                await self.fleet_bridge.acknowledge_obligation(
+                    obligation=original,
+                    logical_agent_id=sender_id,
+                    work_session_id=work_session_id,
+                    session_epoch=session_epoch,
+                    replied_at=utc_text() if reply_ref is not None else None,
+                    reply_message_ref=reply_ref,
+                )
+            except PersistentStoreError as exc:
+                return {"ok": False, "code": exc.code, "error": exc.code}
+            return {
+                "ok": True,
+                "sender": sender_name,
+                "message_hash": reply_ref or message_hash,
+                "reply_to": message_hash if reply_ref else None,
+            }
+
+        if text is None:
+            visible = []
+            for item in inbox:
+                sender_access = await self._access_get(str(item.get("sender_agent_id") or ""))
+                visible.append(
+                    {
+                        "message_hash": item["message_ref"],
+                        "sender": (
+                            sender_access.get("public_name")
+                            if sender_access is not None
+                            else item.get("sender_agent_id")
+                        ),
+                        "text": item.get("text"),
+                        "require_reply": bool(item.get("require_reply")),
+                        "alert": bool(item.get("alert")),
+                        "created_at": item.get("created_at"),
+                    }
+                )
+            return {"ok": True, "sender": sender_name, "pending_messages": visible}
+
+        recipients: list[tuple[str, str]] = []
+        if namespace is not None or task_id is not None:
+            if not namespace or not task_id:
+                return {"ok": False, "code": "invalid_task_target", "error": "invalid_task_target"}
+            task = await self.task_store.get_task(namespace, task_id)
+            if task is None:
+                return {"ok": False, "code": "task_not_found", "error": "task_not_found"}
+            for claim in await self.task_store.active_claims(namespace, task_id):
+                rid = str(claim.get("owner_id") or claim["agent_id"])
+                if rid == sender_id:
+                    continue
+                access = await self._access_get(rid)
+                if access is not None and access.get("status") == "active":
+                    recipients.append((rid, str(access["public_name"])))
+        elif target and target.casefold() != "broadcast":
+            try:
+                access = await self._resolve_access_name(target)
+            except PersistentStoreError as exc:
+                code = (
+                    "recipient_not_found" if exc.code == "access_identity_not_found" else exc.code
+                )
+                return {"ok": False, "code": code, "error": code}
+            if access["logical_agent_id"] == sender_id:
+                return {
+                    "ok": False,
+                    "code": "no_active_recipients",
+                    "error": "no_active_recipients",
+                }
+            recipients.append((str(access["logical_agent_id"]), str(access["public_name"])))
+        else:
+            # Persistent implicit broadcast is Fleet-scoped, never attachment-local.
+            try:
+                slots = await self.fleet_bridge.list_access_slots()
+            except PersistentStoreError as exc:
+                return {"ok": False, "code": exc.code, "error": exc.code}
+            for access in slots:
+                rid = str(access.get("logical_agent_id") or "")
+                if not rid or rid == sender_id or access.get("status") != "active":
+                    continue
+                recipients.append((rid, str(access["public_name"])))
+
+        if not recipients:
+            return {"ok": False, "code": "no_active_recipients", "error": "no_active_recipients"}
+
+        delivered_to: list[str] = []
+        message_hashes: dict[str, str] = {}
+        authority_failure = False
+        inactive_count = 0
+        for rid, name in recipients:
+            try:
+                delivered = await self.fleet_bridge.deliver_message(
+                    logical_agent_id=rid,
+                    sender_agent_id=sender_id,
+                    text=text,
+                    require_reply=require_reply,
+                    alert=alert,
+                )
+            except PersistentStoreError as exc:
+                if exc.code == "recipient_not_active":
+                    inactive_count += 1
+                    continue
+                if exc.code in {"authority_unavailable", "wrong_authority", "recovery_required"}:
+                    authority_failure = True
+                    continue
+                if len(recipients) == 1:
+                    return {"ok": False, "code": exc.code, "error": exc.code}
+                continue
+            delivered_to.append(name)
+            message_hashes[name] = str(delivered["message_ref"])
+
+        if not delivered_to:
+            if authority_failure:
+                return {
+                    "ok": False,
+                    "code": "authority_unavailable",
+                    "error": "authority_unavailable",
+                }
+            code = (
+                "recipient_not_active"
+                if len(recipients) == 1 and inactive_count
+                else "no_active_recipients"
+            )
+            return {"ok": False, "code": code, "error": code}
+
+        response = {
+            "ok": True,
+            "sender": sender_name,
+            "delivered_to": delivered_to,
+            "scope": "fleet"
+            if not (namespace and task_id) and (not target or target.casefold() == "broadcast")
+            else "direct",
+            "namespace": namespace,
+            "task_id": task_id,
+        }
+        if len(message_hashes) == 1:
+            response["message_hash"] = next(iter(message_hashes.values()))
+        else:
+            response["message_hashes"] = message_hashes
+        return response
+
+    async def _access_message_legacy(
+        self,
+        sender_public_name: str,
+        *,
         text: str | None = None,
         target: str | None = None,
         message_hash: str | None = None,

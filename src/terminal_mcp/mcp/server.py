@@ -1010,12 +1010,16 @@ def build_mcp(
         annotations=_SAFE_OPERATION,
         description=(
             "Send, acknowledge, or reply to coordination messages using the sender's public "
-            "Access name. The sender must resolve to an active unified session bound to the "
-            "authenticated transport principal. No Access code is accepted here."
+            "Access name. The sender must resolve to an active unified session. Persistent "
+            "callers may provide the same Access code used by cmd/task/context so roaming "
+            "attachments resolve one fenced logical work-session identity."
         ),
     )
     async def access_message_tool(
         sender: str,
+        code: Annotated[
+            str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")
+        ] = None,
         text: str | None = None,
         target: str | None = None,
         message_hash: str | None = None,
@@ -1029,6 +1033,7 @@ def build_mcp(
             return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
         return await backend.access_message(
             sender,
+            access_code=code,
             text=text,
             target=target,
             message_hash=message_hash,

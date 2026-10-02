@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException
 
+from terminal_mcp.core.orchestration import parse_utc, utc_now
 from terminal_mcp.core.persistent_admission import (
     VerifiedAdmissionContext,
     bind_admission_context,
@@ -462,6 +463,66 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
         except PersistentStoreError as exc:
             raise_store_error(exc)
         return {"ok": True, **result}
+
+    @router.post(
+        "/internal/fleet/persistent/obligation-list",
+        include_in_schema=False,
+    )
+    async def obligation_list(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        logical_agent_id = str(payload.get("logical_agent_id") or "")
+        try:
+            await bridge._guard_local_authority(logical_agent_id)
+            session = await bridge.store.assert_session_authority(
+                logical_agent_id,
+                str(payload.get("work_session_id") or ""),
+                int(payload.get("session_epoch") or 0),
+            )
+            if session.state != "active" or utc_now() >= parse_utc(session.hard_expires_at):
+                raise PersistentStoreError("session_not_active")
+            obligations = await bridge.store.open_message_obligations(logical_agent_id)
+        except PersistentStoreError as exc:
+            raise_store_error(exc)
+        return {"ok": True, "obligations": obligations}
+
+    @router.post(
+        "/internal/fleet/persistent/obligation-create",
+        include_in_schema=False,
+    )
+    async def obligation_create(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer = authenticate(x_terminal_mcp_peer, authorization)
+        if payload.get("requesting_instance_id") != peer.instance_id:
+            raise HTTPException(status_code=400, detail="requesting instance mismatch")
+        logical_agent_id = str(payload.get("logical_agent_id") or "")
+        try:
+            await bridge._guard_local_authority(logical_agent_id)
+            session = await bridge.store.active_session_for_slot(logical_agent_id)
+            if (
+                session is None
+                or session.state != "active"
+                or utc_now() >= parse_utc(session.hard_expires_at)
+            ):
+                raise PersistentStoreError("recipient_not_active")
+            obligation = await bridge.create_obligation(
+                logical_agent_id=logical_agent_id,
+                sender_agent_id=str(payload.get("sender_agent_id") or ""),
+                text=str(payload.get("text") or ""),
+                require_reply=bool(payload.get("require_reply")),
+                alert=bool(payload.get("alert")),
+            )
+        except PersistentStoreError as exc:
+            raise_store_error(exc)
+        return {"ok": True, "obligation": obligation}
 
     @router.post(
         "/internal/fleet/persistent/obligation-delivery",
