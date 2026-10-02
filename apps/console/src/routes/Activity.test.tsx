@@ -61,7 +61,7 @@ test('switches servers, filters messages and renders direct task navigation', as
   expect(screen.getByRole('link', { name: 'Task M2-009' })).toHaveAttribute('href', '/servers/alpha/tasks/console/M2-009')
   expect(screen.queryByRole('link', { name: 'Server Alpha' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', '/servers/alpha/agents/Alpha-1111')
-  expect(screen.getByText(/28\.09\.2026 \d{2}:00:02/)).toBeInTheDocument()
+  expect(screen.getByText(/\d{2}:00:02/)).toBeInTheDocument()
   expect(document.querySelector('.activity-screen .filter-status .status')).not.toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
   expect(screen.getByText('Ship it')).toBeInTheDocument()
@@ -69,7 +69,7 @@ test('switches servers, filters messages and renders direct task navigation', as
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
   await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
-  expect(await screen.findByText('health.changed')).toBeInTheDocument()
+  expect(await screen.findByText('Beta is online again')).toBeInTheDocument()
 })
 
 test('does not silently choose a server when activity has no server context', async () => {
@@ -101,10 +101,10 @@ test('filters duplicate public names by exact agent session identity', async () 
       </MemoryRouter>
     </I18nProvider>,
   )
-  await waitFor(() => expect(document.querySelectorAll('.activity-event')).toHaveLength(1))
+  await waitFor(() => expect(document.querySelectorAll('.activity-chat-message')).toHaveLength(1))
   expect(screen.getByText('SameName')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: /Agent SameName-2222/ }))
-  await waitFor(() => expect(document.querySelectorAll('.activity-event')).toHaveLength(2))
+  await waitFor(() => expect(document.querySelectorAll('.activity-chat-message')).toHaveLength(2))
 })
 
 test('mobile chat viewport ends above the fixed bottom navigation', async () => {
@@ -153,6 +153,8 @@ test('loads a concise latest window and keeps raw payload collapsed', async () =
   await userEvent.click(toggle)
   expect(toggle).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText(/"ok": true/)).toBeInTheDocument()
+  expect(screen.getByText(/28\.09\.2026 \d{2}:00:07/)).toBeInTheDocument()
+  expect(screen.getByText(/health.changed/)).toBeInTheDocument()
 })
 
 
