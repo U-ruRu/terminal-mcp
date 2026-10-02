@@ -14,7 +14,9 @@ export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions
 
 const ACTIVITY_WINDOW = 100
 const HISTORY_BATCH = 250
-const SCROLL_EDGE = 72
+const HISTORY_RETAIN = 1000
+const BOTTOM_EDGE = 24
+const TOP_EDGE = 64
 
 type FeedState = {
   events: ActivityFeedReadModel['events']
@@ -46,6 +48,12 @@ function reason(error: unknown) {
   return error instanceof Error ? error.message : 'activity_load_failed'
 }
 
+
+function scrollActivityToBottom(node: HTMLDivElement, behavior: ScrollBehavior = 'auto') {
+  if (typeof node.scrollTo === 'function') scrollActivityToBottom(node, behavior)
+  else node.scrollTop = node.scrollHeight
+}
+
 function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
   if (code.includes('auth_unpaired')) return t('diagnostics.serverUnpaired')
   if (code.includes('direct_authority_auth_revoked') || code.includes('auth_revoked')) return t('diagnostics.authorizationRevoked')
@@ -59,9 +67,11 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const [feeds, setFeeds] = useState<Record<string, FeedState>>({})
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set())
   const [newItemsCount, setNewItemsCount] = useState(0)
+  const [enteringItems, setEnteringItems] = useState<Set<string>>(() => new Set())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
-  const pendingHistoryHeight = useRef<number | null>(null)
+  const pendingHistoryAnchor = useRef<{ key: string; offset: number } | null>(null)
+  const historyRequestPending = useRef(false)
   const awayFromBottom = useRef(false)
 
   const requested = searchParams.get('server') ?? ''
@@ -148,49 +158,84 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     let cancelled = false
     void loadActivity(selectedId, { since: feed.cursor, limit: ACTIVITY_WINDOW }).then((page) => {
       if (cancelled) return
-      if (awayFromBottom.current && page.events.length > 0) {
-        setNewItemsCount((current) => current + projectActivity(page.events, locale, selected?.profile.displayName ?? selectedId, agentNames).length)
+      const serverName = selected?.profile.displayName ?? selectedId
+      const forCurrentView = (events: ActivityFeedReadModel['events']) => {
+        const categorized = filterActivityEvents(events, category)
+        return requestedAgentId
+          ? categorized.filter((event) => event.actorId === requestedAgentId || event.message?.senderAgentId === requestedAgentId || event.payload.logical_agent_id === requestedAgentId)
+          : categorized
+      }
+      const beforeItems = projectActivity(forCurrentView(feed.events), locale, serverName, agentNames)
+      const beforeKeys = new Set(beforeItems.map((item) => item.key))
+      const mergedEvents = mergeActivityEvents(feed.events, page.events).slice(-ACTIVITY_WINDOW)
+      const afterItems = projectActivity(forCurrentView(mergedEvents), locale, serverName, agentNames)
+      const newKeys = afterItems.map((item) => item.key).filter((key) => !beforeKeys.has(key))
+      if (newKeys.length > 0) {
+        if (awayFromBottom.current) setNewItemsCount((current) => current + newKeys.length)
+        else {
+          setEnteringItems(new Set(newKeys))
+          window.setTimeout(() => setEnteringItems(new Set()), 220)
+        }
       }
       setFeeds((current) => {
         const prior = current[selectedId] ?? emptyFeed()
-        const merged = mergeActivityEvents(prior.events, page.events).slice(-ACTIVITY_WINDOW)
-        return { ...current, [selectedId]: { ...prior, events: merged, cursor: page.nextCursor, highWater: page.highWaterSeq, oldestSeq: page.oldestSeq, gap: page.gap, error: undefined } }
+        return { ...current, [selectedId]: { ...prior, events: mergedEvents, cursor: page.nextCursor, highWater: page.highWaterSeq, oldestSeq: page.oldestSeq, gap: page.gap, error: undefined } }
       })
     }).catch((error: unknown) => {
       if (cancelled) return
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? emptyFeed()), error: reason(error) } }))
     })
     return () => { cancelled = true }
-  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.initialized, feed.loading, feed.historyMode, locale, selected?.profile.displayName, agentNames])
+  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.events, feed.initialized, feed.loading, feed.historyMode, locale, selected?.profile.displayName, agentNames, category, requestedAgentId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = scrollRef.current
     if (!node || !feed.initialized) return
-    if (pendingHistoryHeight.current !== null) {
-      node.scrollTop += node.scrollHeight - pendingHistoryHeight.current
-      pendingHistoryHeight.current = null
+    const anchor = pendingHistoryAnchor.current
+    if (anchor) {
+      const target = [...node.querySelectorAll<HTMLElement>('[data-activity-key]')]
+        .find((element) => element.dataset.activityKey === anchor.key)
+      if (target) {
+        const nextOffset = target.getBoundingClientRect().top - node.getBoundingClientRect().top
+        node.scrollTop += nextOffset - anchor.offset
+      }
+      pendingHistoryAnchor.current = null
       return
     }
-    if (!feed.historyMode && stickToBottom.current) node.scrollTop = node.scrollHeight
-  }, [selectedId, feed.initialized, feed.historyMode, firstEventSeq, lastEventSeq])
+    if (!feed.historyMode && stickToBottom.current) {
+      const behavior: ScrollBehavior = enteringItems.size > 0 ? 'smooth' : 'auto'
+      scrollActivityToBottom(node, behavior)
+    }
+  }, [selectedId, feed.initialized, feed.historyMode, firstEventSeq, lastEventSeq, enteringItems])
 
   const loadOlder = async () => {
     const node = scrollRef.current
     const firstSeq = feed.events[0]?.seq
-    if (!node || !loadActivity || !selectedId || feed.loading || firstSeq === undefined) return
+    if (!node || !loadActivity || !selectedId || historyRequestPending.current || feed.loading || firstSeq === undefined) return
     if (feed.oldestSeq !== undefined && firstSeq <= feed.oldestSeq) return
-    pendingHistoryHeight.current = node.scrollHeight
+    const nodeTop = node.getBoundingClientRect().top
+    const firstVisible = [...node.querySelectorAll<HTMLElement>('[data-activity-key]')]
+      .find((element) => element.getBoundingClientRect().bottom > nodeTop)
+    if (firstVisible?.dataset.activityKey) {
+      pendingHistoryAnchor.current = {
+        key: firstVisible.dataset.activityKey,
+        offset: firstVisible.getBoundingClientRect().top - nodeTop,
+      }
+    }
+    historyRequestPending.current = true
     setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: true } }))
     try {
       const page = await loadActivity(selectedId, { before: firstSeq, limit: HISTORY_BATCH })
       setFeeds((current) => {
         const prior = current[selectedId] ?? feed
-        const window = mergeActivityEvents(page.events, prior.events).slice(0, ACTIVITY_WINDOW)
+        const window = mergeActivityEvents(page.events, prior.events).slice(-HISTORY_RETAIN)
         return { ...current, [selectedId]: { ...prior, events: window, cursor: window.at(-1)?.seq ?? prior.cursor, highWater: page.highWaterSeq, oldestSeq: page.oldestSeq, gap: page.gap, loading: false, historyMode: true, error: undefined } }
       })
     } catch (error: unknown) {
-      pendingHistoryHeight.current = null
+      pendingHistoryAnchor.current = null
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: false, error: reason(error) } }))
+    } finally {
+      historyRequestPending.current = false
     }
   }
 
@@ -210,17 +255,22 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     const node = scrollRef.current
     if (!node || !feed.initialized) return
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
-    stickToBottom.current = distanceFromBottom <= SCROLL_EDGE
-    awayFromBottom.current = distanceFromBottom > node.clientHeight
+    stickToBottom.current = distanceFromBottom <= BOTTOM_EDGE
+    awayFromBottom.current = distanceFromBottom > BOTTOM_EDGE
     if (stickToBottom.current) setNewItemsCount(0)
-    if (node.scrollTop <= SCROLL_EDGE) void loadOlder()
-    else if (feed.historyMode && distanceFromBottom <= SCROLL_EDGE) void restoreLatest()
+    if (node.scrollTop <= TOP_EDGE) void loadOlder()
+    else if (feed.historyMode && distanceFromBottom <= BOTTOM_EDGE) void restoreLatest()
   }
 
   const visible = useMemo(() => {
     const categorized = filterActivityEvents(feed.events, category)
     if (!requestedAgentId) return categorized
-    return categorized.filter((event) => event.actorId === requestedAgentId || event.message?.senderAgentId === requestedAgentId)
+    return categorized.filter((event) =>
+      event.actorId === requestedAgentId
+      || event.message?.senderAgentId === requestedAgentId
+      || event.payload.logical_agent_id === requestedAgentId
+      || event.payload.agent_id === requestedAgentId
+    )
   }, [feed.events, category, requestedAgentId])
   const requestedAgent = selected?.runtime.realtime?.snapshot?.agents.find((agent) => agent.agentId === requestedAgentId)
   const logicalItems = useMemo(
@@ -229,16 +279,14 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   )
   const chatItems = useMemo(() => renderActivity(logicalItems, locale), [logicalItems, locale])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setExpandedEvents(new Set())
     setNewItemsCount(0)
+    setEnteringItems(new Set())
     stickToBottom.current = true
     awayFromBottom.current = false
-    const frame = window.requestAnimationFrame(() => {
-      const node = scrollRef.current
-      if (node) node.scrollTop = node.scrollHeight
-    })
-    return () => window.cancelAnimationFrame(frame)
+    const node = scrollRef.current
+    if (node) node.scrollTop = node.scrollHeight
   }, [selectedId, category, requestedAgentId])
 
   const chooseServer = (instanceId: string) => {
@@ -291,15 +339,16 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {selectedId && !feed.error ? (
         <div className="activity-timeline-wrap">
           <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
+            {feed.loading && feed.initialized ? <div className="activity-history-loading" aria-label={t('status.catchingUp')}>•••</div> : null}
             {chatItems.map((item) => {
-              if (item.kind === 'date') return <div className="activity-date-separator" key={item.key}>{item.label}</div>
+              if (item.kind === 'date') return <div className="activity-date-separator" data-activity-key={item.key} key={item.key}>{item.label}</div>
               const eventKey = selectedId + ':' + item.key
               const expanded = expandedEvents.has(eventKey)
               const detailsId = 'activity-details-' + eventKey.replace(/[^a-zA-Z0-9_-]/g, '-')
               const first = item.events[0]
               if (item.kind === 'service') {
                 return (
-                  <div className={'activity-service-event activity-service-' + (item.tone ?? 'neutral')} key={item.key}>
+                  <div className={'activity-service-event activity-service-' + (item.tone ?? 'neutral') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} key={item.key}>
                     <span>{item.content}</span>
                     <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
                     <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
@@ -307,17 +356,17 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
                     </button>
                     {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
-                      timestamp: activityFullTimestamp(item.createdAt), eventType: first.eventType, entityType: first.entityType,
-                      entityId: first.entityId, events: item.events,
+                      timestamp: activityFullTimestamp(item.createdAt), server: selected?.profile.displayName ?? selectedId,
+                      eventType: first.eventType, entityType: first.entityType, entityId: first.entityId, events: item.events,
                     }, null, 2)}</pre> : null}
                   </div>
                 )
               }
               const actorName = item.actorName ?? 'Unknown agent'
               return (
-                <article className={'activity-chat-message' + (item.showIdentity ? ' activity-group-start' : ' activity-group-continuation')} key={item.key}>
+                <article className={'activity-chat-message' + (item.showIdentity ? ' activity-group-start' : ' activity-group-continuation') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} key={item.key}>
                   <div className="activity-identity-column">
-                    {item.showIdentity ? <span className="activity-identity-marker" style={{ '--activity-actor-hue': actorHue(actorName) } as React.CSSProperties} aria-hidden="true">{actorName.charAt(0).toUpperCase()}</span> : null}
+                    {item.showIdentity ? <span className="activity-identity-marker" style={{ '--activity-actor-hue': actorHue(item.actorId ?? actorName) } as React.CSSProperties} aria-hidden="true">{item.actorAnonymous ? '•' : actorName.charAt(0).toUpperCase()}</span> : null}
                   </div>
                   <div className={'activity-chat-content' + (item.commands?.length ? ' activity-command-bubble' : '') + (item.commands?.length && expanded ? ' is-expanded' : '')}>
                     {item.showIdentity ? <div className="activity-chat-header">
@@ -333,16 +382,16 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                       onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
                     </button>
-                    {expanded && item.commands?.length ? (
+                    {expanded && item.commands && item.commands.length > 1 ? (
                       <div id={detailsId} className="activity-command-list">
-                        {item.commands.map((command, commandIndex) => {
+                        {item.commands.map((command) => {
                           const commandKey = eventKey + ':' + command.key
                           const commandExpanded = expandedEvents.has(commandKey)
                           const commandDetailsId = 'activity-command-details-' + commandKey.replace(/[^a-zA-Z0-9_-]/g, '-')
                           return (
                             <div className="activity-command-row" key={command.key}>
                               <div className="activity-command-summary">
-                                <span>{command.label ?? (item.commands!.length > 1 ? t('common.commands') + ' ' + (commandIndex + 1) : t('common.commands'))}</span>
+                                <span>{command.label}</span>
                                 <time dateTime={command.createdAt}>{activityTime(command.createdAt)}</time>
                                 <small>{command.status}</small>
                               </div>
@@ -359,8 +408,9 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                         })}
                       </div>
                     ) : expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
-                      timestamp: activityFullTimestamp(item.createdAt), eventType: first.eventType, entityType: first.entityType,
-                      entityId: first.entityId, actorId: first.actorId, actorName: first.actorName, events: item.events,
+                      timestamp: activityFullTimestamp(item.createdAt), server: selected?.profile.displayName ?? selectedId,
+                      eventType: first.eventType, entityType: first.entityType, entityId: first.entityId,
+                      actorIdentity: item.actorId, actorName: item.actorName, events: item.events,
                     }, null, 2)}</pre> : null}
                   </div>
                 </article>
@@ -371,7 +421,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           {newItemsCount > 0 ? (
             <button className="activity-new-items" type="button" onClick={() => {
               const node = scrollRef.current
-              if (node) node.scrollTop = node.scrollHeight
+              if (node) scrollActivityToBottom(node, 'smooth')
               stickToBottom.current = true
               awayFromBottom.current = false
               setNewItemsCount(0)

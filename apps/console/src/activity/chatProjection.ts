@@ -65,8 +65,10 @@ const copyByLocale: Record<Locale, Copy> = {
 export type ActivityCommandEntry = {
   key: string
   createdAt: string
-  label?: string
+  label: string
   status: string
+  statusKey: string
+  duration?: string
   events: ActivityEventReadModel[]
 }
 
@@ -76,6 +78,7 @@ export type ActivityChatItem = {
   createdAt: string
   actorId?: string
   actorName?: string
+  actorAnonymous?: boolean
   content: string
   secondary?: string
   tone?: 'success' | 'stale' | 'critical' | 'neutral'
@@ -102,31 +105,96 @@ function stateOf(event: ActivityEventReadModel): string {
   return (textField(event.payload, 'state', 'status', 'action', 'operational_status') ?? '').toLowerCase()
 }
 
+function actorIdentity(event: ActivityEventReadModel): string | undefined {
+  if (event.message?.senderAgentId) return event.message.senderAgentId
+  if (event.actorId) return event.actorId
+  const logical = textField(event.payload, 'logical_agent_id', 'logicalAgentId', 'agent_id', 'agentId')
+  if (logical) return logical
+  const ownerKind = textField(event.payload, 'owner_kind', 'ownerKind')
+  if (ownerKind === 'logical_agent' || ownerKind === 'agent') {
+    const owner = textField(event.payload, 'owner_id', 'ownerId')
+    if (owner) return owner
+  }
+  if (/^(logical_)?agent$/i.test(event.entityType) && event.entityId) return event.entityId
+  return undefined
+}
+
+function actorFingerprint(identity: string): string {
+  let hash = 2166136261
+  for (const char of identity) {
+    hash ^= char.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(4, '0').slice(-4)
+}
+
+function anonymousActorName(identity: string, locale: Locale): string {
+  const prefix = locale === 'ru' ? 'Агент' : locale === 'ka' ? 'აგენტი' : locale === 'es' ? 'Agente' : 'Agent'
+  return prefix + ' · ' + actorFingerprint(identity)
+}
+
 function actorFor(
   event: ActivityEventReadModel,
   copy: Copy,
+  locale: Locale,
   agentNames: Record<string, string> = {},
-): { id?: string; name: string } {
-  if (event.message) return { id: event.message.senderAgentId, name: event.message.senderName || copy.unknownAgent }
-  const id = event.actorId ?? textField(event.payload, 'logical_agent_id', 'logicalAgentId', 'agent_id', 'agentId')
-  return {
-    id,
-    name: event.actorName ?? textField(event.payload, 'display_name', 'displayName', 'public_name', 'name') ?? (id ? agentNames[id] : undefined) ?? copy.unknownAgent,
+): { id?: string; name?: string; anonymous: boolean } {
+  if (event.message) {
+    const id = event.message.senderAgentId
+    const publicName = event.message.senderName || (id ? agentNames[id] : undefined)
+    return publicName ? { id, name: publicName, anonymous: false } : id
+      ? { id, name: anonymousActorName(id, locale), anonymous: true }
+      : { anonymous: false }
   }
+  const id = actorIdentity(event)
+  const publicName = event.actorName
+    ?? textField(event.payload, 'display_name', 'displayName', 'public_name', 'publicName')
+    ?? (id ? agentNames[id] : undefined)
+  if (publicName) return { id, name: publicName, anonymous: false }
+  if (id) return { id, name: anonymousActorName(id, locale), anonymous: true }
+  return { anonymous: false }
 }
 
 function serviceEvent(event: ActivityEventReadModel): boolean {
-  if (event.actorId || event.actorName || event.message) return false
-  const value = (event.entityType + ' ' + event.eventType).toLowerCase()
-  return /health|connection|auth|snapshot|runtime/.test(value)
+  if (event.message || event.actorName || actorIdentity(event)) return false
+  return true
+}
+
+function commandStatusKey(events: ActivityEventReadModel[]): string {
+  for (const event of [...events].reverse()) {
+    const status = stateOf(event)
+    if (status) return status
+  }
+  return 'queued'
+}
+
+function commandDuration(events: ActivityEventReadModel[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    const explicit = textField(event.payload, 'duration', 'duration_ms', 'durationMs')
+    if (explicit) {
+      if (/^\d+(?:\.\d+)?$/.test(explicit) && ['duration_ms', 'durationMs'].some((key) => key in event.payload)) {
+        return (Number(explicit) / 1000).toFixed(Number(explicit) % 1000 === 0 ? 0 : 1) + ' s'
+      }
+      return explicit
+    }
+  }
+  const terminal = [...events].reverse().find((event) => /complete|success|done|finished|fail|error|cancel/.test(stateOf(event)))
+  if (!terminal) return undefined
+  const milliseconds = new Date(terminal.createdAt).getTime() - new Date(events[0].createdAt).getTime()
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return undefined
+  const seconds = milliseconds / 1000
+  return (seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)).replace(/\.0$/, '') + ' s'
 }
 
 function commandStatus(events: ActivityEventReadModel[], copy: Copy): string {
-  const latest = events.at(-1)!
-  const status = stateOf(latest)
-  const duration = textField(latest.payload, 'duration', 'duration_ms', 'durationMs')
+  const status = commandStatusKey(events)
+  const duration = commandDuration(events)
   if (/complete|success|done|finished/.test(status)) return copy.completed + (duration ? ' · ' + duration : '')
-  if (/fail|error/.test(status)) return copy.failed + (textField(latest.payload, 'error', 'detail', 'message') ? ' · ' + textField(latest.payload, 'error', 'detail', 'message') : '')
+  if (/fail|error/.test(status)) {
+    const latest = [...events].reverse().find((event) => textField(event.payload, 'error', 'detail', 'message'))
+    const shortError = latest ? textField(latest.payload, 'error', 'detail', 'message') : undefined
+    return copy.failed + (shortError ? ' · ' + shortError : '')
+  }
   if (/cancel/.test(status)) return copy.cancelled
   if (/running|active|execut/.test(status)) return copy.running
   return copy.queued
@@ -150,21 +218,66 @@ function commandSummary(count: number, locale: Locale): string {
   return 'Ran ' + count + ' commands'
 }
 
-function projectCommand(events: ActivityEventReadModel[], locale: Locale, agentNames: Record<string, string>): ActivityChatItem {
+function commandBatchStatus(commands: ActivityCommandEntry[], locale: Locale): string | undefined {
+  if (commands.length <= 1) return commands[0]?.status
+  const groups = [
+    { match: /complete|success|done|finished/, ru: 'завершена', en: 'completed', es: 'completada', ka: 'დასრულდა' },
+    { match: /cancel/, ru: 'отменена', en: 'cancelled', es: 'cancelada', ka: 'გაუქმდა' },
+    { match: /fail|error/, ru: 'с ошибкой', en: 'failed', es: 'con error', ka: 'შეცდომით' },
+    { match: /running|active|execut/, ru: 'выполняется', en: 'running', es: 'en ejecución', ka: 'მიმდინარეობს' },
+    { match: /.*/, ru: 'в очереди', en: 'queued', es: 'en cola', ka: 'რიგშია' },
+  ]
+  const counts = new Map<(typeof groups)[number], number>()
+  for (const command of commands) {
+    const group = groups.find((candidate) => candidate.match.test(command.statusKey)) ?? groups.at(-1)!
+    counts.set(group, (counts.get(group) ?? 0) + 1)
+  }
+  const parts: string[] = []
+  for (const group of groups) {
+    const count = counts.get(group) ?? 0
+    if (!count) continue
+    const word = locale === 'ru' ? group.ru : locale === 'es' ? group.es : locale === 'ka' ? group.ka : group.en
+    parts.push(count + ' ' + word)
+  }
+  const hasCompleted = commands.some((command) => /complete|success|done|finished/.test(command.statusKey))
+  return (hasCompleted ? '✓ ' : '') + parts.join(' · ')
+}
+
+function commandLabel(events: ActivityEventReadModel[], locale: Locale): string {
+  const rawCommand = events.map((event) => textField(event.payload, 'command', 'cmd')).find(Boolean)
+  if (rawCommand) return '$ ' + rawCommand
+  const operation = events.map((event) => textField(event.payload, 'command_type', 'commandType', 'operation', 'tool')).find(Boolean)
+  if (operation) return operation.replace(/_/g, ' ')
+  return locale === 'ru' ? 'Команда' : locale === 'ka' ? 'ბრძანება' : locale === 'es' ? 'Comando' : 'Command'
+}
+
+function projectCommand(events: ActivityEventReadModel[], locale: Locale, serverName: string, agentNames: Record<string, string>): ActivityChatItem {
   const copy = copyByLocale[locale]
   const first = events[0]
   const actorEvent = events.find((event) =>
     event.actorName || event.actorId || textField(event.payload, 'logical_agent_id', 'logicalAgentId', 'agent_id', 'agentId', 'display_name', 'displayName', 'public_name', 'name')
   ) ?? first
-  const actor = actorFor(actorEvent, copy, agentNames)
-  const command = events.map((event) => textField(event.payload, 'command', 'cmd')).find(Boolean)
+  const actor = actorFor(actorEvent, copy, locale, agentNames)
   const correlation = textField(first.payload, 'command_id', 'commandId') ?? first.entityId
+  const duration = commandDuration(events)
   const entry: ActivityCommandEntry = {
     key: 'command:' + correlation,
     createdAt: first.createdAt,
-    label: command ? '$ ' + command : undefined,
+    label: commandLabel(events, locale),
     status: commandStatus(events, copy),
+    statusKey: commandStatusKey(events),
+    duration,
     events,
+  }
+  if (!actor.name) {
+    return {
+      key: 'command-batch:' + correlation,
+      kind: 'service',
+      createdAt: first.createdAt,
+      content: serverName + ': ' + entry.label + ' · ' + entry.status,
+      commands: [entry],
+      events,
+    }
   }
   return {
     key: 'command-batch:' + correlation,
@@ -172,7 +285,9 @@ function projectCommand(events: ActivityEventReadModel[], locale: Locale, agentN
     createdAt: first.createdAt,
     actorId: actor.id,
     actorName: actor.name,
-    content: commandSummary(1, locale),
+    actorAnonymous: actor.anonymous,
+    content: entry.label,
+    secondary: entry.status,
     commands: [entry],
     events,
   }
@@ -181,13 +296,13 @@ function projectCommand(events: ActivityEventReadModel[], locale: Locale, agentN
 function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: string, agentNames: Record<string, string>): ActivityChatItem {
   const copy = copyByLocale[locale]
   if (event.message) {
-    const actor = actorFor(event, copy, agentNames)
+    const actor = actorFor(event, copy, locale, agentNames)
     const target = event.message.target
     const broadcast = /^(all|everyone|broadcast|fleet|\*)$/i.test(target)
     const recipientNames = event.message.recipients.map((recipient) => recipient.name).filter(Boolean)
     const routeLabel = broadcast ? copy.broadcast : recipientNames.length ? recipientNames.join(', ') : target
     return {
-      key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name,
+      key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name, actorAnonymous: actor.anonymous,
       content: event.message.text, secondary: '→ ' + routeLabel,
       taskNamespace: event.message.taskNamespace, taskId: event.message.taskId, events: [event],
     }
@@ -196,16 +311,18 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
   if (serviceEvent(event)) {
     const state = stateOf(event)
     const raw = (event.eventType + ' ' + state).toLowerCase()
-    let content = serverName + ': ' + copy.healthChanged
+    const summary = textField(event.payload, 'message', 'summary', 'detail', 'intent')
+    let content = summary ? serverName + ': ' + summary : serverName + ': ' + copy.generic
     let tone: ActivityChatItem['tone'] = 'neutral'
     if (/revoked/.test(raw)) { content = serverName + ': ' + copy.authRevoked; tone = 'critical' }
     else if (/offline|disconnect|failed|error/.test(raw)) { content = serverName + ' ' + copy.offline; tone = 'critical' }
     else if (/stale/.test(raw)) { content = serverName + ': ' + copy.stale; tone = 'stale' }
     else if (/online|live|healthy/.test(raw) || event.payload.ok === true) { content = serverName + ' ' + copy.online; tone = 'success' }
+    else if (/health/.test(raw)) content = serverName + ': ' + copy.healthChanged
     return { key: 'event:' + event.seq, kind: 'service', createdAt: event.createdAt, content, tone, events: [event] }
   }
 
-  const actor = actorFor(event, copy, agentNames)
+  const actor = actorFor(event, copy, locale, agentNames)
   const state = stateOf(event)
   if (/logical_agent|work_session|session|agent/.test(event.eventType + ' ' + event.entityType)) {
     const content = state === 'armed' ? copy.ready
@@ -214,7 +331,7 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
           : state === 'suspended' ? copy.suspended
             : state === 'ended' ? copy.ended
               : textField(event.payload, 'summary', 'message', 'detail', 'intent') ?? copy.generic
-    return { key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name, content, events: [event] }
+    return { key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name, actorAnonymous: actor.anonymous, content, events: [event] }
   }
 
   if (/task/.test(event.entityType + ' ' + event.eventType) || textField(event.payload, 'task_id', 'taskId')) {
@@ -228,15 +345,20 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
     else if (/done|complete/.test(action)) content = copy.done + ' ' + taskId
     else if (/comment/.test(action)) content = copy.comment + ' ' + taskId
     else content = taskId + (state ? ' · ' + state : '')
+    const detail = /comment/.test(action)
+      ? textField(event.payload, 'comment', 'message', 'detail')
+      : /block/.test(action)
+        ? textField(event.payload, 'blocker_reason', 'reason', 'detail')
+        : title
     return {
-      key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name,
-      content, secondary: title ?? textField(event.payload, 'comment', 'reason', 'blocker_reason'),
+      key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name, actorAnonymous: actor.anonymous,
+      content, secondary: detail,
       taskNamespace: textField(event.payload, 'namespace', 'task_namespace'), taskId, events: [event],
     }
   }
 
   return {
-    key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name,
+    key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name, actorAnonymous: actor.anonymous,
     content: textField(event.payload, 'message', 'summary', 'detail', 'intent', 'state', 'status', 'action') ?? copy.generic,
     events: [event],
   }
@@ -256,10 +378,10 @@ export function projectActivity(
       const existing = commandIndex.get(correlation)
       if (existing === undefined) {
         commandIndex.set(correlation, result.length)
-        result.push(projectCommand([event], locale, agentNames))
+        result.push(projectCommand([event], locale, serverName, agentNames))
       } else {
         const prior = result[existing]
-        result[existing] = projectCommand([...prior.events, event], locale, agentNames)
+        result[existing] = projectCommand([...prior.events, event], locale, serverName, agentNames)
       }
       continue
     }
@@ -268,7 +390,7 @@ export function projectActivity(
   const batched: ActivityChatItem[] = []
   for (const item of result) {
     const prior = batched.at(-1)
-    if (item.commands?.length && prior?.commands?.length) {
+    if (item.kind === 'message' && prior?.kind === 'message' && item.commands?.length && prior.commands?.length) {
       const priorActor = prior.actorId ?? prior.actorName
       const currentActor = item.actorId ?? item.actorName
       const delta = new Date(item.createdAt).getTime() - new Date(prior.commands.at(-1)?.createdAt ?? prior.createdAt).getTime()
@@ -277,6 +399,7 @@ export function projectActivity(
         batched[batched.length - 1] = {
           ...prior,
           content: commandSummary(commands.length, locale),
+          secondary: commandBatchStatus(commands, locale),
           commands,
           events: [...prior.events, ...item.events],
         }

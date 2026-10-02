@@ -1862,3 +1862,51 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   outline-offset: 3px;
   border-radius: 4px;
 }
+
+
+/* Activity UX hardening: stable layout, denser groups and anchored history. */
+.activity-date-separator {
+  position: relative;
+  top: auto;
+  z-index: 1;
+  flex: 0 0 auto;
+}
+.activity-chat-message {
+  padding-block: 2px;
+}
+.activity-chat-message.activity-group-start {
+  margin-top: 8px;
+}
+.activity-chat-message.activity-group-continuation {
+  margin-top: 0;
+}
+.activity-chat-content {
+  max-width: 88%;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.activity-group-continuation .activity-chat-content {
+  margin-top: 0;
+}
+.activity-history-loading {
+  position: sticky;
+  top: 2px;
+  z-index: 3;
+  flex: 0 0 auto;
+  width: fit-content;
+  height: 0;
+  margin: 0 auto;
+  color: var(--color-muted);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+}
+.activity-item-entering {
+  animation: activity-item-enter 180ms ease-out both;
+}
+@keyframes activity-item-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-item-entering { animation: none; }
+}
