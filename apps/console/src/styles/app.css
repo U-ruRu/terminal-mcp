@@ -1120,3 +1120,50 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .destructive-action:focus-visible:not(:disabled) {
   border-color: var(--color-danger) !important;
 }
+
+
+/* Shared production control contract */
+.connection-form .ui-field,
+.mesh-control .ui-field,
+.policy-controls-grid .ui-field,
+.slot-create .ui-field,
+.filter-controls .ui-field,
+.theme-select.ui-field {
+  color: var(--color-muted);
+  font-size: var(--font-label-size);
+  line-height: var(--font-label-line);
+}
+
+.connection-form .ui-field input,
+.mesh-control .ui-field input,
+.mesh-control .ui-field select,
+.mesh-membership-control.ui-field select,
+.policy-controls-grid .ui-field input,
+.slot-create .ui-field input,
+.filter-controls .ui-field select,
+.theme-select.ui-field select,
+.settings .ui-field select {
+  min-height: var(--control-standard);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  padding: 8px 10px;
+}
+
+.connection-form .ui-field input:hover,
+.mesh-control .ui-field input:hover,
+.mesh-control .ui-field select:hover,
+.mesh-membership-control.ui-field select:hover,
+.policy-controls-grid .ui-field input:hover,
+.slot-create .ui-field input:hover,
+.filter-controls .ui-field select:hover,
+.theme-select.ui-field select:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+}
+
+.secondary-action {
+  border-color: var(--color-border) !important;
+  background: var(--color-surface) !important;
+  color: var(--color-text) !important;
+}

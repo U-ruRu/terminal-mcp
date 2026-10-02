@@ -26,8 +26,8 @@ export function Settings() {
       <article className="panel" aria-labelledby="language-title">
         <h3 id="language-title">{t('settings.language')}</h3>
         <p className="muted">{t('settings.languageHint')}</p>
-        <label>
-          <span className="eyebrow">{t('settings.language')}</span>
+        <label className="ui-field">
+          <span className="ui-field-label">{t('settings.language')}</span>
           <select
             aria-label={t('settings.language')}
             value={locale}

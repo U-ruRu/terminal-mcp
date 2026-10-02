@@ -15,7 +15,7 @@ export function ThemeSelect() {
   const { t } = useI18n()
   const { theme, setTheme } = useTheme()
   return (
-    <label className="theme-select">
+    <label className="theme-select ui-field">
       <span>{t('settings.theme')}</span>
       <select
         aria-label={t('settings.theme')}
