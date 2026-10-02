@@ -129,7 +129,7 @@
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; margin: 0; }
 html { background: var(--color-bg); }
-body { background: var(--color-bg); color: var(--color-text); }
+body { background: var(--color-bg); color: var(--color-text); font-size: var(--font-body-size); line-height: var(--font-body-line); }
 ::selection { background: var(--color-selection); }
 a { color: inherit; }
 button, input, textarea, select { font: inherit; }
