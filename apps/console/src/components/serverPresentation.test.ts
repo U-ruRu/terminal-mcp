@@ -4,6 +4,7 @@ import { fixtureFleetModel } from '../fixtures/fleet'
 import {
   needsAttention,
   resourceDisplayValue,
+  resourcePercent,
   resourceVisualState,
   serverProblemSort,
   serverVisualState,
@@ -69,4 +70,30 @@ test('problem ordering is offline or critical, then attention, then stale, then 
     'attention',
     'stale',
   ])
+})
+
+
+test('normalizes load average by logical CPU count when direct CPU usage is absent', () => {
+  const server = {
+    ...healthy,
+    resources: {
+      ...healthy.resources!,
+      cpu: { ...healthy.resources!.cpu, usagePercent: undefined, logicalCores: 4, load1m: 4.4 },
+    },
+  }
+
+  expect(resourcePercent(server, 'cpu')).toBeCloseTo(110)
+  expect(resourceDisplayValue(server, 'cpu', 'Unavailable', 'Load')).toBe('110%')
+  expect(resourceVisualState(server, 'cpu')).toBe('attention')
+})
+
+test('blocked tasks and communication counts do not change server health', () => {
+  const server = {
+    ...healthy,
+    blockerCount: 7,
+    communication: { unread: 12, replyRequired: 4, alerts: 3 },
+  }
+
+  expect(serverVisualState(server)).toBe('healthy')
+  expect(needsAttention(server)).toBe(false)
 })

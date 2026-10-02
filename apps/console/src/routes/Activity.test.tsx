@@ -59,15 +59,16 @@ test('switches servers, filters messages and renders direct task navigation', as
   )
   await screen.findByText('Ship it')
   expect(screen.getByRole('link', { name: 'Task M2-009' })).toHaveAttribute('href', '/servers/alpha/tasks/console/M2-009')
-  expect(screen.getAllByRole('link', { name: 'Server Alpha' })[0]).toHaveAttribute('href', '/servers/alpha')
-  expect(screen.getByRole('link', { name: 'Agent Alpha' })).toHaveAttribute('href', '/servers/alpha/agents/Alpha-1111')
+  expect(screen.queryByRole('link', { name: 'Server Alpha' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', '/servers/alpha/agents/Alpha-1111')
+  expect(screen.getByText(/28\.09\.2026 \d{2}:00:02/)).toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
   expect(screen.getByText('Ship it')).toBeInTheDocument()
-  expect(screen.queryByText('task.updated · #1')).not.toBeInTheDocument()
+  expect(screen.queryByText('task.updated')).not.toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
   await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
-  expect(await screen.findByText('health.changed · #7')).toBeInTheDocument()
+  expect(await screen.findByText('health.changed')).toBeInTheDocument()
 })
 
 test('does not silently choose a server when activity has no server context', async () => {
@@ -99,11 +100,10 @@ test('filters duplicate public names by exact agent session identity', async () 
       </MemoryRouter>
     </I18nProvider>,
   )
-  expect(await screen.findByText(/second-session/)).toBeInTheDocument()
-  expect(screen.queryByText(/first-session/)).not.toBeInTheDocument()
+  await waitFor(() => expect(document.querySelectorAll('.activity-event')).toHaveLength(1))
+  expect(screen.getByText('SameName')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: /Agent SameName-2222/ }))
-  expect(await screen.findByText(/first-session/)).toBeInTheDocument()
-  expect(screen.getByText(/second-session/)).toBeInTheDocument()
+  await waitFor(() => expect(document.querySelectorAll('.activity-event')).toHaveLength(2))
 })
 
 test('mobile chat viewport ends above the fixed bottom navigation', async () => {
@@ -124,7 +124,7 @@ test('mobile chat viewport ends above the fixed bottom navigation', async () => 
   )
 
   await screen.findByText('Ship it')
-  expect(document.querySelector('.activity-chat')).toHaveStyle({ maxHeight: '392px' })
+  expect(document.querySelector('.activity-chat')).toHaveStyle({ height: '400px', maxHeight: '400px' })
   rect.mockRestore()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
 })
@@ -138,8 +138,13 @@ test('loads a concise latest window and keeps raw payload collapsed', async () =
   )
 
   await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
-  const details = screen.getByText('Technical details').closest('details')
+  const summary = screen.getByLabelText('Technical details')
+  const details = summary.closest('details')
   expect(details).not.toHaveAttribute('open')
+  expect(summary).toHaveTextContent('⌄')
+  await userEvent.click(summary)
+  expect(details).toHaveAttribute('open')
+  expect(summary).toHaveTextContent('⌃')
   expect(details).toHaveTextContent('"ok": true')
 })
 

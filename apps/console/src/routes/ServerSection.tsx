@@ -10,6 +10,22 @@ import { FeedbackState } from '../components/UiPrimitives'
 
 type ServerSectionKind = 'agents' | 'context' | 'health'
 
+function connectionLabel(value: string, t: ReturnType<typeof useI18n>['t']): string {
+  if (value === 'live') return t('status.live')
+  if (value === 'offline') return t('status.offline')
+  if (value === 'stale') return t('status.stale')
+  if (value === 'reconnecting') return t('status.reconnecting')
+  if (value === 'connecting') return t('status.connecting')
+  return t('common.unknown')
+}
+
+function diagnosticError(code: string | undefined, t: ReturnType<typeof useI18n>['t']): string {
+  if (!code) return t('diagnostics.connectionError')
+  if (code === 'auth_unpaired') return t('diagnostics.serverUnpaired')
+  if (code === 'direct_authority_auth_revoked' || code === 'auth_revoked') return t('diagnostics.authorizationRevoked')
+  return t('diagnostics.connectionError')
+}
+
 const titles: Record<ServerSectionKind, MessageKey> = {
   agents: 'nav.agents',
   context: 'nav.context',
@@ -101,12 +117,18 @@ export function ServerSection({
             <h3>{t('section.lastKnownHealth')}</h3>
             <p>{server.healthy === false ? t('section.unhealthy') : server.healthy === true ? t('section.healthy') : t('common.unknown')}</p>
             <p className="muted">
-              {t('section.connection')} {server.connectivity}
+              {t('section.connection')} {connectionLabel(server.connectivity, t)}
               {server.lastSeenAt ? ' · ' + t('section.lastActivity') + ' ' + dateTime(server.lastSeenAt) : ''}
             </p>
             <p className="muted">{t('server.hostResources')}: {server.resources?.status ?? t('common.unavailable')}</p>
-            {server.staleReason ? <p className="muted">{server.staleReason}</p> : null}
-            {server.lastError ? <p className="connection-error" role="status">{server.lastError}</p> : null}
+            {server.lastError ? <p className="connection-error" role="status">{diagnosticError(server.lastError, t)}</p> : null}
+            {server.lastError || server.staleReason ? (
+              <details className="inline-technical-details">
+                <summary>{t('diagnostics.technicalDetails')}</summary>
+                {server.lastError ? <code>{server.lastError}</code> : null}
+                {server.staleReason ? <code>{server.staleReason}</code> : null}
+              </details>
+            ) : null}
           </>
         ) : section === 'context' ? (
           <>
@@ -150,11 +172,18 @@ export function ServerSection({
             <div className="diagnostics-log" aria-label={t('diagnostics.title')}>
               {diagnosticEntries.map((event) => (
                 <div className="diagnostics-entry" key={event.seq}>
-                  <div><time dateTime={event.at}>{dateTime(event.at)}</time> <code>#{event.seq} {event.type}</code></div>
-                  <div className="muted">
-                    {[event.server, event.status, event.authStatus ? `auth=${event.authStatus}` : '', event.code ? `code=${event.code}` : ''].filter(Boolean).join(' · ')}
+                  <div className="diagnostics-entry-heading">
+                    <time dateTime={event.at}>{dateTime(event.at)}</time>
+                    <strong>{event.code ? diagnosticError(event.code, t) : event.status ? connectionLabel(event.status, t) : t('diagnostics.connectionError')}</strong>
                   </div>
-                  {event.detail ? <div className="diagnostics-detail">{event.detail}</div> : null}
+                  <details className="inline-technical-details">
+                    <summary>{t('diagnostics.technicalDetails')}</summary>
+                    <code>#{event.seq} {event.type}</code>
+                    <div className="muted">
+                      {[event.server, event.status, event.authStatus ? `auth=${event.authStatus}` : '', event.code ? `code=${event.code}` : ''].filter(Boolean).join(' · ')}
+                    </div>
+                    {event.detail ? <div className="diagnostics-detail">{event.detail}</div> : null}
+                  </details>
                 </div>
               ))}
             </div>

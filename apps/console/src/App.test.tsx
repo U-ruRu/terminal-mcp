@@ -43,7 +43,8 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   renderApp()
   const serverCard = screen.getByRole('article', { name: 'Server C server' })
   await userEvent.click(within(serverCard).getByRole('link', { name: 'Server C · Live' }))
-  expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
+  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server C')
+  expect(screen.queryByRole('heading', { name: 'Server C' })).not.toBeInTheDocument()
   expect(screen.getByText('https://server-c.example.invalid')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Back to fleet' })).toHaveAttribute('href', '/')
   const serverNavigation = screen.getByLabelText('Server navigation')
@@ -53,15 +54,17 @@ test('opens a stable server workspace from fleet dashboard', async () => {
 
 test('direct route keeps stale cached server readable after reload', () => {
   renderApp('/servers/server-b')
-  expect(screen.getByRole('heading', { name: 'Server B' })).toBeInTheDocument()
+  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server B')
+  expect(screen.queryByRole('heading', { name: 'Server B' })).not.toBeInTheDocument()
   expect(screen.getByRole('status')).toHaveTextContent('last cached snapshot')
   expect(screen.getByText('Review Android release path')).toBeInTheDocument()
 })
 
 test('direct route keeps offline server snapshot readable', () => {
   renderApp('/servers/server-a')
-  expect(screen.getByRole('heading', { name: 'Server A' })).toBeInTheDocument()
-  expect(screen.getByRole('status')).toHaveTextContent('offline')
+  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server A')
+  expect(screen.queryByRole('heading', { name: 'Server A' })).not.toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent('Offline')
   expect(screen.getByText('No active sessions in the cached snapshot.')).toBeInTheDocument()
 })
 
@@ -130,7 +133,7 @@ test('applies persisted Spanish locale to explicit server chooser', () => {
 
 test('switches server workspace without returning to fleet', async () => {
   renderApp('/servers/server-b')
-  expect(screen.getByRole('heading', { name: 'Server B' })).toBeInTheDocument()
+  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server B')
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Switch server' }), 'server-a')
-  expect(screen.getByRole('heading', { name: 'Server A' })).toBeInTheDocument()
+  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server A')
 })

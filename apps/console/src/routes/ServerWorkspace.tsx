@@ -2,21 +2,11 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { ServerCard } from '../components/ServerCard'
 import { FeedbackState } from '../components/UiPrimitives'
-import { StatusBadge } from '../components/StatusBadge'
-import { serverVisualState, type ServerVisualState } from '../components/serverPresentation'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
 import { activityRoute, agentRoute, contextRoute, healthRoute, taskRoute, tasksRoute } from '../navigation/routes'
 
-
-function statusLabel(state: ServerVisualState, t: ReturnType<typeof useI18n>['t']): string {
-  if (state === 'healthy') return t('status.live')
-  if (state === 'stale') return t('status.stale')
-  if (state === 'offline') return t('status.offline')
-  if (state === 'loading') return t('status.catchingUp')
-  return t('fleet.needsAttention')
-}
 
 function duration(seconds: number | undefined): string {
   if (seconds === undefined) return 'unknown'
@@ -40,29 +30,20 @@ export function ServerWorkspace({
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
   if (!server) return <Navigate to="/" replace />
 
-  const visualState = serverVisualState(server)
   const snapshot = instance?.runtime.realtime?.snapshot
   const agents = snapshot?.agents.filter((agent) => agent.status === 'active') ?? []
   const tasks = snapshot?.tasks ?? []
 
   return (
-    <section className="stack" aria-labelledby="server-title">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">{t('server.eyebrow')}</p>
-          <h2 id="server-title">{server.displayName}</h2>
-          <p className="muted">{server.origin}</p>
-        </div>
-        <div className="page-tools">
-          <label className="server-switcher"><span>{t('server.switch')}</span><select aria-label={t('aria.switchServer')} value={server.instanceId} onChange={(event) => navigate('/servers/' + encodeURIComponent(event.target.value))}>{model.servers.map((item) => <option key={item.instanceId} value={item.instanceId}>{item.displayName}</option>)}</select></label>
-          <StatusBadge state={visualState} label={statusLabel(visualState, t)} />
-        </div>
+    <section className="stack" aria-label={t('title.server')}>
+      <div className="server-detail-toolbar">
+        <p className="muted server-origin">{server.origin}</p>
+        <label className="server-switcher"><span>{t('server.switch')}</span><select aria-label={t('aria.switchServer')} value={server.instanceId} onChange={(event) => navigate('/servers/' + encodeURIComponent(event.target.value))}>{model.servers.map((item) => <option key={item.instanceId} value={item.instanceId}>{item.displayName}</option>)}</select></label>
       </div>
 
       {server.connectivity !== 'live' ? (
         <div className="attention-strip" role="status">
-          {t('server.cached')} {server.connectivity}.
-          {server.staleReason ? ' ' + server.staleReason + '.' : ''}
+          {t('server.cached')} {server.connectivity === 'offline' ? t('status.offline') : server.freshness === 'stale' ? t('status.stale') : t('status.catchingUp')}.
         </div>
       ) : null}
 
