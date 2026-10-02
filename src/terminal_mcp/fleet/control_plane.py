@@ -307,23 +307,15 @@ class ManagedFleetControl:
         )
         return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
-    def _bootstrap_nodes(self) -> list[dict]:
-        return [
-            {
-                "node_id": self.config.instance_id,
-                "origin": self.public_base_url,
-                "public_key": self._local_public_key(),
-            },
-            *[
-                {
-                    "node_id": peer.instance_id,
-                    "origin": peer.origin,
-                    "public_key": peer.public_key,
-                    "auth_token": peer.auth_token,
-                }
-                for peer in self.bootstrap_config.peers
-            ],
-        ]
+    def _initial_control_node(self) -> list[dict]:
+        # Bootstrap peers are transport hints only. Creating a managed Mesh must never
+        # turn configured peers into members implicitly; membership is an explicit
+        # control-plane mutation.
+        return [{
+            "node_id": self.config.instance_id,
+            "origin": self.public_base_url,
+            "public_key": self._local_public_key(),
+        }]
 
     async def snapshot(self) -> dict:
         return await self.store.control_state(include_secrets=False)
@@ -349,7 +341,7 @@ class ManagedFleetControl:
         state = await self.store.adopt_managed(
             mesh_id=mesh_id or f"mesh-{secrets.token_hex(8)}",
             display_name=display_name,
-            nodes=self._bootstrap_nodes(),
+            nodes=self._initial_control_node(),
             policy=self.policy_controller.snapshot(),
         )
         await self._apply_local(state)

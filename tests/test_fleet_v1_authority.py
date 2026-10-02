@@ -847,7 +847,13 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
         public_base_url="https://home.example",
         client_factory=lambda: _FakeClient(home_http),
     )
-    await home.adopt(mesh_id="mesh-a", display_name="Before")
+    created = await home.adopt(mesh_id="mesh-a", display_name="Before")
+    assert [node["node_id"] for node in created["nodes"]] == ["home"]
+    await home.upsert_node(
+        node_id="remote", mesh_id="mesh-a", origin="https://remote.example",
+        public_key=remote_public, auth_token="remote-token",
+        expected_topology_revision=created["revisions"]["topology"],
+    )
 
     async def remote_http(url, headers, body):
         assert headers["X-Terminal-MCP-Peer"] == "remote"
@@ -876,7 +882,8 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
         "After",
         expected_topology_revision=initial["revisions"]["topology"],
     )
-    assert renamed["mesh"] is None
+    assert renamed["mesh"]["mesh_id"] == "mesh-a"
+    assert renamed["mesh"]["display_name"] == "After"
     assert renamed["meshes"][0]["display_name"] == "After"
     assert renamed["revisions"]["topology"] == initial["revisions"]["topology"] + 1
     assert (await home.snapshot())["meshes"][0]["display_name"] == "After"
@@ -1049,7 +1056,13 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
         public_base_url="https://home.example",
         client_factory=lambda: _FakeClient(handler),
     )
-    await control.adopt(mesh_id="mesh-a", display_name="Fleet")
+    created = await control.adopt(mesh_id="mesh-a", display_name="Fleet")
+    assert [node["node_id"] for node in created["nodes"]] == ["home"]
+    await control.upsert_node(
+        node_id="remote", mesh_id="mesh-a", origin="https://remote.example",
+        public_key=remote_public, auth_token="remote-token",
+        expected_topology_revision=created["revisions"]["topology"],
+    )
     state = await control.snapshot()
     remote = next(node for node in state["nodes"] if node["node_id"] == "remote")
     assert remote["last_error"] == "reconcile_failed:RuntimeError"
@@ -1218,7 +1231,8 @@ async def test_detach_is_delivered_before_revocation_and_does_not_restore_stale_
     )
     adopted = await home.adopt(mesh_id="mesh-a", display_name="Fleet")
     assert adopted["managed"] is True
-    assert (await remote.snapshot())["managed"] is True
+    assert [node["node_id"] for node in adopted["nodes"]] == ["home"]
+    assert (await remote.snapshot())["managed"] is False
     attached = await home.upsert_node(
         node_id="remote",
         mesh_id="mesh-a",
