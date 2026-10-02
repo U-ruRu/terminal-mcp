@@ -147,7 +147,9 @@ class PersistentPolicyController:
         policy = dict(self._local_policy)
         async with self._lock, self.lifecycle.policy_guard():
             self.settings.persistent_session_duration_sec = int(policy["duration_seconds"])
-            self.settings.persistent_session_warning_after_sec = int(policy["warning_after_seconds"])
+            self.settings.persistent_session_warning_after_sec = int(
+                policy["warning_after_seconds"]
+            )
             self.settings.persistent_session_alert_after_sec = int(policy["alert_after_seconds"])
             self.settings.persistent_session_rearm_after_sec = int(policy["rearm_after_seconds"])
             self.settings.legacy_agent_admission_enabled = bool(policy["legacy_admission_enabled"])
