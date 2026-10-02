@@ -265,15 +265,24 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
       {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
       {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}
-      {feed.error ? (
-        <div className="activity-error-state">
-          <FeedbackState variant="error" title={t('activity.unavailable')} detail={userError(feed.error, t)} />
-          <details className="inline-technical-details">
-            <summary aria-label={t('activity.rawDetails')}><span aria-hidden="true">⌄</span></summary>
-            <code>{feed.error}</code>
-          </details>
-        </div>
-      ) : null}
+      {feed.error ? (() => {
+        const errorKey = 'activity-error:' + selectedId
+        const errorExpanded = expandedEvents.has(errorKey)
+        const errorDetailsId = 'activity-error-details-' + selectedId.replace(/[^a-zA-Z0-9_-]/g, '-')
+        return (
+          <div className="activity-error-service" role="alert">
+            <div>
+              <strong>{t('activity.unavailable')}</strong>
+              <span>{userError(feed.error, t)}</span>
+            </div>
+            <button type="button" className="activity-error-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={errorExpanded} aria-controls={errorDetailsId}
+              onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(errorKey)) next.delete(errorKey); else next.add(errorKey); return next })}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d={errorExpanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+            </button>
+            {errorExpanded ? <code id={errorDetailsId}>{feed.error}</code> : null}
+          </div>
+        )
+      })() : null}
       {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
       {selectedId && !feed.error ? (
         <div className="activity-timeline-wrap">

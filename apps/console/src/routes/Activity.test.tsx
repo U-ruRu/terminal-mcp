@@ -198,3 +198,18 @@ test('groups consecutive commands into one cascade and keeps raw details nested 
   await userEvent.click(technical[1])
   expect(screen.getByText(/"entityId": "cmd-b"/)).toBeInTheDocument()
 })
+
+test('shows connection failures as a compact service row with nested technical code', async () => {
+  const load = vi.fn(async () => { throw new Error('direct_authority_auth_revoked') })
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+  expect(await screen.findByText('Activity unavailable')).toBeInTheDocument()
+  expect(screen.getByText('Authorization revoked.')).toBeInTheDocument()
+  expect(screen.queryByText('direct_authority_auth_revoked')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Technical details' }))
+  expect(screen.getByText('direct_authority_auth_revoked')).toBeInTheDocument()
+  expect(document.querySelector('.activity-error-state')).not.toBeInTheDocument()
+})

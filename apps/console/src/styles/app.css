@@ -1798,3 +1798,67 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   background: var(--color-surface);
   transform: rotate(45deg);
 }
+
+.activity-error-service {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  margin-inline: var(--space-2);
+  padding: 8px 34px 8px 10px;
+  border-left: 2px solid var(--color-danger);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.activity-error-service > div {
+  display: grid;
+  gap: 2px;
+}
+.activity-error-service strong {
+  font-size: 13px;
+}
+.activity-error-service span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.activity-error-service code {
+  margin-top: 6px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.activity-error-detail-toggle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  padding: 0;
+}
+.activity-error-detail-toggle:hover,
+.activity-error-detail-toggle:focus-visible,
+.activity-error-detail-toggle:active {
+  background: transparent;
+  color: var(--color-text);
+}
+.activity-error-detail-toggle svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.activity-error-detail-toggle:focus-visible svg {
+  outline: 1px solid var(--color-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
