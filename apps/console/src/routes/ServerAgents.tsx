@@ -1,20 +1,19 @@
 import { Link, Navigate, useParams } from 'react-router-dom'
 
 import type { FleetInstanceView } from '../fleet/types'
+import type { MessageKey } from '../i18n/catalogs'
+import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
 import { activityRoute, agentRoute, taskRoute } from '../navigation/routes'
 
-function duration(seconds: number | undefined): string {
-  if (seconds === undefined) return 'unknown'
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+const agentStateKeys: Record<string, MessageKey> = { active: 'agents.state.active' }
+function localizedAgentState(t: (key: MessageKey) => string, state: string): string {
+  return t(agentStateKeys[state] ?? 'common.unknown')
 }
 
 export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { instanceId = '', agentId } = useParams()
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
   if (!instance) return <Navigate to="/agents" replace />
@@ -49,12 +48,12 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
             <h2 id="agent-title">{selected.name}</h2>
             <p className="muted">{t('agents.exactSession')} {selected.agentId}</p>
           </div>
-          <span className={'status status-' + instance.runtime.status}>{selected.status}</span>
+          <span className={'status status-' + instance.runtime.status}>{localizedAgentState(t, selected.status)}</span>
         </div>
         <article className="panel">
           <h3>{t('agents.currentSession')}</h3>
           <p>{selected.intent || t('agents.noIntent')}</p>
-          <p className="muted">{t('agents.sessionLabel')} {duration(selected.sessionAgeSeconds)} · {t('agents.idleLabel')} {duration(selected.idleSeconds)}</p>
+          <p className="muted">{t('agents.sessionLabel')} {formatDuration(selected.sessionAgeSeconds, locale, t('common.unknown'))} · {t('agents.idleLabel')} {formatDuration(selected.idleSeconds, locale, t('common.unknown'))}</p>
           {selected.taskSummary && <p className="muted">{selected.taskSummary}</p>}
         </article>
         <article className="panel">
@@ -86,7 +85,7 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
               {agent.agentId ? (
                 <Link className="text-link" to={agentRoute(instanceId, agent.agentId)}>{agent.name}</Link>
               ) : <strong>{agent.name}</strong>}
-              <span className="chip">{agent.status}</span>
+              <span className="chip">{localizedAgentState(t, agent.status)}</span>
             </div>
             <p>{agent.intent || t('agents.noIntent')}</p>
             {!agent.agentId && <p className="muted">{t('agents.identityUnavailable')}</p>}

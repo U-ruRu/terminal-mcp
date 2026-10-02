@@ -150,11 +150,18 @@ export function AppShell({
   const isServerOverview = /^\/servers\/[^/]+\/?$/.test(location.pathname)
   const isMeshOverview = /^\/meshes\/[^/]+\/?$/.test(location.pathname)
   const appBarVariant = isServerOverview || isMeshOverview ? 'detail' : contextual ? 'secondary' : 'root'
+  const globalScreenTitle = location.pathname === '/'
+    ? t('nav.fleet')
+    : location.pathname === '/connections' || location.pathname === '/connect'
+      ? t('nav.connections')
+      : location.pathname === '/settings'
+        ? t('settings.title')
+        : t('app.console')
   const appBarTitle = isServerOverview
     ? selectedServer?.displayName ?? t('title.server')
     : contextual
       ? t(contextual.titleKey)
-      : t('app.console')
+      : globalScreenTitle
   const appBarEyebrow = selectedServer?.displayName ?? (selectedMeshId ? t('title.mesh') + ' · ' + selectedMeshId : 'Terminal MCP')
   const bottomNavigation = globalNavigation.filter((item) => bottomNavigationKeys.has(item.key))
   const isGlobalActive = (key: NavigationItem['key']) => {
