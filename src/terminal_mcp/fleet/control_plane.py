@@ -673,13 +673,17 @@ class ManagedFleetControl:
             if any(node["node_id"] == node_id for node in active_nodes)
         )
         identity = await self._ensure_local_identity()
+        local_material = await self.store.managed_node(self.config.instance_id)
+        local_auth_token = (
+            str(local_material.get("auth_token") or "") if local_material else ""
+        ) or str(identity["ingress_token"])
         new_config = FleetConfig(
             self.config.instance_id,
             self.config.signing_private_key,
             peers,
             self.config.replication_interval_seconds,
             self.config.request_timeout_seconds,
-            str(identity["ingress_token"]),
+            local_auth_token,
         )
         self._replace_runtime_config(new_config)
         await self.store.mark_managed_applied(

@@ -832,8 +832,12 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
     await home_store.initialize()
     await remote_store.initialize()
 
+    replicated_state = None
+
     async def home_http(url, headers, body):
+        nonlocal replicated_state
         assert url.endswith("/internal/fleet/control/apply")
+        replicated_state = body["state"]
         return _FakeResponse({"ok": True, "control": body["state"]})
 
     home = ManagedFleetControl(
@@ -860,7 +864,13 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
         client_factory=lambda: _FakeClient(remote_http),
     )
     initial = await home.snapshot()
-    await remote.apply_replica(initial, source_node_id="home")
+    assert replicated_state is not None
+    assert any(
+        item.get("node_id") == "remote" and item.get("auth_token") == "remote-token"
+        for item in replicated_state.get("_peer_material", [])
+    )
+    await remote.apply_replica(replicated_state, source_node_id="home")
+    assert remote.config.local_auth_token == "remote-token"
 
     renamed = await remote.rename(
         "After",
