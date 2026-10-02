@@ -65,7 +65,7 @@ test('switches servers, filters messages and renders direct task navigation', as
   expect(screen.getByText('Ship it')).toBeInTheDocument()
   expect(screen.queryByText('task.updated · #1')).not.toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 1000 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
   expect(await screen.findByText('health.changed · #7')).toBeInTheDocument()
 })
@@ -80,7 +80,7 @@ test('does not silently choose a server when activity has no server context', as
   expect(screen.getByText('Choose a server to view activity.')).toBeInTheDocument()
   expect(load).not.toHaveBeenCalled()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 3, limit: 1000 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 3, limit: 100 })))
 })
 
 
@@ -127,4 +127,31 @@ test('mobile chat viewport ends above the fixed bottom navigation', async () => 
   expect(document.querySelector('.activity-chat')).toHaveStyle({ maxHeight: '392px' })
   rect.mockRestore()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+})
+
+test('loads a concise latest window and keeps raw payload collapsed', async () => {
+  const load = activityLoader()
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=beta']}>
+      <Activity instances={[instance('beta', 'Beta', 7)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+
+  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
+  const details = screen.getByText('Technical details').closest('details')
+  expect(details).not.toHaveAttribute('open')
+  expect(details).toHaveTextContent('"ok": true')
+})
+
+
+test('shows loading feedback before the first activity page resolves', () => {
+  const load = vi.fn(() => new Promise<ActivityFeedReadModel>(() => {}))
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+
+  expect(screen.getByText('Catching up')).toBeInTheDocument()
+  expect(screen.queryByText('No activity matches this filter.')).not.toBeInTheDocument()
 })

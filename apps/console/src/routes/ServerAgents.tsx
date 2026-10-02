@@ -2,6 +2,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 import { activityRoute, agentRoute, agentsRoute, serverRoute, taskRoute } from '../navigation/routes'
 
 function duration(seconds: number | undefined): string {
@@ -67,7 +68,7 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
                 </Link>
               ))}
             </div>
-          ) : <p className="muted">{t('agents.noTaskClaims')}</p>}
+          ) : <FeedbackState variant="empty" title={t('agents.noTaskClaims')} />}
         </article>
         <div className="server-actions">
           <Link className="nav-link" to={activityRoute(instanceId, { agentId: selected.agentId })}>{t('agents.activity')}</Link>
@@ -101,7 +102,7 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
             {!agent.agentId && <p className="muted">{t('agents.identityUnavailable')}</p>}
           </article>
         ))}
-        {agents.length === 0 && <article className="panel"><p className="muted">{t('agents.empty')}</p></article>}
+        {agents.length === 0 && <FeedbackState variant="empty" title={t('agents.empty')} />}
       </div>
     </section>
   )

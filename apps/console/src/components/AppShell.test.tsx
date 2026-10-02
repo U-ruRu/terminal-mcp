@@ -1,4 +1,4 @@
-import { cleanup, render, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
 import type { FleetServerReadModel } from '../fleet/readModel'
@@ -11,23 +11,37 @@ function renderShell(path: string) {
 }
 test('offers deterministic contextual back navigation for server and task detail routes', () => {
   renderShell('/servers/server-a')
-  let context = document.querySelector('.mobile-context') as HTMLElement
-  expect(within(context).getByRole('link', { name: 'Go back to fleet' })).toHaveAttribute('href', '/')
+  let appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(appBar).toHaveAttribute('data-variant', 'detail')
+  expect(within(appBar).getByRole('link', { name: 'Go back to fleet' })).toHaveAttribute('href', '/')
   cleanup()
   renderShell('/servers/server-a/tasks/core/T-1')
-  context = document.querySelector('.mobile-context') as HTMLElement
-  expect(within(context).getByRole('link', { name: 'Go back to tasks' })).toHaveAttribute('href', '/servers/server-a/tasks')
+  appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(appBar).toHaveAttribute('data-variant', 'secondary')
+  expect(within(appBar).getByRole('link', { name: 'Go back to tasks' })).toHaveAttribute('href', '/servers/server-a/tasks')
 })
 test('server-scoped activity exposes a direct return path', () => {
   renderShell('/activity?server=server-a')
-  const context = document.querySelector('.mobile-context') as HTMLElement
-  expect(within(context).getByRole('link', { name: 'Go back to server' })).toHaveAttribute('href', '/servers/server-a')
+  const appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('link', { name: 'Go back to server' })).toHaveAttribute('href', '/servers/server-a')
 })
 
 test('renders both mobile drawer navigation and a separate bottom navigation surface', () => {
   renderShell('/')
   expect(document.querySelector('.menu-toggle')).toBeInTheDocument()
   expect(document.querySelector('.global-navigation')).toBeInTheDocument()
-  expect(document.querySelector('.mobile-bottom-navigation')).toBeInTheDocument()
-  expect(document.querySelector('.mobile-bottom-navigation')).not.toBe(document.querySelector('.global-navigation'))
+  const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
+  expect(bottom).toBeInTheDocument()
+  expect(bottom).not.toBe(document.querySelector('.global-navigation'))
+  expect(within(bottom).getAllByRole('link')).toHaveLength(5)
+  expect(within(bottom).getByRole('link', { name: /Servers/ })).toBeInTheDocument()
+  expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
+})
+
+test('root app bar exposes fleet status without duplicating server context', () => {
+  renderShell('/')
+  const appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(appBar).toHaveAttribute('data-variant', 'root')
+  expect(within(appBar).getByRole('heading', { name: 'Console' })).toBeInTheDocument()
+  expect(screen.getByText('Live 0')).toBeInTheDocument()
 })

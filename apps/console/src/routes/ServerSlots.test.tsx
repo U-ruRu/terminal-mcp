@@ -196,6 +196,8 @@ test('expanded slot detail exposes session, generations and admission policy', a
   expect(screen.getByText('ws_alpha')).toBeInTheDocument()
   expect(screen.getByText('2026-09-30T12:02:00Z')).toBeInTheDocument()
   expect(screen.getByText('bearer')).toBeInTheDocument()
+  expect(screen.queryByText('la_alpha')).not.toBeInTheDocument()
+  expect(screen.getAllByText('Alpha Slot').length).toBeGreaterThan(0)
 })
 
 

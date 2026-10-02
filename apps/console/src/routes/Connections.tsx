@@ -4,6 +4,7 @@ import type { ManagedFleetControlReadModel } from '../api/models'
 import { useConnectionRuntime } from '../connections/runtime'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 
 function statusLabel(status: string | undefined, t: (key: MessageKey) => string): string {
   switch (status) {
@@ -83,7 +84,10 @@ export function Connections() {
   }, [client, profiles])
 
   useEffect(() => {
-    void refreshControls()
+    const handle = window.setTimeout(() => {
+      void refreshControls()
+    }, 0)
+    return () => window.clearTimeout(handle)
   }, [refreshControls])
 
   const authoritative = useMemo(() => {
@@ -101,14 +105,17 @@ export function Connections() {
   )
 
   useEffect(() => {
-    if (!selectedMesh) {
-      if (selectedMeshId) setSelectedMeshId('')
-      return
-    }
-    if (selectedMeshId !== selectedMesh.meshId) {
-      setSelectedMeshId(selectedMesh.meshId)
-      setMeshName(selectedMesh.displayName)
-    }
+    const handle = window.setTimeout(() => {
+      if (!selectedMesh) {
+        if (selectedMeshId) setSelectedMeshId('')
+        return
+      }
+      if (selectedMeshId !== selectedMesh.meshId) {
+        setSelectedMeshId(selectedMesh.meshId)
+        setMeshName(selectedMesh.displayName)
+      }
+    }, 0)
+    return () => window.clearTimeout(handle)
   }, [selectedMesh, selectedMeshId])
 
   const writeProfile = useMemo(() => {
@@ -334,7 +341,7 @@ export function Connections() {
           <p className="eyebrow">{t('connections.addServer')}</p>
           <h3>{t('connections.pairTerminal')}</h3>
         </div>
-        <label>
+        <label className="ui-field">
           <span>{t('connections.pairingLink')}</span>
           <input
             required
@@ -344,7 +351,7 @@ export function Connections() {
             onChange={(event) => setPairingLink(event.target.value)}
           />
         </label>
-        <label>
+        <label className="ui-field">
           <span>{t('connections.displayName')}</span>
           <input
             type="text"
@@ -380,7 +387,7 @@ export function Connections() {
         ) : null}
 
         {meshes.length > 0 ? (
-          <label>
+          <label className="ui-field">
             <span>{t('connections.mesh')}</span>
             <select
               value={selectedMesh?.meshId ?? ''}
@@ -400,7 +407,7 @@ export function Connections() {
 
         {selectedMesh ? (
           <>
-            <label>
+            <label className="ui-field">
               <span>{t('connections.meshName')}</span>
               <input
                 type="text"
@@ -419,7 +426,7 @@ export function Connections() {
               </button>
               <button
                 type="button"
-                className="secondary-action"
+                className="destructive-action"
                 disabled={controlBusy || !writeProfile}
                 onClick={() => void deleteMesh()}
               >
@@ -429,7 +436,7 @@ export function Connections() {
           </>
         ) : null}
 
-        <label>
+        <label className="ui-field">
           <span>{t('connections.newMeshName')}</span>
           <input
             type="text"
@@ -452,10 +459,7 @@ export function Connections() {
 
       <div className="connection-list">
         {profiles.length === 0 ? (
-          <article className="panel">
-            <h3>{t('connections.noPairedServers')}</h3>
-            <p className="muted">{t('connections.usePairingLink')}</p>
-          </article>
+          <FeedbackState variant="empty" title={t('connections.noPairedServers')} detail={t('connections.usePairingLink')} />
         ) : (
           connectionGroups.map((group) => (
             <section className="connection-group" key={group.key}>
@@ -506,7 +510,7 @@ export function Connections() {
                         ) : null}
                       </div>
                       {authoritative?.managed && observed?.control && sameFleet ? (
-                        <label className="mesh-membership-control">
+                        <label className="mesh-membership-control ui-field">
                           <span>{t('connections.membership')}</span>
                           <select
                             value={member?.meshId ?? ''}
@@ -549,7 +553,7 @@ export function Connections() {
                         ) : null}
                         <button
                           type="button"
-                          className="secondary-action"
+                          className="destructive-action"
                           onClick={() => disconnect(profile.instanceId)}
                         >
                           {t('connections.remove')}

@@ -4,56 +4,75 @@ import { Link, useLocation } from 'react-router-dom'
 import type { FleetServerReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { StatusBadge } from './StatusBadge'
+import { needsAttention, serverVisualState, type ServerVisualState } from './serverPresentation'
 
 type NavigationItem = {
   key: 'fleet' | 'servers' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
   labelKey: MessageKey
   globalPath: string
+  icon: string
   serverPath?: (instanceId: string) => string
 }
 
 const navigation: NavigationItem[] = [
-  { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/' },
-  { key: 'servers', labelKey: 'nav.servers', globalPath: '/servers' },
-  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections' },
+  { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: '⌂' },
+  { key: 'servers', labelKey: 'nav.servers', globalPath: '/servers', icon: '▦' },
+  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: '◌' },
   {
     key: 'agents',
+    icon: '◎',
     labelKey: 'nav.agents',
     globalPath: '/agents',
     serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents',
   },
   {
     key: 'slots',
+    icon: '◇',
     labelKey: 'nav.slots',
     globalPath: '/slots',
     serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots',
   },
   {
     key: 'tasks',
+    icon: '✓',
     labelKey: 'nav.tasks',
     globalPath: '/tasks',
     serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks',
   },
   {
     key: 'activity',
+    icon: '↕',
     labelKey: 'nav.activity',
     globalPath: '/activity',
     serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId),
   },
   {
     key: 'context',
+    icon: '◫',
     labelKey: 'nav.context',
     globalPath: '/context',
     serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context',
   },
   {
     key: 'health',
+    icon: '＋',
     labelKey: 'nav.health',
     globalPath: '/health',
     serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health',
   },
-  { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings' },
+  { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings', icon: '⚙' },
 ]
+
+const bottomNavigationKeys = new Set<NavigationItem['key']>(['servers', 'tasks', 'activity', 'context', 'settings'])
+
+function serverStatusLabel(state: ServerVisualState, t: (key: MessageKey) => string): string {
+  if (state === 'healthy') return t('status.live')
+  if (state === 'stale') return t('status.stale')
+  if (state === 'offline') return t('status.offline')
+  if (state === 'loading') return t('status.catchingUp')
+  return t('fleet.needsAttention')
+}
 
 function pathServer(pathname: string): string | undefined {
   const match = /^\/servers\/([^/]+)/.exec(pathname)
@@ -118,7 +137,7 @@ export function AppShell({
   servers: FleetServerReadModel[]
 }) {
   const location = useLocation()
-  const { t } = useI18n()
+  const { t, number } = useI18n()
   const [menuOpen, setMenuOpen] = useState(false)
   const toggleRef = useRef<HTMLButtonElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -151,6 +170,17 @@ export function AppShell({
   const current = activeKey(location.pathname)
   const contextual = contextNavigation(location.pathname, location.search)
   const selectedId = selectedServer?.instanceId
+  const serverState = selectedServer ? serverVisualState(selectedServer) : undefined
+  const problemCount = servers.filter(needsAttention).length
+  const isServerOverview = /^\/servers\/[^/]+\/?$/.test(location.pathname)
+  const appBarVariant = isServerOverview ? 'detail' : contextual ? 'secondary' : 'root'
+  const appBarTitle = isServerOverview
+    ? selectedServer?.displayName ?? t('title.server')
+    : contextual
+      ? t(contextual.titleKey)
+      : t('app.console')
+  const appBarEyebrow = selectedServer?.displayName ?? 'Terminal MCP'
+  const bottomNavigation = navigation.filter((item) => bottomNavigationKeys.has(item.key))
 
   const destination = (item: NavigationItem) => {
     if (selectedId && item.serverPath) return item.serverPath(selectedId)
@@ -159,23 +189,52 @@ export function AppShell({
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <button
-          ref={toggleRef}
-          className="menu-toggle"
-          type="button"
-          aria-label={t('aria.openNavigation')}
-          aria-expanded={menuOpen}
-          aria-controls="global-navigation"
-          onClick={() => setMenuOpen(true)}
-        >
-          <span aria-hidden="true">☰</span>
-        </button>
-        <div className="brand-block">
-          <p className="eyebrow">Terminal MCP</p>
-          <h1>{t('app.console')}</h1>
+      <header className={'topbar app-bar app-bar-' + appBarVariant} data-variant={appBarVariant}>
+        <div className="app-bar-leading">
+          {contextual ? (
+            <Link className="app-bar-back" aria-label={t(contextual.ariaKey)} to={contextual.to}>
+              <span aria-hidden="true">‹</span>
+            </Link>
+          ) : (
+            <button
+              ref={toggleRef}
+              className="menu-toggle"
+              type="button"
+              aria-label={t('aria.openNavigation')}
+              aria-expanded={menuOpen}
+              aria-controls="global-navigation"
+              onClick={() => setMenuOpen(true)}
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+          )}
         </div>
-        <span className="environment-badge">{t('environment.localFleet')}</span>
+        <div className="brand-block">
+          <p className="eyebrow">{appBarEyebrow}</p>
+          {appBarVariant === 'root' ? <h1>{appBarTitle}</h1> : <span className="app-bar-title">{appBarTitle}</span>}
+        </div>
+        <div className="app-bar-trailing">
+          {selectedServer && serverState ? (
+            <StatusBadge state={serverState} label={serverStatusLabel(serverState, t)} />
+          ) : (
+            <span className={'environment-badge' + (problemCount > 0 ? ' environment-badge-attention' : '')}>
+              {problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(servers.length)}
+            </span>
+          )}
+          {contextual ? (
+            <button
+              ref={toggleRef}
+              className="menu-toggle menu-toggle-context"
+              type="button"
+              aria-label={t('aria.openNavigation')}
+              aria-expanded={menuOpen}
+              aria-controls="global-navigation"
+              onClick={() => setMenuOpen(true)}
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+          ) : null}
+        </div>
       </header>
 
       {menuOpen ? (
@@ -245,25 +304,20 @@ export function AppShell({
         </nav>
 
         <main className="content">
-          {contextual ? (
-            <div className="mobile-context" aria-label={t('aria.currentLocation')}>
-              <Link className="mobile-back" aria-label={t(contextual.ariaKey)} to={contextual.to}>{t(contextual.labelKey)}</Link>
-              <span>{t(contextual.titleKey)}</span>
-            </div>
-          ) : null}
           {children}
         </main>
       </div>
       <nav className="mobile-bottom-navigation" aria-label={t('aria.bottomNavigation')}>
-        {navigation.map((item) => (
+        {bottomNavigation.map((item) => (
           <Link
             key={item.key}
             to={destination(item)}
             aria-current={current === item.key ? 'page' : undefined}
-            aria-label={`${t(item.labelKey)} · ${t('aria.bottomNavigation')}`}
+            aria-label={t(item.labelKey) + ' · ' + t('aria.bottomNavigation')}
             className={current === item.key ? 'nav-link active' : 'nav-link'}
           >
-            {t(item.labelKey)}
+            <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+            <span className="nav-label">{t(item.labelKey)}</span>
           </Link>
         ))}
       </nav>

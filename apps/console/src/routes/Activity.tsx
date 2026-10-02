@@ -7,10 +7,11 @@ import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 
 export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions) => Promise<ActivityFeedReadModel>
 
-const ACTIVITY_WINDOW = 1000
+const ACTIVITY_WINDOW = 100
 const HISTORY_BATCH = 250
 const SCROLL_EDGE = 72
 
@@ -213,8 +214,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       </div>
       <div className="filter-bar">
         <div className="filter-controls">
-          <label>{t('common.server')}<select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}><option value="">{t('activity.chooseServer')}</option>{instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}</select></label>
-          <label>{t('common.category')}<select aria-label={t('common.category')} value={category} onChange={(event) => setCategory(event.target.value as ActivityCategory)}>{categories.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}</select></label>
+          <label className="ui-field">{t('common.server')}<select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}><option value="">{t('activity.chooseServer')}</option>{instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}</select></label>
+          <label className="ui-field">{t('common.category')}<select aria-label={t('common.category')} value={category} onChange={(event) => setCategory(event.target.value as ActivityCategory)}>{categories.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}</select></label>
         </div>
         <div className="filter-status">
           {selected && <span className={'status status-' + selected.runtime.status}>{runtimeStatus}</span>}
@@ -222,15 +223,23 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         </div>
       </div>
       {selected ? <p className="muted activity-provenance">{t('activity.serverJournal')} · {runtimeStatus}{feed.events.length ? ' · ' + dateTime(feed.events[feed.events.length - 1].createdAt) : ''}</p> : null}
-      {instances.length === 0 && <div className="panel"><p className="muted">{t('activity.noPairedServers')}</p></div>}
-      {instances.length > 0 && !selectedId && <div className="panel"><p className="muted">{t('activity.chooseToView')}</p></div>}
-      {feed.gap && <div className="panel"><strong>{t('activity.historyGap')}</strong><p className="muted">{t('activity.historyGapDescription')}</p></div>}
-      {feed.error && <div className="panel"><strong>{t('activity.unavailable')}</strong><p className="muted">{feed.error}</p></div>}
+      {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
+      {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
+      {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}
+      {feed.error && <FeedbackState variant="error" title={t('activity.unavailable')} detail={feed.error} />}
+      {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
       <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
         {visible.map((event) => (
           <article className="panel activity-event" key={selectedId + ':' + event.seq}>
             <div className="section-heading"><div><strong>{event.message?.senderName ?? event.actorName ?? event.eventType}</strong><p className="muted">{event.eventType} · #{number(event.seq)}</p></div><span className="chip">{event.entityType}</span></div>
-            {event.message ? <p>{event.message.text}</p> : <pre>{JSON.stringify(event.payload, null, 2)}</pre>}
+            {event.message ? (
+              <p className="activity-message">{event.message.text}</p>
+            ) : (
+              <details className="activity-payload">
+                <summary>{t('activity.rawDetails')}</summary>
+                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+              </details>
+            )}
             <div className="chip-row">
               {selected && <Link className="text-link" to={serverRoute(selectedId)}>{t('common.server')} {selected.profile.displayName}</Link>}
               {event.message?.taskNamespace && event.message.taskId && <Link className="text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>{t('common.task')} {event.message.taskId}</Link>}
@@ -239,7 +248,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
             </div>
           </article>
         ))}
-        {selectedId && visible.length === 0 && !feed.error && <div className="panel"><p className="muted">{t('activity.noMatches')}</p></div>}
+        {selectedId && feed.initialized && visible.length === 0 && !feed.error && <FeedbackState variant="empty" title={t('activity.noMatches')} />}
       </div>
     </section>
   )

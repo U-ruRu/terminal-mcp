@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 
 export type ServerDestination = 'agents' | 'slots' | 'tasks' | 'context' | 'health'
 
@@ -52,9 +53,7 @@ export function ServerChooser({
       </div>
 
       {model.servers.length === 0 ? (
-        <article className="panel">
-          <p className="muted">{t('chooser.noServers')}</p>
-        </article>
+        <FeedbackState variant="empty" title={t('chooser.noServers')} />
       ) : null}
     </section>
   )
