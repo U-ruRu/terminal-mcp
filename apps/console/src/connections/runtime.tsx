@@ -10,6 +10,7 @@ import {
 } from 'react'
 
 import { PairingTransport } from '../auth/transport'
+import { ConsoleClient } from '../api/client'
 import { BrowserConnectionRegistry } from './registry'
 import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { ConnectionProfile, ProfileRestoreResult } from './types'
@@ -27,6 +28,7 @@ type ConnectionRuntimeValue = {
   pair: (pairingLink: string, displayName?: string) => Promise<void>
   retry: (instanceId: string) => Promise<void>
   disconnect: (instanceId: string) => void
+  client: (instanceId: string) => ConsoleClient | null
 }
 
 const ConnectionRuntimeContext = createContext<ConnectionRuntimeValue | null>(null)
@@ -151,6 +153,16 @@ export function ConnectionRuntimeProvider({
     [diagnostics, registry, restoreOne],
   )
 
+  const client = useCallback(
+    (instanceId: string): ConsoleClient | null => {
+      const profile = profiles.find((item) => item.instanceId === instanceId)
+      const state = states[instanceId]
+      if (!profile || state?.status !== 'connected') return null
+      return new ConsoleClient(profile.origin, () => state.accessToken)
+    },
+    [profiles, states],
+  )
+
   const disconnect = useCallback(
     (instanceId: string) => {
       const profile = registry.get(instanceId)
@@ -168,8 +180,8 @@ export function ConnectionRuntimeProvider({
   )
 
   const value = useMemo(
-    () => ({ profiles, states, error, pair, retry, disconnect }),
-    [disconnect, error, pair, profiles, retry, states],
+    () => ({ profiles, states, error, pair, retry, disconnect, client }),
+    [client, disconnect, error, pair, profiles, retry, states],
   )
 
   return (

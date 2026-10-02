@@ -605,3 +605,82 @@ export function decodeActivityFeed(value: unknown, path = '$'): ActivityFeedRead
     gapToSeq: optionalInteger(root.gap_to_seq, `${path}.gap_to_seq`),
   }
 }
+
+export function decodeManagedFleetControl(value: unknown): import('./models').ManagedFleetControlReadModel {
+  const envelope = record(value, '$')
+  const raw = record(envelope.control, '$.control')
+  const revisions = record(raw.revisions, '$.control.revisions')
+  const meshRaw = raw.mesh === null || raw.mesh === undefined
+    ? undefined
+    : record(raw.mesh, '$.control.mesh')
+  const meshesRaw = array(
+    raw.meshes ?? (meshRaw ? [meshRaw] : []),
+    '$.control.meshes',
+  ).map((item, index) => {
+    const mesh = record(item, '$.control.meshes[' + index + ']')
+    return {
+      meshId: string(mesh.mesh_id, '$.control.meshes[' + index + '].mesh_id'),
+      displayName: string(mesh.display_name, '$.control.meshes[' + index + '].display_name'),
+      adopted: boolean(mesh.adopted, '$.control.meshes[' + index + '].adopted'),
+      adoptedAt: optionalString(mesh.adopted_at, '$.control.meshes[' + index + '].adopted_at'),
+      updatedAt: string(mesh.updated_at, '$.control.meshes[' + index + '].updated_at'),
+    }
+  })
+  const policyRaw = raw.policy === null || raw.policy === undefined
+    ? undefined
+    : record(raw.policy, '$.control.policy')
+  const nodes = array(raw.nodes ?? [], '$.control.nodes').map((item, index) => {
+    const node = record(item, '$.control.nodes[' + index + ']')
+    return {
+      nodeId: string(node.node_id, '$.control.nodes[' + index + '].node_id'),
+      origin: optionalString(node.origin, '$.control.nodes[' + index + '].origin'),
+      publicKey: optionalString(node.public_key, '$.control.nodes[' + index + '].public_key'),
+      meshId: optionalString(node.mesh_id, '$.control.nodes[' + index + '].mesh_id'),
+      state: enumValue(
+        node.state,
+        ['active', 'draining', 'offline', 'detached'] as const,
+        '$.control.nodes[' + index + '].state',
+      ),
+      desiredTopologyRevision: integer(node.desired_topology_revision, '$.control.nodes[' + index + '].desired_topology_revision'),
+      appliedTopologyRevision: integer(node.applied_topology_revision, '$.control.nodes[' + index + '].applied_topology_revision'),
+      desiredTrustRevision: integer(node.desired_trust_revision, '$.control.nodes[' + index + '].desired_trust_revision'),
+      appliedTrustRevision: integer(node.applied_trust_revision, '$.control.nodes[' + index + '].applied_trust_revision'),
+      desiredPolicyRevision: integer(node.desired_policy_revision, '$.control.nodes[' + index + '].desired_policy_revision'),
+      appliedPolicyRevision: integer(node.applied_policy_revision, '$.control.nodes[' + index + '].applied_policy_revision'),
+      lastError: optionalString(node.last_error, '$.control.nodes[' + index + '].last_error'),
+      updatedAt: string(node.updated_at, '$.control.nodes[' + index + '].updated_at'),
+    }
+  })
+  return {
+    schemaVersion: integer(raw.schema_version, '$.control.schema_version'),
+    fleetId: string(raw.fleet_id, '$.control.fleet_id'),
+    nodeId: string(raw.node_id, '$.control.node_id'),
+    controlNodeId: string(raw.control_node_id, '$.control.control_node_id'),
+    managed: boolean(raw.managed, '$.control.managed'),
+    mesh: meshRaw ? {
+      meshId: string(meshRaw.mesh_id, '$.control.mesh.mesh_id'),
+      displayName: string(meshRaw.display_name, '$.control.mesh.display_name'),
+      adopted: boolean(meshRaw.adopted, '$.control.mesh.adopted'),
+      adoptedAt: optionalString(meshRaw.adopted_at, '$.control.mesh.adopted_at'),
+      updatedAt: string(meshRaw.updated_at, '$.control.mesh.updated_at'),
+    } : undefined,
+    meshes: meshesRaw,
+    nodes,
+    policy: policyRaw ? {
+      durationSeconds: integer(policyRaw.duration_seconds, '$.control.policy.duration_seconds'),
+      warningAfterSeconds: integer(policyRaw.warning_after_seconds, '$.control.policy.warning_after_seconds'),
+      alertAfterSeconds: integer(policyRaw.alert_after_seconds, '$.control.policy.alert_after_seconds'),
+      rearmAfterSeconds: integer(policyRaw.rearm_after_seconds, '$.control.policy.rearm_after_seconds'),
+      legacyAdmissionEnabled: boolean(policyRaw.legacy_admission_enabled, '$.control.policy.legacy_admission_enabled'),
+      revision: integer(policyRaw.revision, '$.control.policy.revision'),
+      updatedAt: string(policyRaw.updated_at, '$.control.policy.updated_at'),
+    } : undefined,
+    revisions: {
+      routing: integer(revisions.routing, '$.control.revisions.routing'),
+      topology: integer(revisions.topology, '$.control.revisions.topology'),
+      trust: integer(revisions.trust, '$.control.revisions.trust'),
+      accessPolicy: integer(revisions.access_policy, '$.control.revisions.access_policy'),
+    },
+    updatedAt: string(raw.updated_at, '$.control.updated_at'),
+  }
+}

@@ -85,6 +85,41 @@ async def test_feature_gate_and_authenticated_admission_are_fail_closed(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_create_slot_is_armed_atomically_with_initial_duration(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=90)
+    created = await lifecycle.create_slot("Alpha", admission=admission())
+
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    assert created["slot"]["state"] == "armed"
+    assert created["slot"]["slot_revision"] == 1
+    assert created["arm"]["generation"] == 1
+    assert created["arm"]["captured_duration_seconds"] == 90
+    assert await store.get_arm(logical_agent_id, 1) is not None
+    assert await store.active_session_for_slot(logical_agent_id) is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_loop_does_not_starve_rearm_when_expiry_pass_fails(tmp_path):
+    _, _, _, lifecycle = await setup(tmp_path)
+    calls = []
+
+    async def broken_expiry():
+        calls.append("expiry")
+        raise RuntimeError("boom")
+
+    async def working_rearm():
+        calls.append("rearm")
+        lifecycle._stopped.set()
+
+    lifecycle.reconcile_expired = broken_expiry
+    lifecycle.reconcile_rearms = working_rearm
+    lifecycle._stopped.clear()
+
+    await asyncio.wait_for(lifecycle._reconcile_loop(0), timeout=1)
+    assert calls == ["expiry", "rearm"]
+
+
+@pytest.mark.asyncio
 async def test_play_and_session_start_capture_duration_and_one_concurrent_winner(tmp_path):
     _, store, _, lifecycle = await setup(tmp_path, duration=90)
     created = await lifecycle.create_slot("Alpha", admission=admission())

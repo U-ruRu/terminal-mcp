@@ -133,14 +133,16 @@ class PersistentLifecycleCoordinator:
 
     async def _reconcile_loop(self, interval_seconds: float) -> None:
         while not self._stopped.is_set():
-            try:
-                await asyncio.sleep(interval_seconds)
-                await self.reconcile_expired()
-                await self.reconcile_rearms()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await asyncio.sleep(interval_seconds)
+            await asyncio.sleep(interval_seconds)
+            for reconcile in (self.reconcile_expired, self.reconcile_rearms):
+                try:
+                    await reconcile()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Expiry and rearm are independent durable reconciliation passes.
+                    # A failure in one must not starve the other indefinitely.
+                    continue
 
     def _available(self) -> None:
         if not self.enabled:
@@ -218,16 +220,20 @@ class PersistentLifecycleCoordinator:
         for _ in range(32):
             selector = generate_slot_selector()
             try:
-                slot = await self.store.create_slot(
-                    logical_agent_id,
-                    display_name.strip(),
-                    selector,
-                    authority_node_id=self.authority_node_id,
-                )
+                async with self.policy_guard():
+                    slot = await self.store.create_slot(
+                        logical_agent_id,
+                        display_name.strip(),
+                        selector,
+                        authority_node_id=self.authority_node_id,
+                        initial_arm_duration_seconds=self.session_duration_seconds,
+                    )
+                arm = await self.store.get_arm(logical_agent_id, 1)
                 return {
                     "ok": True,
                     "slot": asdict(slot),
                     "selector": {"selector": selector, "generation": 1},
+                    "arm": asdict(arm) if arm is not None else None,
                     "server_now": utc_text(),
                 }
             except Exception as exc:
@@ -350,6 +356,7 @@ class PersistentLifecycleCoordinator:
         *,
         admission: VerifiedAdmissionContext | None = None,
         now: str | None = None,
+        access_code_verified: bool = False,
     ):
         self._available()
         verified = self._admission(admission)
@@ -361,7 +368,11 @@ class PersistentLifecycleCoordinator:
             self._raise_store(exc)
         if session.authority_node_id != self.authority_node_id:
             raise PersistentLifecycleError("authority_unavailable")
-        if session.auth_principal_id and session.auth_principal_id != verified.principal_id:
+        if (
+            not access_code_verified
+            and session.auth_principal_id
+            and session.auth_principal_id != verified.principal_id
+        ):
             raise PersistentLifecycleError("persistent_auth_required")
         return session
 
@@ -429,6 +440,7 @@ class PersistentLifecycleCoordinator:
         session_epoch: int,
         *,
         admission: VerifiedAdmissionContext | None = None,
+        access_code_verified: bool = False,
     ):
         verified = self._admission(admission)
         session = await self.store.get_work_session(work_session_id)
@@ -440,7 +452,11 @@ class PersistentLifecycleCoordinator:
             raise PersistentLifecycleError("session_not_found")
         if session.authority_node_id != self.authority_node_id:
             raise PersistentLifecycleError("authority_unavailable")
-        if session.auth_principal_id and session.auth_principal_id != verified.principal_id:
+        if (
+            not access_code_verified
+            and session.auth_principal_id
+            and session.auth_principal_id != verified.principal_id
+        ):
             raise PersistentLifecycleError("persistent_auth_required")
         if session.state == "active":
             await self.authorize_session(
@@ -448,6 +464,7 @@ class PersistentLifecycleCoordinator:
                 work_session_id,
                 session_epoch,
                 admission=verified,
+                access_code_verified=access_code_verified,
             )
         elif session.state != "stopping":
             raise PersistentLifecycleError("session_not_active")
@@ -460,12 +477,14 @@ class PersistentLifecycleCoordinator:
         session_epoch: int,
         *,
         admission: VerifiedAdmissionContext | None = None,
+        access_code_verified: bool = False,
     ) -> dict:
         session = await self._authorize_stop_session(
             logical_agent_id,
             work_session_id,
             session_epoch,
             admission=admission,
+            access_code_verified=access_code_verified,
         )
         return await self._stop_active_session(
             logical_agent_id,
@@ -482,12 +501,14 @@ class PersistentLifecycleCoordinator:
         session_epoch: int,
         *,
         admission: VerifiedAdmissionContext | None = None,
+        access_code_verified: bool = False,
     ) -> dict:
         session = await self._authorize_stop_session(
             logical_agent_id,
             work_session_id,
             session_epoch,
             admission=admission,
+            access_code_verified=access_code_verified,
         )
         return await self._stop_active_session(
             logical_agent_id,

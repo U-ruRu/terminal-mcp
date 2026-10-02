@@ -15,15 +15,15 @@ def test_access_codes_are_keyed_rotated_tombstoned_and_never_persisted_raw(tmp_p
         path = tmp_path / "auth.sqlite3"
         store = AuthFoundationStore(path)
         await store.initialize()
-        await store.reserve_access_codes(["GRH8", "7X81"])
+        await store.reserve_access_codes(["1188", "7001"])
         slot = await store.register_access_slot("la_one", "secondary", display_suffix="One")
-        first = await store.issue_access_code("la_one", requested_code="ABCD")
-        assert (await store.resolve_access_code("ABCD"))["logical_agent_id"] == "la_one"
-        second = await store.issue_access_code("la_one", requested_code="EFGH")
-        assert await store.resolve_access_code("ABCD") is None
-        assert (await store.resolve_access_code("EFGH"))["public_name"] == "Alpha"
+        first = await store.issue_access_code("la_one", requested_code="0042")
+        assert (await store.resolve_access_code("0042"))["logical_agent_id"] == "la_one"
+        second = await store.issue_access_code("la_one", requested_code="7319")
+        assert await store.resolve_access_code("0042") is None
+        assert (await store.resolve_access_code("7319"))["public_name"] == "Alpha"
         with pytest.raises(AuthConflictError):
-            await store.issue_access_code("la_one", requested_code="GRH8")
+            await store.issue_access_code("la_one", requested_code="1188")
         return path, slot, first, second
 
     path, slot, first, second = run(scenario())
@@ -31,7 +31,7 @@ def test_access_codes_are_keyed_rotated_tombstoned_and_never_persisted_raw(tmp_p
     assert first["access_generation"] == 1
     assert second["access_generation"] == 2
     raw = path.read_bytes()
-    for plaintext in (b"ABCD", b"EFGH", b"GRH8", b"7X81"):
+    for plaintext in (b"0042", b"7319", b"1188", b"7001"):
         assert plaintext not in raw
     with sqlite3.connect(path) as db:
         assert (
@@ -41,6 +41,26 @@ def test_access_codes_are_keyed_rotated_tombstoned_and_never_persisted_raw(tmp_p
             == 1
         )
         assert db.execute("SELECT COUNT(*) FROM auth_access_code_tombstones").fetchone()[0] == 2
+
+
+def test_access_codes_are_strict_four_digit_decimal_and_preserve_leading_zeroes(tmp_path):
+    async def scenario():
+        store = AuthFoundationStore(tmp_path / "auth.sqlite3")
+        await store.initialize()
+        await store.register_access_slot("la_numeric", "secondary")
+        explicit = await store.issue_access_code("la_numeric", requested_code="0042")
+        assert explicit["access_code"] == "0042"
+        assert (await store.resolve_access_code("0042"))["logical_agent_id"] == "la_numeric"
+        for invalid in ("ABCD", "12A4", "123", "12345", "１２３４"):
+            with pytest.raises(ValueError, match="4 decimal digits"):
+                await store.resolve_access_code(invalid)
+        await store.register_access_slot("la_generated", "secondary")
+        generated = await store.issue_access_code("la_generated")
+        assert len(generated["access_code"]) == 4
+        assert generated["access_code"].isascii()
+        assert generated["access_code"].isdigit()
+
+    run(scenario())
 
 
 def test_access_public_names_continue_after_nato_alphabet_without_reuse(tmp_path):
@@ -85,7 +105,7 @@ def test_access_key_is_dedicated_durable_and_missing_key_fails_closed(tmp_path):
         assert key_path.exists()
         assert (key_path.stat().st_mode & 0o777) == 0o600
         await store.register_access_slot("la_keyed", "secondary")
-        issued = await store.issue_access_code("la_keyed", requested_code="ABCD")
+        issued = await store.issue_access_code("la_keyed", requested_code="0042")
         assert (await store.resolve_access_code(issued["access_code"]))[
             "logical_agent_id"
         ] == "la_keyed"
@@ -187,8 +207,7 @@ def test_auth_v2_to_v3_migration_preserves_access_security_state(tmp_path):
                 "FROM auth_access_slots ORDER BY logical_agent_id"
             ).fetchall()
             codes = db.execute(
-                "SELECT logical_agent_id,generation,code_index,verifier "
-                "FROM auth_access_codes"
+                "SELECT logical_agent_id,generation,code_index,verifier FROM auth_access_codes"
             ).fetchall()
             tombstones = db.execute(
                 "SELECT code_index,reason FROM auth_access_code_tombstones"

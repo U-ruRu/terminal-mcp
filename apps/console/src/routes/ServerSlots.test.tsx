@@ -3,10 +3,10 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 
-import type { ConsoleSnapshotReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
+import type { ConsoleSnapshotReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
 import { I18nProvider } from '../i18n/I18nProvider'
-import { ServerSlots, type PersistentMutator } from './ServerSlots'
+import { ServerSlots, type FleetControlLoader, type FleetControlMutator, type PersistentMutator } from './ServerSlots'
 
 function slot(state: string = 'suspended', hardExpiresAt?: string): PersistentSlotReadModel {
   return {
@@ -115,14 +115,16 @@ function renderSlots(
   fleet: FleetInstanceView[],
   mutatePersistent?: PersistentMutator,
   loadSlotAudit?: (instanceId: string, logicalAgentId: string) => Promise<import('../api/models').PersistentAuditReadModel[]>,
+  loadFleetControl?: FleetControlLoader,
+  mutateFleetControl?: FleetControlMutator,
 ) {
   const initialInstanceId = fleet[0]?.profile.instanceId ?? 'alpha'
   return render(
     <I18nProvider>
       <MemoryRouter initialEntries={['/servers/' + initialInstanceId + '/slots']}>
         <Routes>
-          <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} />} />
-          <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} />} />
+          <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
+          <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={fleet} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         </Routes>
       </MemoryRouter>
     </I18nProvider>,
@@ -131,6 +133,7 @@ function renderSlots(
 
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   vi.restoreAllMocks()
 })
 
@@ -216,6 +219,123 @@ test('policy controls mutate D/W/A/R and Legacy through the authenticated write 
   expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { legacy_admission_enabled: true })
 })
 
+
+test('managed AccessPolicy uses Fleet control authority for timing, Legacy and reset', async () => {
+  const user = userEvent.setup()
+  const persistentMutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+  let revision = 4
+  let policy = {
+    durationSeconds: 1380,
+    warningAfterSeconds: 1200,
+    alertAfterSeconds: 1320,
+    rearmAfterSeconds: 180,
+    legacyAdmissionEnabled: false,
+    revision,
+    updatedAt: '2026-10-02T06:00:00Z',
+  }
+  const baseControl: ManagedFleetControlReadModel = {
+    schemaVersion: 2,
+    fleetId: 'fleet-a',
+    nodeId: 'secondary',
+    controlNodeId: 'main',
+    managed: true,
+    mesh: {
+      meshId: 'mesh-a',
+      displayName: 'Production',
+      adopted: true,
+      adoptedAt: '2026-10-02T05:00:00Z',
+      updatedAt: '2026-10-02T06:00:00Z',
+    },
+    meshes: [{
+      meshId: 'mesh-a',
+      displayName: 'Production',
+      adopted: true,
+      adoptedAt: '2026-10-02T05:00:00Z',
+      updatedAt: '2026-10-02T06:00:00Z',
+    }],
+    nodes: [{
+      nodeId: 'secondary',
+      origin: 'https://alpha.example',
+      state: 'active',
+      desiredTopologyRevision: 2,
+      appliedTopologyRevision: 2,
+      desiredTrustRevision: 2,
+      appliedTrustRevision: 2,
+      desiredPolicyRevision: 4,
+      appliedPolicyRevision: 4,
+      updatedAt: '2026-10-02T06:00:00Z',
+    }],
+    policy,
+    revisions: { routing: 1, topology: 2, trust: 2, accessPolicy: 4 },
+    updatedAt: '2026-10-02T06:00:00Z',
+  }
+  const loadControl = vi.fn(async () => ({ ...baseControl, policy })) as FleetControlLoader
+  const mutateControl = vi.fn(async (_instanceId: string, path: string, body: Record<string, unknown>): Promise<ManagedFleetMutationResult> => {
+    revision += 1
+    if (path.endsWith('/reset')) {
+      policy = {
+        durationSeconds: 1380,
+        warningAfterSeconds: 1200,
+        alertAfterSeconds: 1320,
+        rearmAfterSeconds: 180,
+        legacyAdmissionEnabled: false,
+        revision,
+        updatedAt: '2026-10-02T06:01:00Z',
+      }
+    } else {
+      policy = {
+        durationSeconds: Number(body.duration_seconds),
+        warningAfterSeconds: Number(body.warning_after_seconds),
+        alertAfterSeconds: Number(body.alert_after_seconds),
+        rearmAfterSeconds: Number(body.rearm_after_seconds),
+        legacyAdmissionEnabled: Boolean(body.legacy_admission_enabled),
+        revision,
+        updatedAt: '2026-10-02T06:01:00Z',
+      }
+    }
+    return {
+      ok: true,
+      control: {
+        ...baseControl,
+        policy,
+        revisions: { ...baseControl.revisions, accessPolicy: revision },
+      },
+    }
+  }) as FleetControlMutator
+
+  renderSlots([instance('offline', slot('active', '2026-09-30T12:02:00Z'))], persistentMutate, undefined, loadControl, mutateControl)
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeEnabled())
+  expect(screen.queryByText(/Suspend or cancel every armed\/active slot/)).not.toBeInTheDocument()
+
+  const duration = screen.getByRole('spinbutton', { name: 'D — hard duration (seconds)' })
+  const warning = screen.getByRole('spinbutton', { name: 'W — warning after (seconds)' })
+  const alert = screen.getByRole('spinbutton', { name: 'A — alert after (seconds)' })
+  const rearm = screen.getByRole('spinbutton', { name: 'R — automatic rearm after (seconds)' })
+  await user.clear(duration); await user.type(duration, '180')
+  await user.clear(warning); await user.type(warning, '60')
+  await user.clear(alert); await user.type(alert, '120')
+  await user.clear(rearm); await user.type(rearm, '15')
+  await user.click(screen.getByRole('button', { name: 'Save D/W/A/R' }))
+
+  expect(mutateControl).toHaveBeenNthCalledWith(1, 'alpha', '/actions/fleet/control/policy', {
+    duration_seconds: 180,
+    warning_after_seconds: 60,
+    alert_after_seconds: 120,
+    rearm_after_seconds: 15,
+    legacy_admission_enabled: false,
+    expected_revision: 4,
+  })
+  expect(persistentMutate).not.toHaveBeenCalled()
+
+  await user.click(screen.getByRole('checkbox', { name: 'Allow Legacy agent admission' }))
+  expect(mutateControl).toHaveBeenNthCalledWith(2, 'alpha', '/actions/fleet/control/policy', expect.objectContaining({
+    legacy_admission_enabled: true,
+    expected_revision: 5,
+  }))
+  await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+  expect(mutateControl).toHaveBeenNthCalledWith(3, 'alpha', '/actions/fleet/control/policy/reset', { expected_revision: 6 })
+})
+
 test('old server snapshots do not expose policy mutation controls', () => {
   const old = instance('live', slot())
   old.runtime.realtime!.snapshot!.persistent!.policy.policyControlSupported = false
@@ -258,26 +378,25 @@ test('unpaired projected slot can load audit through Fleet ingress while mutatio
 })
 
 
-test('Access code handoff is one-time ephemeral UI and selector is not a credential action', async () => {
+test('Persistent Access code stays visible on the slot card, copies exactly, and rotates', async () => {
   const user = userEvent.setup()
   const mutate = vi.fn()
     .mockResolvedValueOnce({
       ok: true,
       payload: {
         ok: true,
-        access: { public_name: 'Alpha', access_generation: 1, access_code: 'ZQPH' },
+        access: { public_name: 'Alpha', access_generation: 1, access_code: '0042' },
       },
     })
     .mockResolvedValueOnce({
       ok: true,
       payload: {
         ok: true,
-        access: { public_name: 'Alpha', access_generation: 2, access_code: 'R5M4' },
+        access: { public_name: 'Alpha', access_generation: 2, access_code: '7319' },
       },
     }) as PersistentMutator
   renderSlots([instance('live', slot())], mutate)
 
-  await user.click(screen.getByRole('link', { name: 'Details' }))
   expect(screen.queryByRole('button', { name: 'Copy selector' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Rotate selector' })).not.toBeInTheDocument()
 
@@ -287,12 +406,9 @@ test('Access code handoff is one-time ephemeral UI and selector is not a credent
     '/actions/persistent/slots/migrate-access',
     { logical_agent_id: 'la_alpha' },
   )
-  expect(screen.getByRole('dialog')).toHaveTextContent('ZQPH')
-  expect(screen.getByRole('dialog')).toHaveTextContent('Shown once')
-
-  await user.click(screen.getByRole('button', { name: 'Dismiss code' }))
-  expect(screen.queryByText('ZQPH')).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeEnabled()
+  expect(screen.getByText('0042')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Copy Access code — Alpha Slot' })).toBeEnabled()
+  expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_alpha')).toContain('0042')
 
   await user.click(screen.getByRole('button', { name: 'Rotate Access code' }))
   expect(mutate).toHaveBeenLastCalledWith(
@@ -300,28 +416,31 @@ test('Access code handoff is one-time ephemeral UI and selector is not a credent
     '/actions/persistent/slots/rotate-access-code',
     { logical_agent_id: 'la_alpha' },
   )
-  expect(screen.getByRole('dialog')).toHaveTextContent('R5M4')
+  expect(screen.queryByText('0042')).not.toBeInTheDocument()
+  expect(screen.getByText('7319')).toBeInTheDocument()
+  expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_alpha')).toContain('7319')
 
-  await user.click(screen.getByRole('link', { name: 'Back to slots' }))
-  await waitFor(() => expect(screen.queryByText('R5M4')).not.toBeInTheDocument())
+  await user.click(screen.getByRole('link', { name: 'Details' }))
+  expect(screen.getAllByText('7319').length).toBeGreaterThan(0)
 })
 
 
-test('existing Access generation without plaintext code offers explicit rotation', async () => {
+test('existing Access generation without a local code offers rotation and stores the replacement', async () => {
   const user = userEvent.setup()
+  const item = slot()
+  item.access = { publicName: 'Alpha', accessGeneration: 3, status: 'active' }
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({
     ok: true,
     payload: {
       ok: true,
-      access: { public_name: 'Alpha', access_generation: 3, status: 'active' },
+      access: { public_name: 'Alpha', access_generation: 4, access_code: '9007' },
     },
   })) as PersistentMutator
-  renderSlots([instance('live', slot())], mutate)
+  renderSlots([instance('live', item)], mutate)
 
-  await user.click(screen.getByRole('link', { name: 'Details' }))
-  await user.click(screen.getByRole('button', { name: 'Set up Access code' }))
+  expect(screen.getByText('Access code is not stored on this device. Rotate it to obtain a new local copy.')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Rotate Access code' }))
 
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  expect(screen.getByRole('status')).toHaveTextContent('already exists')
-  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeEnabled()
+  expect(screen.getByText('9007')).toBeInTheDocument()
+  expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_alpha')).toContain('9007')
 })

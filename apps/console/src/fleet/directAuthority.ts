@@ -1,5 +1,5 @@
 import { ConsoleClient, type FetchLike } from '../api/client'
-import type { ActivityFeedReadModel, PersistentMutationResult, TaskReadModel } from '../api/models'
+import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentMutationResult, TaskReadModel } from '../api/models'
 import type { ProfileRestoreResult } from '../connections/types'
 import { DEFAULT_FLEET_REQUEST_TIMEOUT_MS, withRequestTimeout } from './policy'
 import type { FleetActivityOptions } from './types'
@@ -14,6 +14,18 @@ export class BrowserDirectAuthorityClient {
     fetcher: FetchLike = fetch,
   ) {
     this.fetcher = withRequestTimeout(fetcher, DEFAULT_FLEET_REQUEST_TIMEOUT_MS)
+  }
+
+  fleetControl(instanceId: string): Promise<ManagedFleetControlReadModel> {
+    return this.withClient(instanceId, (client) => client.fleetControl())
+  }
+
+  fleetControlMutation(
+    instanceId: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<ManagedFleetMutationResult> {
+    return this.withClient(instanceId, (client) => client.fleetControlMutation(path, body))
   }
 
   persistentMutation(

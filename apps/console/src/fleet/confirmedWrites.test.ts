@@ -60,7 +60,7 @@ test('Access-code mutation secrets never become durable confirmed-write overlays
           logical_agent_id: 'la-1',
           public_name: 'Alpha',
           access_generation: 1,
-          access_code: 'ZQPH',
+          access_code: '0042',
         },
       },
     },

@@ -414,6 +414,13 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
           }
           return directAuthority.task(instanceId, namespace, taskId)
         }}
+        loadFleetControl={(instanceId) => directAuthority.fleetControl(instanceId)}
+        mutateFleetControl={async (instanceId, path, body) => {
+          const result = await directAuthority.fleetControlMutation(instanceId, path, body)
+          const runtime = fleetRuntimeRef.current
+          if (runtime) void runtime.syncOnce()
+          return result
+        }}
         mutatePersistent={async (instanceId, path, body) => {
           const result = await directAuthority.persistentMutation(instanceId, path, body)
           const runtime = fleetRuntimeRef.current

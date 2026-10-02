@@ -118,11 +118,20 @@ class PersistentBackend:
             return self._error(PersistentLifecycleError(exc.code, blockers=exc.blockers))
 
     async def _execution_authority(
-        self, logical_agent_id: str, work_session_id: str, session_epoch: int, *, scope: str
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        scope: str,
+        access_code: str | None = None,
     ):
         try:
             session = await self.lifecycle.authorize_session(
-                logical_agent_id, work_session_id, session_epoch
+                logical_agent_id,
+                work_session_id,
+                session_epoch,
+                access_code_verified=access_code is not None,
             )
             return session, None
         except PersistentLifecycleError as exc:
@@ -142,6 +151,7 @@ class PersistentBackend:
                 session_epoch=session_epoch,
                 scope=scope,
                 principal_id=verified.principal_id,
+                access_code=access_code,
             )
         except PersistentStoreError as exc:
             raise PersistentLifecycleError(exc.code, blockers=exc.blockers) from exc
@@ -210,6 +220,7 @@ class PersistentBackend:
         *,
         require_active: bool = True,
         allow_stopping: bool = False,
+        access_code_verified: bool = False,
     ):
         logical_agent_id = access["logical_agent_id"]
         if access["authority_node_id"] != self.lifecycle.authority_node_id:
@@ -225,7 +236,10 @@ class PersistentBackend:
             return session
         try:
             await self.lifecycle.authorize_session(
-                logical_agent_id, session.work_session_id, session.session_epoch
+                logical_agent_id,
+                session.work_session_id,
+                session.session_epoch,
+                access_code_verified=access_code_verified,
             )
         except PersistentLifecycleError as exc:
             raise PersistentStoreError(exc.code, blockers=exc.blockers) from exc
@@ -259,7 +273,10 @@ class PersistentBackend:
         active = await self.lifecycle.store.active_session_for_slot(logical_agent_id)
         if active is not None and active.state == "active":
             await self.lifecycle.authorize_session(
-                logical_agent_id, active.work_session_id, active.session_epoch
+                logical_agent_id,
+                active.work_session_id,
+                active.session_epoch,
+                access_code_verified=True,
             )
             return self._session_result(access, active)
         slot = await self.lifecycle.store.get_slot(logical_agent_id)
@@ -298,6 +315,8 @@ class PersistentBackend:
                     )
                 return await self._local_session_start_resolved(access)
 
+            if not self.service.legacy_agent_admission_enabled:
+                raise PersistentStoreError("legacy_admission_disabled")
             created = await self.lifecycle.create_slot(
                 (display_name or "Legacy").strip() or "Legacy"
             )
@@ -349,7 +368,7 @@ class PersistentBackend:
                 return await self.fleet_bridge.unified_session_call(
                     access["authority_node_id"], "status", {"access_code": access_code}
                 )
-            session = await self._local_access_session(access)
+            session = await self._local_access_session(access, access_code_verified=True)
             return {
                 **self._session_result(access, session),
                 "logical_agent_id": access["logical_agent_id"],
@@ -553,14 +572,15 @@ class PersistentBackend:
                     {"access_code": access_code},
                 )
             async with self.lifecycle.operation_guard(access["logical_agent_id"]):
-                session = await self._local_access_session(access, allow_stopping=True)
-                stop = (
-                    self.lifecycle.session_interrupt
-                    if interrupt
-                    else self.lifecycle.session_end
+                session = await self._local_access_session(
+                    access, allow_stopping=True, access_code_verified=True
                 )
+                stop = self.lifecycle.session_interrupt if interrupt else self.lifecycle.session_end
                 result = await stop(
-                    access["logical_agent_id"], session.work_session_id, session.session_epoch
+                    access["logical_agent_id"],
+                    session.work_session_id,
+                    session.session_epoch,
+                    access_code_verified=True,
                 )
             if access["slot_kind"] == "legacy" and not result.get("stopping"):
                 await self._cleanup_legacy_access(access)
@@ -866,6 +886,7 @@ class PersistentBackend:
         logical_agent_id: str,
         work_session_id: str,
         session_epoch: int,
+        access_code: str | None = None,
         queue_id: int | None,
         task_scope: str,
     ):
@@ -874,7 +895,11 @@ class PersistentBackend:
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
                 session, permit = await self._execution_authority(
-                    logical_agent_id, work_session_id, session_epoch, scope="run"
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    scope="run",
+                    access_code=access_code,
                 )
                 if permit is not None:
                     bridge = getattr(self, "fleet_bridge", None)
@@ -976,6 +1001,7 @@ class PersistentBackend:
         logical_agent_id: str,
         work_session_id: str,
         session_epoch: int,
+        access_code: str | None = None,
     ):
         if not cmd:
             return {"ok": False, "code": "invalid_command", "error": "command is required"}
@@ -983,7 +1009,11 @@ class PersistentBackend:
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
                 session, permit = await self._execution_authority(
-                    logical_agent_id, work_session_id, session_epoch, scope="recovery"
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    scope="recovery",
+                    access_code=access_code,
                 )
                 if permit is not None and self.fleet_bridge is not None:
                     self.fleet_bridge.ensure_permit_valid(permit)
@@ -1045,11 +1075,16 @@ class PersistentBackend:
         logical_agent_id: str,
         work_session_id: str,
         session_epoch: int,
+        access_code: str | None = None,
     ):
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
                 await self._execution_authority(
-                    logical_agent_id, work_session_id, session_epoch, scope="cancel"
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    scope="cancel",
+                    access_code=access_code,
                 )
                 attribution = await self.repo.persistent_attribution(cmd_hash)
                 if attribution is None:
@@ -1107,6 +1142,7 @@ class PersistentBackend:
         logical_agent_id: str,
         work_session_id: str,
         session_epoch: int,
+        access_code: str | None = None,
         action: str,
         namespace: str,
         task_id: str | None = None,
@@ -1117,7 +1153,11 @@ class PersistentBackend:
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
                 _session, permit = await self._execution_authority(
-                    logical_agent_id, work_session_id, session_epoch, scope="task"
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    scope="task",
+                    access_code=access_code,
                 )
                 if permit is not None and self.fleet_bridge is not None:
                     self.fleet_bridge.ensure_permit_valid(permit)

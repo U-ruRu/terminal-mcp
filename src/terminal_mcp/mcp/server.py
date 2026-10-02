@@ -57,7 +57,7 @@ class CmdReadRequest(_StrictRequest):
 
 class CmdRunRequest(_StrictRequest):
     action: Literal["run"]
-    code: Annotated[str, Field(min_length=4, max_length=4)]
+    code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     command: str
     queue_id: Annotated[int | None, Field(ge=1)] = None
     task_scope: str = "none"
@@ -65,13 +65,13 @@ class CmdRunRequest(_StrictRequest):
 
 class CmdCancelRequest(_StrictRequest):
     action: Literal["cancel"]
-    code: Annotated[str, Field(min_length=4, max_length=4)]
+    code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     cmd_hash: str
 
 
 class CmdRecoveryRequest(_StrictRequest):
     action: Literal["recovery"]
-    code: Annotated[str, Field(min_length=4, max_length=4)]
+    code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     command: str
 
 
@@ -88,7 +88,7 @@ class ContextListRequest(_StrictRequest):
 
 class ContextCreateRequest(_StrictRequest):
     action: Literal["create"]
-    code: Annotated[str, Field(min_length=4, max_length=4)]
+    code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     summary: str
     content: str
     primary: bool = False
@@ -96,7 +96,7 @@ class ContextCreateRequest(_StrictRequest):
 
 class ContextUpdateRequest(_StrictRequest):
     action: Literal["update"]
-    code: Annotated[str, Field(min_length=4, max_length=4)]
+    code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     context_id: int
     summary: str | None = None
     content: str | None = None
@@ -105,7 +105,7 @@ class ContextUpdateRequest(_StrictRequest):
 
 class ContextDeleteRequest(_StrictRequest):
     action: Literal["delete"]
-    code: Annotated[str, Field(min_length=4, max_length=4)]
+    code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     context_id: int
 
 
@@ -925,7 +925,9 @@ def build_mcp(
     async def access_session_tool(
         action: Literal["start", "end", "interrupt"],
         mode: Literal["persistent", "legacy"] | None = None,
-        code: Annotated[str | None, Field(min_length=4, max_length=4)] = None,
+        code: Annotated[
+            str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")
+        ] = None,
         display_name: Annotated[str | None, Field(max_length=80)] = None,
     ) -> dict:
         backend = access_backend()
@@ -1046,7 +1048,7 @@ def build_mcp(
         ),
     )
     async def access_task_tool(
-        code: Annotated[str, Field(min_length=4, max_length=4)],
+        code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")],
         action: TaskAction,
         namespace: str,
         task_id: str | None = None,
@@ -1059,6 +1061,7 @@ def build_mcp(
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
             session_epoch=identity["session_epoch"],
+            access_code=code,
             action=action,
             namespace=namespace,
             task_id=task_id,
@@ -1092,6 +1095,7 @@ def build_mcp(
                 logical_agent_id=identity["logical_agent_id"],
                 work_session_id=identity["work_session_id"],
                 session_epoch=identity["session_epoch"],
+                access_code=request.code,
                 queue_id=request.queue_id,
                 task_scope=request.task_scope,
             )
@@ -1101,12 +1105,14 @@ def build_mcp(
                 logical_agent_id=identity["logical_agent_id"],
                 work_session_id=identity["work_session_id"],
                 session_epoch=identity["session_epoch"],
+                access_code=request.code,
             )
         result = await backend.recovery(
             request.command,
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
             session_epoch=identity["session_epoch"],
+            access_code=request.code,
         )
         result["public_name"] = identity["public_name"]
         result["session_ref"] = identity["session_ref"]

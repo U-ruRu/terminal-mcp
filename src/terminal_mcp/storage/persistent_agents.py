@@ -77,12 +77,16 @@ class PersistentAgentStore:
         authority_node_id: str,
         authority_epoch: int = 1,
         auth_generation: int = 1,
+        initial_arm_duration_seconds: int | None = None,
         now: str | None = None,
     ) -> PersistentSlot:
         selector = normalize_slot_selector(selector)
         if authority_epoch < 1 or auth_generation < 1:
             raise ValueError("authority_epoch and auth_generation must be positive")
+        if initial_arm_duration_seconds is not None and initial_arm_duration_seconds < 1:
+            raise ValueError("initial_arm_duration_seconds must be positive")
         stamp = now or utc_text()
+        initial_state = "armed" if initial_arm_duration_seconds is not None else "suspended"
         async with self._connect("persistent_slot_create") as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
@@ -90,10 +94,11 @@ class PersistentAgentStore:
                     "INSERT INTO logical_agents("
                     "logical_agent_id,display_name,state,authority_node_id,authority_epoch,"
                     "slot_revision,selector_generation,auth_generation,created_at,updated_at"
-                    ") VALUES(?,?,'suspended',?,?,1,1,?,?,?)",
+                    ") VALUES(?,?,?,?,?,1,1,?,?,?)",
                     (
                         logical_agent_id,
                         display_name,
+                        initial_state,
                         authority_node_id,
                         authority_epoch,
                         auth_generation,
@@ -107,6 +112,24 @@ class PersistentAgentStore:
                     ") VALUES(?,?,1,?,NULL,NULL)",
                     (selector, logical_agent_id, stamp),
                 )
+                if initial_arm_duration_seconds is not None:
+                    armed_until = utc_text(
+                        parse_utc(stamp) + timedelta(seconds=int(initial_arm_duration_seconds))
+                    )
+                    await db.execute(
+                        "INSERT INTO logical_agent_arms("
+                        "logical_agent_id,generation,armed_at,armed_until,captured_duration_seconds,"
+                        "selector_generation,auth_generation,slot_revision,consumed_at,revoked_at"
+                        ") VALUES(?,1,?,?,?,?,?,1,NULL,NULL)",
+                        (
+                            logical_agent_id,
+                            stamp,
+                            armed_until,
+                            int(initial_arm_duration_seconds),
+                            1,
+                            auth_generation,
+                        ),
+                    )
                 await db.commit()
             except Exception:
                 await db.rollback()

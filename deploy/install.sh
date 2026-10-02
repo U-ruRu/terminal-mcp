@@ -503,14 +503,21 @@ schema_rollback_safe(){
   local release=$1
   local runtime_db="$DATA/terminal-mcp.sqlite3"
   local auth_db="$DATA/auth.sqlite3"
-  [ -f "$runtime_db" ] || [ -f "$auth_db" ] || return 0
-  runtime_python "$release" - "$runtime_db" "$auth_db" <<'PYSCHEMA'
+  local fleet_control_db="$DATA/fleet-control.sqlite3"
+  if [ -f "$ENV_FILE" ]; then
+    local configured_fleet_control
+    configured_fleet_control=$(sed -n 's/^TERMINAL_MCP_FLEET_CONTROL_PATH=//p' "$ENV_FILE" | tail -n 1 | tr -d '"' || true)
+    [ -z "$configured_fleet_control" ] || fleet_control_db="$configured_fleet_control"
+  fi
+  [ -f "$runtime_db" ] || [ -f "$auth_db" ] || [ -f "$fleet_control_db" ] || return 0
+  runtime_python "$release" - "$runtime_db" "$auth_db" "$fleet_control_db" <<'PYSCHEMA'
 import sqlite3
 import sys
 from pathlib import Path
 
 runtime_path = Path(sys.argv[1])
 auth_path = Path(sys.argv[2])
+fleet_control_path = Path(sys.argv[3])
 
 if runtime_path.is_file():
     try:
@@ -528,6 +535,34 @@ if runtime_path.is_file():
             file=sys.stderr,
         )
         raise SystemExit(42)
+
+if fleet_control_path.is_file():
+    try:
+        from terminal_mcp.fleet.control_storage import FleetControlStore
+        target_control_version = int(FleetControlStore.SCHEMA_VERSION)
+    except Exception:
+        target_control_version = 1
+
+    with sqlite3.connect(fleet_control_path) as db:
+        tables = {
+            row[0]
+            for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "control_schema" in tables:
+            row = db.execute(
+                "SELECT version FROM control_schema WHERE singleton=1"
+            ).fetchone()
+            current_control_version = int(row[0]) if row else 0
+        else:
+            current_control_version = 0
+    if current_control_version > target_control_version:
+        print(
+            f"Refusing fleet-control schema downgrade "
+            f"{current_control_version}->{target_control_version}: "
+            "durable managed topology/trust/AccessPolicy state requires a compatible binary",
+            file=sys.stderr,
+        )
+        raise SystemExit(45)
 
 if auth_path.is_file():
     try:

@@ -3,6 +3,7 @@ import {
   decodeActivityFeed,
   decodeAgents,
   decodeContexts,
+  decodeManagedFleetControl,
   decodeSnapshot,
   decodeTaskDetail,
   decodeTasks,
@@ -13,6 +14,9 @@ import type {
   AgentCollectionReadModel,
   ConsoleSnapshotReadModel,
   ContextCollectionReadModel,
+  ManagedFleetControlReadModel,
+  ManagedFleetEnrollment,
+  ManagedFleetMutationResult,
   PersistentMutationResult,
   TaskCollectionReadModel,
   TaskReadModel,
@@ -143,6 +147,53 @@ export class ConsoleClient {
       error: typeof payload.error === 'string' ? payload.error : undefined,
       blockers: Array.isArray(payload.blockers) ? payload.blockers.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : undefined,
       payload,
+    }
+  }
+
+  async fleetControl(): Promise<ManagedFleetControlReadModel> {
+    return decodeManagedFleetControl(await this.request('/actions/fleet/control'))
+  }
+
+  async fleetEnrollment(): Promise<ManagedFleetEnrollment> {
+    const raw = await this.request('/actions/fleet/control/enrollment')
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ConsoleContractError('$', 'fleet enrollment response was not an object')
+    }
+    const payload = raw as Record<string, unknown>
+    const enrollment = payload.enrollment
+    if (!enrollment || typeof enrollment !== 'object' || Array.isArray(enrollment)) {
+      throw new ConsoleContractError('$.enrollment', 'expected object')
+    }
+    const item = enrollment as Record<string, unknown>
+    for (const key of ['node_id', 'origin', 'public_key', 'auth_token'] as const) {
+      if (typeof item[key] !== 'string' || item[key].length === 0) {
+        throw new ConsoleContractError('$.enrollment.' + key, 'expected non-empty string')
+      }
+    }
+    return {
+      nodeId: item.node_id as string,
+      origin: item.origin as string,
+      publicKey: item.public_key as string,
+      authToken: item.auth_token as string,
+    }
+  }
+
+  async fleetControlMutation(
+    path: string,
+    body: Record<string, unknown> = {},
+  ): Promise<ManagedFleetMutationResult> {
+    if (!path.startsWith('/actions/fleet/control/')) throw new Error('invalid_fleet_control_path')
+    const raw = await this.request(path, { method: 'POST', body: JSON.stringify(body) })
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ConsoleContractError('$', 'fleet control response was not an object')
+    }
+    const payload = raw as Record<string, unknown>
+    if (typeof payload.ok !== 'boolean') throw new ConsoleContractError('$.ok', 'expected boolean')
+    return {
+      ok: payload.ok,
+      code: typeof payload.code === 'string' ? payload.code : undefined,
+      error: typeof payload.error === 'string' ? payload.error : undefined,
+      control: payload.control ? decodeManagedFleetControl({ control: payload.control }) : undefined,
     }
   }
 

@@ -278,3 +278,43 @@ h2 { font-size: clamp(1.6rem, 4vw, 2.4rem); }
 .access-code-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: var(--space-6); background: color-mix(in srgb, var(--color-bg) 72%, transparent); }
 .access-code-dialog { width: min(32rem, 100%); }
 .access-code-value { display: block; margin: var(--space-5) 0; font-size: clamp(2rem, 8vw, 3.5rem); font-weight: 800; letter-spacing: 0.18em; text-align: center; }
+
+.slot-access-code { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin: var(--space-3) 0; }
+.slot-access-code > span:first-child { font-size: 0.8rem; font-weight: 700; }
+.slot-access-code code, .access-code-inline code { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.16em; }
+.access-code-inline { display: inline-flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+
+/* Managed Connections / Mesh control */
+.connection-form,
+.mesh-control,
+.connection-card { display: grid; gap: var(--space-3); }
+.connection-list { display: grid; gap: var(--space-4); }
+.connection-group { display: grid; gap: var(--space-3); }
+.connection-group-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.connection-group-heading h3 { margin: 0; }
+.connection-group-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.connection-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.connection-card-heading > div { min-width: 0; }
+.connection-card-heading .muted { overflow-wrap: anywhere; }
+.connection-actions,
+.mesh-revisions,
+.connection-fleet-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.mesh-revisions,
+.connection-fleet-status { color: var(--color-muted); font-size: 0.82rem; }
+.mesh-control > label,
+.mesh-membership-control { display: grid; gap: var(--space-2); color: var(--color-muted); }
+.mesh-control input,
+.mesh-control select,
+.mesh-membership-control select,
+.connection-form input { min-height: 42px; width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-raised); color: var(--color-text); padding: 8px 10px; }
+.connection-actions button,
+.connection-form button,
+.mesh-control button { min-height: 42px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-raised); color: var(--color-text); padding: 8px 12px; cursor: pointer; }
+.connection-actions button:disabled,
+.connection-form button:disabled,
+.mesh-control button:disabled { cursor: not-allowed; opacity: 0.55; }
+@media (max-width: 700px) {
+  .connection-group-list { grid-template-columns: 1fr; }
+  .connection-card-heading { align-items: stretch; flex-direction: column; }
+  .connection-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
