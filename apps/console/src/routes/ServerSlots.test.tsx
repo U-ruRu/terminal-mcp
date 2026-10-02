@@ -194,6 +194,11 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test('server-scoped slots derive Server context from the route without a second selector', () => {
+  renderSlots([instance('live', slot())])
+  expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
+})
+
 test('cached/offline read state does not disable a healthy authenticated write route', async () => {
   const user = userEvent.setup()
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
@@ -594,8 +599,7 @@ test('managed Mesh exposes Persistent slots without a physical-server switcher',
     </I18nProvider>,
   )
 
-  expect(screen.getByText('Production')).toBeInTheDocument()
   expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Alpha Slot' })).toHaveAttribute('href', '/meshes/mesh-prod/persistent/la_alpha')
-  expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/meshes/mesh-prod')
+  expect(screen.queryByRole('link', { name: 'Mesh' })).not.toBeInTheDocument()
 })

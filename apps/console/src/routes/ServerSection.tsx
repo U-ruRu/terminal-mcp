@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 
 import type { ContextReadModel } from '../api/models'
 import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
@@ -109,13 +109,9 @@ export function ServerSection({
     window.setTimeout(() => setCopied(false), 1800)
   }
   return (
-    <section className="stack" aria-labelledby="server-section-title">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">{server.displayName}</p>
-          <h2 id="server-section-title">{title}</h2>
-          <p className="muted">{server.origin}</p>
-        </div>
+    <section className="stack" aria-label={title}>
+      <div className="server-context-status">
+        <p className="muted">{server.origin}</p>
         <div className="server-state-strip" aria-label={server.displayName + ' state'}>
           <span className={'status status-' + server.connectionState}>{server.connectionState === 'live' ? t('status.live') : server.connectionState === 'offline' ? t('status.offline') : t('status.loading')}</span>
           <span className={'status fleet-status-' + server.freshness}>{server.freshness === 'fresh' ? t('status.fresh') : server.freshness === 'stale' ? t('status.stale') : t('status.loading')}</span>
@@ -145,7 +141,6 @@ export function ServerSection({
         ) : section === 'context' ? (
           <>
             <div className="context-heading">
-              <h3>{title} {t('section.on')} {server.displayName}</h3>
               <label className="context-search">
                 <span className="visually-hidden">{t('context.search')}</span>
                 <input type="search" value={contextQuery} onChange={(event) => setContextQuery(event.target.value)} placeholder={t('context.search')} />
@@ -216,9 +211,6 @@ export function ServerSection({
         </details>
       ) : null}
 
-      <Link className="text-link" to={'/servers/' + encodeURIComponent(server.instanceId)}>
-        {t('section.openOverview')}
-      </Link>
     </section>
   )
 }
