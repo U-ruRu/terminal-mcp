@@ -165,6 +165,7 @@ class SqliteRepository:
                     message_hash TEXT PRIMARY KEY, sender_agent_id TEXT NOT NULL,
                     target_name TEXT, text TEXT NOT NULL, created_at TEXT NOT NULL,
                     require_reply INTEGER NOT NULL DEFAULT 0, alert INTEGER NOT NULL DEFAULT 0,
+                    delivery_mode TEXT NOT NULL DEFAULT 'legacy',
                     task_namespace TEXT, task_id TEXT
                 );
                 CREATE TABLE IF NOT EXISTS coordination_message_recipients(
@@ -341,7 +342,11 @@ class SqliteRepository:
                     require_reply INTEGER NOT NULL DEFAULT 0 CHECK(require_reply IN (0,1)),
                     alert INTEGER NOT NULL DEFAULT 0 CHECK(alert IN (0,1)),
                     gate_revision INTEGER NOT NULL CHECK(gate_revision > 0),
-                    created_at TEXT NOT NULL, resolved_at TEXT, resolution TEXT,
+                    created_at TEXT NOT NULL,
+                    first_seen_at TEXT, last_seen_at TEXT,
+                    seen_count INTEGER NOT NULL DEFAULT 0,
+                    read_at TEXT, replied_at TEXT, reply_message_ref TEXT,
+                    resolved_at TEXT, resolution TEXT,
                     FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
                 );
                 CREATE TABLE IF NOT EXISTS persistent_message_receipts(
@@ -503,6 +508,7 @@ class SqliteRepository:
             [
                 ("require_reply", "INTEGER NOT NULL DEFAULT 0"),
                 ("alert", "INTEGER NOT NULL DEFAULT 0"),
+                ("delivery_mode", "TEXT NOT NULL DEFAULT 'legacy'"),
                 ("task_namespace", "TEXT"),
                 ("task_id", "TEXT"),
             ],
@@ -658,8 +664,21 @@ class SqliteRepository:
             "require_reply INTEGER NOT NULL DEFAULT 0 CHECK(require_reply IN (0,1)),"
             "alert INTEGER NOT NULL DEFAULT 0 CHECK(alert IN (0,1)),"
             "gate_revision INTEGER NOT NULL CHECK(gate_revision > 0),"
-            "created_at TEXT NOT NULL,resolved_at TEXT,resolution TEXT,"
+            "created_at TEXT NOT NULL,first_seen_at TEXT,last_seen_at TEXT,"
+            "seen_count INTEGER NOT NULL DEFAULT 0,read_at TEXT,replied_at TEXT,"
+            "reply_message_ref TEXT,resolved_at TEXT,resolution TEXT,"
             "FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT)"
+        )
+        await add_columns(
+            "persistent_message_obligations",
+            [
+                ("first_seen_at", "TEXT"),
+                ("last_seen_at", "TEXT"),
+                ("seen_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("read_at", "TEXT"),
+                ("replied_at", "TEXT"),
+                ("reply_message_ref", "TEXT"),
+            ],
         )
         await db.execute(
             "CREATE TABLE IF NOT EXISTS persistent_message_receipts("

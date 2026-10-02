@@ -703,6 +703,16 @@ class PersistentFleetBridge:
             if not data.get("ok"):
                 raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
             authoritative = list(data.get("obligations") or [])
+        authoritative_refs = {
+            str(item.get("message_ref") or "") for item in authoritative if item.get("message_ref")
+        }
+        for message_ref, cached in list(self._remote_obligations.items()):
+            if (
+                cached.get("logical_agent_id") == logical_agent_id
+                and cached.get("home_node_id") == authority_node_id
+                and message_ref not in authoritative_refs
+            ):
+                self._remote_obligations.pop(message_ref, None)
         for item in authoritative:
             items[item["message_ref"]] = {
                 **item,
@@ -715,6 +725,128 @@ class PersistentFleetBridge:
             items.values(),
             key=lambda item: (item.get("created_at") or "", item["message_ref"]),
         )
+
+    async def message_inbox(
+        self,
+        logical_agent_id: str,
+        *,
+        work_session_id: str,
+        session_epoch: int,
+        show_all: bool = False,
+        recent_seconds: int = 300,
+        limit: int = 50,
+    ) -> list[dict]:
+        route = await self.route_info(logical_agent_id)
+        authority_node_id = (
+            str(route.get("authority_node_id") or "")
+            if route is not None
+            else self.config.instance_id
+        )
+        cutoff = utc_text(utc_now() - timedelta(seconds=max(0, int(recent_seconds))))
+        if authority_node_id == self.config.instance_id:
+            session = await self.store.assert_session_authority(
+                logical_agent_id, work_session_id, session_epoch
+            )
+            if session.state != "active" or utc_now() >= parse_utc(session.hard_expires_at):
+                raise PersistentStoreError("session_not_active")
+            rows = await self.store.message_inbox(
+                logical_agent_id,
+                recent_cutoff=cutoff,
+                show_all=show_all,
+                limit=limit,
+            )
+        else:
+            peer = self.config.peers_by_id.get(authority_node_id)
+            if peer is None:
+                raise PersistentStoreError("authority_unavailable")
+            async with self.client_factory() as client:
+                try:
+                    response = await client.post(
+                        f"{peer.origin}/internal/fleet/persistent/obligation-inbox",
+                        headers=self._headers(peer),
+                        json={
+                            "requesting_instance_id": self.config.instance_id,
+                            "logical_agent_id": logical_agent_id,
+                            "work_session_id": work_session_id,
+                            "session_epoch": int(session_epoch),
+                            "show_all": bool(show_all),
+                            "recent_cutoff": cutoff,
+                            "limit": int(limit),
+                        },
+                    )
+                except Exception as exc:
+                    raise PersistentStoreError("authority_unavailable") from exc
+            if response.status_code >= 400:
+                raise PersistentStoreError("authority_unavailable")
+            data = response.json()
+            if not data.get("ok"):
+                raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+            rows = list(data.get("messages") or [])
+        return [
+            {
+                **item,
+                "home_node_id": authority_node_id,
+                "logical_agent_id": logical_agent_id,
+            }
+            for item in rows
+        ]
+
+    async def surface_obligations(
+        self,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        obligations: list[dict],
+        retention_calls: int = 5,
+    ) -> None:
+        if not obligations:
+            return
+        grouped: dict[str, list[str]] = {}
+        for item in obligations:
+            home = str(item.get("home_node_id") or "")
+            ref = str(item.get("message_ref") or "")
+            if home and ref:
+                grouped.setdefault(home, []).append(ref)
+        for home_node_id, refs in grouped.items():
+            if home_node_id == self.config.instance_id:
+                session = await self.store.assert_session_authority(
+                    logical_agent_id, work_session_id, session_epoch
+                )
+                if session.state != "active" or utc_now() >= parse_utc(session.hard_expires_at):
+                    raise PersistentStoreError("session_not_active")
+                await self.store.surface_message_obligations(
+                    logical_agent_id,
+                    refs,
+                    self.config.instance_id,
+                    retention_calls=retention_calls,
+                )
+                continue
+            peer = self.config.peers_by_id.get(home_node_id)
+            if peer is None:
+                raise PersistentStoreError("authority_unavailable")
+            async with self.client_factory() as client:
+                try:
+                    response = await client.post(
+                        f"{peer.origin}/internal/fleet/persistent/obligation-surface",
+                        headers=self._headers(peer),
+                        json={
+                            "requesting_instance_id": self.config.instance_id,
+                            "logical_agent_id": logical_agent_id,
+                            "work_session_id": work_session_id,
+                            "session_epoch": int(session_epoch),
+                            "message_refs": refs,
+                            "attachment_node_id": self.config.instance_id,
+                            "retention_calls": int(retention_calls),
+                        },
+                    )
+                except Exception as exc:
+                    raise PersistentStoreError("authority_unavailable") from exc
+            if response.status_code >= 400:
+                raise PersistentStoreError("authority_unavailable")
+            data = response.json()
+            if not data.get("ok"):
+                raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
 
     async def acknowledge_obligation(
         self,
@@ -893,7 +1025,7 @@ class PersistentFleetBridge:
         operation: str | None = None,
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
-        if scope not in {"run", "cancel", "task", "recovery", "message"}:
+        if scope not in {"run", "read", "cancel", "task", "recovery", "message", "context"}:
             raise PersistentStoreError("policy_incompatible")
         if requesting_instance_id not in self.config.peers_by_id:
             raise PersistentStoreError("authority_unavailable")
@@ -936,11 +1068,15 @@ class PersistentFleetBridge:
         ):
             raise PersistentStoreError("session_not_active")
         gate = await self.store.fleet_gate(logical_agent_id)
-        if gate["blocked"] and scope == "run":
-            raise PersistentStoreError(
-                "coordination_blocked",
-                blockers=await self.store.open_message_obligations(logical_agent_id),
-            )
+        obligations = await self.store.open_message_obligations(logical_agent_id)
+        alert_pending = any(bool(item.get("alert")) for item in obligations)
+        ack_pending = any(
+            bool(item.get("require_reply")) and not bool(item.get("alert")) for item in obligations
+        )
+        if alert_pending and scope not in {"message", "cancel"}:
+            raise PersistentStoreError("coordination_alert", blockers=obligations)
+        if ack_pending and scope == "run":
+            raise PersistentStoreError("coordination_ack_required", blockers=obligations)
         now = utc_now()
         hard_expiry = parse_utc(session.hard_expires_at)
         if now >= hard_expiry:

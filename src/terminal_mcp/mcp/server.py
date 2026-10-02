@@ -50,6 +50,7 @@ class _StrictRequest(BaseModel):
 
 class CmdReadRequest(_StrictRequest):
     action: Literal["read"]
+    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     cmd_hash: str
     lines_count: Annotated[int, Field(ge=1, le=MAX_READ_LINES)] = DEFAULT_READ_LINES
     offset: Annotated[int | None, Field(ge=0)] = None
@@ -1009,10 +1010,12 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Send, acknowledge, or reply to coordination messages using the sender's public "
-            "Access name. The sender must resolve to an active unified session. Persistent "
-            "callers may provide the same Access code used by cmd/task/context so roaming "
-            "attachments resolve one fenced logical work-session identity."
+            "Full agent messaging inbox for an active unified session. Send with text+target "
+            "(or broadcast); mode=notify surfaces for five calls, mode=ack blocks new cmd.run "
+            "until explicit acknowledgement, and mode=alert blocks work until reply. With no "
+            "text/message_hash returns inbox; show_all returns history. message_hash alone "
+            "acknowledges; message_hash+text replies. Persistent callers use the same Access code "
+            "used by cmd/task/context across Fleet roaming attachments."
         ),
     )
     async def access_message_tool(
@@ -1023,8 +1026,11 @@ def build_mcp(
         text: str | None = None,
         target: str | None = None,
         message_hash: str | None = None,
+        mode: Literal["notify", "ack", "alert"] | None = None,
         require_reply: bool = False,
         alert: bool = False,
+        show_all: bool = False,
+        limit: Annotated[int, Field(ge=1, le=500)] = 50,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
@@ -1039,6 +1045,9 @@ def build_mcp(
             message_hash=message_hash,
             require_reply=require_reply,
             alert=alert,
+            mode=mode,
+            show_all=show_all,
+            limit=limit,
             namespace=namespace,
             task_id=task_id,
         )
@@ -1078,12 +1087,14 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Run, read, cancel, or execute recovery commands. The request is an action-"
-            "discriminated union: read has no code field; run/cancel/recovery require code."
+            "Run, read, cancel, or execute recovery commands. run/cancel/recovery require "
+            "an Access code; read may omit code for anonymous output access, or provide code "
+            "to surface the caller's inbox. ack-required messages block run and alerts block "
+            "work until reply."
         ),
     )
     async def access_cmd_tool(request: CmdRequest) -> dict:
-        if request.action == "read":
+        if request.action == "read" and request.code is None:
             return await service.read(
                 cmd_hash=request.cmd_hash,
                 lines_count=request.lines_count,
@@ -1094,8 +1105,47 @@ def build_mcp(
         if failure is not None:
             return failure
         backend = access_backend()
+        try:
+            message_state = await backend.message_state(
+                logical_agent_id=identity["logical_agent_id"],
+                work_session_id=identity["work_session_id"],
+                session_epoch=identity["session_epoch"],
+                surface=True,
+            )
+        except Exception as exc:
+            return {"ok": False, "code": "message_state_unavailable", "error": str(exc)}
+        if message_state.get("alert_pending") and request.action != "cancel":
+            return {
+                "ok": False,
+                "code": "coordination_alert",
+                "error": "coordination_alert: reply to the pending alert before continuing",
+                **message_state,
+            }
+        if message_state.get("ack_required_pending") and request.action == "run":
+            return {
+                "ok": False,
+                "code": "coordination_ack_required",
+                "error": "coordination_ack_required: acknowledge the pending message before run",
+                **message_state,
+            }
+        if request.action == "read":
+            result = await service.read(
+                cmd_hash=request.cmd_hash,
+                lines_count=request.lines_count,
+                offset=request.offset,
+                agent_id=None,
+            )
+            result.update(message_state)
+            result.update(
+                {
+                    "logical_agent_id": identity["logical_agent_id"],
+                    "work_session_id": identity["work_session_id"],
+                    "session_epoch": identity["session_epoch"],
+                }
+            )
+            return result
         if request.action == "run":
-            return await backend.run(
+            result = await backend.run(
                 request.command,
                 logical_agent_id=identity["logical_agent_id"],
                 work_session_id=identity["work_session_id"],
@@ -1104,14 +1154,18 @@ def build_mcp(
                 queue_id=request.queue_id,
                 task_scope=request.task_scope,
             )
+            result.update(message_state)
+            return result
         if request.action == "cancel":
-            return await backend.cancel(
+            result = await backend.cancel(
                 request.cmd_hash,
                 logical_agent_id=identity["logical_agent_id"],
                 work_session_id=identity["work_session_id"],
                 session_epoch=identity["session_epoch"],
                 access_code=request.code,
             )
+            result.update(message_state)
+            return result
         result = await backend.recovery(
             request.command,
             logical_agent_id=identity["logical_agent_id"],
@@ -1121,6 +1175,7 @@ def build_mcp(
         )
         result["public_name"] = identity["public_name"]
         result["session_ref"] = identity["session_ref"]
+        result.update(message_state)
         return result
 
     @mcp.tool(

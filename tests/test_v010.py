@@ -853,7 +853,9 @@ def test_mcp_schema_has_unified_task_contract():
     run = cmd["$defs"]["CmdRunRequest"]
     assert {"action", "code", "command"} <= set(run["required"])
     assert "task_scope" in run["properties"]
-    assert "code" not in cmd["$defs"]["CmdReadRequest"]["properties"]
+    read = cmd["$defs"]["CmdReadRequest"]
+    assert "code" in read["properties"]
+    assert "code" not in read["required"]
 
     message = tools["message"].parameters
     assert message["required"] == ["sender"]
