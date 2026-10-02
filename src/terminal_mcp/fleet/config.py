@@ -25,10 +25,14 @@ class FleetConfig:
     peers: tuple[FleetPeer, ...]
     replication_interval_seconds: float
     request_timeout_seconds: float
+    local_auth_token: str | None = None
 
     @property
     def peers_by_id(self) -> dict[str, FleetPeer]:
         return {peer.instance_id: peer for peer in self.peers}
+
+    def outbound_auth_token(self, peer: FleetPeer) -> str:
+        return self.local_auth_token or peer.auth_token
 
 
 _INSTANCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")

@@ -958,13 +958,21 @@ async def test_non_bootstrap_node_enrolls_and_forwards_through_durable_managed_t
     assert "private_key" not in remote_enrollment
 
     adopted = await home.adopt(mesh_id="mesh-a", display_name="Before")
+    home_attached = await home.upsert_node(
+        node_id="home",
+        mesh_id="mesh-a",
+        origin=None,
+        public_key=None,
+        auth_token=None,
+        expected_topology_revision=adopted["revisions"]["topology"],
+    )
     attached = await home.upsert_node(
         node_id=remote_enrollment["node_id"],
         mesh_id="mesh-a",
         origin=remote_enrollment["origin"],
         public_key=remote_enrollment["public_key"],
         auth_token=remote_enrollment["auth_token"],
-        expected_topology_revision=adopted["revisions"]["topology"],
+        expected_topology_revision=home_attached["revisions"]["topology"],
     )
     remote_state = await remote.snapshot()
     remote_node = next(
@@ -977,6 +985,14 @@ async def test_non_bootstrap_node_enrolls_and_forwards_through_durable_managed_t
     remote_home_material = await remote_store.managed_node("home")
     assert remote_home_material is not None
     assert remote_home_material["auth_token"] == home_enrollment["auth_token"]
+    assert home.config.local_auth_token == home_enrollment["auth_token"]
+    assert remote.config.local_auth_token == remote_enrollment["auth_token"]
+    home_remote = home.config.peers_by_id["remote"]
+    remote_home = remote.config.peers_by_id["home"]
+    assert home_remote.auth_token == remote_enrollment["auth_token"]
+    assert remote_home.auth_token == home_enrollment["auth_token"]
+    assert home.config.outbound_auth_token(home_remote) == home_enrollment["auth_token"]
+    assert remote.config.outbound_auth_token(remote_home) == remote_enrollment["auth_token"]
 
     renamed = await remote.rename(
         "After",
