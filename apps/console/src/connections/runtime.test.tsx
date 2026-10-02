@@ -706,3 +706,133 @@ test('creates a second mesh on an independently selected standalone control node
   })
   await waitFor(() => expect(screen.getAllByRole('option', { name: 'Staging' }).length).toBeGreaterThan(0))
 })
+
+test('moves a member between meshes with different authorities via detach then join', async () => {
+  const storage = new MemoryStorage()
+  let nextId = 0
+  const registry = new BrowserConnectionRegistry(
+    storage,
+    () => 10_000,
+    () => ['alpha', 'beta', 'gamma'][nextId++] ?? 'fallback',
+  )
+  registry.add(connection('https://alpha.example', 'alpha'), 'Alpha')
+  registry.add(connection('https://beta.example', 'beta'), 'Beta')
+  registry.add(connection('https://gamma.example', 'gamma'), 'Gamma')
+
+  let alphaTopology = 2
+  let betaTopology = 1
+  let gammaAuthority: 'alpha' | 'beta' = 'alpha'
+  let gammaAlphaMesh: string | null = 'mesh-a'
+  let gammaBetaMesh: string | null = null
+  const meshA = {
+    mesh_id: 'mesh-a', display_name: 'Production', adopted: true,
+    adopted_at: '2026-10-02T05:00:00Z', updated_at: '2026-10-02T06:00:00Z',
+  }
+  const meshB = {
+    mesh_id: 'mesh-b', display_name: 'Staging', adopted: true,
+    adopted_at: '2026-10-02T05:30:00Z', updated_at: '2026-10-02T06:00:00Z',
+  }
+  const rawNode = (nodeId: string, meshId: string | null, revision: number) => ({
+    node_id: nodeId,
+    origin: `https://${nodeId}.example`,
+    mesh_id: meshId,
+    state: 'active',
+    desired_topology_revision: revision,
+    applied_topology_revision: revision,
+    desired_trust_revision: revision,
+    applied_trust_revision: revision,
+    desired_policy_revision: 1,
+    applied_policy_revision: 1,
+    updated_at: '2026-10-02T06:00:00Z',
+  })
+  const policy = {
+    duration_seconds: 1380, warning_after_seconds: 1200, alert_after_seconds: 1320,
+    rearm_after_seconds: 180, legacy_admission_enabled: false, revision: 1,
+    updated_at: '2026-10-02T06:00:00Z',
+  }
+  const alphaEnvelope = (nodeId: string) => ({ ok: true, control: {
+    schema_version: 3, fleet_id: 'fleet-a', node_id: nodeId, control_node_id: 'alpha', managed: true,
+    mesh: nodeId === 'gamma' && gammaAlphaMesh ? meshA : null,
+    meshes: [meshA],
+    nodes: [rawNode('alpha', null, alphaTopology), rawNode('gamma', gammaAlphaMesh, alphaTopology)],
+    policy,
+    revisions: { routing: 1, topology: alphaTopology, trust: alphaTopology, access_policy: 1 },
+    updated_at: '2026-10-02T06:00:00Z',
+  } })
+  const betaEnvelope = (nodeId: string) => ({ ok: true, control: {
+    schema_version: 3, fleet_id: 'fleet-a', node_id: nodeId, control_node_id: 'beta', managed: true,
+    mesh: nodeId === 'gamma' && gammaBetaMesh ? meshB : null,
+    meshes: [meshB],
+    nodes: [
+      rawNode('beta', null, betaTopology),
+      ...(gammaBetaMesh ? [rawNode('gamma', gammaBetaMesh, betaTopology)] : []),
+    ],
+    policy,
+    revisions: { routing: 1, topology: betaTopology, trust: betaTopology, access_policy: 1 },
+    updated_at: '2026-10-02T06:00:00Z',
+  } })
+
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    const nodeId = url.origin.includes('alpha') ? 'alpha' : url.origin.includes('beta') ? 'beta' : 'gamma'
+    if (url.pathname.includes('oauth') || url.pathname.includes('token')) {
+      return new Response(JSON.stringify({
+        access_token: 'access-' + nodeId, token_type: 'Bearer', expires_in: 120,
+        refresh_token: 'refresh-' + nodeId + '-next', scope: 'terminal:read terminal:execute',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control' && (!init?.method || init.method === 'GET')) {
+      const body = nodeId === 'alpha'
+        ? alphaEnvelope('alpha')
+        : nodeId === 'beta'
+          ? betaEnvelope('beta')
+          : gammaAuthority === 'alpha' ? alphaEnvelope('gamma') : betaEnvelope('gamma')
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control/enrollment' && (!init?.method || init.method === 'GET')) {
+      return new Response(JSON.stringify({ ok: true, enrollment: {
+        node_id: nodeId, origin: `https://${nodeId}.example`,
+        public_key: 'public-' + nodeId, auth_token: 'ingress-' + nodeId,
+      } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control/nodes/detach' && init?.method === 'POST') {
+      expect(url.origin).toBe('https://alpha.example')
+      expect(JSON.parse(String(init.body))).toEqual({ node_id: 'gamma', expected_topology_revision: 2 })
+      alphaTopology += 1
+      gammaAlphaMesh = null
+      return new Response(JSON.stringify(alphaEnvelope('alpha')), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control/nodes/upsert' && init?.method === 'POST') {
+      expect(url.origin).toBe('https://beta.example')
+      expect(JSON.parse(String(init.body))).toEqual({
+        node_id: 'gamma', mesh_id: 'mesh-b', origin: 'https://gamma.example',
+        public_key: 'public-gamma', auth_token: 'ingress-gamma', expected_topology_revision: 1,
+      })
+      betaTopology += 1
+      gammaBetaMesh = 'mesh-b'
+      gammaAuthority = 'beta'
+      return new Response(JSON.stringify(betaEnvelope('beta')), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ error: 'unexpected_request' }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  render(
+    <I18nProvider>
+      <ConnectionRuntimeProvider registry={registry} transport={new PairingTransport(fetcher)}>
+        <Connections />
+      </ConnectionRuntimeProvider>
+    </I18nProvider>,
+  )
+
+  const gammaCard = () => screen.getByRole('heading', { name: 'Gamma' }).closest('article')!
+  await waitFor(() => expect(within(gammaCard()).getByLabelText('Mesh membership')).toHaveValue('mesh-a'))
+  await userEvent.selectOptions(within(gammaCard()).getByLabelText('Mesh membership'), 'mesh-b')
+
+  await waitFor(() => {
+    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/detach'))).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/upsert'))).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/move'))).toHaveLength(0)
+  })
+  await waitFor(() => expect(within(gammaCard()).getByLabelText('Mesh membership')).toHaveValue('mesh-b'))
+})
