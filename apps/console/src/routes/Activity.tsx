@@ -73,6 +73,16 @@ function activityServerLabel(instance: FleetInstanceView): string {
   return configured || instance.profile.instanceId
 }
 
+
+function commandStateLabel(status: string, t: ReturnType<typeof useI18n>['t']): string {
+  if (/complete|success|done|finished/.test(status)) return t('activity.commandCompleted')
+  if (/fail|error/.test(status)) return t('activity.commandFailed')
+  if (/cancel/.test(status)) return t('activity.commandCancelled')
+  if (/running|active|execut/.test(status)) return t('activity.commandRunning')
+  if (/queued|pending/.test(status)) return t('activity.commandQueued')
+  return t('common.unknown')
+}
+
 function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
   if (code.includes('auth_unpaired')) return t('diagnostics.serverUnpaired')
   if (code.includes('direct_authority_auth_revoked') || code.includes('auth_revoked')) return t('diagnostics.authorizationRevoked')
@@ -450,7 +460,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                               <div className="activity-command-summary">
                                 <span>{command.label}</span>
                                 <time dateTime={command.createdAt}>{activityTime(command.createdAt)}</time>
-                                <small>{command.status}</small>
+                                <small>{commandStateLabel(command.statusKey, t)}</small>
                               </div>
                               <button type="button" className="activity-command-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={commandExpanded} aria-controls={commandDetailsId}
                                 onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(commandKey)) next.delete(commandKey); else next.add(commandKey); return next })}>

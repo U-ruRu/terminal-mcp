@@ -81,7 +81,11 @@ test('restores every stored profile into app runtime and removes only the select
   await waitFor(() => expect(screen.getAllByText('Connected')).toHaveLength(2))
   expect(fetcher).toHaveBeenCalledTimes(2)
 
+  const addServer = screen.getByRole('button', { name: 'Add server' })
+  expect(addServer).toHaveClass('primary-action')
+  expect(addServer.closest('form')).not.toHaveClass('panel')
   const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
+  expect(removeButtons[0]).toHaveClass('destructive-action')
   await userEvent.click(removeButtons[0])
 
   await waitFor(() => expect(registry.list().map((profile) => profile.displayName)).toEqual(['Beta']))
@@ -456,6 +460,7 @@ test('managed mesh membership supports standalone attach move and detach with ex
 
   expect(screen.getAllByText(/Reachability:/)).toHaveLength(2)
   const rotateButtons = screen.getAllByRole('button', { name: 'Rotate trust' })
+  expect(rotateButtons[1]).toHaveClass('secondary-action')
   await userEvent.click(rotateButtons[1])
   await waitFor(() => {
     expect(fetcher.mock.calls.filter(
@@ -711,6 +716,7 @@ test('creates a second mesh on an independently selected standalone control node
   await userEvent.selectOptions(screen.getByLabelText('Control node'), 'beta')
   await userEvent.clear(screen.getByLabelText('New mesh name'))
   await userEvent.type(screen.getByLabelText('New mesh name'), 'Staging')
+  expect(screen.getByRole('button', { name: 'Create mesh' })).toHaveClass('primary-action')
   await userEvent.click(screen.getByRole('button', { name: 'Create mesh' }))
 
   await waitFor(() => {

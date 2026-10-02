@@ -203,11 +203,11 @@ export function AppShell({
         <div className="app-bar-trailing">
           {selectedServer && serverState ? (
             <StatusBadge state={serverState} label={serverStatusLabel(serverState, t)} />
-          ) : (
+          ) : location.pathname !== '/' ? (
             <span className={'environment-badge' + (problemCount > 0 ? ' environment-badge-attention' : '')}>
               {problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(servers.length)}
             </span>
-          )}
+          ) : null}
           {contextual ? (
             <button
               ref={toggleRef}

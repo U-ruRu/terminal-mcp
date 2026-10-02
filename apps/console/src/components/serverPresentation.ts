@@ -66,9 +66,7 @@ export function hasResourceAttention(server: FleetServerReadModel): boolean {
 export function serverVisualState(server: FleetServerReadModel): ServerVisualState {
   if (server.connectivity === 'offline') return 'offline'
   if (server.healthy === false) return 'critical'
-
   if (hasResourceAttention(server)) return 'attention'
-
   if (server.freshness === 'stale') return 'stale'
   if (server.freshness === 'catching_up' || server.connectivity === 'connecting' || server.connectivity === 'reconnecting') {
     return 'loading'

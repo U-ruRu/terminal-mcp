@@ -214,6 +214,8 @@ test('groups consecutive commands into one cascade and keeps raw details nested 
   await userEvent.click(screen.getByRole('button', { name: 'Ran 2 commands' }))
   expect(screen.getByText('$ uptime')).toBeInTheDocument()
   expect(screen.getByText('Command')).toBeInTheDocument()
+  expect(screen.getAllByText('Completed')).toHaveLength(2)
+  expect(screen.queryByText('completed')).not.toBeInTheDocument()
   expect(screen.queryByText(/"entityId": "cmd-b"/)).not.toBeInTheDocument()
 
   const technical = screen.getAllByRole('button', { name: 'Technical details' })
