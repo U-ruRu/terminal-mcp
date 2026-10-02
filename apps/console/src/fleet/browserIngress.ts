@@ -1,4 +1,4 @@
-import type { FetchLike } from '../api/client'
+import { ConsoleHttpError, type FetchLike } from '../api/client'
 import type { ConnectionProfile, ProfileRestoreResult } from '../connections/types'
 import type { FleetIngressEndpoint } from './adaptiveRuntime'
 import type { FleetIngressProbe } from './selector'
@@ -11,6 +11,7 @@ const TOKEN_REFRESH_SKEW_MS = 30_000
 
 export type FleetCredentialSource = {
   restore(instanceId: string): Promise<ProfileRestoreResult>
+  invalidateAccessSession?(instanceId: string): void
 }
 
 export class BrowserFleetIngressEndpoint implements FleetIngressEndpoint {
@@ -42,8 +43,7 @@ export class BrowserFleetIngressEndpoint implements FleetIngressEndpoint {
     const started = this.now()
     this.attempts += 1
     try {
-      await this.ensureAccess()
-      const result = await this.client.probe()
+      const result = await this.authorized(() => this.client.probe())
       this._nodeId = result.nodeId
       this._fleetId = result.fleetId
       const sources = result.sources
@@ -72,35 +72,47 @@ export class BrowserFleetIngressEndpoint implements FleetIngressEndpoint {
   }
 
   async snapshot() {
-    await this.ensureAccess()
-    const snapshot = await this.client.snapshot()
+    const snapshot = await this.authorized(() => this.client.snapshot())
     if (this._fleetId && snapshot.fleetId !== this._fleetId) throw new Error('fleet_identity_changed')
     return snapshot
   }
 
   async events(since: number, limit?: number) {
-    await this.ensureAccess()
-    return this.client.events(since, limit)
+    return this.authorized(() => this.client.events(since, limit))
   }
 
   async query<T = Record<string, unknown>>(resource: string, input: FleetQueryRequest = {}) {
-    await this.ensureAccess()
-    return this.client.query<T>(resource, input)
+    return this.authorized(() => this.client.query<T>(resource, input))
   }
 
   async detail<T = Record<string, unknown>>(resource: string, entityId: string, sourceNodeId?: string) {
-    await this.ensureAccess()
-    return this.client.detail<T>(resource, entityId, sourceNodeId)
+    return this.authorized(() => this.client.detail<T>(resource, entityId, sourceNodeId))
   }
 
   async namespaces(input: Omit<FleetQueryRequest, 'filters'> = {}) {
-    await this.ensureAccess()
-    return this.client.namespaces(input)
+    return this.authorized(() => this.client.namespaces(input))
   }
 
   async taskGraph(namespace: string, taskId: string, depth = 2, sourceNodeId?: string) {
+    return this.authorized(() => this.client.taskGraph(namespace, taskId, depth, sourceNodeId))
+  }
+
+  private async authorized<T>(operation: () => Promise<T>): Promise<T> {
     await this.ensureAccess()
-    return this.client.taskGraph(namespace, taskId, depth, sourceNodeId)
+    try {
+      return await operation()
+    } catch (error) {
+      if (
+        !(error instanceof ConsoleHttpError)
+        || !error.authenticationRequired
+        || !this.credentials.invalidateAccessSession
+      ) throw error
+      this.credentials.invalidateAccessSession(this.profile.instanceId)
+      this.accessToken = ''
+      this.accessExpiresAt = 0
+      await this.ensureAccess()
+      return operation()
+    }
   }
 
   private async ensureAccess(): Promise<void> {

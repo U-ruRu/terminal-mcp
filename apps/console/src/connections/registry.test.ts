@@ -314,3 +314,37 @@ test('fails closed on conflicting persisted registry documents', () => {
     new ConnectionRegistryError('conflicting_registry'),
   )
 })
+
+test('reuses one valid access session across sequential consumers and refreshes only near expiry', async () => {
+  const storage = new MemoryStorage()
+  let now = 5_000
+  const registry = new BrowserConnectionRegistry(storage, () => now, ids('alpha'))
+  const profile = registry.add(connection('https://alpha.example', 'refresh-a'), 'Alpha')
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = String(init?.body)
+    if (body.includes('refresh_token=refresh-a')) {
+      return jsonResponse({
+        access_token: 'access-a', token_type: 'Bearer', expires_in: 120,
+        refresh_token: 'refresh-b', scope: 'terminal:read',
+      })
+    }
+    expect(body).toContain('refresh_token=refresh-b')
+    return jsonResponse({
+      access_token: 'access-b', token_type: 'Bearer', expires_in: 120,
+      refresh_token: 'refresh-c', scope: 'terminal:read',
+    })
+  })
+  const transport = new PairingTransport(fetcher)
+
+  const first = await registry.restore(profile.instanceId, transport)
+  const second = await registry.restore(profile.instanceId, transport)
+  expect(first.status).toBe('connected')
+  expect(second.status).toBe('connected')
+  expect(fetcher).toHaveBeenCalledTimes(1)
+
+  now = 96_000
+  const refreshed = await registry.restore(profile.instanceId, transport)
+  expect(refreshed.status).toBe('connected')
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(registry.credential(profile.instanceId)?.refreshToken).toBe('refresh-c')
+})

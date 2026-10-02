@@ -17,6 +17,10 @@ import type {
 } from './types'
 
 const REGISTRY_STORAGE_KEY = 'terminal-mcp.console.connections.v1'
+const ACCESS_SESSION_REFRESH_SKEW_MS = 30_000
+
+type ConnectedProfileSession = Extract<ProfileRestoreResult, { status: 'connected' }>
+type AuthStateListener = (instanceId: string, result: ProfileRestoreResult) => void
 
 export class ConnectionRegistryError extends Error {
   constructor(readonly code: string) {
@@ -156,6 +160,10 @@ function parsePairingLink(value: string): { origin: string; name: string; secret
 }
 
 export class BrowserConnectionRegistry {
+  private readonly accessSessions = new Map<string, ConnectedProfileSession>()
+  private readonly restoreFlights = new Map<string, Promise<ProfileRestoreResult>>()
+  private readonly authListeners = new Set<AuthStateListener>()
+
   constructor(
     private readonly storage: KeyValueStorage = window.localStorage,
     private readonly now: () => number = Date.now,
@@ -220,46 +228,112 @@ export class BrowserConnectionRegistry {
     return { ...profile, metadata: { ...profile.metadata } }
   }
 
+  accessSession(instanceId: string): ConnectedProfileSession | null {
+    const cached = this.accessSessions.get(instanceId)
+    if (!cached || cached.accessExpiresAt <= this.now()) return null
+    const profile = this.get(instanceId)
+    if (!profile || !this.sameProfileCredential(profile, cached.profile)) {
+      this.accessSessions.delete(instanceId)
+      return null
+    }
+    return this.cloneConnected(cached)
+  }
+
+  invalidateAccessSession(instanceId: string): void {
+    this.accessSessions.delete(instanceId)
+  }
+
+  subscribeAuth(listener: AuthStateListener): () => void {
+    this.authListeners.add(listener)
+    return () => this.authListeners.delete(listener)
+  }
+
   async restore(
     instanceId: string,
     transport = new PairingTransport(),
   ): Promise<ProfileRestoreResult> {
     const profile = this.get(instanceId)
-    if (!profile) return { status: 'missing' }
-
-    const credentialVault = BrowserCredentialVault.forReference(
-      profile.credentialRef,
-      this.storage,
-    )
-    const restored = await restoreCredential(credentialVault, transport, this.now)
-    const currentProfile = this.get(instanceId)
-    if (!currentProfile) return { status: 'missing' }
-
-    if (restored.status === 'unpaired') {
-      return { status: 'unpaired', profile: currentProfile }
-    }
-    if (restored.connection) {
-      assertCredentialMatchesProfile(currentProfile, restored.connection)
+    if (!profile) {
+      this.accessSessions.delete(instanceId)
+      return { status: 'missing' }
     }
 
-    switch (restored.status) {
-      case 'connected':
-        return {
-          status: 'connected',
-          profile: currentProfile,
-          accessToken: restored.accessToken,
-          accessExpiresAt: restored.accessExpiresAt,
-        }
-      case 'revoked':
-      case 'expired':
-        return { status: restored.status, profile: currentProfile }
-      case 'error':
-        return {
-          status: 'error',
-          profile: currentProfile,
-          retryable: restored.retryable,
-          message: restored.message,
-        }
+    const credential = this.credential(instanceId)
+    if (!credential) {
+      this.accessSessions.delete(instanceId)
+      const result: ProfileRestoreResult = { status: 'unpaired', profile }
+      this.emitAuth(instanceId, result)
+      return result
+    }
+
+    const cached = this.accessSessions.get(instanceId)
+    if (
+      cached
+      && cached.accessExpiresAt > this.now() + ACCESS_SESSION_REFRESH_SKEW_MS
+      && this.sameProfileCredential(profile, cached.profile)
+    ) {
+      return this.cloneConnected(cached)
+    }
+
+    const active = this.restoreFlights.get(instanceId)
+    if (active) return active
+
+    const flight = (async (): Promise<ProfileRestoreResult> => {
+      const credentialVault = BrowserCredentialVault.forReference(
+        profile.credentialRef,
+        this.storage,
+      )
+      const restored = await restoreCredential(credentialVault, transport, this.now)
+      const currentProfile = this.get(instanceId)
+      if (!currentProfile) {
+        this.accessSessions.delete(instanceId)
+        return { status: 'missing' }
+      }
+
+      if (restored.status === 'unpaired') {
+        this.accessSessions.delete(instanceId)
+        const result: ProfileRestoreResult = { status: 'unpaired', profile: currentProfile }
+        this.emitAuth(instanceId, result)
+        return result
+      }
+      if (restored.connection) {
+        assertCredentialMatchesProfile(currentProfile, restored.connection)
+      }
+
+      let result: ProfileRestoreResult
+      switch (restored.status) {
+        case 'connected':
+          result = {
+            status: 'connected',
+            profile: currentProfile,
+            accessToken: restored.accessToken,
+            accessExpiresAt: restored.accessExpiresAt,
+          }
+          this.accessSessions.set(instanceId, result)
+          break
+        case 'revoked':
+        case 'expired':
+          this.accessSessions.delete(instanceId)
+          result = { status: restored.status, profile: currentProfile }
+          break
+        case 'error':
+          result = {
+            status: 'error',
+            profile: currentProfile,
+            retryable: restored.retryable,
+            message: restored.message,
+          }
+          break
+      }
+      this.emitAuth(instanceId, result)
+      return result
+    })()
+
+    this.restoreFlights.set(instanceId, flight)
+    try {
+      return await flight
+    } finally {
+      if (this.restoreFlights.get(instanceId) === flight) this.restoreFlights.delete(instanceId)
     }
   }
 
@@ -313,11 +387,15 @@ export class BrowserConnectionRegistry {
       }
     }
 
-    return {
+    const result: PairedProfile = {
       profile: { ...profile, metadata: { ...profile.metadata } },
       accessToken: exchanged.access_token,
       accessExpiresAt: pairedAt + Math.max(0, exchanged.expires_in) * 1000,
     }
+    const connected: ConnectedProfileSession = { status: 'connected', ...result }
+    this.accessSessions.set(profile.instanceId, connected)
+    this.emitAuth(profile.instanceId, connected)
+    return result
   }
 
   rename(instanceId: string, displayName: string): ConnectionProfile {
@@ -332,6 +410,8 @@ export class BrowserConnectionRegistry {
     const profiles = document.profiles.slice()
     profiles[index] = updated
     this.persist({ version: 1, profiles })
+    const session = this.accessSessions.get(instanceId)
+    if (session) this.accessSessions.set(instanceId, { ...session, profile: updated })
     return { ...updated, metadata: { ...updated.metadata } }
   }
 
@@ -342,11 +422,32 @@ export class BrowserConnectionRegistry {
     const profiles = document.profiles.filter((item) => item.instanceId !== instanceId)
     this.persist({ version: 1, profiles })
     BrowserCredentialVault.forReference(profile.credentialRef, this.storage).clear()
+    this.accessSessions.delete(instanceId)
     return true
   }
 
   disconnect(instanceId: string): boolean {
     return this.remove(instanceId)
+  }
+
+
+  private sameProfileCredential(left: ConnectionProfile, right: ConnectionProfile): boolean {
+    return left.instanceId === right.instanceId
+      && left.origin === right.origin
+      && left.credentialRef === right.credentialRef
+      && left.metadata.deviceId === right.metadata.deviceId
+      && left.metadata.clientId === right.metadata.clientId
+  }
+
+  private cloneConnected(result: ConnectedProfileSession): ConnectedProfileSession {
+    return {
+      ...result,
+      profile: { ...result.profile, metadata: { ...result.profile.metadata } },
+    }
+  }
+
+  private emitAuth(instanceId: string, result: ProfileRestoreResult): void {
+    for (const listener of this.authListeners) listener(instanceId, result)
   }
 
   private document(): ConnectionRegistryDocument {

@@ -1,10 +1,15 @@
-import { ConsoleClient, type FetchLike } from '../api/client'
+import { ConsoleClient, ConsoleHttpError, type FetchLike } from '../api/client'
 import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentMutationResult, TaskReadModel } from '../api/models'
 import type { ProfileRestoreResult } from '../connections/types'
+
+type ConnectedRestore = Extract<ProfileRestoreResult, { status: 'connected' }>
 import { DEFAULT_FLEET_REQUEST_TIMEOUT_MS, withRequestTimeout } from './policy'
 import type { FleetActivityOptions } from './types'
 
-export type DirectCredentialSource = { restore(instanceId: string): Promise<ProfileRestoreResult> }
+export type DirectCredentialSource = {
+  restore(instanceId: string): Promise<ProfileRestoreResult>
+  invalidateAccessSession?(instanceId: string): void
+}
 
 export class BrowserDirectAuthorityClient {
   private readonly fetcher: FetchLike
@@ -18,6 +23,10 @@ export class BrowserDirectAuthorityClient {
 
   fleetControl(instanceId: string): Promise<ManagedFleetControlReadModel> {
     return this.withClient(instanceId, (client) => client.fleetControl())
+  }
+
+  fleetEnrollment(instanceId: string) {
+    return this.withClient(instanceId, (client) => client.fleetEnrollment())
   }
 
   fleetControlMutation(
@@ -52,10 +61,30 @@ export class BrowserDirectAuthorityClient {
     if (restored.status !== 'connected') {
       throw new Error('direct_authority_auth_' + restored.status)
     }
-    return operation(new ConsoleClient(
-      restored.profile.origin,
-      () => restored.accessToken,
-      this.fetcher,
-    ))
+    let session: ConnectedRestore = restored
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await operation(new ConsoleClient(
+          session.profile.origin,
+          () => session.accessToken,
+          this.fetcher,
+        ))
+      } catch (error) {
+        if (
+          attempt > 0
+          || !(error instanceof ConsoleHttpError)
+          || !error.authenticationRequired
+          || !this.registry.invalidateAccessSession
+        ) throw error
+        this.registry.invalidateAccessSession(instanceId)
+        const refreshed = await this.registry.restore(instanceId)
+        if (refreshed.status !== 'connected') {
+          throw new Error('direct_authority_auth_' + refreshed.status, { cause: error })
+        }
+        session = refreshed
+      }
+    }
+    throw new Error('direct_authority_auth_retry_exhausted')
   }
 }

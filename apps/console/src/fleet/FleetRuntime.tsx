@@ -97,7 +97,10 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
     [dependencies.fleetV1Enabled],
   )
   const manager = useMemo(
-    () => dependencies.manager ?? new FleetConnectionManager(registry, browserFleetActorFactory()),
+    () => dependencies.manager ?? new FleetConnectionManager(
+      registry,
+      browserFleetActorFactory({ credentialSource: registry }),
+    ),
     [dependencies.manager, registry],
   )
   const directAuthority = useMemo(() => new BrowserDirectAuthorityClient(registry), [registry])
@@ -323,7 +326,6 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
       registry={registry}
       diagnostics={diagnostics}
       onProfilesChanged={syncProfiles}
-      restoreOnMount={false}
     >
       <PairingHandoffController />
       <App

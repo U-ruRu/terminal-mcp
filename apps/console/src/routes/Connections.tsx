@@ -12,6 +12,8 @@ function statusLabel(status: string | undefined, t: (key: MessageKey) => string)
       return t('connections.status.connected')
     case 'restoring':
       return t('connections.status.restoring')
+    case 'unpaired':
+      return t('connections.status.unpaired')
     case 'revoked':
       return t('connections.status.revoked')
     case 'expired':

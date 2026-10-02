@@ -10,7 +10,8 @@ import {
 } from 'react'
 
 import { PairingTransport } from '../auth/transport'
-import { ConsoleClient } from '../api/client'
+import type { ConsoleClient } from '../api/client'
+import { BrowserDirectAuthorityClient } from '../fleet/directAuthority'
 import { BrowserConnectionRegistry } from './registry'
 import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { ConnectionProfile, ProfileRestoreResult } from './types'
@@ -18,7 +19,7 @@ import type { ConnectionProfile, ProfileRestoreResult } from './types'
 export type RuntimeProfileState =
   | { status: 'restoring' }
   | { status: 'connected'; accessToken: string; accessExpiresAt: number }
-  | { status: 'revoked' | 'expired' }
+  | { status: 'unpaired' | 'revoked' | 'expired' }
   | { status: 'error'; retryable: boolean; message: string }
 
 type ConnectionRuntimeValue = {
@@ -28,7 +29,7 @@ type ConnectionRuntimeValue = {
   pair: (pairingLink: string, displayName?: string) => Promise<void>
   retry: (instanceId: string) => Promise<void>
   disconnect: (instanceId: string) => void
-  client: (instanceId: string) => ConsoleClient | null
+  client: (instanceId: string) => Pick<ConsoleClient, 'fleetControl' | 'fleetControlMutation' | 'fleetEnrollment'> | null
 }
 
 const ConnectionRuntimeContext = createContext<ConnectionRuntimeValue | null>(null)
@@ -45,7 +46,7 @@ function stateFromRestore(result: ProfileRestoreResult): RuntimeProfileState | n
     case 'expired':
       return { status: result.status }
     case 'unpaired':
-      return null
+      return { status: 'unpaired' }
     case 'error':
       return {
         status: 'error',
@@ -76,8 +77,16 @@ export function ConnectionRuntimeProvider({
 }) {
   const [registry] = useState(() => registryProp ?? new BrowserConnectionRegistry())
   const [transport] = useState(() => transportProp ?? new PairingTransport())
+  const authority = useMemo(() => new BrowserDirectAuthorityClient(registry), [registry])
   const [profiles, setProfiles] = useState<ConnectionProfile[]>(() => registry.list())
-  const [states, setStates] = useState<Record<string, RuntimeProfileState>>({})
+  const [states, setStates] = useState<Record<string, RuntimeProfileState>>(() =>
+    restoreOnMount
+      ? Object.fromEntries(registry.list().map((profile) => [
+          profile.instanceId,
+          registry.credential(profile.instanceId) ? { status: 'restoring' } : { status: 'unpaired' },
+        ])) as Record<string, RuntimeProfileState>
+      : {},
+  )
   const [error, setError] = useState<string | null>(null)
   const restoreStarted = useRef(false)
 
@@ -104,6 +113,16 @@ export function ConnectionRuntimeProvider({
     },
     [registry, transport],
   )
+
+  useEffect(() => registry.subscribeAuth((instanceId, result) => {
+    const nextState = stateFromRestore(result)
+    setStates((current) => {
+      const next = { ...current }
+      if (nextState) next[instanceId] = nextState
+      else delete next[instanceId]
+      return next
+    })
+  }), [registry])
 
   useEffect(() => {
     if (!restoreOnMount || restoreStarted.current) return
@@ -156,13 +175,16 @@ export function ConnectionRuntimeProvider({
   )
 
   const client = useCallback(
-    (instanceId: string): ConsoleClient | null => {
+    (instanceId: string): Pick<ConsoleClient, 'fleetControl' | 'fleetControlMutation' | 'fleetEnrollment'> | null => {
       const profile = profiles.find((item) => item.instanceId === instanceId)
-      const state = states[instanceId]
-      if (!profile || state?.status !== 'connected') return null
-      return new ConsoleClient(profile.origin, () => state.accessToken)
+      if (!profile || !registry.credential(instanceId)) return null
+      return {
+        fleetControl: () => authority.fleetControl(instanceId),
+        fleetControlMutation: (path, body) => authority.fleetControlMutation(instanceId, path, body ?? {}),
+        fleetEnrollment: () => authority.fleetEnrollment(instanceId),
+      }
     },
-    [profiles, states],
+    [authority, profiles, registry],
   )
 
   const disconnect = useCallback(

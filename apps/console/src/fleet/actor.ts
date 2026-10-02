@@ -3,7 +3,7 @@ import type { ActivityFeedReadModel, PersistentMutationResult, TaskReadModel } f
 import { ConnectionManager } from '../auth/pairing'
 import { PairingTransport } from '../auth/transport'
 import { BrowserCredentialVault, type KeyValueStorage } from '../auth/vault'
-import type { ConnectionProfile } from '../connections/types'
+import type { ConnectionProfile, ProfileRestoreResult } from '../connections/types'
 import {
   RealtimeConsoleEngine,
   type RealtimeEngineOptions,
@@ -26,7 +26,13 @@ export function jitterDelay(delayMs: number, random: () => number = Math.random)
   return Math.max(0, Math.round(delayMs * (0.8 + sample * 0.4)))
 }
 
+type FleetActorCredentialSource = {
+  restore(instanceId: string): Promise<ProfileRestoreResult>
+  invalidateAccessSession?(instanceId: string): void
+}
+
 export type BrowserFleetActorOptions = {
+  credentialSource?: FleetActorCredentialSource
   storage?: KeyValueStorage
   fetcher?: FetchLike
   socketFactory?: RealtimeSocketFactory
@@ -45,7 +51,8 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
   private readonly random: () => number
   private readonly reconnectBaseMs: number
   private readonly reconnectMaxMs: number
-  private readonly auth: ConnectionManager
+  private readonly auth: ConnectionManager | null
+  private readonly credentialSource?: FleetActorCredentialSource
   private readonly fetcher: FetchLike
   private readonly engineOptions: RealtimeEngineOptions
   private state: FleetInstanceRuntimeState
@@ -72,9 +79,14 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
       options.requestTimeoutMs ?? DEFAULT_FLEET_REQUEST_TIMEOUT_MS,
       this.scheduler,
     )
-    const storage = options.storage ?? window.localStorage
-    const vault = BrowserCredentialVault.forReference(profile.credentialRef, storage)
-    this.auth = new ConnectionManager(vault, new PairingTransport(this.fetcher))
+    this.credentialSource = options.credentialSource
+    if (this.credentialSource) {
+      this.auth = null
+    } else {
+      const storage = options.storage ?? window.localStorage
+      const vault = BrowserCredentialVault.forReference(profile.credentialRef, storage)
+      this.auth = new ConnectionManager(vault, new PairingTransport(this.fetcher))
+    }
     this.state = {
       instanceId: this.instanceId,
       status: 'offline',
@@ -176,7 +188,7 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
       lastError: undefined,
     })
 
-    const authState = await this.auth.restore()
+    const authState = await this.restoreAccess()
     if (!this.running || generation !== this.generation) return
 
     if (authState.status !== 'connected') {
@@ -196,7 +208,7 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
     }
 
     this.authAttempt = 0
-    this.accessToken = authState.session.accessToken
+    this.accessToken = authState.accessToken
     const client = new ConsoleClient(
       this.profile.origin,
       () => this.accessToken,
@@ -225,9 +237,43 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
         realtimeState.status === 'offline' &&
         ['unauthorized', 'revoked_device'].includes(realtimeState.lastError ?? '')
       ) {
+        this.credentialSource?.invalidateAccessSession?.(this.instanceId)
         this.scheduleAuthRetry(realtimeState.lastError)
       }
     })
+  }
+
+
+  private async restoreAccess(): Promise<
+    | { status: 'connected'; accessToken: string }
+    | { status: 'unpaired' | 'revoked' | 'expired' | 'disconnected' | 'pairing' | 'restoring' }
+    | { status: 'error'; retryable: boolean; message: string }
+  > {
+    if (this.credentialSource) {
+      const result = await this.credentialSource.restore(this.instanceId)
+      switch (result.status) {
+        case 'connected':
+          return { status: 'connected', accessToken: result.accessToken }
+        case 'missing':
+        case 'unpaired':
+          return { status: 'unpaired' }
+        case 'revoked':
+        case 'expired':
+          return { status: result.status }
+        case 'error':
+          return { status: 'error', retryable: result.retryable, message: result.message }
+      }
+    }
+
+    const result = await this.auth!.restore()
+    switch (result.status) {
+      case 'connected':
+        return { status: 'connected', accessToken: result.session.accessToken }
+      case 'error':
+        return { status: 'error', retryable: result.retryable, message: result.message }
+      default:
+        return { status: result.status }
+    }
   }
 
   private scheduleAuthRetry(
