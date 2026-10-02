@@ -5,10 +5,10 @@ export type ActivityCategory = 'all' | 'messages' | 'tasks' | 'intents' | 'sessi
 export function activityCategory(event: ActivityEventReadModel): ActivityCategory {
   if (event.entityType === 'message') return 'messages'
   if (event.entityType === 'task') return 'tasks'
-  if (event.entityType === 'health') return 'health'
-  if (event.entityType === 'command') return 'commands'
+  if (event.entityType === 'health' || /health|connection|auth|snapshot/.test(event.eventType)) return 'health'
+  if (event.entityType === 'command' || event.eventType.includes('command')) return 'commands'
   if (event.eventType.includes('intent')) return 'intents'
-  if (event.entityType === 'agent' || event.eventType.startsWith('agent.')) return 'sessions'
+  if (/agent|session/.test(event.entityType) || /agent|session/.test(event.eventType)) return 'sessions'
   return 'all'
 }
 

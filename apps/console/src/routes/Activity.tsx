@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
-import type { ActivityEventReadModel, ActivityFeedReadModel } from '../api/models'
+import type { ActivityFeedReadModel } from '../api/models'
 import { agentRoute, taskRoute } from '../navigation/routes'
 import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from '../activity/timeline'
+import { activityFullTimestamp, activityTime, actorHue, projectActivity, renderActivity } from '../activity/chatProjection'
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
@@ -45,47 +46,6 @@ function reason(error: unknown) {
   return error instanceof Error ? error.message : 'activity_load_failed'
 }
 
-function activityTimestamp(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear() + ' ' +
-    pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds())
-}
-
-function textField(payload: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = payload[key]
-    if (typeof value === 'string' && value.trim()) return value
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  }
-  return undefined
-}
-
-function semanticEventContent(event: ActivityEventReadModel, t: ReturnType<typeof useI18n>['t']): string {
-  const payload = event.payload
-  if (event.eventType === 'health.changed') {
-    const ok = payload.ok
-    return ok === true ? t('section.healthy') : ok === false ? t('section.unhealthy') : t('common.health')
-  }
-  if (event.eventType.includes('command')) {
-    const command = textField(payload, 'command', 'cmd')
-    const status = textField(payload, 'status', 'result', 'exit_code')
-    return [command, status].filter(Boolean).join(' · ') || event.eventType
-  }
-  if (event.eventType.includes('task')) {
-    const task = textField(payload, 'title', 'task_id', 'taskId') ?? event.entityId
-    const state = textField(payload, 'operational_status', 'state', 'status', 'action')
-    return [task, state].filter(Boolean).join(' · ')
-  }
-  if (event.eventType.includes('agent') || event.eventType.includes('session')) {
-    const actor = event.actorName ?? textField(payload, 'display_name', 'name') ?? event.entityType
-    const state = textField(payload, 'state', 'status', 'action', 'intent')
-    return [actor, state].filter(Boolean).join(' · ')
-  }
-  return textField(payload, 'message', 'detail', 'summary', 'status', 'state', 'action', 'intent') ?? event.eventType
-}
-
 function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
   if (code.includes('auth_unpaired')) return t('diagnostics.serverUnpaired')
   if (code.includes('direct_authority_auth_revoked') || code.includes('auth_revoked')) return t('diagnostics.authorizationRevoked')
@@ -93,14 +53,16 @@ function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
 }
 
 export function Activity({ instances = [], loadActivity }: { instances?: FleetInstanceView[]; loadActivity?: ActivityLoader }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const [category, setCategory] = useState<ActivityCategory>('all')
   const [feeds, setFeeds] = useState<Record<string, FeedState>>({})
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set())
+  const [newItemsCount, setNewItemsCount] = useState(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
   const pendingHistoryHeight = useRef<number | null>(null)
+  const awayFromBottom = useRef(false)
 
   const requested = searchParams.get('server') ?? ''
   const requestedAgentId = searchParams.get('agent') ?? ''
@@ -182,6 +144,9 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     let cancelled = false
     void loadActivity(selectedId, { since: feed.cursor, limit: ACTIVITY_WINDOW }).then((page) => {
       if (cancelled) return
+      if (awayFromBottom.current && page.events.length > 0) {
+        setNewItemsCount((current) => current + projectActivity(page.events, locale, selected?.profile.displayName ?? selectedId).length)
+      }
       setFeeds((current) => {
         const prior = current[selectedId] ?? emptyFeed()
         const merged = mergeActivityEvents(prior.events, page.events).slice(-ACTIVITY_WINDOW)
@@ -192,7 +157,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? emptyFeed()), error: reason(error) } }))
     })
     return () => { cancelled = true }
-  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.initialized, feed.loading, feed.historyMode])
+  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.initialized, feed.loading, feed.historyMode, locale, selected?.profile.displayName])
 
   useEffect(() => {
     const node = scrollRef.current
@@ -242,6 +207,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     if (!node || !feed.initialized) return
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
     stickToBottom.current = distanceFromBottom <= SCROLL_EDGE
+    awayFromBottom.current = distanceFromBottom > node.clientHeight
+    if (stickToBottom.current) setNewItemsCount(0)
     if (node.scrollTop <= SCROLL_EDGE) void loadOlder()
     else if (feed.historyMode && distanceFromBottom <= SCROLL_EDGE) void restoreLatest()
   }
@@ -252,6 +219,23 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     return categorized.filter((event) => event.actorId === requestedAgentId || event.message?.senderAgentId === requestedAgentId)
   }, [feed.events, category, requestedAgentId])
   const requestedAgent = selected?.runtime.realtime?.snapshot?.agents.find((agent) => agent.agentId === requestedAgentId)
+  const logicalItems = useMemo(
+    () => projectActivity(visible, locale, selected?.profile.displayName ?? selectedId),
+    [visible, locale, selected?.profile.displayName, selectedId],
+  )
+  const chatItems = useMemo(() => renderActivity(logicalItems, locale), [logicalItems, locale])
+
+  useEffect(() => {
+    setExpandedEvents(new Set())
+    setNewItemsCount(0)
+    stickToBottom.current = true
+    awayFromBottom.current = false
+    const frame = window.requestAnimationFrame(() => {
+      const node = scrollRef.current
+      if (node) node.scrollTop = node.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [selectedId, category, requestedAgentId])
 
   const chooseServer = (instanceId: string) => {
     const next = new URLSearchParams(searchParams)
@@ -292,74 +276,69 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       ) : null}
       {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
       {selectedId && !feed.error ? (
-        <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
-          {visible.map((event) => (
-            <article className={'panel activity-event' + (event.message ? ' activity-event-message' : '')} key={selectedId + ':' + event.seq}>
-              <div className="activity-event-header">
-                <strong>
-                  {event.message?.senderAgentId
-                    ? <Link className="text-link" to={agentRoute(selectedId, event.message.senderAgentId)}>{event.message.senderName}</Link>
-                    : event.message?.senderName ?? event.eventType}
-                </strong>
-                <time dateTime={event.createdAt}>{activityTimestamp(event.createdAt)}</time>
-              </div>
-              {(() => {
-                const eventKey = selectedId + ':' + event.seq
-                const expanded = expandedEvents.has(eventKey)
-                const detailsId = 'activity-details-' + selectedId.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + event.seq
+        <div className="activity-timeline-wrap">
+          <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
+            {chatItems.map((item) => {
+              if (item.kind === 'date') return <div className="activity-date-separator" key={item.key}>{item.label}</div>
+              const eventKey = selectedId + ':' + item.key
+              const expanded = expandedEvents.has(eventKey)
+              const detailsId = 'activity-details-' + eventKey.replace(/[^a-zA-Z0-9_-]/g, '-')
+              const first = item.events[0]
+              if (item.kind === 'service') {
                 return (
-                  <>
-                    <div className="activity-event-main">
-                      <div className="activity-event-copy">
-                        {event.message ? (
-                          <p className="activity-message">{event.message.text}</p>
-                        ) : (
-                          <p className="activity-semantic-content">{semanticEventContent(event, t)}</p>
-                        )}
-                        {event.message?.taskNamespace && event.message.taskId ? (
-                          <Link className="activity-context-link text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>
-                            {t('common.task')} {event.message.taskId}
-                          </Link>
-                        ) : null}
-                      </div>
-                      <button
-                        type="button"
-                        className="activity-details-toggle"
-                        aria-label={t('activity.rawDetails')}
-                        aria-expanded={expanded}
-                        aria-controls={detailsId}
-                        onClick={() => {
-                          setExpandedEvents((current) => {
-                            const next = new Set(current)
-                            if (next.has(eventKey)) next.delete(eventKey)
-                            else next.add(eventKey)
-                            return next
-                          })
-                        }}
-                      >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} />
-                        </svg>
-                      </button>
-                    </div>
-                    {expanded ? (
-                      <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
-                        seq: event.seq,
-                        eventType: event.eventType,
-                        entityType: event.entityType,
-                        entityId: event.entityId,
-                        actorId: event.actorId,
-                        actorName: event.actorName,
-                        payload: event.payload,
-                        message: event.message,
-                      }, null, 2)}</pre>
-                    ) : null}
-                  </>
+                  <div className={'activity-service-event activity-service-' + (item.tone ?? 'neutral')} key={item.key}>
+                    <span>{item.content}</span>
+                    <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
+                    <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
+                      onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+                    </button>
+                    {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
+                      timestamp: activityFullTimestamp(item.createdAt), eventType: first.eventType, entityType: first.entityType,
+                      entityId: first.entityId, events: item.events,
+                    }, null, 2)}</pre> : null}
+                  </div>
                 )
-              })()}
-            </article>
-          ))}
-          {feed.initialized && visible.length === 0 && <FeedbackState variant="empty" title={t('activity.noMatches')} />}
+              }
+              const actorName = item.actorName ?? 'Unknown agent'
+              return (
+                <article className={'activity-chat-message' + (item.showIdentity ? ' activity-group-start' : ' activity-group-continuation')} key={item.key}>
+                  <div className="activity-identity-column">
+                    {item.showIdentity ? <span className="activity-identity-marker" style={{ '--activity-actor-hue': actorHue(actorName) } as React.CSSProperties} aria-hidden="true">{actorName.charAt(0).toUpperCase()}</span> : null}
+                  </div>
+                  <div className="activity-chat-content">
+                    {item.showIdentity ? <div className="activity-chat-header">
+                      {item.actorId ? <Link className="activity-actor-name" to={agentRoute(selectedId, item.actorId)}>{actorName}</Link> : <strong className="activity-actor-name">{actorName}</strong>}
+                      <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
+                    </div> : <time className="activity-continuation-time" dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>}
+                    <div className="activity-message-line">
+                      <p>{item.content}</p>
+                      {item.secondary ? <small>{item.secondary}</small> : null}
+                      {item.taskNamespace && item.taskId ? <Link className="activity-context-link text-link" to={taskRoute(selectedId, item.taskNamespace, item.taskId)}>{t('common.task')} {item.taskId}</Link> : null}
+                    </div>
+                    <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
+                      onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+                    </button>
+                    {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
+                      timestamp: activityFullTimestamp(item.createdAt), eventType: first.eventType, entityType: first.entityType,
+                      entityId: first.entityId, actorId: first.actorId, actorName: first.actorName, events: item.events,
+                    }, null, 2)}</pre> : null}
+                  </div>
+                </article>
+              )
+            })}
+          {feed.initialized && visible.length === 0 && <div className="activity-chat-empty">{t('activity.noMatches')}</div>}
+          </div>
+          {newItemsCount > 0 ? (
+            <button className="activity-new-items" type="button" onClick={() => {
+              const node = scrollRef.current
+              if (node) node.scrollTop = node.scrollHeight
+              stickToBottom.current = true
+              awayFromBottom.current = false
+              setNewItemsCount(0)
+            }}>↓ {newItemsCount}</button>
+          ) : null}
         </div>
       ) : null}
     </section>
