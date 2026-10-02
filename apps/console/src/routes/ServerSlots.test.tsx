@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -264,6 +264,23 @@ test('expanded slot detail exposes session, generations and admission policy', a
   expect(screen.getAllByText('Alpha Slot').length).toBeGreaterThan(0)
 })
 
+
+test('slot detail keeps raw Fleet and audit identifiers inside technical details and rotation secondary', async () => {
+  const user = userEvent.setup()
+  const item = slot()
+  item.access = { publicName: 'Alpha Slot', accessGeneration: 2, status: 'active' }
+  item.attachments = [{ nodeAttachmentId: 'attach-secret-42', nodeInstanceId: 'secondary', attachedAt: '2026-09-30T11:00:00Z', hardExpiresAt: '2026-09-30T12:30:00Z' }]
+  item.audit = [{ id: 77, eventType: 'slot.played', principalId: 'principal-secret-77', payload: {}, createdAt: '2026-09-30T11:10:00Z' }]
+  renderSlots([instance('live', item)])
+
+  await user.click(screen.getByRole('link', { name: 'Details' }))
+  const technical = screen.getByText('Technical details').closest('details') as HTMLElement
+  expect(technical).toContainElement(screen.getByText('attach-secret-42'))
+  expect(technical).toContainElement(screen.getByText('principal-secret-77'))
+  expect(technical).toContainElement(screen.getByText('#77'))
+  const detail = technical.closest('.slot-detail') as HTMLElement
+  expect(within(detail).getByRole('button', { name: 'Rotate Access code' })).toHaveClass('secondary-action')
+})
 
 test('policy controls mutate D/W/A/R and Legacy through the authenticated write path', async () => {
   const user = userEvent.setup()

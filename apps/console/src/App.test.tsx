@@ -109,7 +109,7 @@ test('invalid server-scoped direct link keeps destination intent and asks for a 
 test('changes and persists the Console language from Settings', async () => {
   renderApp('/settings')
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Language' }), 'ru')
-  expect(screen.getByRole('heading', { name: 'Настройки' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Настройки', level: 2 })).toBeInTheDocument()
   expect(screen.getByRole('navigation', { name: 'Навигация приложения' })).toHaveTextContent('Флот')
   expect(localStorage.getItem('terminal-mcp.console.locale')).toBe('ru')
   expect(document.documentElement.lang).toBe('ru')

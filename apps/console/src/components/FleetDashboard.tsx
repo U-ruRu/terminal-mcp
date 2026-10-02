@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 
 import type { FleetReadModel } from '../fleet/readModel'
+import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
 import { ServerCard } from './ServerCard'
 import { FeedbackState, SegmentedControl } from './UiPrimitives'
@@ -9,7 +10,7 @@ import { needsAttention, serverAlphaSort, serverProblemSort, serverVisualState }
 type FleetFilter = 'all' | 'attention' | 'live'
 
 export function FleetDashboard({ model }: { model: FleetReadModel }) {
-  const { t, number } = useI18n()
+  const { t, number, locale } = useI18n()
   const [filter, setFilter] = useState<FleetFilter>('all')
   const serverListRef = useRef<HTMLDivElement>(null)
   const states = model.servers.map(serverVisualState)
@@ -79,9 +80,9 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
         value={filter}
         onChange={(value) => setFilter(value as FleetFilter)}
         options={[
-          { value: 'all', label: t('common.all') + ' (' + number(model.summary.totalServers) + ')' },
-          { value: 'attention', label: t('fleet.needsAttention') + ' (' + number(problemCount) + ')' },
-          { value: 'live', label: t('fleet.live') + ' (' + number(model.summary.liveServers) + ')' },
+          { value: 'all', label: t('common.all') },
+          { value: 'attention', label: t('fleet.needsAttention') },
+          { value: 'live', label: t('fleet.live') },
         ]}
       />
 
@@ -111,8 +112,8 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
                   {session.attachments.length} {t('fleet.attached')}
                 </span>
                 <small>
-                  {t('fleet.age')} {session.sessionAgeSeconds ?? '—'}s · {t('fleet.remaining')}{' '}
-                  {session.sessionRemainingSeconds ?? '—'}s
+                  {t('fleet.age')} {formatDuration(session.sessionAgeSeconds, locale)} · {t('fleet.remaining')}{' '}
+                  {formatDuration(session.sessionRemainingSeconds, locale)}
                 </small>
                 <small>
                   {(session.scopedIntents ?? []).length > 0

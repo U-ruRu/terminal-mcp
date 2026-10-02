@@ -6,17 +6,11 @@ import { FeedbackState } from '../components/UiPrimitives'
 import type { ManagedFleetControlReadModel } from '../api/models'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
+import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
 import { agentRoute, meshRoute, taskRoute } from '../navigation/routes'
 
 
-function duration(seconds: number | undefined): string {
-  if (seconds === undefined) return 'unknown'
-  if (seconds < 60) return seconds + 's'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return minutes + 'm'
-  return Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm'
-}
 
 export function ServerWorkspace({
   model,
@@ -27,7 +21,7 @@ export function ServerWorkspace({
   instances: FleetInstanceView[]
   loadFleetControl?: (instanceId: string) => Promise<ManagedFleetControlReadModel>
 }) {
-  const { t, number, dateTime } = useI18n()
+  const { t, number, dateTime, locale } = useI18n()
   const { instanceId } = useParams()
   const [controlState, setControlState] = useState<{ instanceId: string; control?: ManagedFleetControlReadModel; unavailable?: boolean }>({ instanceId: '' })
   const server = model.servers.find((item) => item.instanceId === instanceId)
@@ -94,7 +88,7 @@ export function ServerWorkspace({
                   </div>
                   <p>{agent.intent || t('server.noIntent')}</p>
                   <p className="muted">
-                    {t('server.session')} {duration(agent.sessionAgeSeconds)} · {t('server.idle')} {duration(agent.idleSeconds)}
+                    {t('server.session')} {formatDuration(agent.sessionAgeSeconds, locale, t('common.unknown'))} · {t('server.idle')} {formatDuration(agent.idleSeconds, locale, t('common.unknown'))}
                     {' · '}{agent.lastActivity}
                   </p>
                   {claimed && (

@@ -50,12 +50,12 @@ test('fleet status action filters problem servers and focuses the compact list',
 test('filters problem servers without refetching fleet state', async () => {
   render(dashboard())
 
-  await userEvent.click(screen.getByRole('button', { name: 'Needs attention (2)' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Needs attention' }))
   expect(screen.getByRole('article', { name: 'Server A server' })).toBeInTheDocument()
   expect(screen.getByRole('article', { name: 'Server B server' })).toBeInTheDocument()
   expect(screen.queryByRole('article', { name: 'Server C server' })).not.toBeInTheDocument()
 
-  await userEvent.click(screen.getByRole('button', { name: 'Live (1)' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Live' }))
   expect(screen.getByRole('article', { name: 'Server C server' })).toBeInTheDocument()
   expect(screen.queryByRole('article', { name: 'Server B server' })).not.toBeInTheDocument()
 })
@@ -131,7 +131,7 @@ test('renders shared-session continuity without exposing private identity', () =
   const session = screen.getByRole('listitem', { name: 'Alpha global session' })
   expect(session).toHaveTextContent('origin server-a')
   expect(session).toHaveTextContent('2 attached')
-  expect(session).toHaveTextContent('remaining 180s')
+  expect(session).toHaveTextContent('remaining 3 min')
   expect(session).toHaveTextContent('Server A: origin task')
   expect(session).toHaveTextContent('Server B: continued task')
   expect(session).not.toHaveTextContent('private')

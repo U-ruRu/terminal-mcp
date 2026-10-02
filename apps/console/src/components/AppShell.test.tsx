@@ -42,8 +42,19 @@ test('root app bar exposes fleet status without duplicating server context', () 
   renderShell('/')
   const appBar = document.querySelector('.app-bar') as HTMLElement
   expect(appBar).toHaveAttribute('data-variant', 'root')
-  expect(within(appBar).getByRole('heading', { name: 'Console' })).toBeInTheDocument()
+  expect(within(appBar).getByRole('heading', { name: 'Fleet' })).toBeInTheDocument()
   expect(screen.getByText('Live 0')).toBeInTheDocument()
+})
+
+
+test('global app bars use destination-specific screen identity', () => {
+  renderShell('/connections')
+  let appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('heading', { name: 'Connections' })).toBeInTheDocument()
+  cleanup()
+  renderShell('/settings')
+  appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
 })
 
 test('Mesh entity route has deterministic return to Connections', () => {
