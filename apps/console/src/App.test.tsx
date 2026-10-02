@@ -42,7 +42,7 @@ test('requires explicit server selection for server-scoped global routes', async
 test('opens a stable server workspace from fleet dashboard', async () => {
   renderApp()
   const serverCard = screen.getByRole('article', { name: 'Server C server' })
-  await userEvent.click(within(serverCard).getByRole('link', { name: 'Open server' }))
+  await userEvent.click(within(serverCard).getByRole('link', { name: 'Server C · Live' }))
   expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
   expect(screen.getByText('https://server-c.example.invalid')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Back to fleet' })).toHaveAttribute('href', '/')
@@ -114,8 +114,9 @@ test('applies persisted Russian locale to fleet UI without translating server da
   renderApp('/')
   expect(screen.getByRole('heading', { name: 'Обзор флота' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
-  expect(screen.getByText('https://server-c.example.invalid')).toBeInTheDocument()
-  expect(screen.getAllByRole('link', { name: 'Открыть сервер' })).toHaveLength(3)
+  const serverCard = screen.getByRole('article', { name: 'Server C сервер' })
+  expect(serverCard).toHaveTextContent('0.10.1')
+  expect(within(serverCard).getByRole('link', { name: 'Server C · Онлайн' })).toHaveAttribute('href', '/servers/server-c')
 })
 
 test('applies persisted Spanish locale to explicit server chooser', () => {

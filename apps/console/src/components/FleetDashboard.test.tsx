@@ -21,12 +21,13 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
   render(dashboard())
 
   expect(screen.getByRole('heading', { name: 'Fleet overview' })).toBeInTheDocument()
-  expect(screen.getByRole('article', { name: 'Server A server' })).toHaveTextContent('Offline')
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('Stale')
-  expect(screen.getByRole('article', { name: 'Server C server' })).toHaveTextContent('Fresh')
+  expect(screen.getByRole('article', { name: 'Server A server' })).toHaveAttribute('data-state', 'offline')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'attention')
+  expect(screen.getByRole('article', { name: 'Server C server' })).toHaveAttribute('data-state', 'healthy')
   expect(screen.getByRole('article', { name: 'Server A server' })).toHaveTextContent('Unavailable')
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('cursor_gap')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('46%')
   expect(screen.getByRole('article', { name: 'Server C server' })).toHaveTextContent('28%')
+  expect(screen.getByRole('link', { name: 'Server C · Live' })).toHaveAttribute('href', '/servers/server-c')
 })
 
 test('filters problem servers without refetching fleet state', async () => {
@@ -44,7 +45,7 @@ test('filters problem servers without refetching fleet state', async () => {
 
 test('updates incrementally when the supplied fleet model changes', () => {
   const { rerender } = render(dashboard())
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('Stale')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'attention')
 
   const updated = {
     ...fixtureFleetModel,
@@ -64,7 +65,7 @@ test('updates incrementally when the supplied fleet model changes', () => {
   }
 
   rerender(dashboard(updated))
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('Fresh')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'healthy')
   expect(screen.getByLabelText('Fleet totals')).toHaveTextContent('Live2')
 })
 
