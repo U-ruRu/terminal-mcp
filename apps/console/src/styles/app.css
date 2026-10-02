@@ -1910,3 +1910,23 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 @media (prefers-reduced-motion: reduce) {
   .activity-item-entering { animation: none; }
 }
+
+/* Activity semantic/scroll continuity hardening. */
+.activity-chat-content {
+  min-width: min(180px, 100%);
+}
+.activity-message-line p,
+.activity-message-line small,
+.activity-actor-name {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.activity-message-line p,
+.activity-message-line small {
+  hyphens: none;
+}
+.activity-technical-payload,
+.activity-error-service code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

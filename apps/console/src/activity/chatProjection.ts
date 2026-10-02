@@ -119,6 +119,18 @@ function actorIdentity(event: ActivityEventReadModel): string | undefined {
   return undefined
 }
 
+function isInternalIdentity(value: string | undefined): boolean {
+  if (!value) return false
+  const trimmed = value.trim()
+  return /^(la[_-]|ws[_-]|device[_-]|logical_agent|work_session)/i.test(trimmed)
+}
+
+function publicName(value: string | undefined, identity?: string): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed || trimmed === identity || isInternalIdentity(trimmed)) return undefined
+  return trimmed
+}
+
 function actorFingerprint(identity: string): string {
   let hash = 2166136261
   for (const char of identity) {
@@ -141,18 +153,31 @@ function actorFor(
 ): { id?: string; name?: string; anonymous: boolean } {
   if (event.message) {
     const id = event.message.senderAgentId
-    const publicName = event.message.senderName || (id ? agentNames[id] : undefined)
-    return publicName ? { id, name: publicName, anonymous: false } : id
+    const resolvedName = publicName(id ? agentNames[id] : undefined, id) ?? publicName(event.message.senderName, id)
+    return resolvedName ? { id, name: resolvedName, anonymous: false } : id
       ? { id, name: anonymousActorName(id, locale), anonymous: true }
       : { anonymous: false }
   }
   const id = actorIdentity(event)
-  const publicName = event.actorName
-    ?? textField(event.payload, 'display_name', 'displayName', 'public_name', 'publicName')
-    ?? (id ? agentNames[id] : undefined)
-  if (publicName) return { id, name: publicName, anonymous: false }
+  const resolvedName = publicName(id ? agentNames[id] : undefined, id)
+    ?? publicName(event.actorName, id)
+    ?? publicName(textField(event.payload, 'display_name', 'displayName', 'public_name', 'publicName'), id)
+  if (resolvedName) return { id, name: resolvedName, anonymous: false }
   if (id) return { id, name: anonymousActorName(id, locale), anonymous: true }
   return { anonymous: false }
+}
+
+function recipientLabel(
+  idOrName: string,
+  explicitName: string | undefined,
+  locale: Locale,
+  agentNames: Record<string, string>,
+): string {
+  if (/^(all|everyone|broadcast|fleet|\*)$/i.test(idOrName)) return copyByLocale[locale].broadcast
+  const stableId = isInternalIdentity(idOrName) ? idOrName : undefined
+  return publicName(stableId ? agentNames[stableId] : explicitName, stableId)
+    ?? publicName(explicitName, stableId)
+    ?? (stableId ? anonymousActorName(stableId, locale) : idOrName)
 }
 
 function serviceEvent(event: ActivityEventReadModel): boolean {
@@ -298,9 +323,12 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
   if (event.message) {
     const actor = actorFor(event, copy, locale, agentNames)
     const target = event.message.target
-    const broadcast = /^(all|everyone|broadcast|fleet|\*)$/i.test(target)
-    const recipientNames = event.message.recipients.map((recipient) => recipient.name).filter(Boolean)
-    const routeLabel = broadcast ? copy.broadcast : recipientNames.length ? recipientNames.join(', ') : target
+    const recipientNames = event.message.recipients.map((recipient) =>
+      recipientLabel(recipient.agentId ?? recipient.name, recipient.name, locale, agentNames)
+    ).filter(Boolean)
+    const routeLabel = recipientNames.length
+      ? recipientNames.join(', ')
+      : recipientLabel(target, undefined, locale, agentNames)
     return {
       key: 'event:' + event.seq, kind: 'message', createdAt: event.createdAt, actorId: actor.id, actorName: actor.name, actorAnonymous: actor.anonymous,
       content: event.message.text, secondary: '→ ' + routeLabel,
@@ -335,7 +363,8 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
   }
 
   if (/task/.test(event.entityType + ' ' + event.eventType) || textField(event.payload, 'task_id', 'taskId')) {
-    const taskId = textField(event.payload, 'task_id', 'taskId') ?? event.entityId
+    const rawTaskId = textField(event.payload, 'task_id', 'taskId') ?? event.entityId
+    const taskId = rawTaskId.includes('/') ? rawTaskId.slice(rawTaskId.lastIndexOf('/') + 1) : rawTaskId
     const title = textField(event.payload, 'title')
     const action = (event.eventType + ' ' + state + ' ' + (textField(event.payload, 'action') ?? '')).toLowerCase()
     let content: string
@@ -370,45 +399,104 @@ export function projectActivity(
   serverName: string,
   agentNames: Record<string, string> = {},
 ): ActivityChatItem[] {
-  const result: ActivityChatItem[] = []
+  type SourceGroup = { kind: 'command' | 'message' | 'raw'; events: ActivityEventReadModel[] }
+  const groups: SourceGroup[] = []
   const commandIndex = new Map<string, number>()
+  const messageIndex = new Map<string, number>()
+
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     if (event.entityType === 'command' || event.eventType.includes('command')) {
       const correlation = textField(event.payload, 'command_id', 'commandId') ?? event.entityId
       const existing = commandIndex.get(correlation)
       if (existing === undefined) {
-        commandIndex.set(correlation, result.length)
-        result.push(projectCommand([event], locale, serverName, agentNames))
-      } else {
-        const prior = result[existing]
-        result[existing] = projectCommand([...prior.events, event], locale, serverName, agentNames)
-      }
+        commandIndex.set(correlation, groups.length)
+        groups.push({ kind: 'command', events: [event] })
+      } else groups[existing].events.push(event)
       continue
     }
-    result.push(projectOne(event, locale, serverName, agentNames))
+    if (event.entityType === 'message' || event.message) {
+      const correlation = event.message?.messageHash ?? event.entityId
+      const existing = messageIndex.get(correlation)
+      if (existing === undefined) {
+        messageIndex.set(correlation, groups.length)
+        groups.push({ kind: 'message', events: [event] })
+      } else groups[existing].events.push(event)
+      continue
+    }
+    groups.push({ kind: 'raw', events: [event] })
   }
-  const batched: ActivityChatItem[] = []
-  for (const item of result) {
-    const prior = batched.at(-1)
-    if (item.kind === 'message' && prior?.kind === 'message' && item.commands?.length && prior.commands?.length) {
+
+  const projected: ActivityChatItem[] = []
+  for (const group of groups) {
+    if (group.kind === 'command') {
+      projected.push(projectCommand(group.events, locale, serverName, agentNames))
+      continue
+    }
+    if (group.kind === 'message') {
+      const rich = group.events.find((event) => event.message)
+      if (!rich?.message) continue
+      const item = projectOne(rich, locale, serverName, agentNames)
+      item.key = 'message:' + rich.message.messageHash
+      item.events = group.events
+      projected.push(item)
+      continue
+    }
+    projected.push(projectOne(group.events[0], locale, serverName, agentNames))
+  }
+
+  const coalesced: ActivityChatItem[] = []
+  const lifecycleText = new Set(Object.values(copyByLocale).flatMap((copy) => [copy.ready, copy.started, copy.stopping, copy.suspended, copy.ended]))
+  for (const item of projected) {
+    const prior = coalesced.at(-1)
+    if (item.kind === 'message' && prior?.kind === 'message') {
       const priorActor = prior.actorId ?? prior.actorName
       const currentActor = item.actorId ?? item.actorName
-      const delta = new Date(item.createdAt).getTime() - new Date(prior.commands.at(-1)?.createdAt ?? prior.createdAt).getTime()
-      if (priorActor === currentActor && delta >= 0 && delta <= 120_000) {
-        const commands = [...prior.commands, ...item.commands]
-        batched[batched.length - 1] = {
+      const delta = new Date(item.createdAt).getTime() - new Date(prior.createdAt).getTime()
+      const sameActor = Boolean(priorActor && priorActor === currentActor)
+
+      if (sameActor && delta >= 0 && delta <= 2_000 && lifecycleText.has(prior.content) && lifecycleText.has(item.content)) {
+        const isDuplicate = prior.content === item.content
+        const isReadyToActive = prior.content === copyByLocale[locale].ready && item.content === copyByLocale[locale].started
+        const isStoppingToFinal = prior.content === copyByLocale[locale].stopping
+          && (item.content === copyByLocale[locale].ended || item.content === copyByLocale[locale].suspended)
+        if (isDuplicate || isReadyToActive || isStoppingToFinal) {
+          coalesced[coalesced.length - 1] = {
+            ...item,
+            key: prior.key,
+            createdAt: prior.createdAt,
+            events: [...prior.events, ...item.events],
+          }
+          continue
+        }
+      }
+
+      if (sameActor && item.taskId && prior.taskId === item.taskId && item.content === prior.content && delta >= 0 && delta <= 2_000) {
+        coalesced[coalesced.length - 1] = {
           ...prior,
-          content: commandSummary(commands.length, locale),
-          secondary: commandBatchStatus(commands, locale),
-          commands,
+          secondary: item.secondary ?? prior.secondary,
           events: [...prior.events, ...item.events],
         }
         continue
       }
+
+      if (item.commands?.length && prior.commands?.length) {
+        const deltaCommand = new Date(item.createdAt).getTime() - new Date(prior.commands.at(-1)?.createdAt ?? prior.createdAt).getTime()
+        if (sameActor && deltaCommand >= 0 && deltaCommand <= 120_000) {
+          const commands = [...prior.commands, ...item.commands]
+          coalesced[coalesced.length - 1] = {
+            ...prior,
+            content: commandSummary(commands.length, locale),
+            secondary: commandBatchStatus(commands, locale),
+            commands,
+            events: [...prior.events, ...item.events],
+          }
+          continue
+        }
+      }
     }
-    batched.push(item)
+    coalesced.push(item)
   }
-  return batched
+  return coalesced
 }
 
 function localDay(value: string): string {

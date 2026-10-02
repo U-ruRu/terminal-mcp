@@ -14,9 +14,9 @@ export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions
 
 const ACTIVITY_WINDOW = 100
 const HISTORY_BATCH = 250
-const HISTORY_RETAIN = 1000
 const BOTTOM_EDGE = 24
-const TOP_EDGE = 64
+const TOP_EDGE = 96
+const SCROLL_IDLE_MS = 140
 
 type FeedState = {
   events: ActivityFeedReadModel['events']
@@ -54,6 +54,24 @@ function scrollActivityToBottom(node: HTMLDivElement, behavior: ScrollBehavior =
   else node.scrollTop = node.scrollHeight
 }
 
+function activityServerLabel(instance: FleetInstanceView): string {
+  const configured = instance.profile.displayName.trim()
+  const haystack = (instance.profile.instanceId + ' ' + configured).toLowerCase()
+  const aliases: Array<[string, string]> = [
+    ['tokyo', 'Tokyo'],
+    ['bacloud', 'BacLOUD'],
+    ['backcloud', 'BacLOUD'],
+    ['firstbyte', 'Firstbyte'],
+    ['secondary', 'Secondary'],
+    ['main', 'Main'],
+  ]
+  if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(configured)) {
+    const match = aliases.find(([needle]) => haystack.includes(needle))
+    if (match) return match[1]
+  }
+  return configured || instance.profile.instanceId
+}
+
 function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
   if (code.includes('auth_unpaired')) return t('diagnostics.serverUnpaired')
   if (code.includes('direct_authority_auth_revoked') || code.includes('auth_revoked')) return t('diagnostics.authorizationRevoked')
@@ -72,12 +90,16 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const stickToBottom = useRef(true)
   const pendingHistoryAnchor = useRef<{ key: string; offset: number } | null>(null)
   const historyRequestPending = useRef(false)
+  const pendingOlderPage = useRef<ActivityFeedReadModel | null>(null)
+  const scrollState = useRef<'idle' | 'dragging' | 'flinging'>('idle')
+  const scrollIdleTimer = useRef<number | undefined>(undefined)
   const awayFromBottom = useRef(false)
 
   const requested = searchParams.get('server') ?? ''
   const requestedAgentId = searchParams.get('agent') ?? ''
   const selectedId = instances.some((item) => item.profile.instanceId === requested) ? requested : ''
   const selected = instances.find((item) => item.profile.instanceId === selectedId)
+  const selectedServerName = selected ? activityServerLabel(selected) : selectedId
   const feed = feeds[selectedId] ?? emptyFeed()
   const realtimeCursor = selected?.runtime.realtime?.cursor ?? 0
   const realtimeHighWater = selected?.runtime.realtime?.highWaterSeq ?? realtimeCursor
@@ -154,11 +176,11 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   }, [selectedId, loadActivity, initialBefore, feed.initialized])
 
   useEffect(() => {
-    if (!selectedId || !loadActivity || !feed.initialized || feed.loading || feed.historyMode || realtimeHighWater <= feed.cursor) return
+    if (!selectedId || !loadActivity || !feed.initialized || feed.loading || realtimeHighWater <= feed.cursor) return
     let cancelled = false
     void loadActivity(selectedId, { since: feed.cursor, limit: ACTIVITY_WINDOW }).then((page) => {
       if (cancelled) return
-      const serverName = selected?.profile.displayName ?? selectedId
+      const serverName = selectedServerName
       const forCurrentView = (events: ActivityFeedReadModel['events']) => {
         const categorized = filterActivityEvents(events, category)
         return requestedAgentId
@@ -167,7 +189,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       }
       const beforeItems = projectActivity(forCurrentView(feed.events), locale, serverName, agentNames)
       const beforeKeys = new Set(beforeItems.map((item) => item.key))
-      const mergedEvents = mergeActivityEvents(feed.events, page.events).slice(-ACTIVITY_WINDOW)
+      const mergedEvents = mergeActivityEvents(feed.events, page.events)
       const afterItems = projectActivity(forCurrentView(mergedEvents), locale, serverName, agentNames)
       const newKeys = afterItems.map((item) => item.key).filter((key) => !beforeKeys.has(key))
       if (newKeys.length > 0) {
@@ -186,7 +208,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? emptyFeed()), error: reason(error) } }))
     })
     return () => { cancelled = true }
-  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.events, feed.initialized, feed.loading, feed.historyMode, locale, selected?.profile.displayName, agentNames, category, requestedAgentId])
+  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.events, feed.initialized, feed.loading, locale, selectedServerName, agentNames, category, requestedAgentId])
 
   useLayoutEffect(() => {
     const node = scrollRef.current
@@ -202,17 +224,15 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       pendingHistoryAnchor.current = null
       return
     }
-    if (!feed.historyMode && stickToBottom.current) {
+    if (stickToBottom.current && scrollState.current === 'idle') {
       const behavior: ScrollBehavior = enteringItems.size > 0 ? 'smooth' : 'auto'
       scrollActivityToBottom(node, behavior)
     }
   }, [selectedId, feed.initialized, feed.historyMode, firstEventSeq, lastEventSeq, enteringItems])
 
-  const loadOlder = async () => {
+  const captureVisibleAnchor = () => {
     const node = scrollRef.current
-    const firstSeq = feed.events[0]?.seq
-    if (!node || !loadActivity || !selectedId || historyRequestPending.current || feed.loading || firstSeq === undefined) return
-    if (feed.oldestSeq !== undefined && firstSeq <= feed.oldestSeq) return
+    if (!node) return
     const nodeTop = node.getBoundingClientRect().top
     const firstVisible = [...node.querySelectorAll<HTMLElement>('[data-activity-key]')]
       .find((element) => element.getBoundingClientRect().bottom > nodeTop)
@@ -222,31 +242,69 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         offset: firstVisible.getBoundingClientRect().top - nodeTop,
       }
     }
+  }
+
+  const commitOlderPage = (page: ActivityFeedReadModel) => {
+    captureVisibleAnchor()
+    setFeeds((current) => {
+      const prior = current[selectedId] ?? feed
+      const merged = mergeActivityEvents(page.events, prior.events)
+      return {
+        ...current,
+        [selectedId]: {
+          ...prior,
+          events: merged,
+          cursor: Math.max(prior.cursor, merged.at(-1)?.seq ?? 0),
+          highWater: Math.max(prior.highWater, page.highWaterSeq),
+          oldestSeq: page.oldestSeq,
+          gap: prior.gap || page.gap,
+          loading: false,
+          historyMode: true,
+          error: undefined,
+        },
+      }
+    })
+    pendingOlderPage.current = null
+    historyRequestPending.current = false
+  }
+
+  const flushPendingOlder = () => {
+    if (scrollState.current !== 'idle' || !pendingOlderPage.current) return
+    commitOlderPage(pendingOlderPage.current)
+  }
+
+  const scheduleScrollIdle = () => {
+    if (scrollIdleTimer.current !== undefined) window.clearTimeout(scrollIdleTimer.current)
+    scrollIdleTimer.current = window.setTimeout(() => {
+      scrollState.current = 'idle'
+      const node = scrollRef.current
+      if (node) {
+        const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+        stickToBottom.current = distanceFromBottom <= BOTTOM_EDGE
+        awayFromBottom.current = distanceFromBottom > BOTTOM_EDGE
+        if (stickToBottom.current) setNewItemsCount(0)
+      }
+      flushPendingOlder()
+    }, SCROLL_IDLE_MS)
+  }
+
+  const loadOlder = async () => {
+    const firstSeq = feed.events[0]?.seq
+    if (!loadActivity || !selectedId || historyRequestPending.current || feed.loading || firstSeq === undefined) return
+    if (feed.oldestSeq !== undefined && firstSeq <= feed.oldestSeq) return
     historyRequestPending.current = true
     setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: true } }))
     try {
       const page = await loadActivity(selectedId, { before: firstSeq, limit: HISTORY_BATCH })
-      setFeeds((current) => {
-        const prior = current[selectedId] ?? feed
-        const window = mergeActivityEvents(page.events, prior.events).slice(-HISTORY_RETAIN)
-        return { ...current, [selectedId]: { ...prior, events: window, cursor: window.at(-1)?.seq ?? prior.cursor, highWater: page.highWaterSeq, oldestSeq: page.oldestSeq, gap: page.gap, loading: false, historyMode: true, error: undefined } }
-      })
+      if (scrollState.current === 'idle') commitOlderPage(page)
+      else {
+        pendingOlderPage.current = page
+        setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: false } }))
+      }
     } catch (error: unknown) {
       pendingHistoryAnchor.current = null
-      setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: false, error: reason(error) } }))
-    } finally {
+      pendingOlderPage.current = null
       historyRequestPending.current = false
-    }
-  }
-
-  const restoreLatest = async () => {
-    if (!loadActivity || !selectedId || feed.loading || !feed.historyMode) return
-    setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: true } }))
-    try {
-      const page = await loadActivity(selectedId, { before: Math.max(1, realtimeHighWater + 1), limit: ACTIVITY_WINDOW })
-      stickToBottom.current = true
-      setFeeds((current) => ({ ...current, [selectedId]: { events: page.events.slice(-ACTIVITY_WINDOW), cursor: page.highWaterSeq, highWater: page.highWaterSeq, oldestSeq: page.oldestSeq, gap: page.gap, initialized: true, loading: false, historyMode: false } }))
-    } catch (error: unknown) {
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? feed), loading: false, error: reason(error) } }))
     }
   }
@@ -254,12 +312,23 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const onScroll = () => {
     const node = scrollRef.current
     if (!node || !feed.initialized) return
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
-    stickToBottom.current = distanceFromBottom <= BOTTOM_EDGE
-    awayFromBottom.current = distanceFromBottom > BOTTOM_EDGE
-    if (stickToBottom.current) setNewItemsCount(0)
+    if (scrollState.current !== 'dragging') scrollState.current = 'flinging'
+    scheduleScrollIdle()
+    stickToBottom.current = false
+    awayFromBottom.current = true
     if (node.scrollTop <= TOP_EDGE) void loadOlder()
-    else if (feed.historyMode && distanceFromBottom <= BOTTOM_EDGE) void restoreLatest()
+  }
+
+  const onTouchStart = () => {
+    scrollState.current = 'dragging'
+    stickToBottom.current = false
+    awayFromBottom.current = true
+    if (scrollIdleTimer.current !== undefined) window.clearTimeout(scrollIdleTimer.current)
+  }
+
+  const onTouchEnd = () => {
+    scrollState.current = 'flinging'
+    scheduleScrollIdle()
   }
 
   const visible = useMemo(() => {
@@ -274,8 +343,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   }, [feed.events, category, requestedAgentId])
   const requestedAgent = selected?.runtime.realtime?.snapshot?.agents.find((agent) => agent.agentId === requestedAgentId)
   const logicalItems = useMemo(
-    () => projectActivity(visible, locale, selected?.profile.displayName ?? selectedId, agentNames),
-    [visible, locale, selected?.profile.displayName, selectedId, agentNames],
+    () => projectActivity(visible, locale, selectedServerName, agentNames),
+    [visible, locale, selectedServerName, agentNames],
   )
   const chatItems = useMemo(() => renderActivity(logicalItems, locale), [logicalItems, locale])
 
@@ -305,7 +374,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     <section className="activity-screen" aria-label={t('nav.activity')}>
       <div className="filter-bar">
         <div className="filter-controls">
-          <label className="ui-field">{t('common.server')}<select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}><option value="">{t('activity.chooseServer')}</option>{instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}</select></label>
+          <label className="ui-field">{t('common.server')}<select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}><option value="">{t('activity.chooseServer')}</option>{instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{activityServerLabel(item)}</option>)}</select></label>
           <label className="ui-field">{t('common.category')}<select aria-label={t('common.category')} value={category} onChange={(event) => setCategory(event.target.value as ActivityCategory)}>{categories.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}</select></label>
         </div>
         {selectedId && requestedAgentId ? (
@@ -338,7 +407,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
       {selectedId && !feed.error ? (
         <div className="activity-timeline-wrap">
-          <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
+          <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
             {feed.loading && feed.initialized ? <div className="activity-history-loading" aria-label={t('status.catchingUp')}>•••</div> : null}
             {chatItems.map((item) => {
               if (item.kind === 'date') return <div className="activity-date-separator" data-activity-key={item.key} key={item.key}>{item.label}</div>
@@ -356,7 +425,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
                     </button>
                     {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
-                      timestamp: activityFullTimestamp(item.createdAt), server: selected?.profile.displayName ?? selectedId,
+                      timestamp: activityFullTimestamp(item.createdAt), server: selectedServerName,
                       eventType: first.eventType, entityType: first.entityType, entityId: first.entityId, events: item.events,
                     }, null, 2)}</pre> : null}
                   </div>
@@ -408,7 +477,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                         })}
                       </div>
                     ) : expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
-                      timestamp: activityFullTimestamp(item.createdAt), server: selected?.profile.displayName ?? selectedId,
+                      timestamp: activityFullTimestamp(item.createdAt), server: selectedServerName,
                       eventType: first.eventType, entityType: first.entityType, entityId: first.entityId,
                       actorIdentity: item.actorId, actorName: item.actorName, events: item.events,
                     }, null, 2)}</pre> : null}
