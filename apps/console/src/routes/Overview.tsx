@@ -82,7 +82,6 @@ export function Overview({
               <Link className="fleet-mesh-row" to={meshRoute(mesh.meshId)} key={mesh.meshId}>
                 <span>
                   <strong>{mesh.displayName}</strong>
-                  <small>{mesh.meshId}</small>
                 </span>
                 <span className="muted">{number(mesh.members)} {t('fleet.servers')}</span>
                 <span aria-hidden="true">›</span>
