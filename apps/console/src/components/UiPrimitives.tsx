@@ -81,7 +81,7 @@ export function FeedbackState({
   detail?: ReactNode
   action?: ReactNode
 }) {
-  const role = variant === 'error' || variant === 'destructive' ? 'alert' : 'status'
+  const role = variant === 'error' || variant === 'destructive' ? 'alert' : variant === 'loading' || variant === 'partial' ? 'status' : undefined
   return (
     <div className={'feedback-state feedback-state-' + variant} role={role}>
       <span className="feedback-state-icon" aria-hidden="true">{feedbackIcon[variant]}</span>

@@ -1,6 +1,7 @@
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { ServerCard } from '../components/ServerCard'
+import { FeedbackState } from '../components/UiPrimitives'
 import { StatusBadge } from '../components/StatusBadge'
 import { serverVisualState, type ServerVisualState } from '../components/serverPresentation'
 import type { FleetReadModel } from '../fleet/readModel'
@@ -107,7 +108,7 @@ export function ServerWorkspace({
           <ul className="intent-list">
             {server.activeIntents.map((intent) => <li key={intent}>{intent}</li>)}
           </ul>
-        ) : <p className="muted">{t('server.noActiveSessions')}</p>}
+        ) : <FeedbackState variant="empty" title={t('server.noActiveSessions')} />}
       </article>
 
       <div className="server-actions" aria-label={t('server.navigation')}>

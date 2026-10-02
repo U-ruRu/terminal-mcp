@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from 'react'
 import type { FleetReadModel } from '../fleet/readModel'
 import { useI18n } from '../i18n/useI18n'
 import { ServerCard } from './ServerCard'
-import { SegmentedControl } from './UiPrimitives'
+import { FeedbackState, SegmentedControl } from './UiPrimitives'
 import { needsAttention, serverAlphaSort, serverProblemSort, serverVisualState } from './serverPresentation'
 
 type FleetFilter = 'all' | 'attention' | 'live'
@@ -105,7 +105,7 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
           <h3>{t('fleet.agentContinuity')}</h3>
         </div>
         {model.sessions.length === 0 ? (
-          <p className="muted">{t('fleet.noActiveSharedSessions')}</p>
+          <FeedbackState variant="empty" title={t('fleet.noActiveSharedSessions')} />
         ) : (
           <ul className="session-list">
             {model.sessions.map((session) => (
@@ -150,7 +150,7 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
           <h3>{t('fleet.acrossFleet')}</h3>
         </div>
         {model.recentActivity.length === 0 ? (
-          <p className="muted">{t('fleet.noRecentActivity')}</p>
+          <FeedbackState variant="empty" title={t('fleet.noRecentActivity')} />
         ) : (
           <ol className="activity-list">
             {model.recentActivity.slice(0, 8).map((item, index) => (
