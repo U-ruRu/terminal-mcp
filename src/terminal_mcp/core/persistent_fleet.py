@@ -347,7 +347,18 @@ class PersistentFleetBridge:
         data = response.json()
         if not data.get("ok"):
             raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
-        return dict(data["result"])
+        result = dict(data["result"])
+        if operation in {"status", "status-name"}:
+            logical_agent_id = str(result.get("logical_agent_id") or "")
+            learned_authority = str(result.get("authority_node_id") or authority_node_id)
+            authority_epoch = int(result.get("authority_epoch") or 0)
+            if logical_agent_id and authority_epoch > 0:
+                await self.publish_authority(
+                    logical_agent_id,
+                    learned_authority,
+                    authority_epoch,
+                )
+        return result
 
     async def route_info(self, logical_agent_id: str) -> dict | None:
         if self.control_store is None:

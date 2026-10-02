@@ -271,6 +271,8 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
                 **backend._session_result(access, session),
                 "logical_agent_id": access["logical_agent_id"],
                 "work_session_id": session.work_session_id,
+                "authority_node_id": session.authority_node_id,
+                "authority_epoch": session.authority_epoch,
             },
         }
 
@@ -299,6 +301,8 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
             **backend._session_result(access, session),
             "logical_agent_id": access["logical_agent_id"],
             "work_session_id": session.work_session_id,
+            "authority_node_id": session.authority_node_id,
+            "authority_epoch": session.authority_epoch,
         }
         return {"ok": True, "result": result}
 

@@ -17,6 +17,7 @@ from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
+from terminal_mcp.fleet.control_storage import FleetControlStore
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -191,6 +192,13 @@ async def test_remote_access_identity_tracks_authority_session_across_end_and_re
             timeout=1.0,
         )
 
+    caller_control = FleetControlStore(
+        tmp_path / "caller-fleet-control.sqlite3",
+        fleet_id="fleet-a",
+        node_id="main",
+        control_node_id="main",
+    )
+    await caller_control.initialize()
     caller_bridge = PersistentFleetBridge(
         caller_config,
         caller_store,
@@ -198,6 +206,7 @@ async def test_remote_access_identity_tracks_authority_session_across_end_and_re
         object(),
         TaskStore(caller_repo.path),
         client_factory=authority_client,
+        control_store=caller_control,
         control_node_id="main",
         access_authority=caller_auth,
     )
@@ -214,6 +223,18 @@ async def test_remote_access_identity_tracks_authority_session_across_end_and_re
     assert active["logical_agent_id"] == logical_agent_id
     assert active["work_session_id"] == first["work_session_id"]
     assert active["session_epoch"] == first["session_epoch"]
+    route = await caller_bridge.route_info(logical_agent_id)
+    assert route is not None
+    assert route["authority_node_id"] == "bacloud"
+    assert route["authority_epoch"] == 1
+    assert (
+        await caller_bridge.inbox_obligations(
+            logical_agent_id,
+            work_session_id=first["work_session_id"],
+            session_epoch=first["session_epoch"],
+        )
+        == []
+    )
 
     ended = await authority_lifecycle.session_end(
         logical_agent_id,
