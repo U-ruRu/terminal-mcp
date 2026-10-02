@@ -1,11 +1,13 @@
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, Navigate, useParams } from 'react-router-dom'
 
 import { ServerCard } from '../components/ServerCard'
 import { FeedbackState } from '../components/UiPrimitives'
+import type { ManagedFleetControlReadModel } from '../api/models'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
-import { activityRoute, agentRoute, contextRoute, healthRoute, taskRoute, tasksRoute } from '../navigation/routes'
+import { activityRoute, agentRoute, agentsRoute, contextRoute, healthRoute, meshRoute, slotsRoute, taskRoute, tasksRoute } from '../navigation/routes'
 
 
 function duration(seconds: number | undefined): string {
@@ -19,26 +21,46 @@ function duration(seconds: number | undefined): string {
 export function ServerWorkspace({
   model,
   instances,
+  loadFleetControl,
 }: {
   model: FleetReadModel
   instances: FleetInstanceView[]
+  loadFleetControl?: (instanceId: string) => Promise<ManagedFleetControlReadModel>
 }) {
   const { t, number, dateTime } = useI18n()
   const { instanceId } = useParams()
-  const navigate = useNavigate()
+  const [controlState, setControlState] = useState<{ instanceId: string; control?: ManagedFleetControlReadModel; unavailable?: boolean }>({ instanceId: '' })
   const server = model.servers.find((item) => item.instanceId === instanceId)
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
+  useEffect(() => {
+    if (!instanceId || !loadFleetControl) return
+    let cancelled = false
+    void loadFleetControl(instanceId)
+      .then((control) => { if (!cancelled) setControlState({ instanceId, control }) })
+      .catch(() => { if (!cancelled) setControlState({ instanceId, unavailable: true }) })
+    return () => { cancelled = true }
+  }, [instanceId, loadFleetControl])
+
   if (!server) return <Navigate to="/" replace />
 
   const snapshot = instance?.runtime.realtime?.snapshot
   const agents = snapshot?.agents.filter((agent) => agent.status === 'active') ?? []
   const tasks = snapshot?.tasks ?? []
+  const control = controlState.instanceId === server.instanceId ? controlState.control : undefined
+  const localNode = control?.managed ? control.nodes.find((node) => node.nodeId === control.nodeId && node.state !== 'detached') : undefined
+  const mesh = localNode?.meshId ? control?.meshes.find((item) => item.meshId === localNode.meshId) : undefined
+  const membershipKnown = controlState.instanceId === server.instanceId && (Boolean(control) || Boolean(controlState.unavailable))
 
   return (
     <section className="stack" aria-label={t('title.server')}>
-      <div className="server-detail-toolbar">
+      <div className="server-entity-context">
         <p className="muted server-origin">{server.origin}</p>
-        <label className="server-switcher"><span>{t('server.switch')}</span><select aria-label={t('aria.switchServer')} value={server.instanceId} onChange={(event) => navigate('/servers/' + encodeURIComponent(event.target.value))}>{model.servers.map((item) => <option key={item.instanceId} value={item.instanceId}>{item.displayName}</option>)}</select></label>
+        <span className="server-membership">
+          {t('connections.mesh')}: {' '}
+          {!membershipKnown ? t('status.catchingUp') : controlState.unavailable ? t('connections.unknown') : mesh ? (
+            <Link className="text-link" to={meshRoute(mesh.meshId)}>{mesh.displayName}</Link>
+          ) : localNode || control?.managed === false ? t('connections.standalone') : t('connections.unknown')}
+        </span>
       </div>
 
       {server.connectivity !== 'live' ? (
@@ -92,13 +114,14 @@ export function ServerWorkspace({
         ) : <FeedbackState variant="empty" title={t('server.noActiveSessions')} />}
       </article>
 
-      <div className="server-actions" aria-label={t('server.navigation')}>
-        <Link className="nav-link" to="/">{t('nav.backToFleet')}</Link>
+      <nav className="server-actions server-local-navigation" aria-label={t('server.navigation')}>
+        <Link className="nav-link" to={agentsRoute(server.instanceId)}>{t('nav.agents')}</Link>
+        <Link className="nav-link" to={slotsRoute(server.instanceId)}>{t('nav.slots')}</Link>
         <Link className="nav-link" to={tasksRoute(server.instanceId)}>{t('nav.tasks')}</Link>
         <Link className="nav-link" to={activityRoute(server.instanceId)}>{t('nav.activity')}</Link>
         <Link className="nav-link" to={contextRoute(server.instanceId)}>{t('nav.context')}</Link>
         <Link className="nav-link" to={healthRoute(server.instanceId)}>{t('nav.health')}</Link>
-      </div>
+      </nav>
     </section>
   )
 }

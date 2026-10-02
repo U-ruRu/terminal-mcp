@@ -34,8 +34,8 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
   return (
     <AppShell servers={model.servers}>
       <Routes>
-        <Route path="/" element={<Overview model={model} />} />
-        <Route path="/servers" element={<Overview model={model} />} />
+        <Route path="/" element={<Overview model={model} loadFleetControl={loadFleetControl} />} />
+        <Route path="/servers" element={<Overview model={model} loadFleetControl={loadFleetControl} />} />
         <Route path="/agents" element={<ServerChooser model={model} section="agents" />} />
         <Route path="/slots" element={<ServerChooser model={model} section="slots" />} />
         <Route path="/tasks" element={<ServerChooser model={model} section="tasks" />} />
@@ -43,9 +43,10 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/health" element={<ServerChooser model={model} section="health" />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
+        <Route path="/meshes/:meshId" element={<Connections />} />
         <Route path="/ui-kit" element={<UiKitShowcase />} />
         <Route path="/connect" element={<Connections />} />
-        <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} />} />
+        <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} loadFleetControl={loadFleetControl} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
