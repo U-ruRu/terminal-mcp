@@ -1,6 +1,6 @@
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 
-import { ResourceMetric } from '../components/ResourceMetric'
+import { ServerCard } from '../components/ServerCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { serverVisualState, type ServerVisualState } from '../components/serverPresentation'
 import type { FleetReadModel } from '../fleet/readModel'
@@ -65,29 +65,11 @@ export function ServerWorkspace({
         </div>
       ) : null}
 
-      <div className="fleet-summary" aria-label={t('server.summary')}>
-        <article className="card"><span>{t('server.version')}</span><strong>{server.version ?? t('common.unavailable')}</strong></article>
-        <article className="card"><span>{t('server.agents')}</span><strong>{number(server.activeAgentCount)}</strong></article>
-        <article className="card"><span>{t('server.runningTasks')}</span><strong>{number(server.taskCounts.inProgress)}</strong></article>
-        <article className="card"><span>{t('server.blocked')}</span><strong>{number(server.taskCounts.blocked)}</strong></article>
-        <article className="card"><span>{t('server.alerts')}</span><strong>{number(server.communication.alerts)}</strong></article>
-        <article className="card"><span>{t('server.replies')}</span><strong>{number(server.communication.replyRequired)}</strong></article>
-      </div>
+      <ServerCard server={server} variant="large" interactive={false} />
 
-      <article className="panel">
-        <div>
-          <p className="eyebrow">{t('server.hostResources')}</p>
-          <h3>{t('server.lastTelemetry')}</h3>
-        </div>
-        <dl className="resource-grid">
-          <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
-          <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
-          <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
-        </dl>
-        <p className="muted">
-          {server.lastSeenAt ? t('server.lastActivity') + ' ' + dateTime(server.lastSeenAt) : t('server.noActivityTimestamp')}
-        </p>
-      </article>
+      <p className="muted server-card-telemetry-time">
+        {server.lastSeenAt ? t('server.lastActivity') + ' ' + dateTime(server.lastSeenAt) : t('server.noActivityTimestamp')}
+      </p>
 
       <article className="panel">
         <div>
