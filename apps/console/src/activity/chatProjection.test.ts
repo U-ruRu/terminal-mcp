@@ -65,11 +65,11 @@ test('batches consecutive commands by the same actor without exposing command ha
   expect(items[1].content).toBe('Вызвал команду')
 })
 
-test('uses command attribution actor instead of leaving a command under an unknown agent', () => {
+test('resolves command attribution logical agent to its public display name', () => {
   const items = projectActivity([
     event(1, { eventType: 'command.created', entityType: 'command', entityId: 'cmd-attributed', actorId: undefined, actorName: undefined, payload: { command: 'date', status: 'queued' } }),
-    event(2, { eventType: 'command.attribution', entityType: 'command', entityId: 'cmd-attributed', actorId: 'la-real', actorName: 'Operator', payload: { status: 'running' } }),
-  ], 'en', 'Main')
+    event(2, { eventType: 'command.attribution', entityType: 'command', entityId: 'cmd-attributed', actorId: undefined, actorName: undefined, payload: { logical_agent_id: 'la-real', status: 'running' } }),
+  ], 'en', 'Main', { 'la-real': 'Operator' })
   expect(items).toHaveLength(1)
   expect(items[0]).toMatchObject({ actorId: 'la-real', actorName: 'Operator', content: 'Ran a command' })
 })

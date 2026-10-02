@@ -102,11 +102,16 @@ function stateOf(event: ActivityEventReadModel): string {
   return (textField(event.payload, 'state', 'status', 'action', 'operational_status') ?? '').toLowerCase()
 }
 
-function actorFor(event: ActivityEventReadModel, copy: Copy): { id?: string; name: string } {
+function actorFor(
+  event: ActivityEventReadModel,
+  copy: Copy,
+  agentNames: Record<string, string> = {},
+): { id?: string; name: string } {
   if (event.message) return { id: event.message.senderAgentId, name: event.message.senderName || copy.unknownAgent }
+  const id = event.actorId ?? textField(event.payload, 'logical_agent_id', 'logicalAgentId', 'agent_id', 'agentId')
   return {
-    id: event.actorId,
-    name: event.actorName ?? textField(event.payload, 'display_name', 'displayName', 'public_name', 'name') ?? copy.unknownAgent,
+    id,
+    name: event.actorName ?? textField(event.payload, 'display_name', 'displayName', 'public_name', 'name') ?? (id ? agentNames[id] : undefined) ?? copy.unknownAgent,
   }
 }
 
@@ -145,11 +150,13 @@ function commandSummary(count: number, locale: Locale): string {
   return 'Ran ' + count + ' commands'
 }
 
-function projectCommand(events: ActivityEventReadModel[], locale: Locale): ActivityChatItem {
+function projectCommand(events: ActivityEventReadModel[], locale: Locale, agentNames: Record<string, string>): ActivityChatItem {
   const copy = copyByLocale[locale]
   const first = events[0]
-  const actorEvent = events.find((event) => event.actorName || event.actorId || textField(event.payload, 'display_name', 'displayName', 'public_name', 'name')) ?? first
-  const actor = actorFor(actorEvent, copy)
+  const actorEvent = events.find((event) =>
+    event.actorName || event.actorId || textField(event.payload, 'logical_agent_id', 'logicalAgentId', 'agent_id', 'agentId', 'display_name', 'displayName', 'public_name', 'name')
+  ) ?? first
+  const actor = actorFor(actorEvent, copy, agentNames)
   const command = events.map((event) => textField(event.payload, 'command', 'cmd')).find(Boolean)
   const correlation = textField(first.payload, 'command_id', 'commandId') ?? first.entityId
   const entry: ActivityCommandEntry = {
@@ -171,10 +178,10 @@ function projectCommand(events: ActivityEventReadModel[], locale: Locale): Activ
   }
 }
 
-function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: string): ActivityChatItem {
+function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: string, agentNames: Record<string, string>): ActivityChatItem {
   const copy = copyByLocale[locale]
   if (event.message) {
-    const actor = actorFor(event, copy)
+    const actor = actorFor(event, copy, agentNames)
     const target = event.message.target
     const broadcast = /^(all|everyone|broadcast|fleet|\*)$/i.test(target)
     const recipientNames = event.message.recipients.map((recipient) => recipient.name).filter(Boolean)
@@ -198,7 +205,7 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
     return { key: 'event:' + event.seq, kind: 'service', createdAt: event.createdAt, content, tone, events: [event] }
   }
 
-  const actor = actorFor(event, copy)
+  const actor = actorFor(event, copy, agentNames)
   const state = stateOf(event)
   if (/logical_agent|work_session|session|agent/.test(event.eventType + ' ' + event.entityType)) {
     const content = state === 'armed' ? copy.ready
@@ -235,7 +242,12 @@ function projectOne(event: ActivityEventReadModel, locale: Locale, serverName: s
   }
 }
 
-export function projectActivity(events: ActivityEventReadModel[], locale: Locale, serverName: string): ActivityChatItem[] {
+export function projectActivity(
+  events: ActivityEventReadModel[],
+  locale: Locale,
+  serverName: string,
+  agentNames: Record<string, string> = {},
+): ActivityChatItem[] {
   const result: ActivityChatItem[] = []
   const commandIndex = new Map<string, number>()
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
@@ -244,14 +256,14 @@ export function projectActivity(events: ActivityEventReadModel[], locale: Locale
       const existing = commandIndex.get(correlation)
       if (existing === undefined) {
         commandIndex.set(correlation, result.length)
-        result.push(projectCommand([event], locale))
+        result.push(projectCommand([event], locale, agentNames))
       } else {
         const prior = result[existing]
-        result[existing] = projectCommand([...prior.events, event], locale)
+        result[existing] = projectCommand([...prior.events, event], locale, agentNames)
       }
       continue
     }
-    result.push(projectOne(event, locale, serverName))
+    result.push(projectOne(event, locale, serverName, agentNames))
   }
   const batched: ActivityChatItem[] = []
   for (const item of result) {

@@ -71,6 +71,10 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const feed = feeds[selectedId] ?? emptyFeed()
   const realtimeCursor = selected?.runtime.realtime?.cursor ?? 0
   const realtimeHighWater = selected?.runtime.realtime?.highWaterSeq ?? realtimeCursor
+  const agentNames = useMemo(
+    () => Object.fromEntries((selected?.runtime.realtime?.snapshot?.agents ?? []).map((agent) => [agent.agentId, agent.name])),
+    [selected?.runtime.realtime?.snapshot?.agents],
+  )
   const initialBefore = Math.max(1, realtimeHighWater + 1)
   const firstEventSeq = feed.events[0]?.seq
   const lastEventSeq = feed.events.at(-1)?.seq
@@ -145,7 +149,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     void loadActivity(selectedId, { since: feed.cursor, limit: ACTIVITY_WINDOW }).then((page) => {
       if (cancelled) return
       if (awayFromBottom.current && page.events.length > 0) {
-        setNewItemsCount((current) => current + projectActivity(page.events, locale, selected?.profile.displayName ?? selectedId).length)
+        setNewItemsCount((current) => current + projectActivity(page.events, locale, selected?.profile.displayName ?? selectedId, agentNames).length)
       }
       setFeeds((current) => {
         const prior = current[selectedId] ?? emptyFeed()
@@ -157,7 +161,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? emptyFeed()), error: reason(error) } }))
     })
     return () => { cancelled = true }
-  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.initialized, feed.loading, feed.historyMode, locale, selected?.profile.displayName])
+  }, [selectedId, loadActivity, realtimeHighWater, feed.cursor, feed.initialized, feed.loading, feed.historyMode, locale, selected?.profile.displayName, agentNames])
 
   useEffect(() => {
     const node = scrollRef.current
@@ -220,8 +224,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   }, [feed.events, category, requestedAgentId])
   const requestedAgent = selected?.runtime.realtime?.snapshot?.agents.find((agent) => agent.agentId === requestedAgentId)
   const logicalItems = useMemo(
-    () => projectActivity(visible, locale, selected?.profile.displayName ?? selectedId),
-    [visible, locale, selected?.profile.displayName, selectedId],
+    () => projectActivity(visible, locale, selected?.profile.displayName ?? selectedId, agentNames),
+    [visible, locale, selected?.profile.displayName, selectedId, agentNames],
   )
   const chatItems = useMemo(() => renderActivity(logicalItems, locale), [logicalItems, locale])
 
