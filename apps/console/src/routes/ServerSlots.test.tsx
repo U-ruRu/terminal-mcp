@@ -205,6 +205,7 @@ test('cached/offline read state does not disable a healthy authenticated write r
   renderSlots([instance('offline', slot())], mutate)
   expect(screen.getByText('Paused')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Make available' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Make available' })).toHaveClass('primary-action')
   expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('status')).toHaveTextContent('cached')
   await user.click(screen.getByRole('button', { name: 'Make available' }))
@@ -295,6 +296,8 @@ test('policy controls mutate D/W/A/R and Legacy through the authenticated write 
   await user.clear(warning); await user.type(warning, '1 min')
   await user.clear(alert); await user.type(alert, '2 min')
   await user.clear(rearm); await user.type(rearm, '15 sec')
+  expect(screen.getByRole('button', { name: 'Save session policy' })).toHaveClass('primary-action')
+  expect(screen.getByRole('button', { name: 'Create slot' })).toHaveClass('primary-action')
   await user.click(screen.getByRole('button', { name: 'Save session policy' }))
   expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { duration_seconds: 180, warning_after_seconds: 60, alert_after_seconds: 120, rearm_after_seconds: 15 })
 

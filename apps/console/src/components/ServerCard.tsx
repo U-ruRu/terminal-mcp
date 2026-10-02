@@ -4,7 +4,7 @@ import type { FleetServerReadModel } from '../fleet/readModel'
 import { useI18n } from '../i18n/useI18n'
 import { ResourceMetric } from './ResourceMetric'
 import { StatusBadge } from './StatusBadge'
-import { serverVisualState, type ServerVisualState } from './serverPresentation'
+import { resourceVisualState, serverVisualState, type ServerVisualState } from './serverPresentation'
 
 function statusLabel(state: ServerVisualState, t: ReturnType<typeof useI18n>['t']): string {
   if (state === 'healthy') return t('status.live')
@@ -27,6 +27,8 @@ export function ServerCard({
 }: ServerCardProps) {
   const { t, number } = useI18n()
   const state = serverVisualState(server)
+  const resourceStates = (['cpu', 'memory', 'filesystem'] as const).map((kind) => resourceVisualState(server, kind))
+  const resourceIssue = server.connectivity !== 'offline' && resourceStates.some((resourceState) => resourceState !== 'normal')
 
   const content = (
     <>
@@ -43,11 +45,22 @@ export function ServerCard({
         </div>
       ) : null}
 
-      <dl className="server-card-metrics">
-        <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
-        <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
-        <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
-      </dl>
+      {resourceIssue ? (
+        <dl className="server-card-metrics server-card-metrics-attention" aria-label={t('server.hostResources')}>
+          <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
+          <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
+          <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
+        </dl>
+      ) : variant === 'large' ? (
+        <details className="server-resource-details">
+          <summary>{t('server.hostResources')}</summary>
+          <dl className="server-card-metrics">
+            <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
+            <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
+            <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
+          </dl>
+        </details>
+      ) : null}
 
       {variant === 'large' ? (
         <div className="server-card-large-summary">

@@ -700,7 +700,7 @@ export function Connections() {
   ].filter((group) => group.profiles.length > 0)
 
   return (
-    <section className="stack" aria-label={routeMeshId ? t('title.mesh') : t('connections.title')}>
+    <section className="stack compact-operational-surface connections-surface" aria-label={routeMeshId ? t('title.mesh') : t('connections.title')}>
       {!routeMeshId ? <div className="page-heading">
         <div>
           <p className="eyebrow">{t('connections.fleetAccess')}</p>
@@ -710,7 +710,7 @@ export function Connections() {
         <span className="environment-badge">{number(profiles.length)} {t('connections.saved')}</span>
       </div> : null}
 
-      {!routeMeshId ? <form className="panel connection-form" onSubmit={onSubmit}>
+      {!routeMeshId ? <form className="surface-section connection-form" onSubmit={onSubmit}>
         <div>
           <p className="eyebrow">{t('connections.addServer')}</p>
           <h3>{t('connections.pairTerminal')}</h3>
@@ -735,17 +735,17 @@ export function Connections() {
             onChange={(event) => setDisplayName(event.target.value)}
           />
         </label>
-        <button type="submit" disabled={submitting}>
+        <button type="submit" className="primary-action" disabled={submitting}>
           {submitting ? t('connections.pairing') : t('connections.addServerAction')}
         </button>
-        {error ? <p className="connection-error" role="alert">{error}</p> : null}
+        <p className={'mutation-status-slot ' + (error ? 'connection-error' : 'muted')} role={error ? 'alert' : undefined} aria-live={error ? 'polite' : undefined}>{error || '\u00a0'}</p>
       </form> : null}
 
       {routeMeshId && !selectedMesh && meshes.length > 0 ? (
         <FeedbackState variant="partial" title={t('connections.unknown')} detail={t('connections.meshState') + ': ' + t('connections.unavailable')} />
       ) : null}
 
-      <article className="panel mesh-control">
+      <article className="surface-section mesh-control">
         <div className="connection-card-heading">
           <div>
             <p className="eyebrow">{t('connections.mesh')}</p>
@@ -812,6 +812,7 @@ export function Connections() {
             <div className="connection-actions">
               <button
                 type="button"
+                className="primary-action"
                 disabled={controlBusy || !writeProfile}
                 onClick={() => void renameMesh()}
               >
@@ -854,6 +855,7 @@ export function Connections() {
         <div className="connection-actions">
           <button
             type="button"
+            className="primary-action"
             disabled={controlBusy || !newMeshControlInstanceId}
             onClick={() => void createMesh()}
           >
@@ -861,21 +863,19 @@ export function Connections() {
           </button>
         </div>
         </> : null}
-        {meshMutationPhase ? (
-          <p className={meshMutationPhase === 'failed' ? 'connection-error' : 'muted'} role="status">
-            {meshMutationPhase === 'pending'
+        <p className={'mutation-status-slot ' + (controlError || meshMutationPhase === 'failed' ? 'connection-error' : 'muted')} role={controlError ? 'alert' : meshMutationPhase || (routeMeshId && authoritativeFreshness !== 'fresh') ? 'status' : undefined} aria-live={controlError || meshMutationPhase || (routeMeshId && authoritativeFreshness !== 'fresh') ? 'polite' : undefined}>
+          {controlError
+            ? t('connections.actionRequired')
+            : meshMutationPhase === 'pending'
               ? t('connections.pending')
               : meshMutationPhase === 'confirmed'
                 ? t('connections.confirmed')
-                : t('connections.failed')}
-          </p>
-        ) : null}
-        {routeMeshId && authoritativeFreshness !== 'fresh' ? (
-          <p className="muted" role="status">
-            {t('connections.syncState')}: {t('connections.unavailable')}
-          </p>
-        ) : null}
-        {controlError ? <p className="connection-error" role="alert">{t('connections.actionRequired')}</p> : null}
+                : meshMutationPhase === 'failed'
+                  ? t('connections.failed')
+                  : routeMeshId && authoritativeFreshness !== 'fresh'
+                    ? t('connections.syncState') + ': ' + t('connections.unavailable')
+                    : '\u00a0'}
+        </p>
       </article>
 
       <div className="connection-list">
@@ -952,31 +952,31 @@ export function Connections() {
                           </select>
                         </label>
                       ) : null}
-                      {membershipMutation ? (
-                        <p className={membershipMutation.phase === 'failed' ? 'connection-error' : 'muted'} role="status">
-                          {membershipMutation.phase === 'pending'
-                            ? t('connections.applying')
-                            : membershipMutation.phase === 'confirmed'
-                              ? t('connections.confirmed')
-                              : t('connections.actionRequired')}
-                        </p>
-                      ) : null}
-                      {member?.lastError ? <p className="connection-error">{t('connections.actionRequired')}</p> : null}
-                      {observed?.error ? <p className="connection-error">{t('connections.controlError')}</p> : null}
-                      {state?.status === 'error' ? (
-                        <p className="connection-error">
-                          {state.message}{state.retryable ? ' — ' + t('connections.retryAvailable') : ''}
-                        </p>
-                      ) : null}
+                      <p className={'mutation-status-slot connection-card-status-slot ' + (membershipMutation?.phase === 'failed' || member?.lastError || observed?.error || state?.status === 'error' ? 'connection-error' : 'muted')} role={member?.lastError || observed?.error || state?.status === 'error' ? 'alert' : membershipMutation ? 'status' : undefined} aria-live={member?.lastError || observed?.error || state?.status === 'error' || membershipMutation ? 'polite' : undefined}>
+                        {state?.status === 'error'
+                          ? t('connections.actionRequired') + (state.retryable ? ' · ' + t('connections.retryAvailable') : '')
+                          : observed?.error
+                            ? t('connections.controlError')
+                            : member?.lastError
+                              ? t('connections.actionRequired')
+                              : membershipMutation?.phase === 'pending'
+                                ? t('connections.applying')
+                                : membershipMutation?.phase === 'confirmed'
+                                  ? t('connections.confirmed')
+                                  : membershipMutation?.phase === 'failed'
+                                    ? t('connections.actionRequired')
+                                    : '\u00a0'}
+                      </p>
                       <div className="connection-actions">
                         {!routeMeshId && state?.status === 'error' && state.retryable ? (
-                          <button type="button" onClick={() => void retry(profile.instanceId)}>
+                          <button type="button" className="primary-action" onClick={() => void retry(profile.instanceId)}>
                             {t('connections.retry')}
                           </button>
                         ) : null}
                         {routeMeshId && observed?.control?.managed ? (
                           <button
                             type="button"
+                            className="secondary-action"
                             disabled={controlBusy || state?.status !== 'connected'}
                             onClick={() => void rotateTrust(profile.instanceId)}
                           >

@@ -27,6 +27,15 @@ function taskStatusLabel(
   return t('tasks.completed')
 }
 
+
+function runtimeStatusLabel(value: string, t: ReturnType<typeof useI18n>['t']): string {
+  if (value === 'live') return t('status.live')
+  if (value === 'offline') return t('status.offline')
+  if (value === 'stale') return t('status.stale')
+  if (value === 'connecting' || value === 'reconnecting' || value === 'catching_up') return t('status.catchingUp')
+  return t('common.unknown')
+}
+
 export function ServerTasks({
   instances,
   loadTask,
@@ -83,11 +92,13 @@ export function ServerTasks({
     <section className="stack" aria-label={t('nav.tasks')}>
       <p className="muted page-supporting-copy">{t('tasks.description')}</p>
 
-      {instance.runtime.status !== 'live' && (
-        <div className="attention-strip" role="status">
-          {t('tasks.cached')} {instance.runtime.status}.
-        </div>
-      )}
+      <div className="operational-status-slot" aria-live="polite">
+        {instance.runtime.status !== 'live' ? (
+          <div className="attention-strip" role="status">
+            {t('tasks.cached')} {runtimeStatusLabel(instance.runtime.status, t)}.
+          </div>
+        ) : null}
+      </div>
 
       {isDetailRoute ? (
         detail ? (

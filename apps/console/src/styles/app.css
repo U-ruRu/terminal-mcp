@@ -2146,3 +2146,95 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   .slot-more-actions > summary { width: 100%; }
   .slot-more-actions .server-actions { grid-template-columns: 1fr; }
 }
+
+
+/* M4 final cross-surface hierarchy and geometry contract */
+.primary-action {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent) !important;
+  color: var(--color-bg) !important;
+  font-weight: var(--font-weight-semibold);
+}
+.primary-action:hover:not(:disabled),
+.primary-action:focus-visible:not(:disabled) {
+  filter: brightness(1.08);
+}
+.surface-section {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--color-border);
+  min-width: 0;
+}
+.compact-operational-surface > .surface-section:first-of-type { border-top: 0; padding-top: 0; }
+.connections-surface .connection-card,
+.slots-surface .slot-card,
+.slots-surface .slot-detail { padding: var(--space-4); }
+.operational-status-slot {
+  min-height: calc(var(--font-body-line) + var(--space-2));
+  display: flex;
+  align-items: flex-start;
+}
+.operational-status-slot:empty { visibility: hidden; }
+.floating-status-stack {
+  position: fixed;
+  z-index: 35;
+  inset-inline-end: max(var(--space-4), env(safe-area-inset-right));
+  bottom: max(calc(var(--space-6) + var(--control-large)), env(safe-area-inset-bottom));
+  width: min(30rem, calc(100vw - (2 * var(--space-4))));
+  display: grid;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+.floating-status-stack > * {
+  pointer-events: auto;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.mutation-status-slot {
+  min-height: var(--font-body-line);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.server-resource-details { min-width: 0; }
+.server-resource-details > summary {
+  min-height: var(--touch-target);
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-muted);
+  font-size: var(--font-caption-size);
+  cursor: pointer;
+}
+.server-resource-details[open] > summary { margin-bottom: var(--space-2); }
+.server-resource-details .resource-metric-normal dd {
+  color: var(--color-muted);
+  font-size: var(--font-label-size);
+  line-height: var(--font-label-line);
+}
+.server-card-metrics-attention .resource-metric-attention dd,
+.server-card-metrics-attention .resource-metric-unavailable dd { font-weight: var(--font-weight-semibold); }
+.connection-actions > *,
+.server-actions > * { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .connection-actions, .server-actions { grid-template-columns: 1fr; }
+  .surface-section { padding-block: var(--space-3); }
+  .connections-surface .connection-card, .slots-surface .slot-card, .slots-surface .slot-detail { padding: var(--space-3); }
+  .floating-status-stack { bottom: calc(var(--control-large) + var(--space-4) + env(safe-area-inset-bottom)); }
+}
+
+.connection-card .connection-actions { min-height: var(--control-standard); }
+.slot-card > .server-actions { min-height: var(--control-standard); }
+.compact-operational-surface { min-width: 0; }
+.compact-operational-surface .panel { min-width: 0; }
+
+/* Healthy resource values stay secondary even when a sibling resource needs attention. */
+.resource-metric-normal dd {
+  color: var(--color-muted);
+  font-size: var(--font-label-size);
+  line-height: var(--font-label-line);
+  font-weight: var(--font-weight-regular);
+}
+.server-card-metrics-attention .resource-metric-unavailable dd { color: var(--color-warning); }

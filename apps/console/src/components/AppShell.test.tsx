@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
 import type { FleetServerReadModel } from '../fleet/readModel'
@@ -38,12 +38,12 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
 })
 
-test('root app bar exposes fleet status without duplicating server context', () => {
+test('root Fleet app bar leaves aggregate status to the Fleet decision surface', () => {
   renderShell('/')
   const appBar = document.querySelector('.app-bar') as HTMLElement
   expect(appBar).toHaveAttribute('data-variant', 'root')
   expect(within(appBar).getByRole('heading', { name: 'Fleet' })).toBeInTheDocument()
-  expect(screen.getByText('Live 0')).toBeInTheDocument()
+  expect(within(appBar).queryByText(/Live 0|Needs attention 0/)).not.toBeInTheDocument()
 })
 
 
