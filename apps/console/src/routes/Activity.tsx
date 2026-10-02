@@ -50,7 +50,7 @@ function reason(error: unknown) {
 
 
 function scrollActivityToBottom(node: HTMLDivElement, behavior: ScrollBehavior = 'auto') {
-  if (typeof node.scrollTo === 'function') scrollActivityToBottom(node, behavior)
+  if (typeof node.scrollTo === 'function') node.scrollTo({ top: node.scrollHeight, behavior })
   else node.scrollTop = node.scrollHeight
 }
 
