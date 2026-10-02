@@ -479,7 +479,7 @@ export function Connections() {
     setControlError(null)
     try {
       const enrollment = await targetApi.fleetEnrollment()
-      return await mutateControl(targetAuthority, '/actions/fleet/control/nodes/upsert', {
+      const result = await mutateControl(targetAuthority, '/actions/fleet/control/nodes/upsert', {
         node_id: enrollment.nodeId,
         mesh_id: meshId,
         origin: enrollment.origin,
@@ -487,6 +487,20 @@ export function Connections() {
         auth_token: enrollment.authToken,
         expected_topology_revision: targetAuthority.control.revisions.topology,
       })
+      if (result.ok && result.control) {
+        const node = result.control.nodes.find((item) => item.nodeId === enrollment.nodeId)
+        const mesh = node?.meshId
+          ? result.control.meshes.find((item) => item.meshId === node.meshId)
+          : undefined
+        const projected = { ...result.control, nodeId: enrollment.nodeId, mesh }
+        const observedAt = Date.now()
+        saveCachedFleetControl(instanceId, projected, observedAt)
+        setControls((current) => ({
+          ...current,
+          [instanceId]: { control: projected, freshness: 'fresh', observedAt },
+        }))
+      }
+      return result
     } catch (cause) {
       const failure = { ok: false, error: cause instanceof Error ? cause.message : 'enrollment_unavailable' }
       setControlError(failure.error)

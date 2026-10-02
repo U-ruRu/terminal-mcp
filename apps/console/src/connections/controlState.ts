@@ -89,26 +89,36 @@ export function loadCachedFleetControlForProfile(
 
   const candidates = Object.values(document.entries)
     .filter((entry) => entry.control.managed)
-    .sort((a, b) => b.observedAt - a.observedAt)
-  for (const entry of candidates) {
-    const node = entry.control.nodes.find((candidate) => (
-      candidate.state !== 'detached'
-      && normalizedOrigin(candidate.origin) === expectedOrigin
-    ))
-    if (!node) continue
-    const mesh = node.meshId
-      ? entry.control.meshes.find((candidate) => candidate.meshId === node.meshId)
-      : undefined
-    return {
-      observedAt: entry.observedAt,
-      control: {
-        ...entry.control,
-        nodeId: node.nodeId,
-        mesh,
-      },
-    }
+    .map((entry) => ({
+      entry,
+      node: entry.control.nodes.find((candidate) => (
+        candidate.state !== 'detached'
+        && normalizedOrigin(candidate.origin) === expectedOrigin
+      )),
+    }))
+    .filter((item): item is typeof item & { node: NonNullable<typeof item.node> } => Boolean(item.node))
+
+  const memberCandidates = candidates
+    .filter((item) => Boolean(item.node.meshId))
+    .sort((a, b) => b.entry.observedAt - a.entry.observedAt)
+  const selected = memberCandidates[0]
+  if (!selected) {
+    const standaloneAuthorities = new Set(candidates.map((item) => item.entry.control.controlNodeId))
+    if (standaloneAuthorities.size !== 1) return undefined
   }
-  return undefined
+  const resolved = selected ?? candidates.sort((a, b) => b.entry.observedAt - a.entry.observedAt)[0]
+  if (!resolved) return undefined
+  const mesh = resolved.node.meshId
+    ? resolved.entry.control.meshes.find((candidate) => candidate.meshId === resolved.node.meshId)
+    : undefined
+  return {
+    observedAt: resolved.entry.observedAt,
+    control: {
+      ...resolved.entry.control,
+      nodeId: resolved.node.nodeId,
+      mesh,
+    },
+  }
 }
 
 export function saveCachedFleetControl(
