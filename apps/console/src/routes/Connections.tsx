@@ -101,6 +101,7 @@ export function Connections() {
   ))
   const [meshName, setMeshName] = useState('Fleet')
   const [newMeshName, setNewMeshName] = useState('Fleet')
+  const [newMeshControlInstanceId, setNewMeshControlInstanceId] = useState('')
   const [selectedMeshId, setSelectedMeshId] = useState('')
   const [controlBusy, setControlBusy] = useState(false)
   const [controlError, setControlError] = useState<string | null>(null)
@@ -182,7 +183,9 @@ export function Connections() {
       .filter((item): item is ControlObservation & { control: ManagedFleetControlReadModel } => Boolean(item?.control))
       .sort((a, b) => {
         const score = (item: ControlObservation & { control: ManagedFleetControlReadModel }) =>
-          (item.control.managed ? 10 : 0) + (item.freshness === 'fresh' ? 2 : item.freshness === 'stale' ? 1 : 0)
+          (item.control.nodeId === item.control.controlNodeId ? 100 : 0)
+          + (item.control.managed ? 10 : 0)
+          + (item.freshness === 'fresh' ? 2 : item.freshness === 'stale' ? 1 : 0)
         return score(b) - score(a)
       })
     return observed[0]
@@ -215,19 +218,25 @@ export function Connections() {
   }, [selectedMesh, selectedMeshId])
 
   const writeProfile = useMemo(() => {
-    if (authoritative) {
-      const authorityNode = authoritative.nodes.find((node) => node.nodeId === authoritative.controlNodeId)
-      const controlProfile = profiles.find((profile) => (
-        states[profile.instanceId]?.status === 'connected'
-        && (
-          controls[profile.instanceId]?.control?.nodeId === authoritative.controlNodeId
-          || (authorityNode?.origin && normalizedOrigin(profile.origin) === normalizedOrigin(authorityNode.origin))
-        )
-      ))
-      if (controlProfile) return controlProfile
-    }
-    return profiles.find((profile) => states[profile.instanceId]?.status === 'connected')
+    if (!authoritative?.managed) return undefined
+    const authorityNode = authoritative.nodes.find((node) => node.nodeId === authoritative.controlNodeId)
+    return profiles.find((profile) => (
+      states[profile.instanceId]?.status === 'connected'
+      && (
+        controls[profile.instanceId]?.control?.nodeId === authoritative.controlNodeId
+        || (authorityNode?.origin && normalizedOrigin(profile.origin) === normalizedOrigin(authorityNode.origin))
+      )
+    ))
   }, [authoritative, controls, profiles, states])
+
+  useEffect(() => {
+    const preferred = writeProfile?.instanceId
+      ?? profiles.find((profile) => states[profile.instanceId]?.status === 'connected')?.instanceId
+      ?? ''
+    if (!newMeshControlInstanceId || !profiles.some((profile) => profile.instanceId === newMeshControlInstanceId)) {
+      setNewMeshControlInstanceId(preferred)
+    }
+  }, [newMeshControlInstanceId, profiles, states, writeProfile])
 
   const mutateControl = useCallback(
     async (path: string, body: Record<string, unknown> = {}): Promise<ManagedFleetMutationResult> => {
@@ -323,6 +332,20 @@ export function Connections() {
 
   async function createMesh() {
     const displayName = newMeshName.trim() || 'Fleet'
+    const selectedProfile = meshes.length > 0
+      ? writeProfile
+      : profiles.find((profile) => profile.instanceId === newMeshControlInstanceId)
+    if (!selectedProfile || states[selectedProfile.instanceId]?.status !== 'connected') {
+      setControlError('control_write_unavailable')
+      setMeshMutationPhase('failed')
+      return
+    }
+    const api = client(selectedProfile.instanceId)
+    if (!api) {
+      setControlError('control_write_unavailable')
+      setMeshMutationPhase('failed')
+      return
+    }
     const pendingMesh: ManagedFleetMeshReadModel = {
       meshId: 'pending:' + Date.now(),
       displayName,
@@ -331,7 +354,33 @@ export function Connections() {
     }
     setOptimisticMeshes([...meshes, pendingMesh])
     setMeshMutationPhase('pending')
-    const result = await mutateControl('/actions/fleet/control/adopt', { display_name: displayName })
+    setControlBusy(true)
+    setControlError(null)
+    let result: ManagedFleetMutationResult
+    try {
+      const enrollment = await api.fleetEnrollment()
+      result = await api.fleetControlMutation('/actions/fleet/control/adopt', {
+        display_name: displayName,
+        control_node_id: enrollment.nodeId,
+      })
+      if (result.ok && result.control) {
+        const observedAt = Date.now()
+        saveCachedFleetControl(selectedProfile.instanceId, result.control, observedAt)
+        propagateCachedFleetControl(result.control, observedAt)
+        setControls((current) => ({
+          ...current,
+          [selectedProfile.instanceId]: { control: result.control, freshness: 'fresh', observedAt },
+        }))
+        void refreshControls()
+      } else if (!result.ok) {
+        setControlError(result.code ?? result.error ?? 'control_mutation_failed')
+      }
+    } catch (cause) {
+      result = { ok: false, error: cause instanceof Error ? cause.message : 'control_mutation_failed' }
+      setControlError(result.error ?? 'control_mutation_failed')
+    } finally {
+      setControlBusy(false)
+    }
     setOptimisticMeshes(null)
     setMeshMutationPhase(result.ok ? 'confirmed' : 'failed')
     if (result.ok) setNewMeshName('Fleet')
@@ -622,10 +671,22 @@ export function Connections() {
             onChange={(event) => setNewMeshName(event.target.value)}
           />
         </label>
+        <label className="ui-field">
+          <span>{t('connections.controlNode')}</span>
+          <select
+            value={meshes.length > 0 ? writeProfile?.instanceId ?? '' : newMeshControlInstanceId}
+            disabled={controlBusy || meshes.length > 0}
+            onChange={(event) => setNewMeshControlInstanceId(event.target.value)}
+          >
+            {profiles.filter((profile) => states[profile.instanceId]?.status === 'connected').map((profile) => (
+              <option key={profile.instanceId} value={profile.instanceId}>{profile.displayName}</option>
+            ))}
+          </select>
+        </label>
         <div className="connection-actions">
           <button
             type="button"
-            disabled={controlBusy || !writeProfile}
+            disabled={controlBusy || (meshes.length > 0 ? !writeProfile : !newMeshControlInstanceId)}
             onClick={() => void createMesh()}
           >
             {t('connections.createMesh')}

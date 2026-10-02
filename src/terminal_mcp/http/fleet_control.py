@@ -13,6 +13,7 @@ class StrictRequest(BaseModel):
 class AdoptRequest(StrictRequest):
     mesh_id: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str = Field(default="Fleet", min_length=1, max_length=120)
+    control_node_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class RenameRequest(StrictRequest):
@@ -97,7 +98,11 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
     @router.post("/actions/fleet/control/adopt", operation_id="adoptManagedFleetControl")
     async def adopt(body: AdoptRequest):
         return await mutation(
-            controller.adopt(mesh_id=body.mesh_id, display_name=body.display_name)
+            controller.adopt(
+                mesh_id=body.mesh_id,
+                display_name=body.display_name,
+                control_node_id=body.control_node_id,
+            )
         )
 
     @router.post("/actions/fleet/control/mesh/delete", operation_id="deleteManagedMesh")

@@ -26,6 +26,7 @@ class PersistentPolicyController:
         self.service = service
         self.lifecycle = lifecycle
         self._lock = asyncio.Lock()
+        self._local_policy = self.snapshot()
 
     def snapshot(self) -> dict:
         return {
@@ -137,6 +138,22 @@ class PersistentPolicyController:
                 self.settings.legacy_agent_admission_enabled = legacy
                 self.service.legacy_agent_admission_enabled = legacy
 
+            result = self.snapshot()
+            self._local_policy = dict(result)
+            return result
+
+    async def restore_local(self) -> dict:
+        """Restore the latest standalone policy after leaving managed Mesh membership."""
+        policy = dict(self._local_policy)
+        async with self._lock, self.lifecycle.policy_guard():
+            self.settings.persistent_session_duration_sec = int(policy["duration_seconds"])
+            self.settings.persistent_session_warning_after_sec = int(policy["warning_after_seconds"])
+            self.settings.persistent_session_alert_after_sec = int(policy["alert_after_seconds"])
+            self.settings.persistent_session_rearm_after_sec = int(policy["rearm_after_seconds"])
+            self.settings.legacy_agent_admission_enabled = bool(policy["legacy_admission_enabled"])
+            self.lifecycle.session_duration_seconds = int(policy["duration_seconds"])
+            self.lifecycle.rearm_delay_seconds = int(policy["rearm_after_seconds"])
+            self.service.legacy_agent_admission_enabled = bool(policy["legacy_admission_enabled"])
             return self.snapshot()
 
     async def apply_managed(

@@ -1335,3 +1335,52 @@ async def test_multi_mesh_membership_supports_standalone_attach_move_and_detach(
     node_b = next(node for node in detached["nodes"] if node["node_id"] == "node-b")
     assert node_b["state"] == "active"
     assert node_b["mesh_id"] is None
+
+@pytest.mark.asyncio
+async def test_control_authority_rehome_is_persisted_and_requires_standalone(tmp_path):
+    path = tmp_path / "rehome-control.sqlite3"
+    store = FleetControlStore(
+        path,
+        fleet_id="fleet-a",
+        node_id="remote",
+        control_node_id="main",
+    )
+    await store.initialize()
+    assert store.control_node_id == "main"
+
+    claimed = await store.claim_local_control_authority()
+    assert claimed == "remote"
+    assert store.control_node_id == "remote"
+
+    restarted = FleetControlStore(
+        path,
+        fleet_id="fleet-a",
+        node_id="remote",
+        control_node_id="main",
+    )
+    await restarted.initialize()
+    assert restarted.control_node_id == "remote"
+    assert (await restarted.control_state())["control_node_id"] == "remote"
+
+    await restarted.adopt_managed(
+        mesh_id="mesh-a",
+        display_name="Remote Mesh",
+        nodes=[{"node_id": "remote"}],
+        policy={
+            "duration_seconds": 1380,
+            "warning_after_seconds": 1200,
+            "alert_after_seconds": 1320,
+            "rearm_after_seconds": 180,
+            "legacy_admission_enabled": False,
+        },
+    )
+    await restarted.upsert_managed_node(
+        node_id="remote",
+        mesh_id="mesh-a",
+        origin=None,
+        public_key=None,
+        auth_token=None,
+        expected_topology_revision=1,
+    )
+    with pytest.raises(FleetControlError, match="control_authority_rehome_requires_standalone"):
+        await restarted.claim_local_control_authority()

@@ -170,8 +170,10 @@ class ManagedFleetControl:
             )
         return self.bootstrap_config.peers_by_id.get(node_id)
 
-    async def _forward_mutation(self, operation: str, payload: dict | None = None) -> dict:
-        peer = await self._management_peer(self.store.control_node_id)
+    async def _forward_mutation_to(
+        self, node_id: str, operation: str, payload: dict | None = None
+    ) -> dict:
+        peer = await self._management_peer(node_id)
         if peer is None:
             raise FleetControlError("control_authority_unavailable")
         async with self.client_factory() as client:
@@ -187,18 +189,22 @@ class ManagedFleetControl:
         state = body.get("control")
         if not isinstance(state, dict):
             raise FleetControlError("control_mutation_invalid")
-        return await self.apply_replica(state, source_node_id=self.store.control_node_id)
+        return await self.apply_replica(state, source_node_id=node_id)
+
+    async def _forward_mutation(self, operation: str, payload: dict | None = None) -> dict:
+        return await self._forward_mutation_to(self.store.control_node_id, operation, payload)
 
     async def execute_forwarded(
         self, operation: str, payload: dict, *, authenticated_peer_id: str | None = None
     ) -> dict:
-        if not self.is_control_node:
-            raise FleetControlError("control_authority_required")
         if operation == "adopt":
             return await self.adopt(
                 mesh_id=payload.get("mesh_id"),
                 display_name=str(payload.get("display_name") or "Fleet"),
+                control_node_id=payload.get("control_node_id"),
             )
+        if not self.is_control_node:
+            raise FleetControlError("control_authority_required")
         if operation == "delete-mesh":
             return await self.delete_mesh(
                 mesh_id=payload.get("mesh_id"),
@@ -259,6 +265,11 @@ class ManagedFleetControl:
         for target in self.runtime_targets:
             if hasattr(target, "config"):
                 target.config = config
+
+    def _sync_control_node(self, control_node_id: str) -> None:
+        for target in self.runtime_targets:
+            if hasattr(target, "control_node_id"):
+                target.control_node_id = control_node_id
 
     async def _ensure_local_identity(self) -> dict:
         identity = await self.store.ensure_managed_identity(self.config.signing_private_key)
@@ -332,12 +343,28 @@ class ManagedFleetControl:
             return str(meshes[0]["mesh_id"])
         raise FleetControlError("mesh_id_required")
 
-    async def adopt(self, *, mesh_id: str | None = None, display_name: str = "Fleet") -> dict:
+    async def adopt(
+        self,
+        *,
+        mesh_id: str | None = None,
+        display_name: str = "Fleet",
+        control_node_id: str | None = None,
+    ) -> dict:
         await self._ensure_local_identity()
-        if not self.is_control_node:
-            return await self._forward_mutation(
-                "adopt", {"mesh_id": mesh_id, "display_name": display_name}
+        requested_control = str(control_node_id or self.store.control_node_id)
+        if requested_control != self.store.node_id:
+            return await self._forward_mutation_to(
+                requested_control,
+                "adopt",
+                {
+                    "mesh_id": mesh_id,
+                    "display_name": display_name,
+                    "control_node_id": requested_control,
+                },
             )
+        if not self.is_control_node:
+            await self.store.claim_local_control_authority()
+            self._sync_control_node(self.store.control_node_id)
         state = await self.store.adopt_managed(
             mesh_id=mesh_id or f"mesh-{secrets.token_hex(8)}",
             display_name=display_name,
@@ -573,13 +600,16 @@ class ManagedFleetControl:
     async def reconcile_local(self) -> dict:
         await self._ensure_local_identity()
         state = await self.snapshot()
+        self._sync_control_node(str(state["control_node_id"]))
         if not state["managed"]:
+            await self._restore_local_policy()
             return state
         await self._apply_local(state)
         return await self.snapshot()
 
     async def apply_replica(self, snapshot: dict, *, source_node_id: str) -> dict:
-        if source_node_id != self.store.control_node_id:
+        incoming_control = str(snapshot.get("control_node_id") or "")
+        if source_node_id != self.store.control_node_id and source_node_id != incoming_control:
             raise FleetControlError("control_authority_required")
         internal_material = snapshot.get("_peer_material") or []
         managed_tokens = {
@@ -597,8 +627,14 @@ class ManagedFleetControl:
             public_snapshot,
             bootstrap_tokens=bootstrap_tokens,
         )
+        self._sync_control_node(self.store.control_node_id)
         await self._apply_local(state)
         return await self.snapshot()
+
+    async def _restore_local_policy(self) -> None:
+        restore = getattr(self.policy_controller, "restore_local", None)
+        if restore is not None:
+            await restore()
 
     def _restore_bootstrap_runtime(self, *, use_peers: bool = True) -> None:
         config = FleetConfig(
@@ -613,17 +649,9 @@ class ManagedFleetControl:
 
     async def _apply_local(self, state: dict) -> None:
         if not state.get("managed"):
+            await self._restore_local_policy()
             self._restore_bootstrap_runtime(use_peers=state.get("mesh") is None)
             return
-        policy = state.get("policy")
-        if policy:
-            await self.policy_controller.apply_managed(
-                duration_seconds=int(policy["duration_seconds"]),
-                warning_after_seconds=int(policy["warning_after_seconds"]),
-                alert_after_seconds=int(policy["alert_after_seconds"]),
-                rearm_after_seconds=int(policy["rearm_after_seconds"]),
-                legacy_admission_enabled=bool(policy["legacy_admission_enabled"]),
-            )
 
         all_nodes = state.get("nodes") or []
         local_node = next(
@@ -635,11 +663,25 @@ class ManagedFleetControl:
             if local_node and local_node.get("state") != "detached"
             else None
         )
+        policy = state.get("policy")
+        if local_mesh_id is None:
+            await self._restore_local_policy()
+        elif policy:
+            await self.policy_controller.apply_managed(
+                duration_seconds=int(policy["duration_seconds"]),
+                warning_after_seconds=int(policy["warning_after_seconds"]),
+                alert_after_seconds=int(policy["alert_after_seconds"]),
+                rearm_after_seconds=int(policy["rearm_after_seconds"]),
+                legacy_admission_enabled=bool(policy["legacy_admission_enabled"]),
+            )
         active_nodes = [
             node
             for node in all_nodes
             if local_mesh_id is not None
-            and node.get("mesh_id") == local_mesh_id
+            and (
+                node.get("mesh_id") == local_mesh_id
+                or node.get("node_id") == self.store.control_node_id
+            )
             and node.get("state") != "detached"
             and node.get("node_id") != self.config.instance_id
         ]
