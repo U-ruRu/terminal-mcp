@@ -4,6 +4,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import type { TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 import { activityRoute, agentRoute, serverRoute, taskRoute } from '../navigation/routes'
 
 export type ServerTaskLoader = (
@@ -110,14 +111,18 @@ export function ServerTasks({
             {error && <p className="muted">{t('tasks.refreshFailed')} {error}. {t('tasks.cachedRemains')}</p>}
           </article>
         ) : (
-          <article className="panel"><p className="muted">{error ? `${t('tasks.refreshFailed')} ${error}.` : t('tasks.loadingDetail')}</p></article>
+          <FeedbackState
+            variant={error ? 'error' : 'loading'}
+            title={error ? t('tasks.refreshFailed') : t('tasks.loadingDetail')}
+            detail={error || undefined}
+          />
         )
       ) : (
         <>
           <div className="page-tools task-filters" aria-label={t('tasks.filters')}>
-            <label className="server-switcher"><span>{t('tasks.namespace')}</span><select aria-label={t('tasks.namespace')} value={namespaceFilter} onChange={(event) => setNamespaceFilter(event.target.value)}><option value="all">{t('tasks.allNamespaces')}</option>{namespaces.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-            <label className="server-switcher"><span>{t('tasks.state')}</span><select aria-label={t('tasks.state')} value={stateFilter} onChange={(event) => setStateFilter(event.target.value as StateFilter)}><option value="open">{t('tasks.open')}</option><option value="ready">ready</option><option value="in_progress">in_progress</option><option value="blocked">blocked</option><option value="deferred">deferred</option><option value="done">{t('tasks.completed')}</option><option value="all">{t('tasks.all')}</option></select></label>
-            <label className="server-switcher"><span>{t('tasks.operationalStatus')}</span><select aria-label={t('tasks.operationalStatus')} value={operationalFilter} onChange={(event) => setOperationalFilter(event.target.value as OperationalFilter)}><option value="all">{t('tasks.all')}</option><option value="ready">ready</option><option value="in_progress">in_progress</option><option value="blocked">blocked</option><option value="deferred">deferred</option><option value="done">done</option></select></label>
+            <label className="server-switcher ui-field"><span>{t('tasks.namespace')}</span><select aria-label={t('tasks.namespace')} value={namespaceFilter} onChange={(event) => setNamespaceFilter(event.target.value)}><option value="all">{t('tasks.allNamespaces')}</option>{namespaces.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label className="server-switcher ui-field"><span>{t('tasks.state')}</span><select aria-label={t('tasks.state')} value={stateFilter} onChange={(event) => setStateFilter(event.target.value as StateFilter)}><option value="open">{t('tasks.open')}</option><option value="ready">ready</option><option value="in_progress">in_progress</option><option value="blocked">blocked</option><option value="deferred">deferred</option><option value="done">{t('tasks.completed')}</option><option value="all">{t('tasks.all')}</option></select></label>
+            <label className="server-switcher ui-field"><span>{t('tasks.operationalStatus')}</span><select aria-label={t('tasks.operationalStatus')} value={operationalFilter} onChange={(event) => setOperationalFilter(event.target.value as OperationalFilter)}><option value="all">{t('tasks.all')}</option><option value="ready">ready</option><option value="in_progress">in_progress</option><option value="blocked">blocked</option><option value="deferred">deferred</option><option value="done">done</option></select></label>
           </div>
           <div className="task-list" aria-label={t('tasks.serverTasks')}>
             {filteredTasks.map((task) => (
@@ -130,7 +135,7 @@ export function ServerTasks({
                 <span className="text-link">{t('tasks.openDetail')}</span>
               </Link>
             ))}
-            {filteredTasks.length === 0 && <article className="panel"><p className="muted">{t('tasks.noMatchingTasks')}</p></article>}
+            {filteredTasks.length === 0 && <FeedbackState variant="empty" title={t('tasks.noMatchingTasks')} />}
           </div>
         </>
       )}
