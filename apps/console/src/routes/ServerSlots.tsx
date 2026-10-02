@@ -14,6 +14,7 @@ export type FleetControlLoader = (instanceId: string) => Promise<ManagedFleetCon
 export type FleetControlMutator = (instanceId: string, path: string, body: Record<string, unknown>) => Promise<ManagedFleetMutationResult>
 function idempotencyKey(): string { return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `console-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 function duration(seconds: number): string { const safe = Math.max(0, Math.floor(seconds)); const minutes = Math.floor(safe / 60); const rest = safe % 60; return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s` }
+function normalizedOrigin(value: string | undefined): string { return (value ?? '').replace(/\/+$/, '').toLowerCase() }
 function slotTiming(slot: PersistentSlotReadModel, authorityNowMs: number, durationSeconds: number, warningAfter: number, alertAfter: number) { if (!slot.workSession) return { text: slot.state, cue: 'normal' as const }; const remaining = Math.max(0, Math.floor((Date.parse(slot.workSession.hardExpiresAt) - authorityNowMs) / 1000)); if (durationSeconds <= 0) return { text: duration(remaining), cue: 'normal' as const }; const elapsed = Math.max(0, durationSeconds - remaining); const cue = elapsed >= alertAfter ? 'alert' as const : elapsed >= warningAfter ? 'warning' as const : 'normal' as const; return { text: duration(remaining), cue } }
 
 export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFleetControl, mutateFleetControl }: { instances: FleetInstanceView[]; mutatePersistent?: PersistentMutator; loadSlotAudit?: (instanceId: string, logicalAgentId: string) => Promise<PersistentAuditReadModel[]>; loadFleetControl?: FleetControlLoader; mutateFleetControl?: FleetControlMutator }) {
@@ -82,6 +83,18 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
   const authorityNowMs = anchor.server ? anchor.serverMs + (clock - anchor.localMs) : clock
   const managedPolicy = fleetControl?.managed ? fleetControl.policy : undefined
+  const managedAuthorityNode = fleetControl?.managed
+    ? fleetControl.nodes.find((node) => node.nodeId === fleetControl.controlNodeId)
+    : undefined
+  const managedAuthorityInstance = fleetControl?.managed
+    ? instances.find((candidate) => {
+        if (candidate.profile.instanceId === fleetControl.controlNodeId) return true
+        const cached = loadCachedFleetControlForProfile(candidate.profile.instanceId, candidate.profile.origin)?.control
+        return cached?.nodeId === fleetControl.controlNodeId
+          || Boolean(managedAuthorityNode?.origin && normalizedOrigin(candidate.profile.origin) === normalizedOrigin(managedAuthorityNode.origin))
+      })
+    : undefined
+  const managedAuthorityInstanceId = managedAuthorityInstance?.profile.instanceId
   const standaloneConfirmed = fleetControl ? !fleetControl.managed : !loadFleetControl
   const effectivePolicy = managedPolicy ?? (standaloneConfirmed ? persistent?.policy : undefined)
   const effectiveLegacyAdmission = legacyOverride && legacyOverride.phase !== 'failed'
@@ -99,18 +112,19 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   // suppress an authenticated direct-authority mutation attempt.
   const canMutate = Boolean(mutatePersistent && persistent?.enabled && instance?.runtime.authStatus === 'connected')
   const policyCanMutate = managedPolicy
-    ? Boolean(mutateFleetControl && instance?.runtime.authStatus === 'connected')
+    ? Boolean(mutateFleetControl && managedAuthorityInstanceId && managedAuthorityInstance?.runtime.authStatus === 'connected')
     : standaloneConfirmed ? canMutate : false
   const mutation = async (key: string, path: string, body: Record<string, unknown>) => { if (!canMutate || !mutatePersistent) { setMessage(t('slots.liveRequired')); return false } setBusy(key); setMessage(''); try { const result = await mutatePersistent(instanceId, path, body); if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return false } setMessage(t('slots.mutationApplied')); return true } catch (error) { setMessage(error instanceof Error ? error.message : t('slots.mutationFailed')); return false } finally { setBusy('') } }
   const managedPolicyMutation = async (key: string, path: string, body: Record<string, unknown>) => {
-    if (!mutateFleetControl || instance?.runtime.authStatus !== 'connected') { setMessage(t('slots.liveRequired')); return false }
+    if (!mutateFleetControl || !managedAuthorityInstanceId || managedAuthorityInstance?.runtime.authStatus !== 'connected') { setMessage(t('slots.liveRequired')); return false }
     setBusy(key); setMessage('')
     try {
-      const result = await mutateFleetControl(instanceId, path, body)
+      const result = await mutateFleetControl(managedAuthorityInstanceId, path, body)
       if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return false }
       if (result.control) {
         const observedAt = Date.now()
-        saveCachedFleetControl(instanceId, result.control, observedAt)
+        saveCachedFleetControl(managedAuthorityInstanceId, result.control, observedAt)
+        saveCachedFleetControl(instanceId, { ...result.control, nodeId: fleetControl?.nodeId ?? result.control.nodeId, mesh: fleetControl?.mesh }, observedAt)
         propagateCachedFleetControl(result.control, observedAt)
         setFleetControl(result.control)
         setFleetControlFreshness('fresh')

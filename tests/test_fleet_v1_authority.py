@@ -846,7 +846,13 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
         public_base_url="https://home.example",
         client_factory=lambda: _FakeClient(home_http),
     )
-    await home.adopt(mesh_id="mesh-a", display_name="Before")
+    created = await home.adopt(mesh_id="mesh-a", display_name="Before")
+    assert [node["node_id"] for node in created["nodes"]] == ["home"]
+    await home.upsert_node(
+        node_id="remote", mesh_id="mesh-a", origin="https://remote.example",
+        public_key=remote_public, auth_token="remote-token",
+        expected_topology_revision=created["revisions"]["topology"],
+    )
 
     async def remote_http(url, headers, body):
         assert headers["X-Terminal-MCP-Peer"] == "remote"
@@ -875,7 +881,8 @@ async def test_managed_control_mutation_forwards_to_control_node_and_applies_sna
         "After",
         expected_topology_revision=initial["revisions"]["topology"],
     )
-    assert renamed["mesh"] is None
+    assert renamed["mesh"]["mesh_id"] == "mesh-a"
+    assert renamed["mesh"]["display_name"] == "After"
     assert renamed["meshes"][0]["display_name"] == "After"
     assert renamed["revisions"]["topology"] == initial["revisions"]["topology"] + 1
     assert (await home.snapshot())["meshes"][0]["display_name"] == "After"
@@ -1046,7 +1053,13 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
         public_base_url="https://home.example",
         client_factory=lambda: _FakeClient(handler),
     )
-    await control.adopt(mesh_id="mesh-a", display_name="Fleet")
+    created = await control.adopt(mesh_id="mesh-a", display_name="Fleet")
+    assert [node["node_id"] for node in created["nodes"]] == ["home"]
+    await control.upsert_node(
+        node_id="remote", mesh_id="mesh-a", origin="https://remote.example",
+        public_key=remote_public, auth_token="remote-token",
+        expected_topology_revision=created["revisions"]["topology"],
+    )
     state = await control.snapshot()
     remote = next(node for node in state["nodes"] if node["node_id"] == "remote")
     assert remote["last_error"] == "reconcile_failed:RuntimeError"
@@ -1219,7 +1232,8 @@ async def test_detach_is_delivered_before_revocation_and_does_not_restore_stale_
     )
     adopted = await home.adopt(mesh_id="mesh-a", display_name="Fleet")
     assert adopted["managed"] is True
-    assert (await remote.snapshot())["managed"] is True
+    assert [node["node_id"] for node in adopted["nodes"]] == ["home"]
+    assert (await remote.snapshot())["managed"] is False
     attached = await home.upsert_node(
         node_id="remote",
         mesh_id="mesh-a",
@@ -1321,6 +1335,54 @@ async def test_multi_mesh_membership_supports_standalone_attach_move_and_detach(
     assert node_b["state"] == "active"
     assert node_b["mesh_id"] is None
 
+@pytest.mark.asyncio
+async def test_control_authority_rehome_is_persisted_and_requires_standalone(tmp_path):
+    path = tmp_path / "rehome-control.sqlite3"
+    store = FleetControlStore(
+        path,
+        fleet_id="fleet-a",
+        node_id="remote",
+        control_node_id="main",
+    )
+    await store.initialize()
+    assert store.control_node_id == "main"
+
+    claimed = await store.claim_local_control_authority()
+    assert claimed == "remote"
+    assert store.control_node_id == "remote"
+
+    restarted = FleetControlStore(
+        path,
+        fleet_id="fleet-a",
+        node_id="remote",
+        control_node_id="main",
+    )
+    await restarted.initialize()
+    assert restarted.control_node_id == "remote"
+    assert (await restarted.control_state())["control_node_id"] == "remote"
+
+    await restarted.adopt_managed(
+        mesh_id="mesh-a",
+        display_name="Remote Mesh",
+        nodes=[{"node_id": "remote"}],
+        policy={
+            "duration_seconds": 1380,
+            "warning_after_seconds": 1200,
+            "alert_after_seconds": 1320,
+            "rearm_after_seconds": 180,
+            "legacy_admission_enabled": False,
+        },
+    )
+    await restarted.upsert_managed_node(
+        node_id="remote",
+        mesh_id="mesh-a",
+        origin=None,
+        public_key=None,
+        auth_token=None,
+        expected_topology_revision=1,
+    )
+    with pytest.raises(FleetControlError, match="control_authority_rehome_requires_standalone"):
+        await restarted.claim_local_control_authority()
 
 @pytest.mark.asyncio
 async def test_message_permit_is_fenced_by_the_same_persistent_session(tmp_path):

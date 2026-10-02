@@ -307,13 +307,15 @@ class FleetControlStore:
                             stamp,
                         ),
                     )
-                elif tuple(meta) != (
-                    self.fleet_id,
-                    self.node_id,
-                    self.control_node_id,
-                ):
+                elif (meta[0], meta[1]) != (self.fleet_id, self.node_id):
                     raise FleetControlError(
                         "fleet_control identity does not match persisted metadata"
+                    )
+                else:
+                    # The persisted control authority is runtime state. The env value is
+                    # only a bootstrap default and must not overwrite an explicit rehome.
+                    self.control_node_id = validate_protocol_id(
+                        str(meta[2]), "control_node_id"
                     )
                 await db.execute(
                     "INSERT INTO fleet_members(node_id,capabilities_json,state,updated_at) "
@@ -326,6 +328,47 @@ class FleetControlStore:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def claim_local_control_authority(self, *, now: str | None = None) -> str:
+        """Make this standalone node the managed-control authority without server-file edits."""
+        stamp = now or utc_text()
+        async with self._connect("fleet_control_claim_local_authority") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT mesh_id,state FROM managed_nodes WHERE node_id=?",
+                        (self.node_id,),
+                    )
+                ).fetchone()
+                if row is not None and row[1] != "detached" and row[0] is not None:
+                    raise FleetControlError("control_authority_rehome_requires_standalone")
+                await db.execute(
+                    "UPDATE control_meta SET control_node_id=?,routing_revision=routing_revision+1,"
+                    "updated_at=? WHERE singleton=1",
+                    (self.node_id, stamp),
+                )
+                # Old authority observations remain historical only. Trust material is kept
+                # in rows so an explicit rejoin does not require pairing or file repair.
+                await db.execute("UPDATE managed_meshes SET active=0,updated_at=?", (stamp,))
+                await db.execute(
+                    "UPDATE managed_nodes SET mesh_id=NULL,state='detached',last_error=NULL,"
+                    "updated_at=?",
+                    (stamp,),
+                )
+                if row is not None:
+                    await db.execute(
+                        "UPDATE managed_nodes SET state='active',mesh_id=NULL,updated_at=? "
+                        "WHERE node_id=?",
+                        (stamp, self.node_id),
+                    )
+                await db.execute("DELETE FROM access_policy")
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        self.control_node_id = self.node_id
+        return self.control_node_id
 
     async def schema_version(self) -> int:
         async with self._connect("fleet_control_schema_version") as db:
@@ -1281,8 +1324,10 @@ class FleetControlStore:
             raise FleetControlError("managed_snapshot_required")
         if str(snapshot.get("fleet_id") or "") != self.fleet_id:
             raise FleetControlError("fleet_id_mismatch")
-        if str(snapshot.get("control_node_id") or "") != self.control_node_id:
-            raise FleetControlError("control_node_mismatch")
+        incoming_control_node_id = validate_protocol_id(
+            str(snapshot.get("control_node_id") or ""), "control_node_id"
+        )
+        authority_changed = incoming_control_node_id != self.control_node_id
 
         legacy_mesh = snapshot.get("mesh") or {}
         incoming_meshes = snapshot.get("meshes")
@@ -1362,7 +1407,20 @@ class FleetControlStore:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 current = await self._control_revisions(db)
-                if topology < current[0] or trust < current[1] or policy_revision < current[2]:
+                if authority_changed:
+                    local = await (
+                        await db.execute(
+                            "SELECT mesh_id,state FROM managed_nodes WHERE node_id=?",
+                            (self.node_id,),
+                        )
+                    ).fetchone()
+                    if local is not None and local[1] != "detached" and local[0] is not None:
+                        raise FleetControlError("control_node_mismatch")
+                    await db.execute(
+                        "UPDATE control_meta SET control_node_id=?,updated_at=? WHERE singleton=1",
+                        (incoming_control_node_id, stamp),
+                    )
+                elif topology < current[0] or trust < current[1] or policy_revision < current[2]:
                     raise FleetControlError("managed_snapshot_stale")
                 existing_tokens = {
                     row[0]: row[1]
@@ -1468,6 +1526,8 @@ class FleetControlStore:
             except Exception:
                 await db.rollback()
                 raise
+        if authority_changed:
+            self.control_node_id = incoming_control_node_id
         return await self.control_state(include_secrets=False)
 
     async def register_member(

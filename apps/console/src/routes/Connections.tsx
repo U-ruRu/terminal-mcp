@@ -37,6 +37,12 @@ type ControlObservation = {
 type MutationPhase = 'pending' | 'confirmed' | 'failed'
 type MembershipMutation = { targetMeshId: string; phase: MutationPhase; error?: string }
 type MembershipProjection = { kind: 'mesh' | 'standalone' | 'unknown'; meshId?: string; node?: ManagedFleetNodeReadModel; freshness: FleetControlFreshness }
+type AuthorityView = {
+  control: ManagedFleetControlReadModel
+  freshness: FleetControlFreshness
+  observedAt?: number
+  profile?: ConnectionProfile
+}
 
 function normalizedOrigin(value: string | undefined): string {
   return (value ?? '').replace(/\/+$/, '').toLowerCase()
@@ -65,7 +71,11 @@ function isRevisionRegression(
   candidate: ManagedFleetControlReadModel,
   current: ManagedFleetControlReadModel | undefined,
 ): boolean {
-  if (!current || candidate.fleetId !== current.fleetId) return false
+  if (
+    !current
+    || candidate.fleetId !== current.fleetId
+    || candidate.controlNodeId !== current.controlNodeId
+  ) return false
   return (
     candidate.revisions.topology < current.revisions.topology
     || candidate.revisions.trust < current.revisions.trust
@@ -101,6 +111,7 @@ export function Connections() {
   ))
   const [meshName, setMeshName] = useState('Fleet')
   const [newMeshName, setNewMeshName] = useState('Fleet')
+  const [newMeshControlInstanceId, setNewMeshControlInstanceId] = useState('')
   const [selectedMeshId, setSelectedMeshId] = useState('')
   const [controlBusy, setControlBusy] = useState(false)
   const [controlError, setControlError] = useState<string | null>(null)
@@ -176,29 +187,76 @@ export function Connections() {
     return () => window.clearTimeout(handle)
   }, [refreshControls])
 
-  const authoritativeObservation = useMemo(() => {
-    const observed = profiles
-      .map((profile) => controls[profile.instanceId])
-      .filter((item): item is ControlObservation & { control: ManagedFleetControlReadModel } => Boolean(item?.control))
-      .sort((a, b) => {
-        const score = (item: ControlObservation & { control: ManagedFleetControlReadModel }) =>
-          (item.control.managed ? 10 : 0) + (item.freshness === 'fresh' ? 2 : item.freshness === 'stale' ? 1 : 0)
-        return score(b) - score(a)
-      })
-    return observed[0]
-  }, [controls, profiles])
+  const authorityViews = useMemo(() => {
+    const grouped = new Map<string, ControlObservation & { control: ManagedFleetControlReadModel }>()
+    const score = (item: ControlObservation & { control: ManagedFleetControlReadModel }) =>
+      (item.control.nodeId === item.control.controlNodeId ? 100 : 0)
+      + (item.freshness === 'fresh' ? 10 : item.freshness === 'stale' ? 1 : 0)
+      + (item.observedAt ?? 0) / 1e15
 
-  const authoritative = authoritativeObservation?.control
-  const authoritativeFreshness = authoritativeObservation?.freshness ?? 'unknown'
-  const meshes = useMemo(
-    () => optimisticMeshes ?? authoritative?.meshes ?? [],
-    [authoritative, optimisticMeshes],
-  )
+    for (const profile of profiles) {
+      const observation = controls[profile.instanceId]
+      if (!observation?.control?.managed) continue
+      const key = observation.control.fleetId + ':' + observation.control.controlNodeId
+      const current = grouped.get(key)
+      if (!current || score(observation as ControlObservation & { control: ManagedFleetControlReadModel }) > score(current)) {
+        grouped.set(key, observation as ControlObservation & { control: ManagedFleetControlReadModel })
+      }
+    }
+
+    return Array.from(grouped.values()).map((observation): AuthorityView => {
+      const control = observation.control
+      const authorityNode = control.nodes.find((node) => node.nodeId === control.controlNodeId)
+      const profile = profiles.find((candidate) => (
+        states[candidate.instanceId]?.status === 'connected'
+        && (
+          controls[candidate.instanceId]?.control?.nodeId === control.controlNodeId
+          || candidate.instanceId === control.controlNodeId
+          || Boolean(authorityNode?.origin && normalizedOrigin(candidate.origin) === normalizedOrigin(authorityNode.origin))
+        )
+      ))
+      return { control, freshness: observation.freshness, observedAt: observation.observedAt, profile }
+    })
+  }, [controls, profiles, states])
+
+  const authorityForMesh = useCallback((meshId: string | undefined): AuthorityView | undefined => (
+    meshId ? authorityViews.find((view) => view.control.meshes.some((mesh) => mesh.meshId === meshId)) : undefined
+  ), [authorityViews])
+
+  const authorityForProfile = useCallback((profile: ConnectionProfile): AuthorityView | undefined => {
+    const observed = controls[profile.instanceId]?.control
+    if (observed?.managed) {
+      const exact = authorityViews.find((view) => (
+        view.control.fleetId === observed.fleetId
+        && view.control.controlNodeId === observed.controlNodeId
+      ))
+      if (exact) return exact
+    }
+    return authorityViews.find((view) => Boolean(nodeForProfile(profile, view.control, controls[profile.instanceId])))
+  }, [authorityViews, controls])
+
+  const managedMeshes = useMemo(() => {
+    const seen = new Set<string>()
+    const values: ManagedFleetMeshReadModel[] = []
+    for (const view of authorityViews) {
+      for (const mesh of view.control.meshes) {
+        if (seen.has(mesh.meshId)) continue
+        seen.add(mesh.meshId)
+        values.push(mesh)
+      }
+    }
+    return values
+  }, [authorityViews])
+  const meshes = optimisticMeshes ?? managedMeshes
 
   const selectedMesh = useMemo(
     () => meshes.find((mesh) => mesh.meshId === selectedMeshId) ?? meshes[0],
     [meshes, selectedMeshId],
   )
+  const selectedAuthority = authorityForMesh(selectedMesh?.meshId)
+  const authoritative = selectedAuthority?.control
+  const authoritativeFreshness = selectedAuthority?.freshness ?? 'unknown'
+  const writeProfile = selectedAuthority?.profile
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -214,29 +272,37 @@ export function Connections() {
     return () => window.clearTimeout(handle)
   }, [selectedMesh, selectedMeshId])
 
-  const writeProfile = useMemo(() => {
-    if (authoritative) {
-      const authorityNode = authoritative.nodes.find((node) => node.nodeId === authoritative.controlNodeId)
-      const controlProfile = profiles.find((profile) => (
-        states[profile.instanceId]?.status === 'connected'
-        && (
-          controls[profile.instanceId]?.control?.nodeId === authoritative.controlNodeId
-          || (authorityNode?.origin && normalizedOrigin(profile.origin) === normalizedOrigin(authorityNode.origin))
-        )
-      ))
-      if (controlProfile) return controlProfile
+  const confirmedStandalone = useCallback((profile: ConnectionProfile): boolean => {
+    const observed = controls[profile.instanceId]
+    if (!observed?.control) return false
+    if (!observed.control.managed) return true
+    const node = nodeForProfile(profile, observed.control, observed)
+    return Boolean(node && !node.meshId)
+  }, [controls])
+
+  const eligibleControlProfiles = useMemo(() => profiles.filter((profile) => {
+    if (states[profile.instanceId]?.status !== 'connected') return false
+    const observed = controls[profile.instanceId]?.control
+    if (!observed) return false
+    return confirmedStandalone(profile) || (observed.managed && observed.nodeId === observed.controlNodeId)
+  }), [confirmedStandalone, controls, profiles, states])
+
+  useEffect(() => {
+    const preferred = eligibleControlProfiles[0]?.instanceId ?? ''
+    if (!newMeshControlInstanceId || !eligibleControlProfiles.some((profile) => profile.instanceId === newMeshControlInstanceId)) {
+      setNewMeshControlInstanceId(preferred)
     }
-    return profiles.find((profile) => states[profile.instanceId]?.status === 'connected')
-  }, [authoritative, controls, profiles, states])
+  }, [eligibleControlProfiles, newMeshControlInstanceId])
 
   const mutateControl = useCallback(
-    async (path: string, body: Record<string, unknown> = {}): Promise<ManagedFleetMutationResult> => {
-      if (!writeProfile) {
+    async (authority: AuthorityView | undefined, path: string, body: Record<string, unknown> = {}): Promise<ManagedFleetMutationResult> => {
+      const profile = authority?.profile
+      if (!profile) {
         const failure = { ok: false, error: 'control_write_unavailable' }
         setControlError(failure.error)
         return failure
       }
-      const api = client(writeProfile.instanceId)
+      const api = client(profile.instanceId)
       if (!api) {
         const failure = { ok: false, error: 'control_write_unavailable' }
         setControlError(failure.error)
@@ -252,15 +318,11 @@ export function Connections() {
         }
         if (result.control) {
           const observedAt = Date.now()
-          saveCachedFleetControl(writeProfile.instanceId, result.control, observedAt)
+          saveCachedFleetControl(profile.instanceId, result.control, observedAt)
           propagateCachedFleetControl(result.control, observedAt)
           setControls((current) => ({
             ...current,
-            [writeProfile.instanceId]: {
-              control: result.control,
-              freshness: 'fresh',
-              observedAt,
-            },
+            [profile.instanceId]: { control: result.control, freshness: 'fresh', observedAt },
           }))
         }
         void refreshControls()
@@ -276,7 +338,7 @@ export function Connections() {
         setControlBusy(false)
       }
     },
-    [client, refreshControls, writeProfile],
+    [client, refreshControls],
   )
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -295,17 +357,12 @@ export function Connections() {
 
   const membershipFor = useCallback((profile: ConnectionProfile): MembershipProjection => {
     const observed = controls[profile.instanceId]
-    const node = nodeForProfile(profile, authoritative, observed)
     const mutation = membershipMutations[profile.instanceId]
     if (mutation && mutation.phase !== 'failed') {
+      const targetAuthority = authorityForMesh(mutation.targetMeshId)
       return mutation.targetMeshId
-        ? { kind: 'mesh', meshId: mutation.targetMeshId, node, freshness: authoritativeFreshness }
-        : { kind: 'standalone', node, freshness: authoritativeFreshness }
-    }
-    if (authoritative?.managed && node) {
-      return node.meshId
-        ? { kind: 'mesh', meshId: node.meshId, node, freshness: authoritativeFreshness }
-        : { kind: 'standalone', node, freshness: authoritativeFreshness }
+        ? { kind: 'mesh', meshId: mutation.targetMeshId, freshness: targetAuthority?.freshness ?? observed?.freshness ?? 'unknown' }
+        : { kind: 'standalone', freshness: observed?.freshness ?? 'unknown' }
     }
     if (observed?.control) {
       if (!observed.control.managed) {
@@ -318,11 +375,30 @@ export function Connections() {
           : { kind: 'standalone', node: localNode, freshness: observed.freshness }
       }
     }
+    for (const authority of authorityViews) {
+      const node = nodeForProfile(profile, authority.control, observed)
+      if (!node) continue
+      return node.meshId
+        ? { kind: 'mesh', meshId: node.meshId, node, freshness: authority.freshness }
+        : { kind: 'standalone', node, freshness: authority.freshness }
+    }
     return { kind: 'unknown', freshness: observed?.freshness ?? 'unknown' }
-  }, [authoritative, authoritativeFreshness, controls, membershipMutations])
+  }, [authorityForMesh, authorityViews, controls, membershipMutations])
 
   async function createMesh() {
     const displayName = newMeshName.trim() || 'Fleet'
+    const selectedProfile = eligibleControlProfiles.find((profile) => profile.instanceId === newMeshControlInstanceId)
+    if (!selectedProfile || states[selectedProfile.instanceId]?.status !== 'connected') {
+      setControlError('control_write_unavailable')
+      setMeshMutationPhase('failed')
+      return
+    }
+    const api = client(selectedProfile.instanceId)
+    if (!api) {
+      setControlError('control_write_unavailable')
+      setMeshMutationPhase('failed')
+      return
+    }
     const pendingMesh: ManagedFleetMeshReadModel = {
       meshId: 'pending:' + Date.now(),
       displayName,
@@ -331,42 +407,69 @@ export function Connections() {
     }
     setOptimisticMeshes([...meshes, pendingMesh])
     setMeshMutationPhase('pending')
-    const result = await mutateControl('/actions/fleet/control/adopt', { display_name: displayName })
+    setControlBusy(true)
+    setControlError(null)
+    let result: ManagedFleetMutationResult
+    try {
+      const enrollment = await api.fleetEnrollment()
+      result = await api.fleetControlMutation('/actions/fleet/control/adopt', {
+        display_name: displayName,
+        control_node_id: enrollment.nodeId,
+      })
+      if (result.ok && result.control) {
+        const observedAt = Date.now()
+        saveCachedFleetControl(selectedProfile.instanceId, result.control, observedAt)
+        propagateCachedFleetControl(result.control, observedAt)
+        setControls((current) => ({
+          ...current,
+          [selectedProfile.instanceId]: { control: result.control, freshness: 'fresh', observedAt },
+        }))
+        void refreshControls()
+      } else if (!result.ok) {
+        setControlError(result.code ?? result.error ?? 'control_mutation_failed')
+      }
+    } catch (cause) {
+      result = { ok: false, error: cause instanceof Error ? cause.message : 'control_mutation_failed' }
+      setControlError(result.error ?? 'control_mutation_failed')
+    } finally {
+      setControlBusy(false)
+    }
     setOptimisticMeshes(null)
     setMeshMutationPhase(result.ok ? 'confirmed' : 'failed')
     if (result.ok) setNewMeshName('Fleet')
   }
 
   async function renameMesh() {
-    if (!authoritative?.managed || !selectedMesh) return
+    if (!selectedAuthority?.control.managed || !selectedMesh) return
     const displayName = meshName.trim() || selectedMesh.displayName
     setOptimisticMeshes(meshes.map((mesh) => (
       mesh.meshId === selectedMesh.meshId ? { ...mesh, displayName } : mesh
     )))
     setMeshMutationPhase('pending')
-    const result = await mutateControl('/actions/fleet/control/mesh/rename', {
+    const result = await mutateControl(selectedAuthority, '/actions/fleet/control/mesh/rename', {
       mesh_id: selectedMesh.meshId,
       display_name: displayName,
-      expected_topology_revision: authoritative.revisions.topology,
+      expected_topology_revision: selectedAuthority.control.revisions.topology,
     })
     setOptimisticMeshes(null)
     setMeshMutationPhase(result.ok ? 'confirmed' : 'failed')
   }
 
   async function deleteMesh() {
-    if (!authoritative?.managed || !selectedMesh) return
+    if (!selectedAuthority?.control.managed || !selectedMesh) return
     setOptimisticMeshes(meshes.filter((mesh) => mesh.meshId !== selectedMesh.meshId))
     setMeshMutationPhase('pending')
-    const result = await mutateControl('/actions/fleet/control/mesh/delete', {
+    const result = await mutateControl(selectedAuthority, '/actions/fleet/control/mesh/delete', {
       mesh_id: selectedMesh.meshId,
-      expected_topology_revision: authoritative.revisions.topology,
+      expected_topology_revision: selectedAuthority.control.revisions.topology,
     })
     setOptimisticMeshes(null)
     setMeshMutationPhase(result.ok ? 'confirmed' : 'failed')
   }
 
   async function addToMesh(instanceId: string, meshId: string): Promise<ManagedFleetMutationResult> {
-    if (!authoritative?.managed) return { ok: false, error: 'control_write_unavailable' }
+    const targetAuthority = authorityForMesh(meshId)
+    if (!targetAuthority?.control.managed) return { ok: false, error: 'control_write_unavailable' }
     const targetApi = client(instanceId)
     if (!targetApi) {
       const failure = { ok: false, error: 'enrollment_unavailable' }
@@ -376,14 +479,28 @@ export function Connections() {
     setControlError(null)
     try {
       const enrollment = await targetApi.fleetEnrollment()
-      return await mutateControl('/actions/fleet/control/nodes/upsert', {
+      const result = await mutateControl(targetAuthority, '/actions/fleet/control/nodes/upsert', {
         node_id: enrollment.nodeId,
         mesh_id: meshId,
         origin: enrollment.origin,
         public_key: enrollment.publicKey,
         auth_token: enrollment.authToken,
-        expected_topology_revision: authoritative.revisions.topology,
+        expected_topology_revision: targetAuthority.control.revisions.topology,
       })
+      if (result.ok && result.control) {
+        const node = result.control.nodes.find((item) => item.nodeId === enrollment.nodeId)
+        const mesh = node?.meshId
+          ? result.control.meshes.find((item) => item.meshId === node.meshId)
+          : undefined
+        const projected = { ...result.control, nodeId: enrollment.nodeId, mesh }
+        const observedAt = Date.now()
+        saveCachedFleetControl(instanceId, projected, observedAt)
+        setControls((current) => ({
+          ...current,
+          [instanceId]: { control: projected, freshness: 'fresh', observedAt },
+        }))
+      }
+      return result
     } catch (cause) {
       const failure = { ok: false, error: cause instanceof Error ? cause.message : 'enrollment_unavailable' }
       setControlError(failure.error)
@@ -392,31 +509,47 @@ export function Connections() {
   }
 
   async function detachFromMesh(instanceId: string): Promise<ManagedFleetMutationResult> {
-    if (!authoritative?.managed) return { ok: false, error: 'control_write_unavailable' }
     const profile = profiles.find((item) => item.instanceId === instanceId)
-    const node = profile ? nodeForProfile(profile, authoritative, controls[instanceId]) : undefined
-    if (!node) return { ok: false, error: 'membership_unknown' }
-    return mutateControl('/actions/fleet/control/nodes/detach', {
+    if (!profile) return { ok: false, error: 'membership_unknown' }
+    const sourceAuthority = authorityForProfile(profile)
+    if (!sourceAuthority?.control.managed) return { ok: false, error: 'control_write_unavailable' }
+    const node = nodeForProfile(profile, sourceAuthority.control, controls[instanceId])
+    if (!node?.meshId) return { ok: false, error: 'membership_unknown' }
+    return mutateControl(sourceAuthority, '/actions/fleet/control/nodes/detach', {
       node_id: node.nodeId,
-      expected_topology_revision: authoritative.revisions.topology,
+      expected_topology_revision: sourceAuthority.control.revisions.topology,
     })
   }
 
   async function moveToMesh(instanceId: string, targetMeshId: string): Promise<ManagedFleetMutationResult> {
-    if (!authoritative?.managed) return { ok: false, error: 'control_write_unavailable' }
     const profile = profiles.find((item) => item.instanceId === instanceId)
-    const node = profile ? nodeForProfile(profile, authoritative, controls[instanceId]) : undefined
-    if (!node) return { ok: false, error: 'membership_unknown' }
-    return mutateControl('/actions/fleet/control/nodes/move', {
-      node_id: node.nodeId,
-      target_mesh_id: targetMeshId,
-      expected_topology_revision: authoritative.revisions.topology,
-    })
+    if (!profile) return { ok: false, error: 'membership_unknown' }
+    const sourceAuthority = authorityForProfile(profile)
+    const targetAuthority = authorityForMesh(targetMeshId)
+    if (!sourceAuthority?.control.managed || !targetAuthority?.control.managed) {
+      return { ok: false, error: 'control_write_unavailable' }
+    }
+    const node = nodeForProfile(profile, sourceAuthority.control, controls[instanceId])
+    if (!node?.meshId) return { ok: false, error: 'membership_unknown' }
+    const sameAuthority = (
+      sourceAuthority.control.fleetId === targetAuthority.control.fleetId
+      && sourceAuthority.control.controlNodeId === targetAuthority.control.controlNodeId
+    )
+    if (sameAuthority) {
+      return mutateControl(sourceAuthority, '/actions/fleet/control/nodes/move', {
+        node_id: node.nodeId,
+        target_mesh_id: targetMeshId,
+        expected_topology_revision: sourceAuthority.control.revisions.topology,
+      })
+    }
+    const detached = await detachFromMesh(instanceId)
+    if (!detached.ok) return detached
+    return addToMesh(instanceId, targetMeshId)
   }
 
   async function changeMembership(instanceId: string, targetMeshId: string) {
     const profile = profiles.find((item) => item.instanceId === instanceId)
-    if (!authoritative?.managed || !profile) return
+    if (!profile) return
     const current = membershipFor(profile)
     const currentMeshId = current.kind === 'mesh' ? current.meshId ?? '' : ''
     if (current.kind !== 'unknown' && currentMeshId === targetMeshId) return
@@ -433,8 +566,10 @@ export function Connections() {
         : { ok: false, error: 'membership_unknown' }
     } else if (current.kind === 'mesh') {
       result = await moveToMesh(instanceId, targetMeshId)
-    } else {
+    } else if (current.kind === 'standalone') {
       result = await addToMesh(instanceId, targetMeshId)
+    } else {
+      result = { ok: false, error: 'membership_unknown' }
     }
 
     setMembershipMutations((value) => ({
@@ -622,10 +757,22 @@ export function Connections() {
             onChange={(event) => setNewMeshName(event.target.value)}
           />
         </label>
+        <label className="ui-field">
+          <span>{t('connections.controlNode')}</span>
+          <select
+            value={newMeshControlInstanceId}
+            disabled={controlBusy || eligibleControlProfiles.length === 0}
+            onChange={(event) => setNewMeshControlInstanceId(event.target.value)}
+          >
+            {eligibleControlProfiles.map((profile) => (
+              <option key={profile.instanceId} value={profile.instanceId}>{profile.displayName}</option>
+            ))}
+          </select>
+        </label>
         <div className="connection-actions">
           <button
             type="button"
-            disabled={controlBusy || !writeProfile}
+            disabled={controlBusy || !newMeshControlInstanceId}
             onClick={() => void createMesh()}
           >
             {t('connections.createMesh')}
@@ -668,10 +815,6 @@ export function Connections() {
                     ? meshes.find((mesh) => mesh.meshId === membership.meshId)
                     : undefined
                   const converged = isConverged(member)
-                  const sameFleet = Boolean(
-                    authoritative
-                    && (member || observed?.control?.fleetId === authoritative.fleetId),
-                  )
                   const membershipMutation = membershipMutations[profile.instanceId]
                   const membershipLabel = membership.kind === 'mesh'
                     ? memberMesh?.displayName ?? membership.meshId ?? t('connections.unknown')
@@ -701,12 +844,12 @@ export function Connections() {
                           </span>
                         ) : null}
                       </div>
-                      {authoritative?.managed && observed?.control && sameFleet ? (
+                      {membership.kind !== 'unknown' && meshes.length > 0 ? (
                         <label className="mesh-membership-control ui-field">
                           <span>{t('connections.membership')}</span>
                           <select
                             value={membership.kind === 'mesh' ? membership.meshId ?? '' : ''}
-                            disabled={controlBusy || !writeProfile}
+                            disabled={controlBusy}
                             onChange={(event) => void changeMembership(
                               profile.instanceId,
                               event.target.value,
@@ -744,7 +887,7 @@ export function Connections() {
                             {t('connections.retry')}
                           </button>
                         ) : null}
-                        {observed?.control?.managed && sameFleet ? (
+                        {observed?.control?.managed ? (
                           <button
                             type="button"
                             disabled={controlBusy || state?.status !== 'connected'}

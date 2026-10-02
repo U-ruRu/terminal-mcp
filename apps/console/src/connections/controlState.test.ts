@@ -62,6 +62,56 @@ describe('fleet control cache', () => {
     expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(true)
     expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(200)
   })
+  test('does not propagate one control authority over another authority in the same fleet', () => {
+    const firstbyteAuthority = {
+      ...control('firstbyte'),
+      controlNodeId: 'firstbyte',
+      mesh: { meshId: 'mesh-b', displayName: 'Staging', adopted: true, updatedAt: '2026-10-02T06:00:00Z' },
+      meshes: [{ meshId: 'mesh-b', displayName: 'Staging', adopted: true, updatedAt: '2026-10-02T06:00:00Z' }],
+    }
+    saveCachedFleetControl('main-profile', control('main'), 100)
+    saveCachedFleetControl('firstbyte-profile', firstbyteAuthority, 100)
+
+    propagateCachedFleetControl(control('main', true), 200)
+
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.controlNodeId).toBe('firstbyte')
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.mesh?.meshId).toBe('mesh-b')
+    expect(loadCachedFleetControl('firstbyte-profile')?.control.policy?.legacyAdmissionEnabled).toBe(false)
+    expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(100)
+  })
+
+  test('prefers confirmed membership over a newer standalone fallback from another authority', () => {
+    const member = control('main')
+    const standalone = {
+      ...control('firstbyte'),
+      controlNodeId: 'firstbyte',
+      nodes: control('firstbyte').nodes.map((node) => node.nodeId === 'firstbyte' ? { ...node, meshId: undefined } : node),
+      mesh: undefined,
+    }
+    saveCachedFleetControl('member-authority', member, 100)
+    saveCachedFleetControl('standalone-authority', standalone, 200)
+
+    const projected = loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')
+    expect(projected?.control.controlNodeId).toBe('main')
+    expect(projected?.control.mesh?.meshId).toBe('mesh-prod')
+  })
+
+  test('returns unknown for ambiguous standalone fallbacks from different authorities', () => {
+    const mainStandalone = {
+      ...control('main'),
+      nodes: control('main').nodes.map((node) => node.nodeId === 'firstbyte' ? { ...node, meshId: undefined } : node),
+    }
+    const firstbyteStandalone = {
+      ...mainStandalone,
+      nodeId: 'firstbyte',
+      controlNodeId: 'firstbyte',
+    }
+    saveCachedFleetControl('main-authority', mainStandalone, 100)
+    saveCachedFleetControl('firstbyte-authority', firstbyteStandalone, 200)
+
+    expect(loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')).toBeUndefined()
+  })
+
   test('projects a managed peer cache onto a profile by authoritative node origin', () => {
     saveCachedFleetControl('main-profile', control('main', true), 300)
 

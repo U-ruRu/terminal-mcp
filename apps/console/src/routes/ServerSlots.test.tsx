@@ -113,6 +113,13 @@ function instance(status: 'live' | 'offline', item: PersistentSlotReadModel): Fl
 }
 
 
+function authorityInstance(): FleetInstanceView {
+  const value = instance('live', slot())
+  value.profile = { ...value.profile, instanceId: 'main', origin: 'https://main.example', displayName: 'Main', credentialRef: 'cred-main' }
+  value.runtime = { ...value.runtime, instanceId: 'main', authStatus: 'connected', status: 'live' }
+  return value
+}
+
 function managedControl(legacyAdmissionEnabled = false, revision = 4): ManagedFleetControlReadModel {
   return {
     schemaVersion: 3,
@@ -355,7 +362,7 @@ test('managed AccessPolicy uses Fleet control authority for timing, Legacy and r
     }
   }) as FleetControlMutator
 
-  renderSlots([instance('offline', slot('active', '2026-09-30T12:02:00Z'))], persistentMutate, undefined, loadControl, mutateControl)
+  renderSlots([instance('offline', slot('active', '2026-09-30T12:02:00Z')), authorityInstance()], persistentMutate, undefined, loadControl, mutateControl)
   await waitFor(() => expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeEnabled())
   expect(screen.queryByText(/Suspend or cancel every armed\/active slot/)).not.toBeInTheDocument()
 
@@ -369,7 +376,7 @@ test('managed AccessPolicy uses Fleet control authority for timing, Legacy and r
   await user.clear(rearm); await user.type(rearm, '15')
   await user.click(screen.getByRole('button', { name: 'Save D/W/A/R' }))
 
-  expect(mutateControl).toHaveBeenNthCalledWith(1, 'alpha', '/actions/fleet/control/policy', {
+  expect(mutateControl).toHaveBeenNthCalledWith(1, 'main', '/actions/fleet/control/policy', {
     duration_seconds: 180,
     warning_after_seconds: 60,
     alert_after_seconds: 120,
@@ -380,12 +387,12 @@ test('managed AccessPolicy uses Fleet control authority for timing, Legacy and r
   expect(persistentMutate).not.toHaveBeenCalled()
 
   await user.click(screen.getByRole('checkbox', { name: 'Allow Legacy agent admission' }))
-  expect(mutateControl).toHaveBeenNthCalledWith(2, 'alpha', '/actions/fleet/control/policy', expect.objectContaining({
+  expect(mutateControl).toHaveBeenNthCalledWith(2, 'main', '/actions/fleet/control/policy', expect.objectContaining({
     legacy_admission_enabled: true,
     expected_revision: 5,
   }))
   await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
-  expect(mutateControl).toHaveBeenNthCalledWith(3, 'alpha', '/actions/fleet/control/policy/reset', { expected_revision: 6 })
+  expect(mutateControl).toHaveBeenNthCalledWith(3, 'main', '/actions/fleet/control/policy/reset', { expected_revision: 6 })
 })
 
 test('old server snapshots do not expose policy mutation controls', () => {
@@ -508,14 +515,14 @@ test('cached managed policy stays mesh-wide when the fresh control read is unava
     control: managedControl(Boolean(body.legacy_admission_enabled), 5),
   })) as FleetControlMutator
 
-  renderSlots([instance('live', slot())], persistentMutate, undefined, loadControl, mutateControl)
+  renderSlots([instance('live', slot()), authorityInstance()], persistentMutate, undefined, loadControl, mutateControl)
 
   const toggle = await screen.findByRole('checkbox', { name: 'Allow Legacy agent admission' })
   await waitFor(() => expect(screen.getByText('Policy scope: Managed mesh · Production · Stale')).toBeInTheDocument())
   expect(toggle).not.toBeChecked()
   await user.click(toggle)
 
-  expect(mutateControl).toHaveBeenCalledWith('alpha', '/actions/fleet/control/policy', expect.objectContaining({
+  expect(mutateControl).toHaveBeenCalledWith('main', '/actions/fleet/control/policy', expect.objectContaining({
     legacy_admission_enabled: true,
     expected_revision: 4,
   }))
@@ -530,7 +537,7 @@ test('Legacy toggle is optimistic and rolls back visibly when authoritative muta
   const loadControl = vi.fn(async () => managedControl(false)) as FleetControlLoader
   const persistentMutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
 
-  renderSlots([instance('live', slot())], persistentMutate, undefined, loadControl, mutateControl)
+  renderSlots([instance('live', slot()), authorityInstance()], persistentMutate, undefined, loadControl, mutateControl)
 
   const toggle = await screen.findByRole('checkbox', { name: 'Allow Legacy agent admission' })
   await waitFor(() => expect(toggle).toBeEnabled())
