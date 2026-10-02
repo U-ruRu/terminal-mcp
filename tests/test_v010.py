@@ -857,9 +857,10 @@ def test_mcp_schema_has_unified_task_contract():
 
     message = tools["message"].parameters
     assert message["required"] == ["sender"]
-    assert "code" not in message["properties"]
+    assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
+    assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
     assert "active unified session" in tools["message"].description
-    assert "No Access code" in tools["message"].description
+    assert "same Access code used by cmd/task/context" in tools["message"].description
 
 
 @pytest.mark.asyncio

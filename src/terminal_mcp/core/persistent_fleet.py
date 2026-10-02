@@ -592,6 +592,190 @@ class PersistentFleetBridge:
             "delivered_nodes": delivered_nodes,
         }
 
+    async def deliver_message(
+        self,
+        *,
+        logical_agent_id: str,
+        sender_agent_id: str,
+        text: str,
+        require_reply: bool = False,
+        alert: bool = False,
+    ) -> dict:
+        """Deliver one Persistent message to the recipient's authoritative active session."""
+        access = await self.get_access_slot(logical_agent_id)
+        if access is None or access.get("status") != "active":
+            raise PersistentStoreError("recipient_not_found")
+        authority_node_id = str(access.get("authority_node_id") or "")
+        if not authority_node_id:
+            raise PersistentStoreError("authority_unavailable")
+        if authority_node_id == self.config.instance_id:
+            await self._guard_local_authority(logical_agent_id)
+            session = await self.store.active_session_for_slot(logical_agent_id)
+            if (
+                session is None
+                or session.state != "active"
+                or utc_now() >= parse_utc(session.hard_expires_at)
+            ):
+                raise PersistentStoreError("recipient_not_active")
+            return await self.create_obligation(
+                logical_agent_id=logical_agent_id,
+                sender_agent_id=sender_agent_id,
+                text=text,
+                require_reply=require_reply,
+                alert=alert,
+            )
+        peer = self.config.peers_by_id.get(authority_node_id)
+        if peer is None:
+            raise PersistentStoreError("authority_unavailable")
+        async with self.client_factory() as client:
+            try:
+                response = await client.post(
+                    f"{peer.origin}/internal/fleet/persistent/obligation-create",
+                    headers=self._headers(peer),
+                    json={
+                        "requesting_instance_id": self.config.instance_id,
+                        "logical_agent_id": logical_agent_id,
+                        "sender_agent_id": sender_agent_id,
+                        "text": text,
+                        "require_reply": bool(require_reply),
+                        "alert": bool(alert),
+                    },
+                )
+            except Exception as exc:
+                raise PersistentStoreError("authority_unavailable") from exc
+        if response.status_code >= 400:
+            try:
+                body = response.json()
+                detail = body.get("detail") if isinstance(body, dict) else None
+                code = detail.get("code") if isinstance(detail, dict) else detail
+            except Exception:
+                code = None
+            raise PersistentStoreError(str(code or "authority_unavailable"))
+        data = response.json()
+        if not data.get("ok"):
+            raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+        return dict(data["obligation"])
+
+    async def inbox_obligations(
+        self,
+        logical_agent_id: str,
+        *,
+        work_session_id: str,
+        session_epoch: int,
+    ) -> list[dict]:
+        """Read the authoritative open inbox, plus any attachment-local delivery cache."""
+        items: dict[str, dict] = {}
+        route = await self.route_info(logical_agent_id)
+        authority_node_id = (
+            str(route.get("authority_node_id") or "")
+            if route is not None
+            else self.config.instance_id
+        )
+        if authority_node_id == self.config.instance_id:
+            session = await self.store.assert_session_authority(
+                logical_agent_id, work_session_id, session_epoch
+            )
+            if session.state != "active" or utc_now() >= parse_utc(session.hard_expires_at):
+                raise PersistentStoreError("session_not_active")
+            authoritative = await self.store.open_message_obligations(logical_agent_id)
+        else:
+            peer = self.config.peers_by_id.get(authority_node_id)
+            if peer is None:
+                raise PersistentStoreError("authority_unavailable")
+            async with self.client_factory() as client:
+                try:
+                    response = await client.post(
+                        f"{peer.origin}/internal/fleet/persistent/obligation-list",
+                        headers=self._headers(peer),
+                        json={
+                            "requesting_instance_id": self.config.instance_id,
+                            "logical_agent_id": logical_agent_id,
+                            "work_session_id": work_session_id,
+                            "session_epoch": int(session_epoch),
+                        },
+                    )
+                except Exception as exc:
+                    raise PersistentStoreError("authority_unavailable") from exc
+            if response.status_code >= 400:
+                raise PersistentStoreError("authority_unavailable")
+            data = response.json()
+            if not data.get("ok"):
+                raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+            authoritative = list(data.get("obligations") or [])
+        for item in authoritative:
+            items[item["message_ref"]] = {
+                **item,
+                "home_node_id": authority_node_id,
+                "logical_agent_id": logical_agent_id,
+            }
+        for item in self.cached_obligations(logical_agent_id):
+            items[item["message_ref"]] = dict(item)
+        return sorted(
+            items.values(),
+            key=lambda item: (item.get("created_at") or "", item["message_ref"]),
+        )
+
+    async def acknowledge_obligation(
+        self,
+        *,
+        obligation: dict,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        replied_at: str | None = None,
+        reply_message_ref: str | None = None,
+    ) -> dict:
+        """Merge a read/reply receipt at the obligation home while preserving the session fence."""
+        home_node_id = str(obligation.get("home_node_id") or "")
+        message_ref = str(obligation.get("message_ref") or "")
+        if not home_node_id or not message_ref:
+            raise PersistentStoreError("message_not_found")
+        stamp = utc_text()
+        payload = {
+            "message_ref": message_ref,
+            "logical_agent_id": logical_agent_id,
+            "work_session_id": work_session_id,
+            "session_epoch": int(session_epoch),
+            "attachment_node_id": self.config.instance_id,
+            "read_at": stamp,
+            "replied_at": replied_at,
+            "reply_message_ref": reply_message_ref,
+        }
+        if home_node_id == self.config.instance_id:
+            session = await self.store.assert_session_authority(
+                logical_agent_id, work_session_id, session_epoch
+            )
+            if session.state != "active" or utc_now() >= parse_utc(session.hard_expires_at):
+                raise PersistentStoreError("session_not_active")
+            receipt = await self.store.merge_message_receipt(
+                message_ref,
+                self.config.instance_id,
+                read_at=stamp,
+                replied_at=replied_at,
+                reply_message_ref=reply_message_ref,
+            )
+            self._remote_obligations.pop(message_ref, None)
+            return {"receipt": receipt}
+        peer = self.config.peers_by_id.get(home_node_id)
+        if peer is None:
+            raise PersistentStoreError("authority_unavailable")
+        async with self.client_factory() as client:
+            try:
+                response = await client.post(
+                    f"{peer.origin}/internal/fleet/persistent/obligation-receipt",
+                    headers=self._headers(peer),
+                    json=payload,
+                )
+            except Exception as exc:
+                raise PersistentStoreError("authority_unavailable") from exc
+        if response.status_code >= 400:
+            raise PersistentStoreError("authority_unavailable")
+        data = response.json()
+        if not data.get("ok"):
+            raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
+        self._remote_obligations.pop(message_ref, None)
+        return dict(data)
+
     async def receive_obligation_delivery(
         self,
         payload: dict,
@@ -708,7 +892,7 @@ class PersistentFleetBridge:
         operation: str | None = None,
         request_id: str | None = None,
     ) -> PersistentCommandPermit:
-        if scope not in {"run", "cancel", "task", "recovery"}:
+        if scope not in {"run", "cancel", "task", "recovery", "message"}:
             raise PersistentStoreError("policy_incompatible")
         if requesting_instance_id not in self.config.peers_by_id:
             raise PersistentStoreError("authority_unavailable")
