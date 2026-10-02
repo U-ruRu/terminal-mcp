@@ -144,5 +144,5 @@ test('task detail route is a dedicated surface without the task list', () => {
 
   expect(screen.getByRole('article', { name: 'Task detail' })).toBeInTheDocument()
   expect(screen.queryByRole('link', { name: 'T-1 · Clickable task' })).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Back to tasks' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Back to tasks' })).not.toBeInTheDocument()
 })
