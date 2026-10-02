@@ -1049,11 +1049,13 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
             raise RuntimeError("offline")
         return _FakeResponse({"ok": True, "control": body["state"]})
 
+    runtime_target = type("RuntimeTarget", (), {"config": config})()
     control = ManagedFleetControl(
         store,
         config,
         _PolicyStub(),
         public_base_url="https://home.example",
+        runtime_targets=(runtime_target,),
         client_factory=lambda: _FakeClient(handler),
     )
     created = await control.adopt(mesh_id="mesh-a", display_name="Fleet")
@@ -1080,8 +1082,15 @@ async def test_managed_control_retries_only_pending_member_until_converged(tmp_p
     assert remote["desired_trust_revision"] == remote["applied_trust_revision"]
     assert remote["desired_policy_revision"] == remote["applied_policy_revision"]
 
+    bootstrap_config = config
+    control.config = bootstrap_config
+    runtime_target.config = bootstrap_config
+    assert runtime_target.config.local_auth_token is None
+
     await control.reconcile_pending()
     assert attempts == first_attempts + 1
+    assert control.config.local_auth_token
+    assert runtime_target.config.local_auth_token == control.config.local_auth_token
 
 
 @pytest.mark.asyncio
