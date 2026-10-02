@@ -465,6 +465,7 @@ class PersistentAgentStore:
         auth_generation: int,
         authority_node_id: str,
         origin_instance_id: str | None,
+        session_duration_seconds: int | None = None,
         now: str | None = None,
     ) -> tuple[PersistentSlot, WorkSessionRecord]:
         selector = normalize_slot_selector(selector)
@@ -495,34 +496,7 @@ class PersistentAgentStore:
                     raise PersistentStoreError("session_stopping")
                 if row[1] == "active":
                     raise PersistentStoreError("session_already_active")
-                if row[1] != "armed":
-                    raise PersistentStoreError("slot_not_armed")
-                arm_row = await (
-                    await db.execute(
-                        "SELECT generation,armed_at,armed_until,captured_duration_seconds,"
-                        "selector_generation,auth_generation,slot_revision,consumed_at,revoked_at "
-                        "FROM logical_agent_arms WHERE logical_agent_id=? "
-                        "ORDER BY generation DESC LIMIT 1",
-                        (logical_agent_id,),
-                    )
-                ).fetchone()
-                if arm_row is None or arm_row[7] is not None or arm_row[8] is not None:
-                    raise PersistentStoreError("slot_not_armed")
-                if current >= parse_utc(arm_row[2]):
-                    await db.execute(
-                        "UPDATE logical_agent_arms SET revoked_at=? WHERE logical_agent_id=? "
-                        "AND generation=? AND revoked_at IS NULL",
-                        (stamp, logical_agent_id, int(arm_row[0])),
-                    )
-                    await db.execute(
-                        "UPDATE logical_agents SET state='suspended',slot_revision=slot_revision+1,"
-                        "updated_at=? WHERE logical_agent_id=? AND state='armed'",
-                        (stamp, logical_agent_id),
-                    )
-                    await db.commit()
-                    raise PersistentStoreError("arm_expired")
-                if int(arm_row[4]) != int(row[5]) or int(arm_row[5]) != int(row[6]):
-                    raise PersistentStoreError("policy_incompatible")
+
                 active = await (
                     await db.execute(
                         "SELECT 1 FROM logical_agent_work_sessions WHERE logical_agent_id=? "
@@ -532,6 +506,80 @@ class PersistentAgentStore:
                 ).fetchone()
                 if active is not None:
                     raise PersistentStoreError("session_already_active")
+
+                arm_row = None
+                pending_rearm = None
+                pending_disposition = None
+                if row[1] == "armed":
+                    arm_row = await (
+                        await db.execute(
+                            "SELECT generation,armed_at,armed_until,captured_duration_seconds,"
+                            "selector_generation,auth_generation,slot_revision,"
+                            "consumed_at,revoked_at "
+                            "FROM logical_agent_arms WHERE logical_agent_id=? "
+                            "ORDER BY generation DESC LIMIT 1",
+                            (logical_agent_id,),
+                        )
+                    ).fetchone()
+                    if arm_row is None or arm_row[7] is not None or arm_row[8] is not None:
+                        raise PersistentStoreError("slot_not_armed")
+                    if current >= parse_utc(arm_row[2]):
+                        await db.execute(
+                            "UPDATE logical_agent_arms SET revoked_at=? WHERE logical_agent_id=? "
+                            "AND generation=? AND revoked_at IS NULL",
+                            (stamp, logical_agent_id, int(arm_row[0])),
+                        )
+                        await db.execute(
+                            "UPDATE logical_agents SET state='suspended',"
+                            "slot_revision=slot_revision+1,"
+                            "updated_at=? WHERE logical_agent_id=? AND state='armed'",
+                            (stamp, logical_agent_id),
+                        )
+                        await db.commit()
+                        raise PersistentStoreError("arm_expired")
+                    if int(arm_row[4]) != int(row[5]) or int(arm_row[5]) != int(row[6]):
+                        raise PersistentStoreError("policy_incompatible")
+                    hard_expires_at = utc_text(
+                        current + timedelta(seconds=int(arm_row[3]))
+                    )
+                elif row[1] == "suspended":
+                    pending_rearm = await (
+                        await db.execute(
+                            "SELECT r.work_session_id,r.rearm_at,s.hard_expires_at,"
+                            "s.state,s.end_reason "
+                            "FROM logical_agent_rearms r JOIN logical_agent_work_sessions s "
+                            "ON s.work_session_id=r.work_session_id "
+                            "WHERE r.logical_agent_id=? AND r.cancelled_at IS NULL "
+                            "AND r.rearmed_at IS NULL",
+                            (logical_agent_id,),
+                        )
+                    ).fetchone()
+                    if pending_rearm is None:
+                        raise PersistentStoreError("slot_not_armed")
+                    rearm_at = parse_utc(pending_rearm[1])
+                    previous_hard_expiry = parse_utc(pending_rearm[2])
+                    can_continue = (
+                        pending_rearm[3] == "ended"
+                        and pending_rearm[4] == "session_end"
+                        and current < rearm_at
+                        and current < previous_hard_expiry
+                    )
+                    if can_continue:
+                        hard_expires_at = pending_rearm[2]
+                        pending_disposition = "cancel"
+                    elif current >= rearm_at:
+                        if session_duration_seconds is None or session_duration_seconds < 1:
+                            raise PersistentStoreError("policy_incompatible")
+                        hard_expires_at = utc_text(
+                            current + timedelta(seconds=int(session_duration_seconds))
+                        )
+                        pending_disposition = "complete"
+                    else:
+                        # The previous D window is exhausted but R has not elapsed yet.
+                        raise PersistentStoreError("slot_not_armed")
+                else:
+                    raise PersistentStoreError("slot_not_armed")
+
                 epoch_row = await (
                     await db.execute(
                         "SELECT COALESCE(MAX(session_epoch),0)+1 FROM logical_agent_work_sessions "
@@ -540,17 +588,33 @@ class PersistentAgentStore:
                     )
                 ).fetchone()
                 session_epoch = int(epoch_row[0])
-                hard_expires_at = utc_text(current + timedelta(seconds=int(arm_row[3])))
                 next_revision = int(row[4]) + 1
-                await db.execute(
-                    "UPDATE logical_agent_arms SET consumed_at=? WHERE logical_agent_id=? "
-                    "AND generation=? AND consumed_at IS NULL AND revoked_at IS NULL",
-                    (stamp, logical_agent_id, int(arm_row[0])),
-                )
+
+                if arm_row is not None:
+                    await db.execute(
+                        "UPDATE logical_agent_arms SET consumed_at=? WHERE logical_agent_id=? "
+                        "AND generation=? AND consumed_at IS NULL AND revoked_at IS NULL",
+                        (stamp, logical_agent_id, int(arm_row[0])),
+                    )
+                elif pending_rearm is not None and pending_disposition == "cancel":
+                    await db.execute(
+                        "UPDATE logical_agent_rearms SET cancelled_at=COALESCE(cancelled_at,?) "
+                        "WHERE logical_agent_id=? AND work_session_id=? "
+                        "AND cancelled_at IS NULL AND rearmed_at IS NULL",
+                        (stamp, logical_agent_id, pending_rearm[0]),
+                    )
+                elif pending_rearm is not None and pending_disposition == "complete":
+                    await db.execute(
+                        "UPDATE logical_agent_rearms SET rearmed_at=COALESCE(rearmed_at,?) "
+                        "WHERE logical_agent_id=? AND work_session_id=? "
+                        "AND cancelled_at IS NULL AND rearmed_at IS NULL",
+                        (stamp, logical_agent_id, pending_rearm[0]),
+                    )
+
                 cur = await db.execute(
                     "UPDATE logical_agents SET state='active',slot_revision=?,updated_at=? "
-                    "WHERE logical_agent_id=? AND state='armed' AND slot_revision=?",
-                    (next_revision, stamp, logical_agent_id, expected_revision),
+                    "WHERE logical_agent_id=? AND state=? AND slot_revision=?",
+                    (next_revision, stamp, logical_agent_id, row[1], expected_revision),
                 )
                 if cur.rowcount != 1:
                     raise PersistentStoreError("revision_conflict")
