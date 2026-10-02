@@ -89,8 +89,8 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
     }
     this.state = {
       instanceId: this.instanceId,
-      status: 'offline',
-      authStatus: 'unpaired',
+      status: 'connecting',
+      authStatus: 'restoring',
       realtime: null,
       reconnectAttempt: 0,
     }

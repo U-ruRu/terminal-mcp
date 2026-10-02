@@ -9,6 +9,10 @@ const snap = (seq: number): ConsoleSnapshotReadModel => ({
 })
 const evt = (seq: number) => ({ type:'event' as const, event:{ seq, eventType:'task.updated', entityType:'task', entityId:'x', payload:{}, createdAt:'2026-09-28T09:00:00Z' } })
 
+test('initial realtime state is converging rather than falsely offline', () => {
+  expect(createRealtimeState()).toMatchObject({ status: 'connecting', snapshot: null, socketConnected: false })
+})
+
 test('cursor reducer dedupes ordered replay and flags gaps', () => {
   let state = socketOpened(replaceSnapshot(createRealtimeState(), snap(10), true))
   state = applyRealtimeFrame(state, evt(11))

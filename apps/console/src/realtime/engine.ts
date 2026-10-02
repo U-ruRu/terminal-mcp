@@ -282,7 +282,7 @@ export class RealtimeConsoleEngine {
       socket.onerror = null
       socket.close(1000, 'console_resync')
     }
-    this.setState(markStale(this.state, reason))
+    this.setState(markStale({ ...this.state, socketConnected: false }, reason))
     try {
       const snapshot = await this.client.snapshot()
       if (!this.running) return

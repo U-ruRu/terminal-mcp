@@ -230,7 +230,7 @@ test('aggregates mixed live, stale and offline servers with problem-first determ
     'live',
   ])
   expect(model.servers.map((server) => server.freshness)).toEqual([
-    'offline',
+    'loading',
     'stale',
     'fresh',
   ])
@@ -317,7 +317,8 @@ test('offline server keeps last-known snapshot but is never classified as fresh'
   const model = buildFleetReadModel([remembered])
   expect(model.servers[0]).toMatchObject({
     connectivity: 'offline',
-    freshness: 'offline',
+    connectionState: 'offline',
+    freshness: 'stale',
     version: '0.9.9',
     snapshotAvailable: true,
     activeAgentCount: 1,
@@ -325,6 +326,18 @@ test('offline server keeps last-known snapshot but is never classified as fresh'
     lastError: 'socket_closed',
   })
   expect(model.summary.offlineServers).toBe(1)
+})
+
+test('keeps connectivity, freshness and attention independent while initial data converges', () => {
+  const cold = instance('cold', 'Cold', 'connecting', null)
+  const cached = instance('cached', 'Cached', 'offline', snapshot('https://cached.example', '0.9.9'))
+  const model = buildFleetReadModel([cold, cached])
+  expect(model.servers.find((server) => server.instanceId === 'cold')).toMatchObject({
+    connectionState: 'loading', freshness: 'loading', healthState: 'unknown', snapshotAvailable: false,
+  })
+  expect(model.servers.find((server) => server.instanceId === 'cached')).toMatchObject({
+    connectionState: 'offline', freshness: 'stale', healthState: 'healthy', snapshotAvailable: true,
+  })
 })
 
 test('ignores archived task pressure and applies a deterministic activity limit', () => {

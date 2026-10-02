@@ -116,7 +116,11 @@ export function ServerSection({
           <h2 id="server-section-title">{title}</h2>
           <p className="muted">{server.origin}</p>
         </div>
-        <span className={'status fleet-status-' + server.freshness}>{server.freshness}</span>
+        <div className="server-state-strip" aria-label={server.displayName + ' state'}>
+          <span className={'status status-' + server.connectionState}>{server.connectionState === 'live' ? t('status.live') : server.connectionState === 'offline' ? t('status.offline') : t('status.loading')}</span>
+          <span className={'status fleet-status-' + server.freshness}>{server.freshness === 'fresh' ? t('status.fresh') : server.freshness === 'stale' ? t('status.stale') : t('status.loading')}</span>
+          {server.healthState === 'attention' ? <span className="status status-attention">{t('status.attention')}</span> : null}
+        </div>
       </div>
 
       <article className="panel">

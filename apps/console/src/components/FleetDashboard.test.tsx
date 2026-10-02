@@ -72,7 +72,9 @@ test('updates incrementally when the supplied fleet model changes', () => {
         ? {
             ...server,
             connectivity: 'live' as const,
+            connectionState: 'live' as const,
             freshness: 'fresh' as const,
+            healthState: 'healthy' as const,
             communication: { unread: 0, replyRequired: 0, alerts: 0 },
             blockerCount: 0,
             staleReason: undefined,

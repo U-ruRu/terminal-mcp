@@ -2034,3 +2034,23 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   width: min(100%, 9rem);
   font-variant-numeric: tabular-nums;
 }
+
+
+/* Async stability: transient pairing overlays preserve the underlying reading context. */
+.pairing-handoff {
+  position: fixed;
+  z-index: 1000;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: min(calc(100vw - 32px), 520px);
+  max-height: min(calc(100dvh - 32px), 680px);
+  overflow: auto;
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.48), 0 18px 48px rgb(0 0 0 / 0.32);
+}
+.server-state-strip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-height: 30px;
+}

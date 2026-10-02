@@ -14,7 +14,7 @@ afterEach(() => cleanup())
 const model: FleetReadModel = {
   servers: [{
     instanceId: 'secondary', origin: 'https://secondary.example', displayName: 'Secondary',
-    connectivity: 'live', freshness: 'fresh', version: '0.10.1', healthy: true,
+    connectivity: 'live', connectionState: 'live', freshness: 'fresh', healthState: 'healthy', version: '0.10.1', healthy: true,
     contexts: [
       { id: 1, summary: 'Primary rules', content: 'Do the important thing.', primary: true },
       { id: 2, summary: 'Extra note', content: 'Optional detail.', primary: false },

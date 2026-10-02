@@ -9,7 +9,9 @@ import type {
 import type { InstanceEvent, RealtimeStatus } from '../realtime/state'
 import type { FleetInstanceView } from './types'
 
-export type FleetFreshness = 'fresh' | 'catching_up' | 'stale' | 'offline'
+export type FleetFreshness = 'loading' | 'fresh' | 'catching_up' | 'stale' | 'offline'
+export type FleetConnectionState = 'loading' | 'live' | 'offline'
+export type FleetHealthState = 'unknown' | 'healthy' | 'attention'
 
 export type FleetSource = {
   instanceId: string
@@ -80,7 +82,9 @@ export type FleetCommunicationCounts = {
 
 export type FleetServerReadModel = FleetSource & {
   connectivity: RealtimeStatus
+  connectionState: FleetConnectionState
   freshness: FleetFreshness
+  healthState: FleetHealthState
   version?: string
   healthy?: boolean
   resources?: HostResourcesReadModel
@@ -124,10 +128,25 @@ function sourceOf(instance: FleetInstanceView): FleetSource {
   }
 }
 
-function freshness(instance: FleetInstanceView): FleetFreshness {
+function connectionState(instance: FleetInstanceView): FleetConnectionState {
+  const realtime = instance.runtime.realtime
+  if (realtime?.socketConnected) return 'live'
   if (instance.runtime.status === 'offline') return 'offline'
-  if (instance.runtime.status !== 'live') return 'stale'
-  return instance.runtime.realtime?.freshness === 'catching_up' ? 'catching_up' : 'fresh'
+  return 'loading'
+}
+
+function freshness(instance: FleetInstanceView): FleetFreshness {
+  const realtime = instance.runtime.realtime
+  if (!realtime?.snapshot) return 'loading'
+  if (realtime.freshness === 'catching_up') return 'catching_up'
+  if (realtime.freshness === 'stale' || instance.runtime.status !== 'live') return 'stale'
+  return 'fresh'
+}
+
+function healthState(snapshot: ConsoleSnapshotReadModel | null, counts: FleetTaskCounts, communication: FleetCommunicationCounts): FleetHealthState {
+  if (snapshot?.instance.healthy === false || counts.blocked > 0 || communication.alerts > 0 || communication.replyRequired > 0) return 'attention'
+  if (snapshot?.instance.healthy === true) return 'healthy'
+  return 'unknown'
 }
 
 function taskCounts(tasks: TaskReadModel[]): FleetTaskCounts {
@@ -366,7 +385,9 @@ export function buildFleetReadModel(
     servers.push({
       ...source,
       connectivity: instance.runtime.status,
+      connectionState: connectionState(instance),
       freshness: freshness(instance),
+      healthState: healthState(snapshot, counts, communication),
       version: snapshot?.instance.version,
       healthy: snapshot?.instance.healthy,
       resources: snapshot?.instance.resources,

@@ -34,7 +34,7 @@ export type RealtimeState = {
 
 export function createRealtimeState(): RealtimeState {
   return {
-    status: 'offline', snapshot: null, cursor: 0, highWaterSeq: 0, socketConnected: false,
+    status: 'connecting', snapshot: null, cursor: 0, highWaterSeq: 0, socketConnected: false,
     reconnectAttempt: 0, freshness: 'stale', catchingUpScopes: [],
   }
 }
