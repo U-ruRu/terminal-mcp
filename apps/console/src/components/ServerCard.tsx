@@ -30,18 +30,18 @@ export function ServerCard({
 
   const content = (
     <>
-      <div className="server-card-heading">
-        <div className="server-card-identity">
-          <span className="server-card-icon" aria-hidden="true">▣</span>
-          <div>
-            {variant === 'large'
-              ? <span className="server-card-title">{server.displayName}</span>
-              : <h3>{server.displayName}</h3>}
-            <p>{server.version ?? t('fleet.versionUnavailable')}</p>
+      {variant === 'compact' ? (
+        <div className="server-card-heading">
+          <div className="server-card-identity">
+            <span className="server-card-icon" aria-hidden="true">▣</span>
+            <div>
+              <h3>{server.displayName}</h3>
+              <p>{server.version ?? t('fleet.versionUnavailable')}</p>
+            </div>
           </div>
+          <StatusBadge state={state} label={statusLabel(state, t)} />
         </div>
-        <StatusBadge state={state} label={statusLabel(state, t)} />
-      </div>
+      ) : null}
 
       <dl className="server-card-metrics">
         <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />

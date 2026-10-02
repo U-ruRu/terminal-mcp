@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
@@ -22,11 +22,15 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
 
   expect(screen.getByRole('heading', { name: 'Fleet overview' })).toBeInTheDocument()
   expect(screen.getByRole('article', { name: 'Server A server' })).toHaveAttribute('data-state', 'offline')
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'attention')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'stale')
   expect(screen.getByRole('article', { name: 'Server C server' })).toHaveAttribute('data-state', 'healthy')
-  expect(screen.getByRole('article', { name: 'Server A server' })).toHaveTextContent('Unavailable')
+  const offlineCard = screen.getByRole('article', { name: 'Server A server' })
+  expect(within(offlineCard).getAllByLabelText('Unavailable')).toHaveLength(3)
+  expect(within(offlineCard).queryByRole('progressbar')).not.toBeInTheDocument()
   expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('46%')
   expect(screen.getByRole('article', { name: 'Server C server' })).toHaveTextContent('28%')
+  expect(within(screen.getByRole('article', { name: 'Server C server' })).getAllByRole('progressbar')).toHaveLength(3)
+  expect(screen.queryByLabelText('Fleet totals')).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Server C · Live' })).toHaveAttribute('href', '/servers/server-c')
 })
 
@@ -34,7 +38,7 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
 test('fleet status action filters problem servers and focuses the compact list', async () => {
   render(dashboard())
 
-  await userEvent.click(screen.getByRole('button', { name: 'Needs attention: 2 servers' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Partial / Offline: 2 servers' }))
 
   const list = screen.getByRole('generic', { name: 'Servers' })
   expect(list).toHaveFocus()
@@ -46,19 +50,19 @@ test('fleet status action filters problem servers and focuses the compact list',
 test('filters problem servers without refetching fleet state', async () => {
   render(dashboard())
 
-  await userEvent.click(screen.getByRole('button', { name: 'Needs attention' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Needs attention (2)' }))
   expect(screen.getByRole('article', { name: 'Server A server' })).toBeInTheDocument()
   expect(screen.getByRole('article', { name: 'Server B server' })).toBeInTheDocument()
   expect(screen.queryByRole('article', { name: 'Server C server' })).not.toBeInTheDocument()
 
-  await userEvent.click(screen.getByRole('button', { name: 'Live' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Live (1)' }))
   expect(screen.getByRole('article', { name: 'Server C server' })).toBeInTheDocument()
   expect(screen.queryByRole('article', { name: 'Server B server' })).not.toBeInTheDocument()
 })
 
 test('updates incrementally when the supplied fleet model changes', () => {
   const { rerender } = render(dashboard())
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'attention')
+  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'stale')
 
   const updated = {
     ...fixtureFleetModel,
@@ -79,7 +83,7 @@ test('updates incrementally when the supplied fleet model changes', () => {
 
   rerender(dashboard(updated))
   expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'healthy')
-  expect(screen.getByLabelText('Fleet totals')).toHaveTextContent('Live2')
+  expect(screen.queryByLabelText('Fleet totals')).not.toBeInTheDocument()
 })
 
 

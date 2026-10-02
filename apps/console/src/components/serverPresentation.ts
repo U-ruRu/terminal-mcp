@@ -10,12 +10,16 @@ export const RESOURCE_THRESHOLDS = {
   filesystem: 80,
 } as const
 
-function availablePercent(server: FleetServerReadModel, kind: ResourceKind): number | undefined {
+export function resourcePercent(server: FleetServerReadModel, kind: ResourceKind): number | undefined {
   if (server.connectivity === 'offline') return undefined
   const resources = server.resources
   if (!resources) return undefined
   if (kind === 'cpu') {
-    return resources.cpu.status === 'available' ? resources.cpu.usagePercent : undefined
+    if (resources.cpu.status !== 'available') return undefined
+    if (resources.cpu.usagePercent !== undefined) return resources.cpu.usagePercent
+    const cores = resources.cpu.logicalCores
+    const load = resources.cpu.load1m
+    return cores && load !== undefined ? (load / cores) * 100 : undefined
   }
   const resource = kind === 'memory' ? resources.memory : resources.filesystem
   return resource.status === 'available' ? resource.usedPercent : undefined
@@ -34,7 +38,7 @@ export function resourceVisualState(server: FleetServerReadModel, kind: Resource
         : resources.filesystem.status === 'available'
   if (!available) return 'unavailable'
 
-  const value = availablePercent(server, kind)
+  const value = resourcePercent(server, kind)
   return value !== undefined && value >= RESOURCE_THRESHOLDS[kind] ? 'attention' : 'normal'
 }
 
@@ -48,16 +52,9 @@ export function resourceDisplayValue(
   const resources = server.resources
   if (!resources) return unavailable
 
-  if (kind === 'cpu') {
-    if (resources.cpu.status !== 'available') return unavailable
-    if (resources.cpu.usagePercent !== undefined) return Math.round(resources.cpu.usagePercent) + '%'
-    return resources.cpu.load1m === undefined ? unavailable : loadLabel + ' ' + resources.cpu.load1m.toFixed(2)
-  }
-
-  const resource = kind === 'memory' ? resources.memory : resources.filesystem
-  return resource.status === 'available' && resource.usedPercent !== undefined
-    ? Math.round(resource.usedPercent) + '%'
-    : unavailable
+  void loadLabel
+  const value = resourcePercent(server, kind)
+  return value === undefined ? unavailable : Math.round(value) + '%'
 }
 
 export function hasResourceAttention(server: FleetServerReadModel): boolean {
@@ -70,12 +67,7 @@ export function serverVisualState(server: FleetServerReadModel): ServerVisualSta
   if (server.connectivity === 'offline') return 'offline'
   if (server.healthy === false) return 'critical'
 
-  const attention =
-    hasResourceAttention(server) ||
-    server.blockerCount > 0 ||
-    server.communication.alerts > 0 ||
-    server.communication.replyRequired > 0
-  if (attention) return 'attention'
+  if (hasResourceAttention(server)) return 'attention'
 
   if (server.freshness === 'stale') return 'stale'
   if (server.freshness === 'catching_up' || server.connectivity === 'connecting' || server.connectivity === 'reconnecting') {

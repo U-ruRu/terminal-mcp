@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
-import type { ActivityFeedReadModel } from '../api/models'
-import { agentRoute, serverRoute, taskRoute } from '../navigation/routes'
+import type { ActivityEventReadModel, ActivityFeedReadModel } from '../api/models'
+import { agentRoute, taskRoute } from '../navigation/routes'
 import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from '../activity/timeline'
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
@@ -45,8 +45,55 @@ function reason(error: unknown) {
   return error instanceof Error ? error.message : 'activity_load_failed'
 }
 
+function activityTimestamp(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear() + ' ' +
+    pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds())
+}
+
+function textField(payload: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = payload[key]
+    if (typeof value === 'string' && value.trim()) return value
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  }
+  return undefined
+}
+
+function semanticEventContent(event: ActivityEventReadModel, t: ReturnType<typeof useI18n>['t']): string {
+  const payload = event.payload
+  if (event.eventType === 'health.changed') {
+    const ok = payload.ok
+    return ok === true ? t('section.healthy') : ok === false ? t('section.unhealthy') : t('common.health')
+  }
+  if (event.eventType.includes('command')) {
+    const command = textField(payload, 'command', 'cmd')
+    const status = textField(payload, 'status', 'result', 'exit_code')
+    return [command, status].filter(Boolean).join(' · ') || event.eventType
+  }
+  if (event.eventType.includes('task')) {
+    const task = textField(payload, 'title', 'task_id', 'taskId') ?? event.entityId
+    const state = textField(payload, 'operational_status', 'state', 'status', 'action')
+    return [task, state].filter(Boolean).join(' · ')
+  }
+  if (event.eventType.includes('agent') || event.eventType.includes('session')) {
+    const actor = event.actorName ?? textField(payload, 'display_name', 'name') ?? event.entityType
+    const state = textField(payload, 'state', 'status', 'action', 'intent')
+    return [actor, state].filter(Boolean).join(' · ')
+  }
+  return textField(payload, 'message', 'detail', 'summary', 'status', 'state', 'action', 'intent') ?? event.eventType
+}
+
+function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
+  if (code.includes('auth_unpaired')) return t('diagnostics.serverUnpaired')
+  if (code.includes('direct_authority_auth_revoked') || code.includes('auth_revoked')) return t('diagnostics.authorizationRevoked')
+  return t('diagnostics.connectionError')
+}
+
 export function Activity({ instances = [], loadActivity }: { instances?: FleetInstanceView[]; loadActivity?: ActivityLoader }) {
-  const { t, number, dateTime } = useI18n()
+  const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const [category, setCategory] = useState<ActivityCategory>('all')
   const [feeds, setFeeds] = useState<Record<string, FeedState>>({})
@@ -71,6 +118,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
 
     const fitChatToViewport = () => {
       if (window.innerWidth > 700) {
+        node.style.removeProperty('height')
         node.style.removeProperty('max-height')
         return
       }
@@ -79,7 +127,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       const navigationTop = bottomNavigation?.getBoundingClientRect().top ?? 0
       const viewportHeight = window.visualViewport?.height ?? window.innerHeight
       const visibleBottom = navigationTop > 0 ? Math.min(navigationTop, viewportHeight) : viewportHeight
-      const available = Math.max(260, Math.min(760, Math.floor(visibleBottom - top - 8)))
+      const available = Math.max(120, Math.floor(visibleBottom - top))
+      node.style.height = `${available}px`
       node.style.maxHeight = `${available}px`
     }
 
@@ -207,11 +256,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           : selected?.runtime.status === 'connecting' ? t('status.connecting') : ''
 
   return (
-    <section className="stack" aria-labelledby="activity-title">
-      <div className="page-heading">
-        <div><p className="eyebrow">{t('activity.eyebrow')}</p><h2 id="activity-title">{t('nav.activity')}</h2><p className="muted">{t('activity.description')}</p></div>
-        <span className="count-badge">{number(feed.events.length)}</span>
-      </div>
+    <section className="activity-screen" aria-label={t('nav.activity')}>
       <div className="filter-bar">
         <div className="filter-controls">
           <label className="ui-field">{t('common.server')}<select aria-label={t('common.server')} value={selectedId} onChange={(event) => chooseServer(event.target.value)}><option value="">{t('activity.chooseServer')}</option>{instances.map((item) => <option key={item.profile.instanceId} value={item.profile.instanceId}>{item.profile.displayName}</option>)}</select></label>
@@ -222,34 +267,62 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           {selectedId && requestedAgentId && <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>}
         </div>
       </div>
-      {selected ? <p className="muted activity-provenance">{t('activity.serverJournal')} · {runtimeStatus}{feed.events.length ? ' · ' + dateTime(feed.events[feed.events.length - 1].createdAt) : ''}</p> : null}
       {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
       {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
       {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}
-      {feed.error && <FeedbackState variant="error" title={t('activity.unavailable')} detail={feed.error} />}
+      {feed.error ? (
+        <div className="activity-error-state">
+          <FeedbackState variant="error" title={t('activity.unavailable')} detail={userError(feed.error, t)} />
+          <details className="inline-technical-details">
+            <summary aria-label={t('activity.rawDetails')}><span aria-hidden="true">⌄</span></summary>
+            <code>{feed.error}</code>
+          </details>
+        </div>
+      ) : null}
       {selectedId && !feed.initialized && !feed.error ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : null}
-      <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
-        {visible.map((event) => (
-          <article className="panel activity-event" key={selectedId + ':' + event.seq}>
-            <div className="section-heading"><div><strong>{event.message?.senderName ?? event.actorName ?? event.eventType}</strong><p className="muted">{event.eventType} · #{number(event.seq)}</p></div><span className="chip">{event.entityType}</span></div>
-            {event.message ? (
-              <p className="activity-message">{event.message.text}</p>
-            ) : (
+      {selectedId && !feed.error ? (
+        <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll}>
+          {visible.map((event) => (
+            <article className={'panel activity-event' + (event.message ? ' activity-event-message' : '')} key={selectedId + ':' + event.seq}>
+              <div className="activity-event-header">
+                <strong>
+                  {event.message?.senderAgentId
+                    ? <Link className="text-link" to={agentRoute(selectedId, event.message.senderAgentId)}>{event.message.senderName}</Link>
+                    : event.message?.senderName ?? event.eventType}
+                </strong>
+                <time dateTime={event.createdAt}>{activityTimestamp(event.createdAt)}</time>
+              </div>
+              {event.message ? (
+                <p className="activity-message">{event.message.text}</p>
+              ) : (
+                <p className="activity-semantic-content">{semanticEventContent(event, t)}</p>
+              )}
+              {event.message?.taskNamespace && event.message.taskId ? (
+                <Link className="activity-context-link text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>
+                  {t('common.task')} {event.message.taskId}
+                </Link>
+              ) : null}
               <details className="activity-payload">
-                <summary>{t('activity.rawDetails')}</summary>
-                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+                <summary aria-label={t('activity.rawDetails')}>
+                  <span className="activity-chevron-collapsed" aria-hidden="true">⌄</span>
+                  <span className="activity-chevron-expanded" aria-hidden="true">⌃</span>
+                </summary>
+                <pre>{JSON.stringify({
+                  seq: event.seq,
+                  eventType: event.eventType,
+                  entityType: event.entityType,
+                  entityId: event.entityId,
+                  actorId: event.actorId,
+                  actorName: event.actorName,
+                  payload: event.payload,
+                  message: event.message,
+                }, null, 2)}</pre>
               </details>
-            )}
-            <div className="chip-row">
-              {selected && <Link className="text-link" to={serverRoute(selectedId)}>{t('common.server')} {selected.profile.displayName}</Link>}
-              {event.message?.taskNamespace && event.message.taskId && <Link className="text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>{t('common.task')} {event.message.taskId}</Link>}
-              {event.actorName && event.actorId ? <Link className="text-link" to={agentRoute(selectedId, event.actorId)}>{t('common.agent')} {event.actorName}</Link> : event.actorName ? <span className="muted">{t('common.agent')} {event.actorName}</span> : null}
-              <span className="muted">{dateTime(event.createdAt)}</span>
-            </div>
-          </article>
-        ))}
-        {selectedId && feed.initialized && visible.length === 0 && !feed.error && <FeedbackState variant="empty" title={t('activity.noMatches')} />}
-      </div>
+            </article>
+          ))}
+          {feed.initialized && visible.length === 0 && <FeedbackState variant="empty" title={t('activity.noMatches')} />}
+        </div>
+      ) : null}
     </section>
   )
 }
