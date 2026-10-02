@@ -271,21 +271,17 @@ class PersistentBackend:
     async def _local_session_start_resolved(self, access: dict) -> dict:
         logical_agent_id = access["logical_agent_id"]
         active = await self.lifecycle.store.active_session_for_slot(logical_agent_id)
-        if active is not None and active.state == "active":
-            await self.lifecycle.authorize_session(
-                logical_agent_id,
-                active.work_session_id,
-                active.session_epoch,
-                access_code_verified=True,
+        if active is not None and active.state in {"active", "stopping"}:
+            raise PersistentStoreError(
+                "session_already_active" if active.state == "active" else "session_stopping"
             )
-            return self._session_result(access, active)
         slot = await self.lifecycle.store.get_slot(logical_agent_id)
         if slot is None or slot.state == "deleted":
             raise PersistentStoreError("slot_not_found")
         selector = await self.lifecycle.store.active_selector(logical_agent_id)
         if selector is None:
             raise PersistentStoreError("selector_not_found")
-        if slot.state != "armed":
+        if slot.state not in {"armed", "suspended"}:
             raise PersistentStoreError("slot_not_armed")
         try:
             started = await self.lifecycle.session_start(
@@ -584,7 +580,7 @@ class PersistentBackend:
                 )
             if access["slot_kind"] == "legacy" and not result.get("stopping"):
                 await self._cleanup_legacy_access(access)
-            return {
+            response = {
                 "ok": True,
                 "mode": access["slot_kind"],
                 "public_name": access["public_name"],
@@ -593,6 +589,13 @@ class PersistentBackend:
                 "stopping": bool(result.get("stopping")),
                 "blockers": result.get("blockers") or [],
             }
+            if not result.get("stopping"):
+                response["hard_expires_at"] = result.get("hard_expires_at")
+                response["remaining_d_seconds"] = result.get("remaining_d_seconds", 0)
+                response["roaming_available"] = bool(result.get("roaming_available"))
+                if result.get("roaming_message"):
+                    response["roaming_message"] = result["roaming_message"]
+            return response
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
         except PersistentLifecycleError as exc:

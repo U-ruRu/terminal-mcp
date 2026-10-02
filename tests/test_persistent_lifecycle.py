@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 
-from terminal_mcp.core.orchestration import parse_utc
+from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
 from terminal_mcp.core.persistent_admission import VerifiedAdmissionContext
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.persistent_lifecycle import (
@@ -575,3 +575,172 @@ async def test_stopping_session_keeps_graceful_drain_until_hard_expiry(tmp_path)
     record = await store.get_work_session(session["work_session_id"])
     assert record.state == "expired"
     assert record.end_reason == "hard_duration"
+
+
+@pytest.mark.asyncio
+async def test_normal_end_reopens_same_d_window_before_rearm(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=20 * 60, rearm=10 * 60)
+    created = await lifecycle.create_slot("Roamer", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    t0 = utc_now()
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(t0),
+    )
+    hard_expires_at = started["hard_expires_at"]
+
+    ended = await lifecycle.session_end(
+        logical_agent_id,
+        started["work_session_id"],
+        started["session_epoch"],
+        admission=admission(),
+        now=utc_text(t0 + timedelta(minutes=5)),
+    )
+    assert ended["slot"]["state"] == "suspended"
+    assert ended["hard_expires_at"] == hard_expires_at
+    assert ended["remaining_d_seconds"] == 15 * 60
+    assert ended["roaming_available"] is True
+    assert "any eligible Fleet server" in ended["roaming_message"]
+    assert await store.pending_rearm(logical_agent_id) is not None
+
+    resumed = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=ended["slot"]["slot_revision"],
+        admission=admission(),
+        origin_instance_id="node-b",
+        now=utc_text(t0 + timedelta(minutes=5, seconds=1)),
+    )
+    assert resumed["hard_expires_at"] == hard_expires_at
+    assert resumed["session_epoch"] == 2
+    assert resumed["work_session"]["origin_instance_id"] == "node-b"
+    assert await store.pending_rearm(logical_agent_id) is None
+
+    with pytest.raises(PersistentLifecycleError, match="session_already_active"):
+        await lifecycle.session_start(
+            created["selector"]["selector"],
+            expected_revision=resumed["slot"]["slot_revision"],
+            admission=admission(),
+            now=utc_text(t0 + timedelta(minutes=5, seconds=2)),
+        )
+
+
+@pytest.mark.asyncio
+async def test_rearm_without_reopen_resets_to_full_d_budget(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=20 * 60, rearm=60)
+    created = await lifecycle.create_slot("Roamer", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    t0 = utc_now()
+    first = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(t0),
+    )
+    ended = await lifecycle.session_end(
+        logical_agent_id,
+        first["work_session_id"],
+        first["session_epoch"],
+        admission=admission(),
+        now=utc_text(t0 + timedelta(seconds=5)),
+    )
+    pending = await store.pending_rearm(logical_agent_id)
+    assert pending is not None
+
+    reconciled = await lifecycle.reconcile_rearms(now=t0 + timedelta(seconds=66))
+    assert len(reconciled) == 1
+    assert reconciled[0]["auto_rearmed"] is True
+    assert await store.pending_rearm(logical_agent_id) is None
+
+    restarted = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=reconciled[0]["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(t0 + timedelta(seconds=67)),
+    )
+    assert (
+        parse_utc(restarted["hard_expires_at"]) - parse_utc(restarted["work_session"]["started_at"])
+    ).total_seconds() == 20 * 60
+    assert parse_utc(restarted["hard_expires_at"]) > parse_utc(first["hard_expires_at"])
+    assert ended["roaming_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_expired_d_window_cannot_reopen_before_r_then_gets_full_budget(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=20, rearm=30)
+    created = await lifecycle.create_slot("Roamer", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    t0 = utc_now()
+    first = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(t0),
+    )
+    ended = await lifecycle.session_end(
+        logical_agent_id,
+        first["work_session_id"],
+        first["session_epoch"],
+        admission=admission(),
+        now=utc_text(t0 + timedelta(seconds=5)),
+    )
+
+    with pytest.raises(PersistentLifecycleError, match="slot_not_armed"):
+        await lifecycle.session_start(
+            created["selector"]["selector"],
+            expected_revision=ended["slot"]["slot_revision"],
+            admission=admission(),
+            now=utc_text(t0 + timedelta(seconds=21)),
+        )
+    assert await store.pending_rearm(logical_agent_id) is not None
+
+    reconciled = await lifecycle.reconcile_rearms(now=t0 + timedelta(seconds=36))
+    assert len(reconciled) == 1
+    restarted = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=reconciled[0]["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(t0 + timedelta(seconds=37)),
+    )
+    assert (
+        parse_utc(restarted["hard_expires_at"]) - parse_utc(restarted["work_session"]["started_at"])
+    ).total_seconds() == 20
+
+
+@pytest.mark.asyncio
+async def test_start_after_r_resets_full_d_even_before_reconciler_tick(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=120, rearm=30)
+    created = await lifecycle.create_slot("Roamer", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    armed = await lifecycle.play(logical_agent_id, expected_revision=1, admission=admission())
+    t0 = utc_now()
+    first = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=armed["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(t0),
+    )
+    ended = await lifecycle.session_end(
+        logical_agent_id,
+        first["work_session_id"],
+        first["session_epoch"],
+        admission=admission(),
+        now=utc_text(t0 + timedelta(seconds=5)),
+    )
+    assert await store.pending_rearm(logical_agent_id) is not None
+
+    restarted_at = t0 + timedelta(seconds=36)
+    restarted = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=ended["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(restarted_at),
+    )
+    assert (
+        parse_utc(restarted["hard_expires_at"]) - parse_utc(restarted["work_session"]["started_at"])
+    ).total_seconds() == 120
+    assert await store.pending_rearm(logical_agent_id) is None
