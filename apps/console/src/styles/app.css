@@ -1652,3 +1652,149 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   flex: 0 0 100%;
   text-align: start;
 }
+
+
+/* Activity chat refinement: Telegram-like bubbles, edge-to-edge timeline and cascade command disclosure. */
+.activity-chat {
+  padding-inline: var(--space-2);
+}
+.activity-chat-message {
+  grid-template-columns: 32px minmax(0, 1fr);
+  column-gap: var(--space-2);
+}
+.activity-chat-content {
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 31px 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+.activity-group-continuation .activity-chat-content {
+  border-top-left-radius: 7px;
+}
+.activity-chat-message .activity-details-toggle,
+.activity-service-event .activity-details-toggle {
+  top: 1px;
+  bottom: auto;
+  right: -5px;
+}
+.activity-details-toggle::before,
+.activity-command-detail-toggle::before {
+  display: none;
+}
+.activity-chat-message .activity-details-toggle:hover,
+.activity-chat-message .activity-details-toggle:focus-visible,
+.activity-chat-message .activity-details-toggle:active,
+.activity-service-event .activity-details-toggle:hover,
+.activity-service-event .activity-details-toggle:focus-visible,
+.activity-service-event .activity-details-toggle:active,
+.activity-command-detail-toggle:hover,
+.activity-command-detail-toggle:focus-visible,
+.activity-command-detail-toggle:active {
+  background: transparent;
+  color: var(--color-text);
+}
+.activity-details-toggle:focus-visible svg,
+.activity-command-detail-toggle:focus-visible svg {
+  outline: 1px solid var(--color-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.activity-command-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 62%, transparent);
+}
+.activity-command-row {
+  position: relative;
+  min-width: 0;
+  padding: 5px 29px 5px 8px;
+  border-radius: 7px;
+  background: var(--color-surface-raised);
+}
+.activity-command-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+.activity-command-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.activity-command-summary > time {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.activity-command-summary > small {
+  grid-column: 1 / -1;
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 13px;
+}
+.activity-command-detail-toggle {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  padding: 0;
+}
+.activity-command-detail-toggle svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.activity-command-row .activity-technical-payload {
+  margin-top: 5px;
+}
+
+@media (max-width: 700px) {
+  .content-activity {
+    padding-inline: 0;
+  }
+  .activity-screen .filter-bar,
+  .activity-screen > .feedback-state,
+  .activity-error-state {
+    margin-inline: var(--space-3);
+  }
+  .activity-chat {
+    padding-inline: var(--space-2);
+  }
+}
+
+.activity-command-bubble.is-expanded {
+  width: min(100%, 560px);
+}
+.activity-group-start .activity-chat-content::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 12px;
+  width: 9px;
+  height: 9px;
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: var(--color-surface);
+  transform: rotate(45deg);
+}

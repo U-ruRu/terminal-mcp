@@ -36,8 +36,9 @@ test('collapses command lifecycle into one logical item with latest status', () 
     event(3, { eventType: 'command.status', entityType: 'command', entityId: 'cmd-1', payload: { status: 'completed', duration: '2s' } }),
   ], 'en', 'Main')
   expect(items).toHaveLength(1)
-  expect(items[0].content).toBe('$ uptime')
-  expect(items[0].secondary).toBe('✓ Completed · 2s')
+  expect(items[0].content).toBe('Ran a command')
+  expect(items[0].commands).toHaveLength(1)
+  expect(items[0].commands?.[0]).toMatchObject({ label: '$ uptime', status: '✓ Completed · 2s' })
   expect(items[0].events).toHaveLength(3)
 })
 
@@ -47,4 +48,28 @@ test('projects service health without raw backend event name', () => {
   ], 'en', 'Firstbyte')
   expect(items).toHaveLength(1)
   expect(items[0]).toMatchObject({ kind: 'service', tone: 'critical', content: 'Firstbyte lost connection' })
+})
+
+test('batches consecutive commands by the same actor without exposing command hashes', () => {
+  const items = projectActivity([
+    event(1, { eventType: 'command.created', entityType: 'command', entityId: 'hash-a', payload: { status: 'completed' } }),
+    event(2, { eventType: 'command.created', entityType: 'command', entityId: 'hash-b', payload: { command: 'uptime', status: 'completed' } }),
+    event(3, { eventType: 'command.created', entityType: 'command', entityId: 'hash-c', actorId: 'la-b', actorName: 'Bravo', payload: { command: 'whoami', status: 'completed' } }),
+  ], 'ru', 'Main')
+  expect(items).toHaveLength(2)
+  expect(items[0].content).toBe('Вызвал 2 команды')
+  expect(items[0].commands).toHaveLength(2)
+  expect(items[0].commands?.[0].label).toBeUndefined()
+  expect(items[0].commands?.[1].label).toBe('$ uptime')
+  expect(items[0].content).not.toContain('hash-a')
+  expect(items[1].content).toBe('Вызвал команду')
+})
+
+test('uses command attribution actor instead of leaving a command under an unknown agent', () => {
+  const items = projectActivity([
+    event(1, { eventType: 'command.created', entityType: 'command', entityId: 'cmd-attributed', actorId: undefined, actorName: undefined, payload: { command: 'date', status: 'queued' } }),
+    event(2, { eventType: 'command.attribution', entityType: 'command', entityId: 'cmd-attributed', actorId: 'la-real', actorName: 'Operator', payload: { status: 'running' } }),
+  ], 'en', 'Main')
+  expect(items).toHaveLength(1)
+  expect(items[0]).toMatchObject({ actorId: 'la-real', actorName: 'Operator', content: 'Ran a command' })
 })
