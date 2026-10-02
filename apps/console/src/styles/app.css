@@ -780,3 +780,40 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
     white-space: normal;
   }
 }
+
+
+/* M4 UI Kit: concise activity cards */
+.activity-event {
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.activity-message {
+  line-height: var(--font-body-line);
+  overflow-wrap: anywhere;
+}
+
+.activity-payload {
+  min-width: 0;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-2);
+}
+
+.activity-payload > summary {
+  width: fit-content;
+  min-height: var(--touch-target);
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: var(--font-label-size);
+}
+
+.activity-payload[open] > summary {
+  color: var(--color-text);
+}
+
+.activity-payload pre {
+  max-height: 240px;
+  margin-top: var(--space-2);
+}

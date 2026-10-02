@@ -10,7 +10,7 @@ import { useI18n } from '../i18n/useI18n'
 
 export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions) => Promise<ActivityFeedReadModel>
 
-const ACTIVITY_WINDOW = 1000
+const ACTIVITY_WINDOW = 100
 const HISTORY_BATCH = 250
 const SCROLL_EDGE = 72
 
@@ -230,7 +230,14 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         {visible.map((event) => (
           <article className="panel activity-event" key={selectedId + ':' + event.seq}>
             <div className="section-heading"><div><strong>{event.message?.senderName ?? event.actorName ?? event.eventType}</strong><p className="muted">{event.eventType} · #{number(event.seq)}</p></div><span className="chip">{event.entityType}</span></div>
-            {event.message ? <p>{event.message.text}</p> : <pre>{JSON.stringify(event.payload, null, 2)}</pre>}
+            {event.message ? (
+              <p className="activity-message">{event.message.text}</p>
+            ) : (
+              <details className="activity-payload">
+                <summary>{t('activity.rawDetails')}</summary>
+                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+              </details>
+            )}
             <div className="chip-row">
               {selected && <Link className="text-link" to={serverRoute(selectedId)}>{t('common.server')} {selected.profile.displayName}</Link>}
               {event.message?.taskNamespace && event.message.taskId && <Link className="text-link" to={taskRoute(selectedId, event.message.taskNamespace, event.message.taskId)}>{t('common.task')} {event.message.taskId}</Link>}
