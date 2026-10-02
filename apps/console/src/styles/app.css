@@ -568,7 +568,12 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .mesh-revisions,
 .connection-fleet-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
 .mesh-revisions,
-.connection-fleet-status { color: var(--color-muted); font-size: 0.82rem; }
+.connection-fleet-status,
+.mesh-operational-summary { color: var(--color-muted); font-size: 0.82rem; }
+.mesh-operational-summary { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.mesh-technical-details { min-width: 0; }
+.mesh-technical-details summary { cursor: pointer; color: var(--color-muted); min-height: var(--control-standard); display: flex; align-items: center; }
+.mesh-technical-details .mesh-revisions { display: grid; gap: var(--space-1); overflow-wrap: anywhere; }
 .mesh-control > label,
 .mesh-membership-control { display: grid; gap: var(--space-2); color: var(--color-muted); }
 .mesh-control input,

@@ -183,7 +183,10 @@ test('cold start preserves last authoritative Production membership while contro
   for (const name of ['Main', 'BacLOUD', 'Firstbyte', 'Tokyo']) {
     const card = screen.getByRole('heading', { name }).closest('article')!
     expect(within(card).getByText('Mesh: Production · Stale')).toBeInTheDocument()
+    expect(within(card).getByText('Synchronization: Unavailable')).toBeInTheDocument()
   }
+  expect(screen.getByText('Mesh state: Unavailable')).toBeInTheDocument()
+  expect(screen.getByText('Technical details')).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Standalone' })).not.toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Unknown' })).not.toBeInTheDocument()
 })
@@ -576,8 +579,9 @@ test('rejected managed membership mutation rolls the optimistic projection back 
   expect(membership()).toHaveValue('')
 
   await userEvent.selectOptions(membership(), 'mesh-a')
-  await waitFor(() => expect(membership()).toHaveValue('mesh-a'))
-  expect(within(betaCard()).getByText('Pending')).toBeInTheDocument()
+  await waitFor(() => expect(within(betaCard()).getByText('Applying')).toBeInTheDocument())
+  expect(membership()).toHaveValue('')
+  expect(membership()).toBeDisabled()
 
   rejectUpsert?.(new Response(JSON.stringify({
     ok: false,
@@ -586,7 +590,8 @@ test('rejected managed membership mutation rolls the optimistic projection back 
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
   await waitFor(() => expect(membership()).toHaveValue(''))
-  expect(within(betaCard()).getByText('Failed: revision_conflict')).toBeInTheDocument()
+  expect(within(betaCard()).getByText('Attention required')).toBeInTheDocument()
+  expect(within(betaCard()).queryByText(/revision_conflict/)).not.toBeInTheDocument()
   expect(within(betaCard()).getByText('Mesh: Standalone')).toBeInTheDocument()
 })
 
