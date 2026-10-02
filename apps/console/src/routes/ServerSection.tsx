@@ -6,6 +6,7 @@ import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { FeedbackState } from '../components/UiPrimitives'
 
 type ServerSectionKind = 'agents' | 'context' | 'health'
 
@@ -110,7 +111,7 @@ export function ServerSection({
         ) : section === 'context' ? (
           <>
             <h3>{title} {t('section.on')} {server.displayName}</h3>
-            {contexts.length === 0 ? <p className="muted">{t('context.empty')}</p> : (
+            {contexts.length === 0 ? <FeedbackState variant="empty" title={t('context.empty')} /> : (
               <div className="stack context-list">
                 {contexts.map((context) => (
                   <section className="context-entry" key={context.id}>
@@ -123,7 +124,7 @@ export function ServerSection({
                 ))}
               </div>
             )}
-            {contextError ? <p className="muted" role="status">{contextError}</p> : null}
+            {contextError ? <FeedbackState variant="partial" title={t('activity.unavailable')} detail={contextError} /> : null}
           </>
         ) : (
           <>
@@ -145,7 +146,7 @@ export function ServerSection({
               {copied ? t('diagnostics.copied') : t('diagnostics.copy')}
             </button>
           </div>
-          {diagnosticEntries.length === 0 ? <p className="muted">{t('diagnostics.empty')}</p> : (
+          {diagnosticEntries.length === 0 ? <FeedbackState variant="empty" title={t('diagnostics.empty')} /> : (
             <div className="diagnostics-log" aria-label={t('diagnostics.title')}>
               {diagnosticEntries.map((event) => (
                 <div className="diagnostics-entry" key={event.seq}>
