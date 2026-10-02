@@ -5,6 +5,7 @@ import type { ActivityFeedReadModel } from '../api/models'
 import { agentRoute, taskRoute } from '../navigation/routes'
 import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from '../activity/timeline'
 import { activityFullTimestamp, activityTime, actorHue, projectActivity, renderActivity } from '../activity/chatProjection'
+import { captureActivityScrollAnchor, restoreActivityScrollAnchor, type ActivityScrollAnchor } from '../activity/scrollAnchor'
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
@@ -88,7 +89,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const [enteringItems, setEnteringItems] = useState<Set<string>>(() => new Set())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
-  const pendingHistoryAnchor = useRef<{ key: string; offset: number } | null>(null)
+  const pendingHistoryAnchor = useRef<ActivityScrollAnchor | null>(null)
   const historyRequestPending = useRef(false)
   const pendingOlderPage = useRef<ActivityFeedReadModel | null>(null)
   const scrollState = useRef<'idle' | 'dragging' | 'flinging'>('idle')
@@ -215,12 +216,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     if (!node || !feed.initialized) return
     const anchor = pendingHistoryAnchor.current
     if (anchor) {
-      const target = [...node.querySelectorAll<HTMLElement>('[data-activity-key]')]
-        .find((element) => element.dataset.activityKey === anchor.key)
-      if (target) {
-        const nextOffset = target.getBoundingClientRect().top - node.getBoundingClientRect().top
-        node.scrollTop += nextOffset - anchor.offset
-      }
+      restoreActivityScrollAnchor(node, anchor)
       pendingHistoryAnchor.current = null
       return
     }
@@ -233,15 +229,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const captureVisibleAnchor = () => {
     const node = scrollRef.current
     if (!node) return
-    const nodeTop = node.getBoundingClientRect().top
-    const firstVisible = [...node.querySelectorAll<HTMLElement>('[data-activity-key]')]
-      .find((element) => element.getBoundingClientRect().bottom > nodeTop)
-    if (firstVisible?.dataset.activityKey) {
-      pendingHistoryAnchor.current = {
-        key: firstVisible.dataset.activityKey,
-        offset: firstVisible.getBoundingClientRect().top - nodeTop,
-      }
-    }
+    pendingHistoryAnchor.current = captureActivityScrollAnchor(node)
   }
 
   const commitOlderPage = (page: ActivityFeedReadModel) => {
@@ -417,7 +405,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
               const first = item.events[0]
               if (item.kind === 'service') {
                 return (
-                  <div className={'activity-service-event activity-service-' + (item.tone ?? 'neutral') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} key={item.key}>
+                  <div className={'activity-service-event activity-service-' + (item.tone ?? 'neutral') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} data-activity-source-seqs={item.events.map((event) => event.seq).join(' ')} key={item.key}>
                     <span>{item.content}</span>
                     <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
                     <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
@@ -433,7 +421,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
               }
               const actorName = item.actorName ?? 'Unknown agent'
               return (
-                <article className={'activity-chat-message' + (item.showIdentity ? ' activity-group-start' : ' activity-group-continuation') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} key={item.key}>
+                <article className={'activity-chat-message' + (item.showIdentity ? ' activity-group-start' : ' activity-group-continuation') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} data-activity-source-seqs={item.events.map((event) => event.seq).join(' ')} key={item.key}>
                   <div className="activity-identity-column">
                     {item.showIdentity ? <span className="activity-identity-marker" style={{ '--activity-actor-hue': actorHue(item.actorId ?? actorName) } as React.CSSProperties} aria-hidden="true">{item.actorAnonymous ? '•' : actorName.charAt(0).toUpperCase()}</span> : null}
                   </div>

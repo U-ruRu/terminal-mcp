@@ -1911,6 +1911,12 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   .activity-item-entering { animation: none; }
 }
 
+/* Activity prepend anchoring is owned by Activity.tsx. Disable WebView native
+   scroll anchoring so it cannot choose a different bubble and double-adjust. */
+.activity-chat {
+  overflow-anchor: none;
+}
+
 /* Activity semantic/scroll continuity hardening. */
 .activity-chat-content {
   min-width: min(180px, 100%);
