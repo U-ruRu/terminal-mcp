@@ -3,7 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
-import { activityRoute, agentRoute, agentsRoute, serverRoute, taskRoute } from '../navigation/routes'
+import { activityRoute, agentRoute, taskRoute } from '../navigation/routes'
 
 function duration(seconds: number | undefined): string {
   if (seconds === undefined) return 'unknown'
@@ -32,7 +32,6 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
           <h2 id="agent-missing-title">{t('agents.missingTitle')}</h2>
           <p className="muted">{t('agents.missingDescription')}</p>
         </div></div>
-        <Link className="text-link" to={agentsRoute(instanceId)}>{t('agents.backToAgents')}</Link>
       </section>
     )
   }
@@ -72,23 +71,14 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
         </article>
         <div className="server-actions">
           <Link className="nav-link" to={activityRoute(instanceId, { agentId: selected.agentId })}>{t('agents.activity')}</Link>
-          <Link className="nav-link" to={agentsRoute(instanceId)}>{t('agents.allAgents')}</Link>
-          <Link className="nav-link" to={serverRoute(instanceId)}>{t('agents.serverOverview')}</Link>
         </div>
       </section>
     )
   }
 
   return (
-    <section className="stack" aria-labelledby="agents-title">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">{instance.profile.displayName}</p>
-          <h2 id="agents-title">{t('nav.agents')}</h2>
-          <p className="muted">{t('agents.description')}</p>
-        </div>
-        <span className={'status status-' + instance.runtime.status}>{instance.runtime.status}</span>
-      </div>
+    <section className="stack" aria-label={t('nav.agents')}>
+      <p className="muted page-supporting-copy">{t('agents.description')}</p>
       <div className="task-list">
         {agents.map((agent) => (
           <article className="panel" key={agent.agentId ?? `${agent.name}:${agent.lastActivityAt}`}>
