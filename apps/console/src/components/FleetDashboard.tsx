@@ -68,7 +68,7 @@ export function FleetDashboard({ model, groups }: { model: FleetReadModel; group
         }
         onClick={() => focusServerList(statusFilter)}
       >
-        <span className="fleet-status-icon" aria-hidden="true"><Icon name={fleetState === 'healthy' ? 'circle-check' : fleetState === 'loading' ? 'loader' : fleetState === 'partial' ? 'alert-circle' : 'alert-triangle'} /></span>
+        <span className="fleet-status-icon" aria-hidden="true"><Icon name={fleetState === 'healthy' ? 'success' : fleetState === 'loading' ? 'loading' : fleetState === 'partial' ? 'error' : 'warning'} /></span>
         <span>
           <strong>{fleetState === 'partial' ? t('fleet.partialOffline') : fleetState === 'attention' ? t('fleet.problems') : fleetState === 'loading' ? t('status.catchingUp') : t('fleet.live')}</strong>
           <small>

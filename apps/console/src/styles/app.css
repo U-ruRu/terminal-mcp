@@ -10,6 +10,7 @@
   -webkit-mask: var(--ui-icon-url) center / contain no-repeat;
   mask: var(--ui-icon-url) center / contain no-repeat;
 }
+.ui-icon-loading,
 .ui-icon-loader { animation: ui-icon-spin 0.9s linear infinite; }
 @keyframes ui-icon-spin { to { transform: rotate(360deg); } }
 .global-navigation .nav-link,

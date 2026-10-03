@@ -406,7 +406,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         </div>
         {selectedId && requestedAgentId ? (
           <div className="filter-status">
-            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} <Icon name="x" /></button>
+            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} <Icon name="close" /></button>
           </div>
         ) : null}
       </div>
@@ -435,7 +435,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {selectedId && !feed.error ? (
         <div className="activity-timeline-wrap">
           <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
-            {feed.loading && feed.initialized ? <div className="activity-history-loading" aria-label={t('status.catchingUp')}><Icon name="loader" /></div> : null}
+            {feed.loading && feed.initialized ? <div className="activity-history-loading" aria-label={t('status.catchingUp')}><Icon name="loading" /></div> : null}
             {chatItems.map((item) => {
               if (item.kind === 'date') return <div className="activity-date-separator" data-activity-key={item.key} key={item.key}>{item.label}</div>
               const eventKey = selectedId + ':' + item.key

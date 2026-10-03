@@ -19,19 +19,19 @@ type NavigationItem = {
 }
 
 const globalNavigation: NavigationItem[] = [
-  { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: 'server-2' },
-  { key: 'slots', labelKey: 'nav.slots', globalPath: '/slots', icon: 'square-key' },
-  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: 'plug-connected' },
+  { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: 'fleet' },
+  { key: 'slots', labelKey: 'nav.slots', globalPath: '/slots', icon: 'slots' },
+  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: 'connections' },
   { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings', icon: 'settings' },
 ]
 
 const serverNavigation: NavigationItem[] = [
-  { key: 'agents', icon: 'users', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
-  { key: 'slots', icon: 'square-key', labelKey: 'nav.slots', globalPath: '/slots', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots' },
-  { key: 'tasks', icon: 'list-check', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
+  { key: 'agents', icon: 'agents', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
+  { key: 'slots', icon: 'slots', labelKey: 'nav.slots', globalPath: '/slots', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots' },
+  { key: 'tasks', icon: 'tasks', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
   { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
-  { key: 'context', icon: 'braces', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
-  { key: 'health', icon: 'heart-rate-monitor', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
+  { key: 'context', icon: 'context', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
+  { key: 'health', icon: 'health', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
 ]
 
 const bottomNavigationKeys = new Set<NavigationItem['key']>(['fleet', 'slots', 'connections', 'settings'])
@@ -189,7 +189,7 @@ export function AppShell({
         <div className="app-bar-leading">
           {contextual ? (
             <Link className="app-bar-back" aria-label={t(contextual.ariaKey)} to={contextual.to}>
-              <Icon name="arrow-left" />
+              <Icon name="back" />
             </Link>
           ) : (
             <button
@@ -201,7 +201,7 @@ export function AppShell({
               aria-controls="global-navigation"
               onClick={() => setMenuOpen(true)}
             >
-              <Icon name="menu-2" />
+              <Icon name="menu" />
             </button>
           )}
         </div>
@@ -227,7 +227,7 @@ export function AppShell({
               aria-controls="global-navigation"
               onClick={() => setMenuOpen(true)}
             >
-              <Icon name="menu-2" />
+              <Icon name="menu" />
             </button>
           ) : null}
         </div>
@@ -266,7 +266,7 @@ export function AppShell({
                 toggleRef.current?.focus()
               }}
             >
-              <Icon name="x" />
+              <Icon name="close" />
             </button>
           </div>
 
@@ -311,11 +311,11 @@ export function AppShell({
           {selectedMeshId ? (
             <div className="navigation-context-group" aria-label={t('title.mesh') + ' · ' + selectedMeshId}>
               <Link className={isMeshOverview ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId)} onClick={() => setMenuOpen(false)}>
-                <Icon name="topology-ring-3" className="nav-drawer-icon" />
+                <Icon name="mesh" className="nav-drawer-icon" />
                 <span>{t('nav.overview')}</span>
               </Link>
               <Link className={location.pathname.includes('/persistent') ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId) + '/persistent'} onClick={() => setMenuOpen(false)}>
-                <Icon name="square-key" className="nav-drawer-icon" />
+                <Icon name="slots" className="nav-drawer-icon" />
                 <span>{t('nav.slots')}</span>
               </Link>
             </div>
