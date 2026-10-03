@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import type { FleetServerReadModel } from '../fleet/readModel'
 import { useI18n } from '../i18n/useI18n'
+import { Icon } from './Icon'
 import { ResourceMetric } from './ResourceMetric'
 import { StatusBadge } from './StatusBadge'
 import { resourceVisualState, serverVisualState, type ServerVisualState } from './serverPresentation'
@@ -72,7 +73,7 @@ export function ServerCard({
       {variant === 'compact' ? (
         <div className="server-card-heading">
           <div className="server-card-identity">
-            <span className="server-card-icon" aria-hidden="true">▣</span>
+            <span className="server-card-icon" aria-hidden="true"><Icon name="server" /></span>
             <div>
               <h3>{server.displayName}</h3>
               <p>{server.version ?? t('fleet.versionUnavailable')}</p>
@@ -128,7 +129,7 @@ export function ServerCard({
       ) : state === 'stale' && server.lastSeenAt ? (
         <p className="server-card-age">{server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC')}</p>
       ) : null}
-      {interactive ? <span className="server-card-chevron" aria-hidden="true">›</span> : null}
+      {interactive ? <span className="server-card-chevron" aria-hidden="true"><Icon name="chevron-right" /></span> : null}
     </>
   )
 

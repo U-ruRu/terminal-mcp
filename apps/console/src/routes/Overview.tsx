@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Icon } from '../components/Icon'
 import { Link } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
@@ -187,9 +188,9 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
                   <span className="chip">{entry.slot.state === 'stopping' ? t('slots.state.stopping') : t('slots.state.active')}</span>
                 </div>
                 <div className="slot-card-secondary">
-                  <span className="slot-code-cell">{saved ? <button type="button" className="access-code-copy" aria-label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)}><code>{saved.code}</code><span aria-hidden="true">▣</span></button> : <span className="slot-code-unavailable">—</span>}</span>
+                  <span className="slot-code-cell">{saved ? <button type="button" className="access-code-copy" aria-label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)}><code>{saved.code}</code><Icon name="copy" /></button> : <span className="slot-code-unavailable">—</span>}</span>
                   <button type="button" className="primary-action" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'suspend')}>{t('slots.suspend')}</button>
-                  <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}>⋯</summary><div className="slot-overflow-menu">
+                  <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="dots" /></summary><div className="slot-overflow-menu">
                     <button type="button" className="secondary-action" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'rotate')}>{t('slots.rotateAccessCode')}</button>
                     <button type="button" className="destructive-action" disabled={Boolean(busy)} onClick={() => { if (window.confirm(t('slots.deleteConfirm'))) void mutateSlot(entry, 'delete') }}>{t('slots.delete')}</button>
                     <Link className="nav-link" to={slotHref(entry)}>{t('slots.details')}</Link>
@@ -205,7 +206,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
         <h2 id="fleet-mesh-title" className="fleet-section-title">{t('fleet.meshes')}</h2>
         {loading ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : unavailable ? <FeedbackState variant="partial" title={t('connections.unknown')} /> : topology.meshes.length === 0 ? <FeedbackState variant="empty" title={t('fleet.noMeshes')} /> : (
           <div className="fleet-mesh-list">{topology.meshes.map((mesh) => (
-            <Link className="fleet-mesh-row" to={meshRoute(mesh.meshId)} key={mesh.meshId}><span><strong>{mesh.displayName}</strong></span><span className="muted">{number(mesh.members)} {t('fleet.servers')}</span><span aria-hidden="true">›</span></Link>
+            <Link className="fleet-mesh-row" to={meshRoute(mesh.meshId)} key={mesh.meshId}><span className="fleet-mesh-identity"><Icon name="topology-ring-3" /><strong>{mesh.displayName}</strong></span><span className="muted">{number(mesh.members)} {t('fleet.servers')}</span><span className="fleet-mesh-chevron" aria-hidden="true"><Icon name="chevron-right" /></span></Link>
           ))}</div>
         )}
       </section>

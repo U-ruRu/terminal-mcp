@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Icon } from '../components/Icon'
 import { Link, Navigate, useParams } from 'react-router-dom'
 
 import type { TaskReadModel } from '../api/models'
@@ -165,7 +166,7 @@ export function ServerTasks({
                   {task.nextAction ? <span className="task-row-next">{task.nextAction}</span> : null}
                 </div>
                 <span className="chip task-row-status">{taskStatusLabel(task.operationalStatus, t)}</span>
-                <span className="task-row-chevron" aria-hidden="true">›</span>
+                <span className="task-row-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
               </Link>
             ))}
             {filteredTasks.length === 0 && <FeedbackState variant="empty" title={t('tasks.noMatchingTasks')} />}

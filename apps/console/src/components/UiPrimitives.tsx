@@ -1,5 +1,7 @@
 import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react'
 
+import { Icon, type IconName } from './Icon'
+
 type ButtonVariant = 'primary' | 'secondary' | 'quiet' | 'destructive'
 
 export function UiButton({
@@ -62,12 +64,12 @@ export function SegmentedControl({
 
 export type FeedbackVariant = 'empty' | 'loading' | 'error' | 'partial' | 'destructive'
 
-const feedbackIcon: Record<FeedbackVariant, string> = {
-  empty: '○',
-  loading: '…',
-  error: '!',
-  partial: '◐',
-  destructive: '!',
+const feedbackIcon: Record<FeedbackVariant, IconName> = {
+  empty: 'info-circle',
+  loading: 'loader',
+  error: 'alert-circle',
+  partial: 'alert-triangle',
+  destructive: 'alert-circle',
 }
 
 export function FeedbackState({
@@ -84,7 +86,7 @@ export function FeedbackState({
   const role = variant === 'error' || variant === 'destructive' ? 'alert' : variant === 'loading' || variant === 'partial' ? 'status' : undefined
   return (
     <div className={'feedback-state feedback-state-' + variant} role={role}>
-      <span className="feedback-state-icon" aria-hidden="true">{feedbackIcon[variant]}</span>
+      <span className="feedback-state-icon" aria-hidden="true"><Icon name={feedbackIcon[variant]} /></span>
       <div className="feedback-state-copy">
         <strong>{title}</strong>
         {detail ? <p>{detail}</p> : null}

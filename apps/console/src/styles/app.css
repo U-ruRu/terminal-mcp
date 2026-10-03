@@ -1,3 +1,25 @@
+
+/* Curated Tabler icon primitive: SVG assets are rendered as currentColor masks. */
+.ui-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  vertical-align: -0.125em;
+  background-color: currentColor;
+  -webkit-mask: var(--ui-icon-url) center / contain no-repeat;
+  mask: var(--ui-icon-url) center / contain no-repeat;
+}
+.ui-icon-loader { animation: ui-icon-spin 0.9s linear infinite; }
+@keyframes ui-icon-spin { to { transform: rotate(360deg); } }
+.global-navigation .nav-link,
+.navigation-context-group .nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.nav-drawer-icon { width: 18px; height: 18px; }
+
 .app-shell { min-height: 100vh; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--color-border); background: var(--color-surface-overlay); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); }
 h1, h2, h3, p { margin: 0; }
@@ -267,8 +289,6 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .slot-card { border-inline-start: 4px solid var(--color-border); }
 .slot-card.slot-cue-warning { border-inline-start-style: double; border-inline-start-width: 7px; }
 .slot-card.slot-cue-alert { border-inline-start-style: solid; border-inline-start-width: 8px; }
-.slot-cue-warning .slot-time strong::before { content: "⚠ "; }
-.slot-cue-alert .slot-time strong::before { content: "! "; font-weight: 900; }
 .slot-selector { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .slot-selector code { font-size: 1.25rem; font-weight: 800; letter-spacing: 0.16em; }
 .slot-time { display: flex; gap: var(--space-2); align-items: baseline; }
@@ -1441,7 +1461,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   background: var(--color-surface-raised);
   color: var(--color-text);
 }
-.activity-details-toggle svg {
+.activity-details-toggle .ui-icon {
   width: 18px;
   height: 18px;
   fill: none;
@@ -1610,7 +1630,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .activity-details-toggle:active::before {
   background: var(--color-surface-3);
 }
-.activity-details-toggle svg { position: relative; z-index: 1; width: 14px; height: 14px; }
+.activity-details-toggle .ui-icon { position: relative; z-index: 1; width: 14px; height: 14px; }
 .activity-technical-payload {
   grid-column: 1 / -1;
   margin-top: var(--space-1);
@@ -1762,7 +1782,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   color: var(--color-muted);
   padding: 0;
 }
-.activity-command-detail-toggle svg {
+.activity-command-detail-toggle .ui-icon {
   width: 12px;
   height: 12px;
   fill: none;
@@ -1854,7 +1874,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   background: transparent;
   color: var(--color-text);
 }
-.activity-error-detail-toggle svg {
+.activity-error-detail-toggle .ui-icon {
   width: 12px;
   height: 12px;
   fill: none;
@@ -2351,7 +2371,10 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 }
 .slot-card-identity { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slot-timer {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
   width: 13ch;
   min-width: 13ch;
   text-align: right;
@@ -2360,8 +2383,6 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   font-feature-settings: 'tnum' 1;
   font-weight: 700;
 }
-.slot-timer-warning::before { content: '⚠ '; }
-.slot-timer-alert::before { content: '! '; font-weight: 900; }
 .slot-card-secondary {
   display: grid;
   grid-template-columns: minmax(6.5rem, auto) minmax(7rem, auto) var(--touch-target);
@@ -2404,3 +2425,24 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   .fleet-server-filter .segmented-control button { font-size: var(--font-caption-size, 11px); padding-inline: 4px; }
   .fleet-status-card { padding: var(--space-3); }
 }
+
+.fleet-status-icon .ui-icon { width: 18px; height: 18px; }
+.fleet-status-card-partial .fleet-status-icon { color: var(--color-danger); }
+.fleet-status-chevron .ui-icon,
+.server-card-chevron .ui-icon,
+.task-row-chevron .ui-icon,
+.fleet-mesh-chevron .ui-icon { width: 1em; height: 1em; }
+.server-card-icon .ui-icon { width: 18px; height: 18px; }
+.app-bar-back .ui-icon,
+.menu-toggle .ui-icon,
+.menu-close .ui-icon { width: 22px; height: 22px; }
+.access-code-copy .ui-icon { width: 18px; height: 18px; }
+.slot-more-actions > summary .ui-icon { width: 20px; height: 20px; }
+.slot-timer .ui-icon { width: 16px; height: 16px; }
+.fleet-mesh-identity { display: inline-flex; align-items: center; gap: var(--space-2); }
+.fleet-mesh-identity .ui-icon { width: 18px; height: 18px; color: var(--color-accent); }
+.activity-new-items { display: inline-flex; align-items: center; gap: 4px; }
+.activity-new-items .ui-icon { width: 16px; height: 16px; }
+.filter-status button { display: inline-flex; align-items: center; gap: 4px; }
+.filter-status button .ui-icon { width: 16px; height: 16px; }
+.feedback-state-icon .ui-icon { width: 1em; height: 1em; }

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Icon } from '../components/Icon'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import type { ActivityFeedReadModel } from '../api/models'
@@ -377,7 +378,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         </div>
         {selectedId && requestedAgentId ? (
           <div className="filter-status">
-            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} ×</button>
+            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} <Icon name="x" /></button>
           </div>
         ) : null}
       </div>
@@ -396,7 +397,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
             </div>
             <button type="button" className="activity-error-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={errorExpanded} aria-controls={errorDetailsId}
               onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(errorKey)) next.delete(errorKey); else next.add(errorKey); return next })}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d={errorExpanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+              <Icon name={errorExpanded ? 'chevron-up' : 'chevron-down'} />
             </button>
             {errorExpanded ? <code id={errorDetailsId}>{feed.error}</code> : null}
           </div>
@@ -420,7 +421,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                     <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
                     <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
                       onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+                      <Icon name={expanded ? 'chevron-up' : 'chevron-down'} />
                     </button>
                     {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
                       timestamp: activityFullTimestamp(item.createdAt), server: selectedServerName,
@@ -447,7 +448,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                     </div>
                     <button type="button" className="activity-details-toggle" aria-label={item.commands?.length ? item.content : t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
                       onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+                      <Icon name={expanded ? 'chevron-up' : 'chevron-down'} />
                     </button>
                     {expanded && item.commands && item.commands.length > 1 ? (
                       <div id={detailsId} className="activity-command-list">
@@ -464,7 +465,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                               </div>
                               <button type="button" className="activity-command-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={commandExpanded} aria-controls={commandDetailsId}
                                 onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(commandKey)) next.delete(commandKey); else next.add(commandKey); return next })}>
-                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={commandExpanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
+                                <Icon name={commandExpanded ? 'chevron-up' : 'chevron-down'} />
                               </button>
                               {commandExpanded ? <pre id={commandDetailsId} className="activity-technical-payload">{JSON.stringify({
                                 timestamp: activityFullTimestamp(command.createdAt),
@@ -492,7 +493,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
               stickToBottom.current = true
               awayFromBottom.current = false
               setNewItemsCount(0)
-            }}>↓ {newItemsCount}</button>
+            }}><Icon name="chevron-down" /> {newItemsCount}</button>
           ) : null}
         </div>
       ) : null}
