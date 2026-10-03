@@ -80,7 +80,7 @@ export function FleetDashboard({ model, groups }: { model: FleetReadModel; group
         <span className="fleet-status-chevron" aria-hidden="true">›</span>
       </button>
 
-      <div className="fleet-server-filter">
+      <div className="fleet-server-filter" data-mobile-layout="single-line-three-segment">
         <SegmentedControl
           label={t('fleet.filterServers')}
           value={filter}

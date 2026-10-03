@@ -28,18 +28,44 @@ export function ServerCard({
 }: ServerCardProps) {
   const { t, number } = useI18n()
   const state = serverVisualState(server)
-  const resourceStates = (['cpu', 'memory', 'filesystem'] as const).map((kind) => resourceVisualState(server, kind))
+  const resourceKinds = ['cpu', 'memory', 'filesystem'] as const
+  const resourceStates = resourceKinds.map((kind) => resourceVisualState(server, kind))
+  const resourceAttention = resourceStates.some((resourceState) => resourceState === 'attention')
   const resourceIssue = server.connectivity !== 'offline' && resourceStates.some((resourceState) => resourceState !== 'normal')
+  const connectionProblem = server.connectivity === 'offline' || server.connectivity === 'connecting' || server.connectivity === 'reconnecting' || server.freshness === 'stale' || server.freshness === 'catching_up'
   const [now, setNow] = useState(() => Date.now())
-  const timedProblem = state === 'offline' || state === 'loading' || state === 'stale'
   useEffect(() => {
-    if (!timedProblem) return
+    if (!connectionProblem || !server.stateSince) return
     const handle = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(handle)
-  }, [timedProblem])
-  const problemStartedAt = server.lastSeenAt ? Date.parse(server.lastSeenAt) : Number.NaN
-  const problemSeconds = Number.isFinite(problemStartedAt) ? Math.max(0, Math.floor((now - problemStartedAt) / 1000)) : undefined
-  const problemReason = server.lastError || server.staleReason || (state === 'loading' ? t('status.catchingUp') : state === 'offline' ? t('status.offline') : state === 'stale' ? t('status.stale') : '')
+  }, [connectionProblem, server.stateSince])
+  const problemStartedAt = server.stateSince ? Date.parse(server.stateSince) : Number.NaN
+  const problemSeconds = connectionProblem && Number.isFinite(problemStartedAt) ? Math.max(0, Math.floor((now - problemStartedAt) / 1000)) : undefined
+
+  const friendlyReason = (raw: string): string => {
+    const normalized = raw.toLowerCase()
+    if (normalized.includes('network_error') || normalized === 'lost') return t('fleet.problem.network')
+    if (normalized.includes('cursor_gap')) return t('fleet.problem.cursorGap')
+    if (normalized.includes('heartbeat_cursor_ahead')) return t('fleet.problem.heartbeatAhead')
+    if (normalized.includes('snapshot_refresh_lag')) return t('fleet.problem.snapshotLag')
+    if (normalized.includes('snapshot_refresh_failed')) return t('fleet.problem.snapshotFailed')
+    if (normalized.includes('journal_gap')) return t('fleet.problem.journalGap')
+    if (normalized.includes('invalid_cursor')) return t('fleet.problem.invalidCursor')
+    if (normalized.includes('unauthorized')) return t('fleet.problem.unauthorized')
+    if (normalized.includes('revoked')) return t('fleet.problem.revoked')
+    if (normalized.includes('expired')) return t('fleet.problem.expired')
+    const human = raw.replace(/[_:.-]+/g, ' ').replace(/\s+/g, ' ').trim()
+    return human ? human.charAt(0).toUpperCase() + human.slice(1) : t('fleet.problem.unknown')
+  }
+  const reasons = new Set<string>()
+  if (server.connectivity === 'offline') reasons.add(t('fleet.problem.noConnection'))
+  if (server.connectivity === 'connecting' || server.connectivity === 'reconnecting') reasons.add(t('fleet.problem.synchronizing'))
+  if (server.freshness === 'catching_up') reasons.add(t('fleet.problem.synchronizing'))
+  if (server.freshness === 'stale') reasons.add(server.staleReason ? friendlyReason(server.staleReason) : t('fleet.problem.stale'))
+  if (server.lastError) reasons.add(friendlyReason(server.lastError))
+  if (server.healthy === false) reasons.add(t('fleet.problem.unhealthy'))
+  if (resourceAttention) reasons.add(t('fleet.problem.resourceAttention'))
+  const problemReasons = [...reasons]
 
   const content = (
     <>
@@ -73,8 +99,8 @@ export function ServerCard({
         </details>
       ) : null}
 
-      {variant === 'compact' && timedProblem ? (
-        <p className="server-card-problem">{problemReason}{problemSeconds !== undefined ? ` · ${number(problemSeconds)}s` : ''}</p>
+      {variant === 'compact' && problemReasons.length > 0 ? (
+        <p className="server-card-problem">{problemReasons.join(' · ')}{problemSeconds !== undefined ? ` · ${number(problemSeconds)}s` : ''}</p>
       ) : null}
 
       {variant === 'large' ? (

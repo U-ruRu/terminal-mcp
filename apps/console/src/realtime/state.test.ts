@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { ConsoleSnapshotReadModel } from '../api/models'
-import { applyPersistentMutationResult, applyRealtimeFrame, boundedBackoffDelay, createRealtimeState, decodeRealtimeFrame, replaceSnapshot, socketOpened } from './state'
+import { applyPersistentMutationResult, applyRealtimeFrame, boundedBackoffDelay, createRealtimeState, decodeRealtimeFrame, markStale, replaceSnapshot, socketOpened } from './state'
 
 const snap = (seq: number): ConsoleSnapshotReadModel => ({
   highWaterSeq: seq, replayFromSeq: seq, duplicateEventsPossible: true,
@@ -83,4 +83,31 @@ test('wire decoder and bounded backoff follow frozen M0 protocol', () => {
   expect(decodeRealtimeFrame({type:'resync_required', reason:'journal_gap', cursor:7, oldest_seq:9, high_water_seq:12})).toMatchObject({type:'resync_required', reason:'journal_gap', highWaterSeq:12})
   expect(() => decodeRealtimeFrame({type:'event',event:{seq:'bad'}})).toThrow(/Invalid realtime frame/)
   expect([0,1,2,9].map((n)=>boundedBackoffDelay(n))).toEqual([250,500,1000,8000])
+})
+
+
+test('status and freshness transition timestamps reset only when their authoritative state changes', () => {
+  let state = createRealtimeState('2026-10-03T12:00:00Z')
+  expect(state.statusSince).toBe('2026-10-03T12:00:00Z')
+  state = replaceSnapshot(state, snap(10), true, '2026-10-03T12:00:01Z')
+  state = socketOpened(state, '2026-10-03T12:00:02Z')
+  expect(state.statusSince).toBe('2026-10-03T12:00:02Z')
+  expect(state.freshnessSince).toBe('2026-10-03T12:00:01Z')
+
+  state = applyRealtimeFrame(state, evt(11), '2026-10-03T12:00:03Z')
+  expect(state.statusSince).toBe('2026-10-03T12:00:02Z')
+  expect(state.freshnessSince).toBe('2026-10-03T12:00:03Z')
+
+  state = markStale(state, 'cursor_gap', undefined, '2026-10-03T12:00:04Z')
+  expect(state.statusSince).toBe('2026-10-03T12:00:04Z')
+  expect(state.freshnessSince).toBe('2026-10-03T12:00:04Z')
+  state = markStale(state, 'cursor_gap', undefined, '2026-10-03T12:00:09Z')
+  expect(state.statusSince).toBe('2026-10-03T12:00:04Z')
+  expect(state.freshnessSince).toBe('2026-10-03T12:00:04Z')
+
+  state = replaceSnapshot({ ...state, socketConnected: true }, snap(11), true, '2026-10-03T12:00:10Z')
+  expect(state.status).toBe('live')
+  expect(state.freshness).toBe('fresh')
+  expect(state.statusSince).toBe('2026-10-03T12:00:10Z')
+  expect(state.freshnessSince).toBe('2026-10-03T12:00:10Z')
 })

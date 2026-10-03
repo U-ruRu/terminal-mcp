@@ -29,81 +29,91 @@ export type RealtimeState = {
   catchingUpScopes: string[]
   staleReason?: string
   lastError?: string
+  statusSince?: string
+  freshnessSince?: string
   lastEvent?: InstanceEvent
 }
 
-export function createRealtimeState(): RealtimeState {
+function transitionTime(value?: string): string { return value ?? new Date().toISOString() }
+function since<T>(previous: T, next: T, previousSince: string | undefined, at: string): string {
+  return previous === next && previousSince ? previousSince : at
+}
+
+export function createRealtimeState(at = transitionTime()): RealtimeState {
   return {
     status: 'connecting', snapshot: null, cursor: 0, highWaterSeq: 0, socketConnected: false,
-    reconnectAttempt: 0, freshness: 'stale', catchingUpScopes: [],
+    reconnectAttempt: 0, freshness: 'stale', catchingUpScopes: [], statusSince: at, freshnessSince: at,
   }
 }
 
-export function beginConnecting(state: RealtimeState, reconnecting = false): RealtimeState {
+export function beginConnecting(state: RealtimeState, reconnecting = false, at = transitionTime()): RealtimeState {
+  const status = reconnecting ? 'reconnecting' : 'connecting'
   return {
-    ...state,
-    status: reconnecting ? 'reconnecting' : 'connecting',
-    socketConnected: false,
-    staleReason: undefined,
-    lastError: undefined,
+    ...state, status, statusSince: since(state.status, status, state.statusSince, at),
+    socketConnected: false, staleReason: undefined, lastError: undefined,
   }
 }
 
-export function replaceSnapshot(state: RealtimeState, snapshot: ConsoleSnapshotReadModel, resetCursor: boolean): RealtimeState {
+export function replaceSnapshot(state: RealtimeState, snapshot: ConsoleSnapshotReadModel, resetCursor: boolean, at = transitionTime()): RealtimeState {
   const cursor = resetCursor ? snapshot.replayFromSeq : state.cursor
   const caughtUp = resetCursor || snapshot.highWaterSeq >= cursor
   const hazardous = state.status === 'stale' && state.freshness === 'stale' && Boolean(state.staleReason)
+  const status = caughtUp
+    ? (state.socketConnected ? 'live' : state.status)
+    : (state.socketConnected && !hazardous ? 'live' : state.status)
+  const freshness = caughtUp ? 'fresh' : (hazardous ? 'stale' : 'catching_up')
   return {
-    ...state,
-    snapshot,
-    cursor,
+    ...state, snapshot, cursor,
     highWaterSeq: Math.max(state.highWaterSeq, snapshot.highWaterSeq),
-    status: caughtUp
-      ? (state.socketConnected ? 'live' : state.status)
-      : (state.socketConnected && !hazardous ? 'live' : state.status),
-    freshness: caughtUp ? 'fresh' : (hazardous ? 'stale' : 'catching_up'),
+    status, statusSince: since(state.status, status, state.statusSince, at),
+    freshness, freshnessSince: since(state.freshness, freshness, state.freshnessSince, at),
     catchingUpScopes: caughtUp ? [] : (state.catchingUpScopes.length > 0 ? state.catchingUpScopes : ['*']),
     staleReason: caughtUp ? undefined : (hazardous ? state.staleReason : undefined),
     lastError: undefined,
   }
 }
 
-export function socketOpened(state: RealtimeState): RealtimeState {
+export function socketOpened(state: RealtimeState, at = transitionTime()): RealtimeState {
   const snapshotCaughtUp = state.snapshot !== null && state.snapshot.highWaterSeq >= state.cursor
   const hazardous = state.status === 'stale' && state.freshness === 'stale' && Boolean(state.staleReason)
+  const status = hazardous ? 'stale' : 'live'
+  const freshness = hazardous ? 'stale' : (snapshotCaughtUp ? 'fresh' : 'catching_up')
   return {
-    ...state,
-    status: hazardous ? 'stale' : 'live',
-    socketConnected: true,
-    reconnectAttempt: 0,
-    freshness: hazardous ? 'stale' : (snapshotCaughtUp ? 'fresh' : 'catching_up'),
+    ...state, status, statusSince: since(state.status, status, state.statusSince, at),
+    socketConnected: true, reconnectAttempt: 0,
+    freshness, freshnessSince: since(state.freshness, freshness, state.freshnessSince, at),
     catchingUpScopes: snapshotCaughtUp ? [] : (state.catchingUpScopes.length > 0 ? state.catchingUpScopes : ['*']),
-    staleReason: hazardous ? state.staleReason : undefined,
-    lastError: undefined,
+    staleReason: hazardous ? state.staleReason : undefined, lastError: undefined,
   }
 }
 
-export function socketReconnecting(state: RealtimeState, attempt: number, error?: string): RealtimeState {
-  return { ...state, status: 'reconnecting', socketConnected: false, reconnectAttempt: attempt, lastError: error }
+export function socketReconnecting(state: RealtimeState, attempt: number, error?: string, at = transitionTime()): RealtimeState {
+  const status = 'reconnecting' as const
+  return { ...state, status, statusSince: since(state.status, status, state.statusSince, at), socketConnected: false, reconnectAttempt: attempt, lastError: error }
 }
 
-export function markOffline(state: RealtimeState, error?: string): RealtimeState {
-  return { ...state, status: 'offline', socketConnected: false, lastError: error }
+export function markOffline(state: RealtimeState, error?: string, at = transitionTime()): RealtimeState {
+  const status = 'offline' as const
+  return { ...state, status, statusSince: since(state.status, status, state.statusSince, at), socketConnected: false, lastError: error }
 }
 
-export function markStale(state: RealtimeState, reason: string, error?: string): RealtimeState {
-  return { ...state, status: 'stale', freshness: 'stale', catchingUpScopes: [], staleReason: reason, lastError: error }
+export function markStale(state: RealtimeState, reason: string, error?: string, at = transitionTime()): RealtimeState {
+  const status = 'stale' as const
+  const freshness = 'stale' as const
+  return { ...state, status, statusSince: since(state.status, status, state.statusSince, at), freshness, freshnessSince: since(state.freshness, freshness, state.freshnessSince, at), catchingUpScopes: [], staleReason: reason, lastError: error }
 }
 
 function addScope(scopes: string[], scope: string): string[] {
   return scopes.includes(scope) ? scopes : [...scopes, scope]
 }
 
-export function applyRealtimeFrame(state: RealtimeState, frame: RealtimeFrame): RealtimeState {
+export function applyRealtimeFrame(state: RealtimeState, frame: RealtimeFrame, at = transitionTime()): RealtimeState {
   if (frame.type === 'resync_required') {
     return markStale(
       { ...state, highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq) },
       frame.reason || 'resync_required',
+      undefined,
+      at,
     )
   }
   if (frame.type === 'heartbeat') {
@@ -111,6 +121,8 @@ export function applyRealtimeFrame(state: RealtimeState, frame: RealtimeFrame): 
       return markStale(
         { ...state, highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq) },
         'heartbeat_cursor_ahead',
+        undefined,
+        at,
       )
     }
     return { ...state, highWaterSeq: Math.max(state.highWaterSeq, frame.highWaterSeq) }
@@ -121,19 +133,18 @@ export function applyRealtimeFrame(state: RealtimeState, frame: RealtimeFrame): 
     return markStale(
       { ...state, highWaterSeq: Math.max(state.highWaterSeq, event.seq), lastEvent: event },
       'cursor_gap',
+      undefined,
+      at,
     )
   }
+  const status = state.socketConnected ? 'live' : state.status
+  const freshness = state.freshness === 'stale' ? 'stale' : 'catching_up'
   return {
-    ...state,
-    status: state.socketConnected ? 'live' : state.status,
-    cursor: event.seq,
-    highWaterSeq: Math.max(state.highWaterSeq, event.seq),
-    freshness: state.freshness === 'stale' ? 'stale' : 'catching_up',
-    catchingUpScopes: state.freshness === 'stale'
-      ? state.catchingUpScopes
-      : addScope(state.catchingUpScopes, event.entityType),
-    staleReason: state.freshness === 'stale' ? state.staleReason : undefined,
-    lastEvent: event,
+    ...state, status, statusSince: since(state.status, status, state.statusSince, at),
+    cursor: event.seq, highWaterSeq: Math.max(state.highWaterSeq, event.seq),
+    freshness, freshnessSince: since(state.freshness, freshness, state.freshnessSince, at),
+    catchingUpScopes: state.freshness === 'stale' ? state.catchingUpScopes : addScope(state.catchingUpScopes, event.entityType),
+    staleReason: state.freshness === 'stale' ? state.staleReason : undefined, lastEvent: event,
   }
 }
 
@@ -222,7 +233,7 @@ function policyPatch(prior: PersistentPolicyReadModel, value: unknown): Persiste
   }
 }
 
-export function applyPersistentMutationResult(state: RealtimeState, result: PersistentMutationResult): RealtimeState {
+export function applyPersistentMutationResult(state: RealtimeState, result: PersistentMutationResult, at = transitionTime()): RealtimeState {
   if (!result.ok || !state.snapshot?.persistent) return state
   const persistent = state.snapshot.persistent
   const payload = result.payload
@@ -262,6 +273,7 @@ export function applyPersistentMutationResult(state: RealtimeState, result: Pers
       },
     },
     freshness: state.freshness === 'stale' ? 'stale' : 'catching_up',
+    freshnessSince: since(state.freshness, state.freshness === 'stale' ? 'stale' : 'catching_up', state.freshnessSince, at),
     catchingUpScopes: state.freshness === 'stale'
       ? state.catchingUpScopes
       : scopes.reduce((values, scope) => addScope(values, scope), state.catchingUpScopes),

@@ -93,6 +93,7 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
       authStatus: 'restoring',
       realtime: null,
       reconnectAttempt: 0,
+      statusSince: new Date().toISOString(),
     }
     this.engineOptions = {
       scheduler: this.scheduler,
@@ -232,6 +233,7 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
         realtime: realtimeState,
         reconnectAttempt: Math.max(this.authAttempt, realtimeState.reconnectAttempt),
         lastError: realtimeState.lastError,
+        statusSince: realtimeState.statusSince,
       })
       if (
         realtimeState.status === 'offline' &&
@@ -317,7 +319,13 @@ export class BrowserFleetInstanceActor implements FleetInstanceActor {
     this.authRetryTimer = null
   }
 
-  private setState(state: FleetInstanceRuntimeState): void {
+  private setState(next: FleetInstanceRuntimeState): void {
+    const changed = next.status !== this.state.status
+    const realtimeSince = next.realtime?.status === next.status ? next.realtime.statusSince : undefined
+    const statusSince = changed
+      ? (realtimeSince ?? new Date().toISOString())
+      : (this.state.statusSince ?? next.statusSince ?? realtimeSince ?? new Date().toISOString())
+    const state = { ...next, statusSince }
     this.state = state
     for (const listener of this.listeners) listener(state)
   }

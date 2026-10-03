@@ -1,7 +1,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import { fixtureFleetModel } from '../fixtures/fleet'
 import { I18nProvider } from '../i18n/I18nProvider'
@@ -99,4 +99,31 @@ test('omits activity and legacy shared-session blocks from Fleet dashboard', () 
   render(dashboard())
   expect(screen.queryByText('Agent continuity')).not.toBeInTheDocument()
   expect(screen.queryByText('Recent activity')).not.toBeInTheDocument()
+})
+
+
+test('uses state transition time and keeps human-readable connection, stale, health and resource reasons together', () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-09-28T11:10:00Z'))
+  const model = {
+    ...fixtureFleetModel,
+    servers: fixtureFleetModel.servers.map((server) => server.instanceId === 'server-b' ? {
+      ...server,
+      connectivity: 'stale' as const, freshness: 'stale' as const, healthy: false,
+      stateSince: '2026-09-28T11:09:30Z', lastSeenAt: '2026-09-28T09:00:00Z',
+      staleReason: 'cursor_gap', lastError: 'network_error',
+      resources: { ...server.resources!, cpu: { status: 'available' as const, logicalCores: 4, usagePercent: 95, load1m: 3.8, load5m: 3, load15m: 2 } },
+    } : server),
+  }
+  render(dashboard(model))
+  const card = screen.getByRole('article', { name: 'Server B server' })
+  expect(card).toHaveTextContent('Event stream gap detected')
+  expect(card).toHaveTextContent('Network connection failed')
+  expect(card).toHaveTextContent('Server health check reports a problem')
+  expect(card).toHaveTextContent('Resource usage requires attention')
+  expect(card).toHaveTextContent('95%')
+  expect(card).toHaveTextContent('30s')
+  expect(card).not.toHaveTextContent('cursor_gap')
+  expect(card).not.toHaveTextContent('network_error')
+  vi.useRealTimers()
 })
