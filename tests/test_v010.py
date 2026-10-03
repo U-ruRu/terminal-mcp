@@ -671,13 +671,22 @@ async def test_broadcast_alias_and_post_finish_message_grace(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_output_prune_default_creates_half_capacity_headroom_with_safe_busy_timeout(tmp_path):
+    store = OutputStore(tmp_path / "output.sqlite3")
+    assert store.prune_rows == 500_000
+    async with store._connect("test_output_busy_timeout") as db:
+        timeout = await (await db.execute("PRAGMA busy_timeout")).fetchone()
+    assert timeout[0] == 5000
+
+
+@pytest.mark.asyncio
 async def test_line_prune_creates_headroom_and_preserves_chunks(tmp_path):
     store = OutputStore(
         tmp_path / "output.sqlite3",
         target_bytes=10_000_000,
         max_bytes=20_000_000,
         max_rows=10,
-        prune_rows=100_000,
+        prune_rows=5,
     )
     await store.initialize()
     hashes = [f"{index:08x}" for index in range(12)]
@@ -689,8 +698,8 @@ async def test_line_prune_creates_headroom_and_preserves_chunks(tmp_path):
     pruned = await store.prune(set())
     after = await store.stats()
     assert pruned
-    assert after["lines"] <= 9
-    assert before["lines"] - after["lines"] >= 3
+    assert after["lines"] <= 5
+    assert before["lines"] - after["lines"] >= 7
     for cmd_hash in hashes:
         count = await store.count_lines(cmd_hash)
         assert count in {0, 1}

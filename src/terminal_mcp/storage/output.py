@@ -16,7 +16,7 @@ DEFAULT_COMMAND_MAX_BYTES = 8 * MIB
 DEFAULT_TARGET_BYTES = 192 * MIB
 DEFAULT_MAX_BYTES = 256 * MIB
 DEFAULT_MAX_ROWS = 1_000_000
-DEFAULT_PRUNE_ROWS = 100_000
+DEFAULT_PRUNE_ROWS = 500_000
 
 LINE_TRUNCATED_SUFFIX = " … [truncated: line exceeded 4 MiB]"
 COMMAND_TRUNCATED_SUFFIX = " … [truncated: command output exceeded 8 MiB]"
@@ -52,7 +52,7 @@ class OutputStore:
         self.max_bytes = int(max_bytes)
         self.max_rows = int(max_rows)
         requested_prune_rows = int(prune_rows)
-        self.prune_rows = min(requested_prune_rows, max(1, self.max_rows // 10))
+        self.prune_rows = min(requested_prune_rows, self.max_rows)
         if self.line_max_bytes <= 0 or self.command_max_bytes <= 0:
             raise ValueError("output line/command limits must be positive")
         if self.line_max_bytes > self.command_max_bytes:
@@ -73,13 +73,13 @@ class OutputStore:
         async with observed_connection(
             aiosqlite.connect,
             self.path,
-            busy_timeout=2.0,
+            busy_timeout=5.0,
             diagnostics=self.sqlite_diagnostics,
             operation=operation,
             pragmas=(
                 "PRAGMA journal_mode=WAL",
                 "PRAGMA synchronous=NORMAL",
-                "PRAGMA busy_timeout=2000",
+                "PRAGMA busy_timeout=5000",
             ),
             command_hash=command_hash,
         ) as db:
