@@ -45,7 +45,7 @@ class ManagedFleetControl:
         self._stopped = asyncio.Event()
 
     async def start(self, interval_seconds: float | None = None) -> None:
-        if not self.is_control_node or self._reconcile_task is not None:
+        if self._reconcile_task is not None:
             return
         self._stopped.clear()
         interval = max(
@@ -77,8 +77,13 @@ class ManagedFleetControl:
             # already converged so a restarted/drifted runtime cannot fall
             # back to bootstrap peer credentials indefinitely.
             await self._apply_local(state)
-        if not self.is_control_node or not state.get("managed"):
+        if not state.get("managed"):
             return state
+        if not self.is_control_node:
+            # Push delivery is best-effort. A replica that was offline during
+            # an authoritative transition must still converge after recovery,
+            # even when the authority no longer has a pending delivery marker.
+            return await self.pull_authoritative()
         pending = any(
             node.get("state") != "detached"
             and (
@@ -203,6 +208,27 @@ class ManagedFleetControl:
 
     async def _forward_mutation(self, operation: str, payload: dict | None = None) -> dict:
         return await self._forward_mutation_to(self.store.control_node_id, operation, payload)
+
+    async def pull_authoritative(self) -> dict:
+        """Pull the current managed snapshot from authority and apply it locally."""
+        if self.is_control_node:
+            return await self.snapshot()
+        peer = await self._management_peer(self.store.control_node_id)
+        if peer is None:
+            raise FleetControlError("control_authority_unavailable")
+        async with self.client_factory() as client:
+            response = await client.get(
+                f"{peer.origin}/internal/fleet/control/state",
+                headers=self._headers(peer),
+            )
+            response.raise_for_status()
+            body = response.json()
+        if not body.get("ok"):
+            raise FleetControlError(str(body.get("code") or "control_snapshot_failed"))
+        snapshot = body.get("control")
+        if not isinstance(snapshot, dict):
+            raise FleetControlError("control_snapshot_invalid")
+        return await self.apply_replica(snapshot, source_node_id=self.store.control_node_id)
 
     async def execute_forwarded(
         self, operation: str, payload: dict, *, authenticated_peer_id: str | None = None
@@ -740,6 +766,37 @@ class ManagedFleetControl:
             error=None,
         )
 
+    @staticmethod
+    def _topology_signature(state: dict) -> tuple:
+        revisions = state.get("revisions") or {}
+        meshes = tuple(
+            sorted(
+                str(item.get("mesh_id") or "")
+                for item in state.get("meshes") or []
+                if item.get("mesh_id") and bool(item.get("active", True))
+            )
+        )
+        nodes = tuple(
+            sorted(
+                (
+                    str(item.get("node_id") or ""),
+                    str(item.get("mesh_id")) if item.get("mesh_id") is not None else None,
+                    str(item.get("state") or "active"),
+                )
+                for item in state.get("nodes") or []
+                if item.get("node_id")
+            )
+        )
+        return int(revisions.get("topology") or 0), meshes, nodes
+
+    async def authoritative_replication_snapshot(self) -> dict:
+        if not self.is_control_node:
+            raise FleetControlError("control_authority_required")
+        state = await self.store.control_state(include_secrets=False)
+        if not state.get("managed"):
+            raise FleetControlError("managed_control_not_adopted")
+        return await self._internal_replication_snapshot(state)
+
     async def _internal_replication_snapshot(self, state: dict) -> dict:
         identity = await self._ensure_local_identity()
         materials = list(await self.store.managed_peer_material())
@@ -804,6 +861,12 @@ class ManagedFleetControl:
                     body = response.json()
                     if not body.get("ok"):
                         raise RuntimeError(str(body.get("code") or "control_apply_failed"))
+                    acknowledged = body.get("control")
+                    if not isinstance(acknowledged, dict) or (
+                        self._topology_signature(acknowledged)
+                        != self._topology_signature(state)
+                    ):
+                        raise RuntimeError("control_apply_not_converged")
                     await self.store.mark_managed_applied(
                         peer.instance_id,
                         topology_revision=int(revisions.get("topology") or 0),
