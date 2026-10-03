@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import type { ConsoleSnapshotReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
@@ -304,7 +305,7 @@ test('slot detail keeps raw Fleet and audit identifiers inside technical details
   expect(within(detail).getByRole('button', { name: 'Rotate Access code' })).toHaveClass('secondary-action')
 })
 
-test('policy controls mutate D/W/A/R and Legacy through the authenticated write path', async () => {
+test('policy controls stage D/W/A/R and Legacy together and Save commits one standalone mutation', async () => {
   const user = userEvent.setup()
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
   renderSlots([instance('live', slot())], mutate)
@@ -313,19 +314,35 @@ test('policy controls mutate D/W/A/R and Legacy through the authenticated write 
   const warning = screen.getByRole('spinbutton', { name: 'Warning time' })
   const alert = screen.getByRole('spinbutton', { name: 'Alert time' })
   const rearm = screen.getByRole('spinbutton', { name: 'Rearm delay' })
+  const legacy = screen.getByRole('checkbox', { name: 'Allow agents to create sessions independently' })
   await user.clear(duration); await user.type(duration, '3')
   await user.clear(warning); await user.type(warning, '1')
   await user.clear(alert); await user.type(alert, '2')
   await user.clear(rearm); await user.type(rearm, '15'); await user.selectOptions(screen.getByRole('combobox', { name: 'Rearm delay · Unit' }), 'seconds')
+  await user.click(legacy)
+  expect(legacy).toBeChecked()
+  expect(mutate).not.toHaveBeenCalled()
+
   expect(screen.getByRole('button', { name: 'Save' })).toHaveClass('primary-action')
   expect(screen.getByRole('button', { name: 'Create slot' })).toHaveClass('primary-action')
   await user.click(screen.getByRole('button', { name: 'Save' }))
-  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { duration_seconds: 180, warning_after_seconds: 60, alert_after_seconds: 120, rearm_after_seconds: 15 })
+  expect(mutate).toHaveBeenCalledTimes(1)
+  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', {
+    duration_seconds: 180,
+    warning_after_seconds: 60,
+    alert_after_seconds: 120,
+    rearm_after_seconds: 15,
+    legacy_admission_enabled: true,
+  })
 
-  await user.click(screen.getByRole('checkbox', { name: 'Allow agents to create sessions independently' }))
-  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { legacy_admission_enabled: true })
   await user.click(screen.getByRole('button', { name: 'Reset' }))
-  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', { duration_seconds: 1380, warning_after_seconds: 1200, alert_after_seconds: 1320, rearm_after_seconds: 180 })
+  expect(mutate).toHaveBeenNthCalledWith(2, 'alpha', '/actions/persistent/policy', {
+    duration_seconds: 1380,
+    warning_after_seconds: 1200,
+    alert_after_seconds: 1320,
+    rearm_after_seconds: 180,
+    legacy_admission_enabled: false,
+  })
 })
 
 
@@ -424,6 +441,8 @@ test('managed AccessPolicy uses Fleet control authority for timing, Legacy and r
   await user.clear(warning); await user.type(warning, '1')
   await user.clear(alert); await user.type(alert, '2')
   await user.clear(rearm); await user.type(rearm, '15'); await user.selectOptions(screen.getByRole('combobox', { name: 'Rearm delay · Unit' }), 'seconds')
+  await user.click(screen.getByRole('checkbox', { name: 'Allow agents to create sessions independently' }))
+  expect(mutateControl).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: 'Save' }))
 
   expect(mutateControl).toHaveBeenNthCalledWith(1, 'main', '/actions/fleet/control/policy', {
@@ -431,18 +450,13 @@ test('managed AccessPolicy uses Fleet control authority for timing, Legacy and r
     warning_after_seconds: 60,
     alert_after_seconds: 120,
     rearm_after_seconds: 15,
-    legacy_admission_enabled: false,
+    legacy_admission_enabled: true,
     expected_revision: 4,
   })
   expect(persistentMutate).not.toHaveBeenCalled()
 
-  await user.click(screen.getByRole('checkbox', { name: 'Allow agents to create sessions independently' }))
-  expect(mutateControl).toHaveBeenNthCalledWith(2, 'main', '/actions/fleet/control/policy', expect.objectContaining({
-    legacy_admission_enabled: true,
-    expected_revision: 5,
-  }))
   await user.click(screen.getByRole('button', { name: 'Reset' }))
-  expect(mutateControl).toHaveBeenNthCalledWith(3, 'main', '/actions/fleet/control/policy/reset', { expected_revision: 6 })
+  expect(mutateControl).toHaveBeenNthCalledWith(2, 'main', '/actions/fleet/control/policy/reset', { expected_revision: 5 })
 })
 
 test('old server snapshots do not expose policy mutation controls', () => {
@@ -578,16 +592,18 @@ test('cached managed policy stays mesh-wide when the fresh control read is unava
   expect(screen.queryByText(/Policy scope:/)).not.toBeInTheDocument()
   expect(toggle).not.toBeChecked()
   await user.click(toggle)
+  expect(toggle).toBeChecked()
+  expect(mutateControl).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'Save' }))
 
   expect(mutateControl).toHaveBeenCalledWith('main', '/actions/fleet/control/policy', expect.objectContaining({
     legacy_admission_enabled: true,
     expected_revision: 4,
   }))
   expect(persistentMutate).not.toHaveBeenCalled()
-  await waitFor(() => expect(toggle).toBeChecked())
 })
 
-test('Legacy toggle is optimistic and rolls back visibly when authoritative mutation is rejected', async () => {
+test('Legacy checkbox is draft-only and a rejected Save keeps the draft available for retry', async () => {
   const user = userEvent.setup()
   let resolveMutation: ((value: ManagedFleetMutationResult) => void) | undefined
   const mutateControl = vi.fn(() => new Promise<ManagedFleetMutationResult>((resolve) => { resolveMutation = resolve })) as FleetControlMutator
@@ -602,11 +618,13 @@ test('Legacy toggle is optimistic and rolls back visibly when authoritative muta
 
   await user.click(toggle)
   expect(toggle).toBeChecked()
-  expect(screen.getByText('Pending')).toBeInTheDocument()
+  expect(mutateControl).not.toHaveBeenCalled()
 
+  await user.click(screen.getByRole('button', { name: 'Save' }))
+  expect(mutateControl).toHaveBeenCalledTimes(1)
   resolveMutation?.({ ok: false, code: 'revision_conflict' })
-  await waitFor(() => expect(toggle).not.toBeChecked())
-  expect(screen.getByText('Failed')).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByText('revision_conflict')).toBeInTheDocument())
+  expect(toggle).toBeChecked()
   expect(persistentMutate).not.toHaveBeenCalled()
 })
 
@@ -794,24 +812,113 @@ test('projected NATO identity is shown without a locally stored Access code and 
   expect(screen.queryByText('la_alpha')).not.toBeInTheDocument()
 })
 
-test('Details click persists list filter and exact scroll offset for restoration', async () => {
+test('Details → Back restores the selected global filter and exact scroll position', async () => {
   const user = userEvent.setup()
   const item = slot(); item.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
   const alpha = instance('live', item)
   const loadControl = vi.fn(async () => standaloneControl('alpha'))
   Object.defineProperty(window, 'scrollY', { configurable: true, value: 317 })
   const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => { callback(0); return 1 })
+  function BackButton() {
+    const location = useLocation()
+    return <Link to={'/slots' + location.search}>Back</Link>
+  }
 
   render(<I18nProvider><MemoryRouter initialEntries={['/slots']}><Routes>
     <Route path="/slots" element={<ServerSlots instances={[alpha]} loadFleetControl={loadControl} />} />
-    <Route path="/slots/:logicalAgentId" element={<ServerSlots instances={[alpha]} loadFleetControl={loadControl} />} />
+    <Route path="/slots/:logicalAgentId" element={<><BackButton /><ServerSlots instances={[alpha]} loadFleetControl={loadControl} /></>} />
   </Routes></MemoryRouter></I18nProvider>)
 
+  const filter = await screen.findByRole('combobox', { name: 'Filter' })
+  await user.selectOptions(filter, 'server:alpha')
   await user.click(await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ }))
-  expect(sessionStorage.getItem('slots-list-filter')).toBe('all')
-  expect(sessionStorage.getItem('slots-scroll:all')).toBe('317')
-  expect(scrollTo).not.toHaveBeenCalledWith({ top: 0 })
+  expect(sessionStorage.getItem('slots-list-filter')).toBe('server:alpha')
+  expect(sessionStorage.getItem('slots-scroll:server:alpha')).toBe('317')
+  scrollTo.mockClear()
+
+  await user.click(screen.getByRole('link', { name: 'Back' }))
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Filter' })).toHaveValue('server:alpha'))
+  await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 317 }))
 })
+
+test('missing readable identity falls back to Unknown and logical agent ID appears only in technical details', async () => {
+  const user = userEvent.setup()
+  const item = slot()
+  item.displayName = item.logicalAgentId
+  item.access = undefined
+  renderSlots([instance('live', item)])
+
+  expect(screen.getByRole('link', { name: 'Unknown' })).toBeInTheDocument()
+  expect(screen.queryByText('la_alpha')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('link', { name: 'Unknown' }))
+  const technicalId = screen.getByText('la_alpha')
+  expect(technicalId).not.toBeVisible()
+  await user.click(screen.getByText('Technical details'))
+  expect(technicalId).toBeVisible()
+  expect(screen.getByText('Logical agent ID')).toBeInTheDocument()
+})
+
+test('successful create becomes a card from confirmed authoritative state without manual refresh', async () => {
+  const user = userEvent.setup()
+  vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+  const initial = instance('live', slot())
+  function Harness() {
+    const [fleet, setFleet] = useState<FleetInstanceView[]>([initial])
+    const mutate: PersistentMutator = async (_instanceId, path, body) => {
+      if (path !== '/actions/persistent/slots/create') return { ok: true, payload: { ok: true } }
+      const displayName = String(body.display_name ?? '')
+      const created: PersistentSlotReadModel = {
+        ...slot(),
+        logicalAgentId: 'la_new',
+        displayName,
+        authorityNodeId: 'secondary',
+        slotRevision: 1,
+        createdAt: '2026-10-03T10:00:00Z',
+        updatedAt: '2026-10-03T10:00:00Z',
+        access: { publicName: 'Bravo', accessGeneration: 1, status: 'active' },
+      }
+      setFleet((current) => current.map((candidate) => ({
+        ...candidate,
+        runtime: {
+          ...candidate.runtime,
+          realtime: candidate.runtime.realtime ? {
+            ...candidate.runtime.realtime,
+            snapshot: candidate.runtime.realtime.snapshot ? {
+              ...candidate.runtime.realtime.snapshot,
+              persistent: candidate.runtime.realtime.snapshot.persistent ? {
+                ...candidate.runtime.realtime.snapshot.persistent,
+                slots: [...candidate.runtime.realtime.snapshot.persistent.slots, created],
+              } : candidate.runtime.realtime.snapshot.persistent,
+            } : candidate.runtime.realtime.snapshot,
+          } : candidate.runtime.realtime,
+        },
+      })))
+      return {
+        ok: true,
+        payload: {
+          ok: true,
+          slot: { logical_agent_id: 'la_new' },
+          access: { public_name: 'Bravo', access_generation: 1, access_code: '4821' },
+        },
+      }
+    }
+    return <ServerSlots instances={fleet} mutatePersistent={mutate} />
+  }
+
+  render(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/slots']}><Routes>
+    <Route path="/servers/:instanceId/slots" element={<Harness />} />
+  </Routes></MemoryRouter></I18nProvider>)
+
+  await user.type(screen.getByRole('textbox', { name: 'Slot name' }), 'Build agent')
+  await user.click(screen.getByRole('button', { name: 'Create slot' }))
+  const createdLink = await screen.findByRole('link', { name: /Bravo.*Build agent/ })
+  const createdCard = createdLink.closest('.slot-card') as HTMLElement
+  expect(createdCard).toBeInTheDocument()
+  expect(within(createdCard).getByText('4821')).toBeInTheDocument()
+  expect(screen.getAllByText('4821').length).toBeGreaterThanOrEqual(2)
+})
+
 
 
 test('Save and Reset share one explicit horizontal policy action row', () => {

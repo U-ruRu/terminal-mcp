@@ -210,3 +210,18 @@ test('synthetic projected instance ids resolve back to their source node', () =>
   expect(projectedSourceNodeId(projected.profile.instanceId)).toBe('node-a')
   expect(projectedSourceNodeId('profile-a')).toBeUndefined()
 })
+
+
+test('projected slot never substitutes logical agent ID for a missing human display name', () => {
+  const [projected] = buildProjectedFleetInstances(cache([
+    entity('logical_agent', 'la_internal', {
+      logical_agent_id: 'la_internal', state: 'suspended', public_name: 'Alpha',
+      authority_node_id: 'node-a', authority_epoch: 1, slot_revision: 1,
+      access_generation: 1,
+    }),
+  ]), [{ sourceNodeId: 'node-a', profile }], 'live')
+  const projectedSlot = projected.runtime.realtime?.snapshot?.persistent?.slots[0]
+  expect(projectedSlot?.logicalAgentId).toBe('la_internal')
+  expect(projectedSlot?.displayName).toBe('')
+  expect(projectedSlot?.access?.publicName).toBe('Alpha')
+})
