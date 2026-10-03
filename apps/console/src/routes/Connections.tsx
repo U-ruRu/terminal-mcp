@@ -822,7 +822,7 @@ export function Connections() {
                 type="button"
                 className="destructive-action"
                 disabled={controlBusy || !writeProfile}
-                onClick={() => void deleteMesh()}
+                onClick={() => { if (selectedMesh && window.confirm(selectedMesh.displayName + ': ' + t('connections.deleteMeshConfirm'))) void deleteMesh() }}
               >
                 {t('connections.deleteMesh')}
               </button>
@@ -986,7 +986,7 @@ export function Connections() {
                         {!routeMeshId ? <button
                           type="button"
                           className="destructive-action"
-                          onClick={() => disconnect(profile.instanceId)}
+                          onClick={() => { if (window.confirm(profile.displayName + ': ' + t('connections.removeConfirm'))) disconnect(profile.instanceId) }}
                         >
                           {t('connections.remove')}
                         </button> : null}
