@@ -34,8 +34,8 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
   return (
     <AppShell servers={model.servers}>
       <Routes>
-        <Route path="/" element={<Overview model={model} loadFleetControl={loadFleetControl} />} />
-        <Route path="/servers" element={<Overview model={model} loadFleetControl={loadFleetControl} />} />
+        <Route path="/" element={<Overview model={model} instances={instances} loadFleetControl={loadFleetControl} mutatePersistent={mutatePersistent} />} />
+        <Route path="/servers" element={<Overview model={model} instances={instances} loadFleetControl={loadFleetControl} mutatePersistent={mutatePersistent} />} />
         <Route path="/agents" element={<ServerChooser model={model} section="agents" />} />
         <Route path="/slots" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/slots/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />

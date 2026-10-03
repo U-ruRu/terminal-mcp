@@ -25,7 +25,7 @@ function renderApp(path = '/') {
 
 test('renders fixture-backed fleet overview shell', () => {
   renderApp()
-  expect(screen.getByRole('heading', { name: 'Fleet overview' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /servers$/i })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
   expect(screen.getAllByText('0.10.1')).toHaveLength(2)
   expect(screen.queryByText('Needs attention 2')).not.toBeInTheDocument()
@@ -120,7 +120,7 @@ test('changes and persists the Console language from Settings', async () => {
 test('applies persisted Russian locale to fleet UI without translating server data', () => {
   localStorage.setItem(LOCALE_STORAGE_KEY, 'ru')
   renderApp('/')
-  expect(screen.getByRole('heading', { name: 'Обзор флота' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /серверов$/i })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Server C' })).toBeInTheDocument()
   const serverCard = screen.getByRole('article', { name: 'Server C сервер' })
   expect(serverCard).toHaveTextContent('0.10.1')
