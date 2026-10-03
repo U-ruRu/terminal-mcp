@@ -38,7 +38,7 @@ test('collapses command lifecycle into one logical item with latest status', () 
   expect(items).toHaveLength(1)
   expect(items[0].content).toBe('$ uptime')
   expect(items[0].commands).toHaveLength(1)
-  expect(items[0].commands?.[0]).toMatchObject({ label: '$ uptime', status: '✓ Completed · 2s' })
+  expect(items[0].commands?.[0]).toMatchObject({ label: '$ uptime', status: 'Completed · 2s' })
   expect(items[0].events).toHaveLength(3)
 })
 

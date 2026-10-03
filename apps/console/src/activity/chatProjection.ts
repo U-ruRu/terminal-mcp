@@ -31,7 +31,7 @@ const copyByLocale: Record<Locale, Copy> = {
   en: {
     unknownAgent: 'Unknown agent', ready: 'Ready to work', started: 'Started session', stopping: 'Ending session',
     suspended: 'Session paused', ended: 'Finished session', broadcast: 'Everyone', queued: 'Queued',
-    running: 'Running…', completed: '✓ Completed', cancelled: 'Cancelled', failed: 'Error',
+    running: 'Running…', completed: 'Completed', cancelled: 'Cancelled', failed: 'Error',
     online: 'is online again', offline: 'lost connection', stale: 'data is stale', authRevoked: 'authorization revoked',
     healthChanged: 'health changed', claimed: 'Claimed task', released: 'Released task', blocked: 'Blocked',
     done: 'Completed', comment: 'Comment on', generic: 'Activity update',
@@ -39,7 +39,7 @@ const copyByLocale: Record<Locale, Copy> = {
   ru: {
     unknownAgent: 'Неизвестный агент', ready: 'Готов к работе', started: 'Начал сессию', stopping: 'Завершает сессию',
     suspended: 'Сессия приостановлена', ended: 'Завершил сессию', broadcast: 'Все', queued: 'В очереди',
-    running: 'Выполняется…', completed: '✓ Завершено', cancelled: 'Отменено', failed: 'Ошибка',
+    running: 'Выполняется…', completed: 'Завершено', cancelled: 'Отменено', failed: 'Ошибка',
     online: 'снова онлайн', offline: 'потерял соединение', stale: 'данные устарели', authRevoked: 'авторизация отозвана',
     healthChanged: 'изменилось состояние', claimed: 'Взял задачу', released: 'Освободил задачу', blocked: 'Заблокирована',
     done: 'Завершил', comment: 'Комментарий к', generic: 'Событие активности',
@@ -47,7 +47,7 @@ const copyByLocale: Record<Locale, Copy> = {
   ka: {
     unknownAgent: 'უცნობი აგენტი', ready: 'მზადაა სამუშაოდ', started: 'სესია დაიწყო', stopping: 'სესიას ასრულებს',
     suspended: 'სესია შეჩერებულია', ended: 'სესია დასრულდა', broadcast: 'ყველა', queued: 'რიგშია',
-    running: 'მიმდინარეობს…', completed: '✓ დასრულდა', cancelled: 'გაუქმდა', failed: 'შეცდომა',
+    running: 'მიმდინარეობს…', completed: 'დასრულდა', cancelled: 'გაუქმდა', failed: 'შეცდომა',
     online: 'კვლავ ონლაინ არის', offline: 'კავშირი დაკარგა', stale: 'მონაცემები მოძველდა', authRevoked: 'ავტორიზაცია გაუქმდა',
     healthChanged: 'მდგომარეობა შეიცვალა', claimed: 'აიღო დავალება', released: 'გაათავისუფლა დავალება', blocked: 'დაბლოკილია',
     done: 'დაასრულა', comment: 'კომენტარი', generic: 'აქტივობის განახლება',
@@ -55,7 +55,7 @@ const copyByLocale: Record<Locale, Copy> = {
   es: {
     unknownAgent: 'Agente desconocido', ready: 'Listo para trabajar', started: 'Inició sesión', stopping: 'Finalizando sesión',
     suspended: 'Sesión pausada', ended: 'Finalizó sesión', broadcast: 'Todos', queued: 'En cola',
-    running: 'Ejecutándose…', completed: '✓ Completado', cancelled: 'Cancelado', failed: 'Error',
+    running: 'Ejecutándose…', completed: 'Completado', cancelled: 'Cancelado', failed: 'Error',
     online: 'está en línea de nuevo', offline: 'perdió la conexión', stale: 'datos desactualizados', authRevoked: 'autorización revocada',
     healthChanged: 'estado cambiado', claimed: 'Tomó la tarea', released: 'Liberó la tarea', blocked: 'Bloqueada',
     done: 'Completó', comment: 'Comentario en', generic: 'Actualización de actividad',
@@ -264,8 +264,7 @@ function commandBatchStatus(commands: ActivityCommandEntry[], locale: Locale): s
     const word = locale === 'ru' ? group.ru : locale === 'es' ? group.es : locale === 'ka' ? group.ka : group.en
     parts.push(count + ' ' + word)
   }
-  const hasCompleted = commands.some((command) => /complete|success|done|finished/.test(command.statusKey))
-  return (hasCompleted ? '✓ ' : '') + parts.join(' · ')
+  return parts.join(' · ')
 }
 
 function commandLabel(events: ActivityEventReadModel[], locale: Locale): string {

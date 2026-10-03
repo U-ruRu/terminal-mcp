@@ -1722,8 +1722,8 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   background: transparent;
   color: var(--color-text);
 }
-.activity-details-toggle:focus-visible svg,
-.activity-command-detail-toggle:focus-visible svg {
+.activity-details-toggle:focus-visible .ui-icon,
+.activity-command-detail-toggle:focus-visible .ui-icon {
   outline: 1px solid var(--color-focus);
   outline-offset: 3px;
   border-radius: 4px;
@@ -1883,7 +1883,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.activity-error-detail-toggle:focus-visible svg {
+.activity-error-detail-toggle:focus-visible .ui-icon {
   outline: 1px solid var(--color-focus);
   outline-offset: 3px;
   border-radius: 4px;
@@ -2446,3 +2446,5 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .filter-status button { display: inline-flex; align-items: center; gap: 4px; }
 .filter-status button .ui-icon { width: 16px; height: 16px; }
 .feedback-state-icon .ui-icon { width: 1em; height: 1em; }
+
+.activity-history-loading .ui-icon { width: 18px; height: 18px; }

@@ -435,7 +435,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       {selectedId && !feed.error ? (
         <div className="activity-timeline-wrap">
           <div className="timeline activity-chat" aria-label={t('activity.timeline')} ref={scrollRef} onScroll={onScroll} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
-            {feed.loading && feed.initialized ? <div className="activity-history-loading" aria-label={t('status.catchingUp')}>•••</div> : null}
+            {feed.loading && feed.initialized ? <div className="activity-history-loading" aria-label={t('status.catchingUp')}><Icon name="loader" /></div> : null}
             {chatItems.map((item) => {
               if (item.kind === 'date') return <div className="activity-date-separator" data-activity-key={item.key} key={item.key}>{item.label}</div>
               const eventKey = selectedId + ':' + item.key
