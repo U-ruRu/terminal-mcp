@@ -11,7 +11,6 @@ export const RESOURCE_THRESHOLDS = {
 } as const
 
 export function resourcePercent(server: FleetServerReadModel, kind: ResourceKind): number | undefined {
-  if (server.connectivity === 'offline') return undefined
   const resources = server.resources
   if (!resources) return undefined
   if (kind === 'cpu') {
@@ -26,7 +25,6 @@ export function resourcePercent(server: FleetServerReadModel, kind: ResourceKind
 }
 
 export function resourceVisualState(server: FleetServerReadModel, kind: ResourceKind): ResourceVisualState {
-  if (server.connectivity === 'offline') return 'unavailable'
   const resources = server.resources
   if (!resources) return 'unavailable'
 
@@ -48,7 +46,6 @@ export function resourceDisplayValue(
   unavailable: string,
   loadLabel: string,
 ): string {
-  if (server.connectivity === 'offline') return unavailable
   const resources = server.resources
   if (!resources) return unavailable
 

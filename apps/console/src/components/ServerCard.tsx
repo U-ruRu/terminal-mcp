@@ -16,6 +16,22 @@ function statusLabel(state: ServerVisualState, t: ReturnType<typeof useI18n>['t'
   return t('fleet.needsAttention')
 }
 
+function connectivityLabel(value: FleetServerReadModel['connectivity'], t: ReturnType<typeof useI18n>['t']): string {
+  if (value === 'live') return t('status.live')
+  if (value === 'offline') return t('status.offline')
+  if (value === 'stale') return t('status.stale')
+  if (value === 'reconnecting') return t('status.reconnecting')
+  return t('status.connecting')
+}
+
+function freshnessLabel(value: FleetServerReadModel['freshness'], t: ReturnType<typeof useI18n>['t']): string {
+  if (value === 'fresh') return t('status.fresh')
+  if (value === 'stale') return t('status.stale')
+  if (value === 'catching_up') return t('status.catchingUp')
+  if (value === 'offline') return t('status.offline')
+  return t('status.loading')
+}
+
 type ServerCardProps = {
   server: FleetServerReadModel
   variant?: 'compact' | 'large'
@@ -81,23 +97,29 @@ export function ServerCard({
           </div>
           <StatusBadge state={state} label={statusLabel(state, t)} />
         </div>
-      ) : null}
+      ) : (
+        <div className="server-runtime-summary">
+          <div className="server-state-strip" aria-label={server.displayName + ' runtime state'}>
+            <span className={'status status-' + server.connectionState}>{connectivityLabel(server.connectivity, t)}</span>
+            <span className={'status fleet-status-' + server.freshness}>{freshnessLabel(server.freshness, t)}</span>
+            <StatusBadge state={state} label={statusLabel(state, t)} />
+          </div>
+          <p className="muted">{t('server.version')}: <strong>{server.version ?? t('fleet.versionUnavailable')}</strong></p>
+        </div>
+      )}
 
-      {resourceIssue ? (
+      {variant === 'large' ? (
+        <dl className={'server-card-metrics' + (resourceIssue ? ' server-card-metrics-attention' : '')} aria-label={t('server.hostResources')}>
+          <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
+          <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
+          <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
+        </dl>
+      ) : resourceIssue ? (
         <dl className="server-card-metrics server-card-metrics-attention" aria-label={t('server.hostResources')}>
           <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
           <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
           <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
         </dl>
-      ) : variant === 'large' ? (
-        <details className="server-resource-details">
-          <summary>{t('server.hostResources')}</summary>
-          <dl className="server-card-metrics">
-            <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
-            <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
-            <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
-          </dl>
-        </details>
       ) : null}
 
       {variant === 'compact' && problemReasons.length > 0 ? (

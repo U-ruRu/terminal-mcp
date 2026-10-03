@@ -131,6 +131,14 @@ test('task list defaults to open work and exposes namespace/state filters', asyn
 })
 
 
+test('reconnect rerender preserves the same task detail surface', () => {
+  const reconnecting: FleetInstanceView = { ...instance, runtime: { ...instance.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: instance.runtime.realtime ? { ...instance.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null } }
+  const { rerender } = render(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}><Routes><Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[instance]} />} /></Routes></MemoryRouter></I18nProvider>)
+  expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
+  rerender(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}><Routes><Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[reconnecting]} />} /></Routes></MemoryRouter></I18nProvider>)
+  expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
+})
+
 test('task detail route is a dedicated surface without the task list', () => {
   render(
     <I18nProvider>

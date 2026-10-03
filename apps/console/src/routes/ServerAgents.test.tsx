@@ -89,6 +89,16 @@ test('duplicate public names have distinct stable deep links', () => {
   expect(links[1]).toHaveAttribute('href', '/servers/alpha/agents/SameName-2222')
 })
 
+test('reconnect rerender preserves the same agent detail surface', () => {
+  const live = instance()
+  const reconnecting: FleetInstanceView = { ...live, runtime: { ...live.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: live.runtime.realtime ? { ...live.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null } }
+  const view = renderAgents('/servers/alpha/agents/SameName-2222', [live])
+  expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
+  view.rerender(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/agents/SameName-2222']}><Routes><Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={[reconnecting]} />} /></Routes></MemoryRouter></I18nProvider>)
+  expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
+})
+
 test('direct reload route resolves exact session and only its related task from cached offline state', () => {
   renderAgents('/servers/alpha/agents/SameName-2222', [instance('offline')])
   expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()

@@ -13,6 +13,7 @@ from terminal_mcp.fleet.protocol import (
     canonical_event_id,
 )
 from terminal_mcp.fleet.source_query import CURRENT_SCOPE_VERSION, FleetSourceQueryPlane
+from terminal_mcp.version import __version__
 from terminal_mcp.storage.events import EventJournalStore
 
 _CANONICAL_ENTITY_TYPES = {
@@ -298,6 +299,8 @@ class FleetSourceService:
         resources = await self.query_plane.sampled_resources()
         if self.runtime_health_provider is None:
             return {
+                "application": "terminal-mcp",
+                "version": __version__,
                 "finalization_pending_commands": [],
                 "stale_running_commands": [],
                 "unowned_running_commands": [],
@@ -306,6 +309,8 @@ class FleetSourceService:
             }
         value = await self.runtime_health_provider()
         return {
+            "application": "terminal-mcp",
+            "version": __version__,
             "finalization_pending_commands": list(value.get("finalization_pending_commands") or []),
             "stale_running_commands": list(value.get("stale_running_commands") or []),
             "unowned_running_commands": list(value.get("unowned_running_commands") or []),

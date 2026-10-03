@@ -74,6 +74,26 @@ test('switches servers, filters messages and renders direct task navigation', as
 })
 
 
+test('reconnect rerender preserves Activity server, filters and cached feed', async () => {
+  const load = activityLoader()
+  const live = instance('alpha', 'Alpha', 2)
+  const { rerender } = render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[live]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+  await screen.findByText('Ship it')
+  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
+  const reconnecting: FleetInstanceView = {
+    ...live,
+    runtime: { ...live.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: live.runtime.realtime ? { ...live.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null },
+  }
+  rerender(<I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}><Activity instances={[reconnecting]} loadActivity={load} /></MemoryRouter></I18nProvider>)
+  expect(screen.getByLabelText('Server')).toHaveValue('alpha')
+  expect(screen.getByLabelText('Category')).toHaveValue('messages')
+  expect(screen.getByText('Ship it')).toBeInTheDocument()
+})
+
 test('uses the native scroll API without recursion when Activity anchors to the bottom', async () => {
   const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo')
   const scrollTo = vi.fn()

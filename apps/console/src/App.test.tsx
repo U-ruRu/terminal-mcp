@@ -55,6 +55,16 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(document.querySelector('.server-local-navigation')).not.toBeInTheDocument()
 })
 
+test('server overview exposes the same runtime version and resource observation used by Fleet', () => {
+  renderApp('/servers/server-c')
+  const serverCard = screen.getByRole('article', { name: 'Server C server' })
+  expect(serverCard).toHaveTextContent('Version: 0.10.1')
+  expect(serverCard).toHaveTextContent('CPU28%')
+  expect(serverCard).toHaveTextContent('RAM45%')
+  expect(serverCard).toHaveTextContent('Disk43%')
+  expect(serverCard).toHaveTextContent('Fresh')
+})
+
 test('direct route keeps stale cached server readable after reload', () => {
   renderApp('/servers/server-b')
   expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server B')

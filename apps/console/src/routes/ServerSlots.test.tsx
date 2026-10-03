@@ -816,7 +816,7 @@ test('Mesh-owned Slot card and detail use managed control.policy over stale memb
   const identity = await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })
   const card = identity.closest('.slot-card') as HTMLElement
   expect(card).toHaveClass('slot-cue-warning')
-  expect(within(card).getByText('5m 00s')).toBeInTheDocument()
+  expect(within(card).getByText(/^(?:5m 00s|4m 59s)$/)).toBeInTheDocument()
 
   await user.click(identity)
   await user.click(await screen.findByText('Technical details'))

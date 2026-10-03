@@ -108,7 +108,7 @@ export function ServerWorkspace({
         <Link className="server-slots-link chip" to={slotsRoute(server.instanceId)}>{t('nav.slots')}</Link>
       </div>
 
-      {server.connectivity !== 'live' ? (
+      {server.connectivity !== 'live' || server.freshness !== 'fresh' ? (
         <div className="attention-strip" role="status">
           {t('server.cached')} {server.connectivity === 'offline' ? t('status.offline') : server.freshness === 'stale' ? t('status.stale') : t('status.catchingUp')}.
         </div>

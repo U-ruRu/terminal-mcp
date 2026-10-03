@@ -103,11 +103,13 @@ test('fresh unowned overlay degrades source without terminalizing durable comman
   expect(instances[0].runtime.realtime?.snapshot?.instance.healthy).toBe(false)
 })
 
-test('fresh sampled resource overlay is normalized and ages out', () => {
+test('runtime overlay preserves version and cached resource values while freshness becomes stale', () => {
   const now = Date.parse('2026-09-30T19:00:05Z')
   const fresh = cache([], [{
     sourceNodeId: 'node-a',
     payload: {
+      application: 'terminal-mcp',
+      version: '0.10.7',
       resources: {
         status: 'available',
         cpu: { status: 'available', logical_cores: 8, load_1m: 1.5 },
@@ -120,11 +122,17 @@ test('fresh sampled resource overlay is normalized and ages out', () => {
     freshness: 'fresh',
   }])
   const live = buildProjectedFleetInstances(fresh, [{ sourceNodeId: 'node-a', profile }], 'live', now)
+  expect(live[0].runtime.realtime?.snapshot?.instance.version).toBe('0.10.7')
   expect(live[0].runtime.realtime?.snapshot?.instance.resources.cpu.logicalCores).toBe(8)
   expect(live[0].runtime.realtime?.snapshot?.instance.resources.memory.totalBytes).toBe(100)
 
-  const stale = buildProjectedFleetInstances(fresh, [{ sourceNodeId: 'node-a', profile }], 'live', now + 11_000)
-  expect(stale[0].runtime.realtime?.snapshot?.instance.resources.status).toBe('unavailable')
+  fresh.sources[0].freshness = 'stale'
+  fresh.runtimeOverlays[0].freshness = 'stale'
+  const stale = buildProjectedFleetInstances(fresh, [{ sourceNodeId: 'node-a', profile }], 'live', now + 60_000)
+  expect(stale[0].runtime.status).toBe('stale')
+  expect(stale[0].runtime.realtime?.snapshot?.instance.version).toBe('0.10.7')
+  expect(stale[0].runtime.realtime?.snapshot?.instance.resources.cpu.logicalCores).toBe(8)
+  expect(stale[0].runtime.realtime?.snapshot?.instance.resources.memory.totalBytes).toBe(100)
 })
 
 

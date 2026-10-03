@@ -32,11 +32,6 @@ const titles: Record<ServerSectionKind, MessageKey> = {
   health: 'section.healthDiagnostics',
 }
 
-function resourceStatusLabel(status: string | undefined, t: ReturnType<typeof useI18n>['t']): string {
-  if (status === 'available') return t('server.resourcesAvailable')
-  if (status === 'partial') return t('server.resourcesPartial')
-  return t('common.unavailable')
-}
 
 export function ServerSection({
   model,
@@ -128,13 +123,8 @@ export function ServerSection({
       <article className="panel">
         {section === 'health' ? (
           <>
-            <h3>{t('section.lastKnownHealth')}</h3>
-            <p>{server.healthy === false ? t('section.unhealthy') : server.healthy === true ? t('section.healthy') : t('common.unknown')}</p>
-            <p className="muted">
-              {t('section.connection')} {connectionLabel(server.connectivity, t)}
-              {server.lastSeenAt ? ' · ' + t('section.lastActivity') + ' ' + dateTime(server.lastSeenAt) : ''}
-            </p>
-            <p className="muted">{t('server.hostResources')}: {resourceStatusLabel(server.resources?.status, t)}</p>
+            <h3>{t('section.healthDiagnostics')}</h3>
+            <p className="muted">{t('diagnostics.description')}</p>
             {server.lastError ? <p className="connection-error" role="status">{diagnosticError(server.lastError, t)}</p> : null}
             {server.lastError || server.staleReason ? (
               <details className="inline-technical-details">
