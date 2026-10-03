@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 import type { ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
+import { AppShell } from '../components/AppShell'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerTasks } from './ServerTasks'
 
@@ -131,12 +132,26 @@ test('task list defaults to open work and exposes namespace/state filters', asyn
 })
 
 
-test('reconnect rerender preserves the same task detail surface', () => {
+test('reconnect preserves task detail and its returnTo navigation context', async () => {
   const reconnecting: FleetInstanceView = { ...instance, runtime: { ...instance.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: instance.runtime.realtime ? { ...instance.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null } }
-  const { rerender } = render(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}><Routes><Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[instance]} />} /></Routes></MemoryRouter></I18nProvider>)
+  const entry = { pathname: '/servers/alpha/tasks/console/T-1', state: { returnTo: '/activity?server=alpha' } }
+  const tree = (fleet: FleetInstanceView[]) => (
+    <I18nProvider><MemoryRouter initialEntries={[entry]}><AppShell servers={[]}>
+      <Routes>
+        <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={fleet} />} />
+        <Route path="/activity" element={<div>Activity return destination</div>} />
+      </Routes>
+    </AppShell></MemoryRouter></I18nProvider>
+  )
+  const { rerender } = render(tree([instance]))
   expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
-  rerender(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}><Routes><Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[reconnecting]} />} /></Routes></MemoryRouter></I18nProvider>)
+  expect(screen.getByRole('link', { name: 'Go back to tasks' })).toHaveAttribute('href', '/activity?server=alpha')
+  rerender(tree([reconnecting]))
   expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
+  const back = screen.getByRole('link', { name: 'Go back to tasks' })
+  expect(back).toHaveAttribute('href', '/activity?server=alpha')
+  await userEvent.click(back)
+  expect(screen.getByText('Activity return destination')).toBeInTheDocument()
 })
 
 test('task detail route is a dedicated surface without the task list', () => {

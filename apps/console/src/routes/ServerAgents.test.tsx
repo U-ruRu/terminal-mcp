@@ -5,6 +5,7 @@ import { afterEach, expect, test } from 'vitest'
 
 import type { ConsoleSnapshotReadModel, TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
+import { AppShell } from '../components/AppShell'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { ServerAgents } from './ServerAgents'
 
@@ -89,14 +90,28 @@ test('duplicate public names have distinct stable deep links', () => {
   expect(links[1]).toHaveAttribute('href', '/servers/alpha/agents/SameName-2222')
 })
 
-test('reconnect rerender preserves the same agent detail surface', () => {
+test('reconnect preserves agent detail and its returnTo navigation context', async () => {
   const live = instance()
   const reconnecting: FleetInstanceView = { ...live, runtime: { ...live.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: live.runtime.realtime ? { ...live.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null } }
-  const view = renderAgents('/servers/alpha/agents/SameName-2222', [live])
+  const entry = { pathname: '/servers/alpha/agents/SameName-2222', state: { returnTo: '/activity?server=alpha&agent=SameName-2222' } }
+  const tree = (fleet: FleetInstanceView[]) => (
+    <I18nProvider><MemoryRouter initialEntries={[entry]}><AppShell servers={[]}>
+      <Routes>
+        <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={fleet} />} />
+        <Route path="/activity" element={<div>Agent activity return destination</div>} />
+      </Routes>
+    </AppShell></MemoryRouter></I18nProvider>
+  )
+  const view = render(tree([live]))
   expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
-  view.rerender(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/agents/SameName-2222']}><Routes><Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={[reconnecting]} />} /></Routes></MemoryRouter></I18nProvider>)
+  expect(screen.getByRole('link', { name: 'Back to agents' })).toHaveAttribute('href', '/activity?server=alpha&agent=SameName-2222')
+  view.rerender(tree([reconnecting]))
   expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
+  const back = screen.getByRole('link', { name: 'Back to agents' })
+  expect(back).toHaveAttribute('href', '/activity?server=alpha&agent=SameName-2222')
+  await userEvent.click(back)
+  expect(screen.getByText('Agent activity return destination')).toBeInTheDocument()
 })
 
 test('direct reload route resolves exact session and only its related task from cached offline state', () => {

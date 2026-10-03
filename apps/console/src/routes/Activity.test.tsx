@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -74,16 +74,36 @@ test('switches servers, filters messages and renders direct task navigation', as
 })
 
 
-test('reconnect rerender preserves Activity server, filters and cached feed', async () => {
-  const load = activityLoader()
-  const live = instance('alpha', 'Alpha', 2)
+test('reconnect preserves Activity pagination cursor, filters and exact viewport', async () => {
+  const message = (seq: number, text: string): ActivityFeedReadModel['events'][number] => ({
+    seq, eventType: 'message.created', entityType: 'message', entityId: `msg-${seq}`, actorId: 'Alpha-1111', actorName: 'Alpha', payload: {}, createdAt: `2026-09-28T11:${String(seq % 60).padStart(2, '0')}:00Z`,
+    message: { messageHash: `msg-${seq}`, senderAgentId: 'Alpha-1111', senderName: 'Alpha', target: 'Bravo', text, requireReply: false, alert: false, recipients: [] },
+  })
+  const load = vi.fn(async (_instanceId: string, options = {}) => {
+    const before = (options as { before?: number }).before
+    if (before === 103) return { ...page(0, [message(101, 'Newest 101'), message(102, 'Newest 102')], 102), oldestSeq: 1 }
+    if (before === 101) return { ...page(0, [message(51, 'Older 51')], 102), oldestSeq: 1 }
+    if (before === 51) return { ...page(0, [message(1, 'Oldest 1')], 102), oldestSeq: 1 }
+    return page(0, [], 102)
+  })
+  const live = instance('alpha', 'Alpha', 102)
   const { rerender } = render(
     <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
       <Activity instances={[live]} loadActivity={load} />
     </MemoryRouter></I18nProvider>,
   )
-  await screen.findByText('Ship it')
+  await screen.findByText('Newest 102')
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
+  const chat = document.querySelector('.activity-chat') as HTMLDivElement
+  Object.defineProperty(chat, 'scrollHeight', { configurable: true, value: 1000 })
+  Object.defineProperty(chat, 'clientHeight', { configurable: true, value: 300 })
+
+  chat.scrollTop = 0
+  fireEvent.scroll(chat)
+  expect(await screen.findByText('Older 51')).toBeInTheDocument()
+  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 101, limit: 250 })))
+
+  chat.scrollTop = 137
   const reconnecting: FleetInstanceView = {
     ...live,
     runtime: { ...live.runtime, status: 'reconnecting', reconnectAttempt: 1, realtime: live.runtime.realtime ? { ...live.runtime.realtime, status: 'reconnecting', socketConnected: false, freshness: 'stale' } : null },
@@ -91,7 +111,12 @@ test('reconnect rerender preserves Activity server, filters and cached feed', as
   rerender(<I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}><Activity instances={[reconnecting]} loadActivity={load} /></MemoryRouter></I18nProvider>)
   expect(screen.getByLabelText('Server')).toHaveValue('alpha')
   expect(screen.getByLabelText('Category')).toHaveValue('messages')
-  expect(screen.getByText('Ship it')).toBeInTheDocument()
+  expect(screen.getByText('Older 51')).toBeInTheDocument()
+  expect(chat.scrollTop).toBe(137)
+
+  chat.scrollTop = 0
+  fireEvent.scroll(chat)
+  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 51, limit: 250 })))
 })
 
 test('uses the native scroll API without recursion when Activity anchors to the bottom', async () => {
