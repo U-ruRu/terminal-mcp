@@ -34,7 +34,8 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
   expect(bottom).toBeInTheDocument()
   expect(bottom).not.toBe(document.querySelector('.global-navigation'))
-  expect(within(bottom).getAllByRole('link')).toHaveLength(3)
+  expect(within(bottom).getAllByRole('link')).toHaveLength(4)
+  expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
 })
@@ -52,6 +53,10 @@ test('global app bars use destination-specific screen identity', () => {
   renderShell('/connections')
   let appBar = document.querySelector('.app-bar') as HTMLElement
   expect(within(appBar).getByRole('heading', { name: 'Connections' })).toBeInTheDocument()
+  cleanup()
+  renderShell('/slots')
+  appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('heading', { name: 'Slots' })).toBeInTheDocument()
   cleanup()
   renderShell('/settings')
   appBar = document.querySelector('.app-bar') as HTMLElement

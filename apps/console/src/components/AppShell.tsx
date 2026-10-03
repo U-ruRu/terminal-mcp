@@ -17,6 +17,7 @@ type NavigationItem = {
 
 const globalNavigation: NavigationItem[] = [
   { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: '⌂' },
+  { key: 'slots', labelKey: 'nav.slots', globalPath: '/slots', icon: '◇' },
   { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: '◌' },
   { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings', icon: '⚙' },
 ]
@@ -30,7 +31,7 @@ const serverNavigation: NavigationItem[] = [
   { key: 'health', icon: '＋', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
 ]
 
-const bottomNavigationKeys = new Set<NavigationItem['key']>(['fleet', 'connections', 'settings'])
+const bottomNavigationKeys = new Set<NavigationItem['key']>(['fleet', 'slots', 'connections', 'settings'])
 
 function serverStatusLabel(state: ServerVisualState, t: (key: MessageKey) => string): string {
   if (state === 'healthy') return t('status.live')
@@ -73,6 +74,7 @@ type ContextNavigation = {
 
 function contextNavigation(pathname: string, search: string): ContextNavigation | null {
   const parts = pathname.split('/').filter(Boolean)
+  if (parts[0] === 'slots' && parts.length >= 2) return { to: '/slots' + search, ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
   if (parts[0] === 'servers' && parts[1]) {
     const serverPath = '/servers/' + parts[1]
     if (parts[2] === 'slots' && parts.length >= 4) return { to: serverPath + '/slots', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
@@ -153,6 +155,8 @@ export function AppShell({
   const appBarVariant = isServerOverview || isMeshOverview ? 'detail' : contextual ? 'secondary' : 'root'
   const globalScreenTitle = location.pathname === '/'
     ? t('nav.fleet')
+    : location.pathname === '/slots'
+      ? t('nav.slots')
     : location.pathname === '/connections' || location.pathname === '/connect'
       ? t('nav.connections')
       : location.pathname === '/settings'
@@ -167,6 +171,7 @@ export function AppShell({
   const bottomNavigation = globalNavigation.filter((item) => bottomNavigationKeys.has(item.key))
   const isGlobalActive = (key: NavigationItem['key']) => {
     if (key === 'fleet') return location.pathname === '/'
+    if (key === 'slots') return location.pathname === '/slots' || location.pathname.startsWith('/slots/')
     if (key === 'connections') return location.pathname === '/connections' || location.pathname === '/connect'
     if (key === 'settings') return location.pathname === '/settings'
     return false

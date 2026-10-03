@@ -49,7 +49,7 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
   const applicationNavigation = screen.getByRole('navigation', { name: 'Application navigation' })
   expect(within(applicationNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
-  expect(within(applicationNavigation).getByRole('link', { name: 'Slots' })).toHaveAttribute('href', '/servers/server-c/slots')
+  expect(within(applicationNavigation).getAllByRole('link', { name: 'Slots' }).some((link) => link.getAttribute('href') === '/servers/server-c/slots')).toBe(true)
   expect(within(applicationNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
   expect(within(applicationNavigation).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/servers/server-c/health')
   expect(document.querySelector('.server-local-navigation')).not.toBeInTheDocument()
