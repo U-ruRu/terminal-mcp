@@ -51,7 +51,7 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(within(applicationNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
   expect(within(applicationNavigation).getAllByRole('link', { name: 'Slots' }).some((link) => link.getAttribute('href') === '/servers/server-c/slots')).toBe(true)
   expect(within(applicationNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
-  expect(within(applicationNavigation).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/servers/server-c/health')
+  expect(within(applicationNavigation).getByRole('link', { name: 'Diagnostics' })).toHaveAttribute('href', '/servers/server-c/health')
   expect(document.querySelector('.server-local-navigation')).not.toBeInTheDocument()
 })
 
@@ -112,7 +112,7 @@ test('drawer closes predictably on Escape and browser Back', async () => {
 
 test('invalid server-scoped direct link keeps destination intent and asks for a server', () => {
   renderApp('/servers/missing/health')
-  expect(screen.getByRole('heading', { name: 'Choose a server for Health' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Choose a server for Diagnostics' })).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Server A/ })).toHaveAttribute('href', '/servers/server-a/health')
 })
 
@@ -126,6 +126,14 @@ test('changes and persists the Console language from Settings', async () => {
   expect(document.documentElement.lang).toBe('ru')
 })
 
+
+test('Health compatibility route is presented as Diagnostics in Russian', () => {
+  localStorage.setItem(LOCALE_STORAGE_KEY, 'ru')
+  renderApp('/servers/server-c/health')
+  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Диагностика')
+  expect(screen.getByRole('heading', { name: 'Диагностика' })).toBeInTheDocument()
+  expect(screen.getByRole('navigation', { name: 'Навигация приложения' }).textContent).toContain('Диагностика')
+})
 
 test('applies persisted Russian locale to fleet UI without translating server data', () => {
   localStorage.setItem(LOCALE_STORAGE_KEY, 'ru')
