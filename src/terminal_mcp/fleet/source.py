@@ -160,11 +160,19 @@ class FleetSourceService:
             }
 
         page = await self.journal.read(since=since, limit=limit)
+        needs_access_identity = any(
+            str(raw.get("entity_type") or "") == "logical_agent" for raw in page["events"]
+        )
+        identities = await self.query_plane.access_identities() if needs_access_identity else {}
         events = []
         for raw in page["events"]:
             event = self._canonical_event(raw, meta)
             if event is not None:
-                events.append(event.to_dict())
+                item = event.to_dict()
+                identity = identities.get(event.entity_id) if event.entity_type == "logical_agent" else None
+                if identity:
+                    item["payload"] = {**item["payload"], **identity}
+                events.append(item)
         return {
             "protocol_major": FLEET_PROTOCOL_MAJOR,
             "fleet_id": meta.fleet_id,
