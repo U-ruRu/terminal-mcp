@@ -80,7 +80,11 @@ export function ServerCard({
         </div>
       ) : null}
 
-      {state === 'stale' && server.lastSeenAt ? (
+      {variant === 'compact' ? (
+        <p className="server-card-age server-card-age-slot">
+          {state === 'stale' && server.lastSeenAt ? server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC') : ''}
+        </p>
+      ) : state === 'stale' && server.lastSeenAt ? (
         <p className="server-card-age">{server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC')}</p>
       ) : null}
       {interactive ? <span className="server-card-chevron" aria-hidden="true">›</span> : null}
