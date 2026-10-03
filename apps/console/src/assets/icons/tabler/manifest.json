@@ -1,1 +1,73 @@
-{"source":"Tabler Icons","version":"3.48.0","license":"MIT","style":"outline","canonical":{"fleet":"server-2","slots":"square-key","connections":"plug-connected","settings":"settings","server":"server","mesh":"topology-ring-3","agents":"users","tasks":"list-check","activity":"activity","context":"braces","health":"heart-rate-monitor","copy":"copy","back":"arrow-left","chevron":"chevron-right","more":"dots","menu":"menu-2"}}
+{
+  "source": "Tabler Icons",
+  "version": "3.48.0",
+  "license": "MIT",
+  "style": "outline",
+  "canonical": {
+    "fleet": "server-2",
+    "slots": "square-key",
+    "connections": "plug-connected",
+    "settings": "settings",
+    "server": "server",
+    "mesh": "topology-ring-3",
+    "agents": "users",
+    "tasks": "list-check",
+    "activity": "activity",
+    "context": "braces",
+    "health": "heart-rate-monitor",
+    "copy": "copy",
+    "back": "arrow-left",
+    "chevron": "chevron-right",
+    "more": "dots",
+    "menu": "menu-2"
+  },
+  "semantic_api": {
+    "entities": {
+      "fleet": "server-2",
+      "slots": "square-key",
+      "connections": "plug-connected",
+      "settings": "settings",
+      "server": "server",
+      "mesh": "topology-ring-3",
+      "agents": "users",
+      "tasks": "list-check",
+      "activity": "activity",
+      "context": "braces",
+      "health": "heart-rate-monitor"
+    },
+    "actions": {
+      "save": "device-floppy",
+      "apply": "check",
+      "reset": "restore",
+      "cancel": "x",
+      "close": "x",
+      "create": "plus",
+      "edit": "pencil",
+      "delete": "trash",
+      "retry": "refresh",
+      "copy": "copy",
+      "play": "player-play",
+      "pause": "player-pause",
+      "stop": "player-stop",
+      "rotate": "rotate",
+      "connect": "plug-connected",
+      "disconnect": "plug-off",
+      "release": "unlink",
+      "reassign": "arrows-exchange",
+      "details": "eye",
+      "back": "arrow-left",
+      "more": "dots",
+      "menu": "menu-2",
+      "access": "key",
+      "secure": "shield-check",
+      "open-external": "external-link"
+    },
+    "states": {
+      "loading": "loader",
+      "success": "circle-check",
+      "warning": "alert-triangle",
+      "error": "alert-circle",
+      "info": "info-circle"
+    }
+  }
+}
