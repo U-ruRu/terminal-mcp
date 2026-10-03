@@ -290,6 +290,7 @@ async def test_source_projects_persistent_attachment_presence_and_obligation(tmp
         auth_generation=1,
         authority_node_id="node-a",
         origin_instance_id="node-a",
+        session_duration_seconds=120,
     )
     attachment = await store.record_node_attachment(
         node_attachment_id="att-1",
