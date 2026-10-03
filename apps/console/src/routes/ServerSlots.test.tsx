@@ -206,6 +206,7 @@ function renderSlots(
 afterEach(() => {
   cleanup()
   localStorage.clear()
+  sessionStorage.clear()
   vi.restoreAllMocks()
 })
 
@@ -698,4 +699,125 @@ test('global Slots aggregates authoritative standalone contexts while filter and
   expect(screen.queryByRole('link', { name: /Alpha.*Alpha Slot/ })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Beta.*Beta Slot/ })).toHaveAttribute('href', '/slots/la_beta?filter=server%3Abeta&settings=server%3Aalpha&owner=server%3Abeta')
   expect(screen.getByRole('combobox', { name: 'Applies to' })).toHaveValue('server:alpha')
+})
+
+
+test.each([
+  ['2026-09-30T12:00:42Z', '42s'],
+  ['2026-09-30T12:12:08Z', '12m 08s'],
+  ['2026-09-30T15:04:09Z', '3h 04m 09s'],
+  ['2026-10-01T15:12:03Z', '27h 12m 03s'],
+])('session timer keeps significant hours/minutes and always seconds: %s', (hardExpiresAt, expected) => {
+  const item = slot('active', hardExpiresAt)
+  item.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const value = instance('live', item)
+  value.runtime.realtime!.snapshot!.persistent!.policy.durationSeconds = 200000
+  value.runtime.realtime!.snapshot!.persistent!.policy.warningAfterSeconds = 190000
+  value.runtime.realtime!.snapshot!.persistent!.policy.alertAfterSeconds = 195000
+  renderSlots([value])
+  const timer = screen.getByText(expected)
+  expect(timer).toHaveClass('slot-timer')
+  expect(timer.closest('.slot-card-primary')).toBeInTheDocument()
+})
+
+test('global All keeps healthy owner Slots visible when another context is unavailable', async () => {
+  const alphaSlot = slot(); alphaSlot.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const alpha = instance('live', alphaSlot)
+  const betaSlot = { ...slot(), logicalAgentId: 'la_beta', displayName: 'Beta Slot', authorityNodeId: 'beta', access: { publicName: 'Beta', accessGeneration: 1, status: 'active' } }
+  const beta = instance('offline', betaSlot)
+  beta.profile = { ...beta.profile, instanceId: 'beta', origin: 'https://beta.example', displayName: 'Beta', credentialRef: 'cred-beta' }
+  beta.runtime = { ...beta.runtime, instanceId: 'beta' }
+  beta.runtime.realtime!.snapshot!.persistent!.available = false
+  beta.runtime.realtime!.snapshot!.persistent!.error = 'beta_down'
+  const loadControl = vi.fn(async (instanceId: string) => standaloneControl(instanceId))
+
+  render(<I18nProvider><MemoryRouter initialEntries={['/slots']}><Routes>
+    <Route path="/slots" element={<ServerSlots instances={[alpha, beta]} loadFleetControl={loadControl} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+
+  expect(await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: /Beta.*Beta Slot/ })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.getAllByText('Beta').length).toBeGreaterThan(0))
+  expect(screen.getByText(/beta_down/)).toBeInTheDocument()
+})
+
+test('each global Slot timer cue uses its owner policy, not the selected settings context', async () => {
+  const alphaSlot = slot('active', '2026-09-30T12:00:30Z'); alphaSlot.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const alpha = instance('live', alphaSlot)
+  alpha.runtime.realtime!.snapshot!.persistent!.policy = { ...alpha.runtime.realtime!.snapshot!.persistent!.policy, durationSeconds: 100, warningAfterSeconds: 40, alertAfterSeconds: 80 }
+  const betaSlot = { ...slot('active', '2026-09-30T12:09:00Z'), logicalAgentId: 'la_beta', displayName: 'Beta Slot', authorityNodeId: 'beta', access: { publicName: 'Beta', accessGeneration: 1, status: 'active' } }
+  const beta = instance('live', betaSlot)
+  beta.profile = { ...beta.profile, instanceId: 'beta', origin: 'https://beta.example', displayName: 'Beta', credentialRef: 'cred-beta' }
+  beta.runtime = { ...beta.runtime, instanceId: 'beta' }
+  beta.runtime.realtime!.snapshot!.persistent!.policy = { ...beta.runtime.realtime!.snapshot!.persistent!.policy, durationSeconds: 1000, warningAfterSeconds: 900, alertAfterSeconds: 950 }
+  const loadControl = vi.fn(async (instanceId: string) => standaloneControl(instanceId))
+
+  render(<I18nProvider><MemoryRouter initialEntries={['/slots']}><Routes>
+    <Route path="/slots" element={<ServerSlots instances={[alpha, beta]} loadFleetControl={loadControl} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+
+  const alphaCard = (await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })).closest('.slot-card')
+  const betaCard = screen.getByRole('link', { name: /Beta.*Beta Slot/ }).closest('.slot-card')
+  expect(alphaCard).toHaveClass('slot-cue-warning')
+  expect(betaCard).toHaveClass('slot-cue-normal')
+  expect(await screen.findByRole('combobox', { name: 'Applies to' })).toHaveValue('server:alpha')
+})
+
+test('cold-start authoritative topology does not expose Mesh members as standalone filters', async () => {
+  const alphaSlot = slot(); alphaSlot.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const alpha = instance('live', alphaSlot)
+  const beta = instance('live', { ...slot(), logicalAgentId: 'la_beta', displayName: 'Beta Slot', authorityNodeId: 'beta', access: { publicName: 'Beta', accessGeneration: 1, status: 'active' } })
+  beta.profile = { ...beta.profile, instanceId: 'beta', origin: 'https://beta.example', displayName: 'Beta', credentialRef: 'cred-beta' }
+  beta.runtime = { ...beta.runtime, instanceId: 'beta' }
+  const control = managedControl()
+  control.nodes = [
+    { ...control.nodes[0], nodeId: 'secondary', origin: 'https://alpha.example', meshId: 'mesh-prod' },
+    { ...control.nodes[0], nodeId: 'beta', origin: 'https://beta.example', meshId: 'mesh-prod' },
+  ]
+  const loadControl = vi.fn(async () => control)
+
+  render(<I18nProvider><MemoryRouter initialEntries={['/slots']}><Routes>
+    <Route path="/slots" element={<ServerSlots instances={[alpha, beta]} loadFleetControl={loadControl} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+
+  const filter = await screen.findByRole('combobox', { name: 'Filter' })
+  expect(within(filter).getByRole('option', { name: 'Production' })).toHaveValue('mesh:mesh-prod')
+  expect(within(filter).queryByRole('option', { name: 'Alpha' })).not.toBeInTheDocument()
+  expect(within(filter).queryByRole('option', { name: 'Beta' })).not.toBeInTheDocument()
+})
+
+test('projected NATO identity is shown without a locally stored Access code and logical id stays technical-only', () => {
+  const item = slot()
+  item.access = { publicName: 'Alpha', accessGeneration: 3, status: 'active' }
+  renderSlots([instance('live', item)])
+  expect(screen.getByRole('link', { name: /Alpha.*Alpha Slot/ })).toBeInTheDocument()
+  expect(screen.queryByText('la_alpha')).not.toBeInTheDocument()
+})
+
+test('Details click persists list filter and exact scroll offset for restoration', async () => {
+  const user = userEvent.setup()
+  const item = slot(); item.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const alpha = instance('live', item)
+  const loadControl = vi.fn(async () => standaloneControl('alpha'))
+  Object.defineProperty(window, 'scrollY', { configurable: true, value: 317 })
+  const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
+
+  render(<I18nProvider><MemoryRouter initialEntries={['/slots']}><Routes>
+    <Route path="/slots" element={<ServerSlots instances={[alpha]} loadFleetControl={loadControl} />} />
+    <Route path="/slots/:logicalAgentId" element={<ServerSlots instances={[alpha]} loadFleetControl={loadControl} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+
+  await user.click(await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ }))
+  expect(sessionStorage.getItem('slots-list-filter')).toBe('all')
+  expect(sessionStorage.getItem('slots-scroll:all')).toBe('317')
+  expect(scrollTo).not.toHaveBeenCalledWith({ top: 0 })
+})
+
+
+test('Save and Reset share one explicit horizontal policy action row', () => {
+  renderSlots([instance('live', slot())])
+  const save = screen.getByRole('button', { name: 'Save' })
+  const reset = screen.getByRole('button', { name: 'Reset' })
+  expect(save.parentElement).toBe(reset.parentElement)
+  expect(save.parentElement).toHaveClass('policy-actions')
 })
