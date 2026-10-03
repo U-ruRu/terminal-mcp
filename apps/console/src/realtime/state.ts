@@ -165,7 +165,7 @@ function slotPatch(prior: PersistentSlotReadModel | undefined, payload: Record<s
   const raw = rawRecord(payload.slot)
   if (!raw) return prior
   const logicalAgentId = rawString(raw.logical_agent_id) ?? prior?.logicalAgentId
-  const displayName = rawString(raw.display_name) ?? prior?.displayName
+  const displayName = raw.display_name !== undefined ? rawString(raw.display_name) : prior?.displayName
   const state = rawString(raw.state) ?? prior?.state
   const authorityNodeId = rawString(raw.authority_node_id) ?? prior?.authorityNodeId
   const authorityEpoch = rawInteger(raw.authority_epoch) ?? prior?.authorityEpoch
@@ -177,7 +177,7 @@ function slotPatch(prior: PersistentSlotReadModel | undefined, payload: Record<s
   const selectorRaw = rawRecord(payload.selector)
   const selector = rawString(selectorRaw?.selector) ?? prior?.selector
   const serverNow = rawString(payload.server_now) ?? prior?.serverNow
-  if (!logicalAgentId || !displayName || !state || !authorityNodeId || authorityEpoch === undefined || slotRevision === undefined || selectorGeneration === undefined || authGeneration === undefined || !createdAt || !updatedAt || !selector || !serverNow) return prior
+  if (!logicalAgentId || displayName === undefined || !state || !authorityNodeId || authorityEpoch === undefined || slotRevision === undefined || selectorGeneration === undefined || authGeneration === undefined || !createdAt || !updatedAt || !selector || !serverNow) return prior
 
   let access = prior?.access
   const accessRaw = rawRecord(payload.access)
@@ -192,10 +192,16 @@ function slotPatch(prior: PersistentSlotReadModel | undefined, payload: Record<s
   const workSession = state === 'active' || state === 'stopping'
     ? (returnedSession ?? prior?.workSession)
     : undefined
+  const rearmRaw = rawRecord(payload.rearm)
+  const rearmWorkSessionId = rawString(rearmRaw?.work_session_id)
+  const rearmAt = rawString(rearmRaw?.rearm_at)
+  const rearm = rearmWorkSessionId && rearmAt
+    ? { workSessionId: rearmWorkSessionId, rearmAt }
+    : (payload.rearm === null ? undefined : prior?.rearm)
 
   return {
     logicalAgentId, displayName, state, authorityNodeId, authorityEpoch, slotRevision, selector,
-    selectorGeneration, authGeneration, access, createdAt, updatedAt, serverNow, workSession,
+    selectorGeneration, authGeneration, access, createdAt, updatedAt, serverNow, workSession, rearm,
     claims: prior?.claims ?? [], audit: prior?.audit ?? [], attachments: prior?.attachments ?? [],
   }
 }

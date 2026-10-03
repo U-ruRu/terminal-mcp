@@ -99,6 +99,30 @@ async def test_create_slot_is_armed_atomically_with_initial_duration(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ready_slot_remains_startable_after_legacy_arm_deadline_and_gets_full_d(tmp_path):
+    _, store, _, lifecycle = await setup(tmp_path, duration=90)
+    created = await lifecycle.create_slot("", admission=admission())
+    logical_agent_id = created["slot"]["logical_agent_id"]
+    legacy_deadline = parse_utc(created["arm"]["armed_until"])
+    start_at = legacy_deadline + timedelta(hours=4)
+
+    started = await lifecycle.session_start(
+        created["selector"]["selector"],
+        expected_revision=created["slot"]["slot_revision"],
+        admission=admission(),
+        now=utc_text(start_at),
+    )
+
+    assert created["slot"]["display_name"] == ""
+    assert started["slot"]["state"] == "active"
+    assert (
+        parse_utc(started["work_session"]["hard_expires_at"])
+        - parse_utc(started["work_session"]["started_at"])
+    ).total_seconds() == 90
+    assert (await store.get_slot(logical_agent_id)).state == "active"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_loop_does_not_starve_rearm_when_expiry_pass_fails(tmp_path):
     _, _, _, lifecycle = await setup(tmp_path)
     calls = []

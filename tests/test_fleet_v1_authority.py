@@ -1487,6 +1487,10 @@ async def test_notify_message_surfaces_five_times_then_leaves_auto_inbox(tmp_pat
     current = next(item for item in history if item["message_ref"] == message_ref)
     assert current["resolution"] == "retention"
     assert current["resolved_at"] is not None
+    active = await store.message_inbox(
+        logical_agent_id, recent_cutoff=current["created_at"], show_all=False
+    )
+    assert all(item["message_ref"] != message_ref for item in active)
 
 
 @pytest.mark.asyncio
