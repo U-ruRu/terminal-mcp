@@ -164,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             fleet_node_meta,
             runtime_health_provider=terminal.health,
             output_db_path=settings.output_cache_path,
+            auth_db_path=settings.auth_database_path,
             metrics=metrics,
             events=events,
         )

@@ -1,4 +1,6 @@
 import pytest
+
+from terminal_mcp.auth.foundation import AuthFoundationStore
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -345,3 +347,30 @@ async def test_source_projects_persistent_attachment_presence_and_obligation(tmp
     assert "node_attachment" in projected_types
     assert "attachment_presence" in projected_types
     assert "message_obligation" in projected_types
+
+
+@pytest.mark.asyncio
+async def test_source_event_replay_enriches_logical_agent_with_authoritative_public_name(tmp_path):
+    runtime_path = tmp_path / "terminal.sqlite3"
+    auth_path = tmp_path / "auth.sqlite3"
+    repo = SqliteRepository(runtime_path, tmp_path / "output.sqlite3")
+    await repo.initialize()
+    persistent = PersistentAgentStore(runtime_path)
+    await persistent.create_slot(
+        "logical-identity", "Builder", "A1B2", authority_node_id="node-a", now="2026-10-03T00:00:00Z"
+    )
+    auth = AuthFoundationStore(auth_path)
+    await auth.initialize()
+    registered = await auth.register_access_slot("logical-identity", "node-a")
+    assert registered["public_name"] == "Alpha"
+
+    journal = EventJournalStore(runtime_path)
+    meta = FleetNodeMetaStore(tmp_path / "fleet-node-meta-identity.sqlite3", fleet_id="fleet-a", node_id="node-a")
+    await meta.initialize()
+    source = FleetSourceService(runtime_path, journal, meta, auth_db_path=auth_path)
+
+    page = await source.events(since=0, limit=100)
+    event = next(item for item in page["events"] if item["entity_type"] == "logical_agent")
+    assert event["payload"]["public_name"] == "Alpha"
+    assert event["payload"]["access_generation"] == 0
+    assert "access_code" not in event["payload"]

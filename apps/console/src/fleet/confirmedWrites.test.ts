@@ -68,3 +68,13 @@ test('Access-code mutation secrets never become durable confirmed-write overlays
   expect(writes).toEqual([])
   expect(JSON.stringify(writes)).not.toContain('ZQPH')
 })
+
+
+test('create confirmation projects readable Access identity without persisting the secret code', () => {
+  const writes = confirmedWritesFromPersistentMutation(
+    'node-a', '/actions/persistent/slots/create', { display_name: 'Builder' },
+    { ok: true, payload: { ok: true, slot: { logical_agent_id: 'la-new', state: 'suspended', slot_revision: 1 }, access: { public_name: 'Bravo', access_generation: 1, access_code: '4821' } } }, 123,
+  )
+  expect(writes[0].payloadPatch).toMatchObject({ public_name: 'Bravo', access_generation: 1, access_status: 'active' })
+  expect(JSON.stringify(writes)).not.toContain('4821')
+})

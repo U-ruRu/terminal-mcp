@@ -144,6 +144,11 @@ function persistent(
       selector: '—',
       selectorGeneration: integer(p.selector_generation),
       authGeneration: integer(p.auth_generation),
+      access: text(p.public_name) ? {
+        publicName: text(p.public_name),
+        accessGeneration: integer(p.access_generation),
+        status: text(p.access_status, 'active'),
+      } : undefined,
       createdAt: text(p.created_at, item.updatedAt),
       updatedAt: text(p.updated_at, item.updatedAt),
       serverNow: nowIso,

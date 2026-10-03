@@ -1,9 +1,11 @@
 import aiosqlite
 import pytest
 
+from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.fleet.source import FleetSourceService
 from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
 from terminal_mcp.storage.events import EventJournalStore
+from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 
 
@@ -160,3 +162,37 @@ async def test_command_current_recovery_keeps_active_plus_bounded_recent_termina
     health = await source.runtime_health()
     assert "resources" in health
     assert "sample_age_ms" in health["resources"]
+
+
+@pytest.mark.asyncio
+async def test_logical_agent_recovery_projects_authoritative_access_public_name(tmp_path):
+    runtime = tmp_path / "runtime.sqlite3"
+    output = tmp_path / "output.sqlite3"
+    auth_db = tmp_path / "auth.sqlite3"
+    repo = SqliteRepository(runtime, output)
+    await repo.initialize()
+    persistent = PersistentAgentStore(runtime)
+    await persistent.create_slot(
+        "logical-1", "Build agent", "A1B2", authority_node_id="node-a", now="2026-10-03T00:00:00Z"
+    )
+    auth = AuthFoundationStore(auth_db)
+    await auth.initialize()
+    registered = await auth.register_access_slot("logical-1", "node-a")
+    assert registered["public_name"] == "Alpha"
+
+    journal = EventJournalStore(runtime)
+    meta = FleetNodeMetaStore(tmp_path / "fleet-node-meta.sqlite3", fleet_id="fleet-a", node_id="node-a")
+    await meta.initialize()
+    source = FleetSourceService(runtime, journal, meta, output_db_path=output, auth_db_path=auth_db)
+
+    recovery = await source.current_recovery("logical_agents")
+    recovered = next(item for item in recovery["entities"] if item["entity_id"] == "logical-1")
+    assert recovered["payload"]["public_name"] == "Alpha"
+    assert recovered["payload"]["access_generation"] == 0
+    assert "access_code" not in recovered["payload"]
+
+    snapshot = await source.snapshot()
+    projected = next(item for item in snapshot["entities"] if item["entity_type"] == "logical_agent")
+    assert projected["payload"]["public_name"] == "Alpha"
+    assert projected["payload"]["display_name"] == "Build agent"
+    assert "access_code" not in projected["payload"]
