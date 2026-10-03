@@ -172,7 +172,7 @@ test('loads a concise latest window and keeps raw payload collapsed', async () =
   const toggle = screen.getByRole('button', { name: 'Technical details' })
   expect(toggle).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByText(/"ok": true/)).not.toBeInTheDocument()
-  expect(toggle.querySelector('svg')).toBeInTheDocument()
+  expect(toggle.querySelector('.ui-icon-chevron-down')).toBeInTheDocument()
   await userEvent.click(toggle)
   expect(toggle).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText(/"ok": true/)).toBeInTheDocument()

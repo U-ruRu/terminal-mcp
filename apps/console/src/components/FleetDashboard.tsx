@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 
 import type { FleetReadModel, FleetServerReadModel } from '../fleet/readModel'
 import { useI18n } from '../i18n/useI18n'
+import { Icon } from './Icon'
 import { ServerCard } from './ServerCard'
 import { SegmentedControl } from './UiPrimitives'
 import { needsAttention, serverAlphaSort, serverProblemSort, serverVisualState } from './serverPresentation'
@@ -67,7 +68,7 @@ export function FleetDashboard({ model, groups }: { model: FleetReadModel; group
         }
         onClick={() => focusServerList(statusFilter)}
       >
-        <span className="fleet-status-icon" aria-hidden="true">{fleetState === 'healthy' ? '✓' : fleetState === 'loading' ? '…' : '!'}</span>
+        <span className="fleet-status-icon" aria-hidden="true"><Icon name={fleetState === 'healthy' ? 'circle-check' : fleetState === 'loading' ? 'loader' : fleetState === 'partial' ? 'alert-circle' : 'alert-triangle'} /></span>
         <span>
           <strong>{fleetState === 'partial' ? t('fleet.partialOffline') : fleetState === 'attention' ? t('fleet.problems') : fleetState === 'loading' ? t('status.catchingUp') : t('fleet.live')}</strong>
           <small>
@@ -77,7 +78,7 @@ export function FleetDashboard({ model, groups }: { model: FleetReadModel; group
             {' · '}{number(staleCount)} {t('fleet.stale')}
           </small>
         </span>
-        <span className="fleet-status-chevron" aria-hidden="true">›</span>
+        <span className="fleet-status-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
       </button>
 
       <div className="fleet-server-filter" data-mobile-layout="single-line-three-segment">

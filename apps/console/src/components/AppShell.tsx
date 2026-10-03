@@ -6,6 +6,7 @@ import { navigationReturnTo, serverSwitchDestination } from '../navigation/conte
 import type { FleetServerReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
+import { Icon, type IconName } from './Icon'
 import { StatusBadge } from './StatusBadge'
 import { needsAttention, serverVisualState, type ServerVisualState } from './serverPresentation'
 
@@ -13,24 +14,24 @@ type NavigationItem = {
   key: 'fleet' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
   labelKey: MessageKey
   globalPath: string
-  icon: string
+  icon: IconName
   serverPath?: (instanceId: string) => string
 }
 
 const globalNavigation: NavigationItem[] = [
-  { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: '⌂' },
-  { key: 'slots', labelKey: 'nav.slots', globalPath: '/slots', icon: '◇' },
-  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: '◌' },
-  { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings', icon: '⚙' },
+  { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: 'server-2' },
+  { key: 'slots', labelKey: 'nav.slots', globalPath: '/slots', icon: 'square-key' },
+  { key: 'connections', labelKey: 'nav.connections', globalPath: '/connections', icon: 'plug-connected' },
+  { key: 'settings', labelKey: 'nav.settings', globalPath: '/settings', icon: 'settings' },
 ]
 
 const serverNavigation: NavigationItem[] = [
-  { key: 'agents', icon: '◎', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
-  { key: 'slots', icon: '◇', labelKey: 'nav.slots', globalPath: '/slots', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots' },
-  { key: 'tasks', icon: '✓', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
-  { key: 'activity', icon: '↕', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
-  { key: 'context', icon: '◫', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
-  { key: 'health', icon: '＋', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
+  { key: 'agents', icon: 'users', labelKey: 'nav.agents', globalPath: '/agents', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/agents' },
+  { key: 'slots', icon: 'square-key', labelKey: 'nav.slots', globalPath: '/slots', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/slots' },
+  { key: 'tasks', icon: 'list-check', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
+  { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
+  { key: 'context', icon: 'braces', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
+  { key: 'health', icon: 'heart-rate-monitor', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
 ]
 
 const bottomNavigationKeys = new Set<NavigationItem['key']>(['fleet', 'slots', 'connections', 'settings'])
@@ -188,7 +189,7 @@ export function AppShell({
         <div className="app-bar-leading">
           {contextual ? (
             <Link className="app-bar-back" aria-label={t(contextual.ariaKey)} to={contextual.to}>
-              <span aria-hidden="true">‹</span>
+              <Icon name="arrow-left" />
             </Link>
           ) : (
             <button
@@ -200,7 +201,7 @@ export function AppShell({
               aria-controls="global-navigation"
               onClick={() => setMenuOpen(true)}
             >
-              <span aria-hidden="true">☰</span>
+              <Icon name="menu-2" />
             </button>
           )}
         </div>
@@ -226,7 +227,7 @@ export function AppShell({
               aria-controls="global-navigation"
               onClick={() => setMenuOpen(true)}
             >
-              <span aria-hidden="true">☰</span>
+              <Icon name="menu-2" />
             </button>
           ) : null}
         </div>
@@ -265,7 +266,7 @@ export function AppShell({
                 toggleRef.current?.focus()
               }}
             >
-              ×
+              <Icon name="x" />
             </button>
           </div>
 
@@ -277,7 +278,8 @@ export function AppShell({
               className={isGlobalActive(item.key) ? 'nav-link active' : 'nav-link'}
               onClick={() => setMenuOpen(false)}
             >
-              {t(item.labelKey)}
+              <Icon name={item.icon} className="nav-drawer-icon" />
+              <span>{t(item.labelKey)}</span>
             </Link>
           ))}
 
@@ -288,7 +290,8 @@ export function AppShell({
                 to={'/servers/' + encodeURIComponent(selectedServer.instanceId)}
                 onClick={() => setMenuOpen(false)}
               >
-                {t('nav.overview')}
+                <Icon name="server" className="nav-drawer-icon" />
+                <span>{t('nav.overview')}</span>
               </Link>
               {serverNavigation.map((item) => (
                 <Link
@@ -298,7 +301,8 @@ export function AppShell({
                   className={current === item.key ? 'nav-link active' : 'nav-link'}
                   onClick={() => setMenuOpen(false)}
                 >
-                  {t(item.labelKey)}
+                  <Icon name={item.icon} className="nav-drawer-icon" />
+                  <span>{t(item.labelKey)}</span>
                 </Link>
               ))}
             </div>
@@ -307,10 +311,12 @@ export function AppShell({
           {selectedMeshId ? (
             <div className="navigation-context-group" aria-label={t('title.mesh') + ' · ' + selectedMeshId}>
               <Link className={isMeshOverview ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId)} onClick={() => setMenuOpen(false)}>
-                {t('nav.overview')}
+                <Icon name="topology-ring-3" className="nav-drawer-icon" />
+                <span>{t('nav.overview')}</span>
               </Link>
               <Link className={location.pathname.includes('/persistent') ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId) + '/persistent'} onClick={() => setMenuOpen(false)}>
-                {t('nav.slots')}
+                <Icon name="square-key" className="nav-drawer-icon" />
+                <span>{t('nav.slots')}</span>
               </Link>
             </div>
           ) : null}
@@ -345,7 +351,7 @@ export function AppShell({
             aria-label={t(item.labelKey) + ' · ' + t('aria.bottomNavigation')}
             className={isGlobalActive(item.key) ? 'nav-link active' : 'nav-link'}
           >
-            <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+            <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span>
             <span className="nav-label">{t(item.labelKey)}</span>
           </Link>
         ))}
