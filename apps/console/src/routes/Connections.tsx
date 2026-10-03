@@ -8,7 +8,8 @@ import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
-import { meshPersistentRoute, meshRoute } from '../navigation/routes'
+import { returnToState } from '../navigation/context'
+import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
 
 function statusLabel(status: string | undefined, t: (key: MessageKey) => string): string {
   switch (status) {
@@ -818,6 +819,21 @@ export function Connections() {
             <span>{t('connections.members')}: {number(selectedMembers.length)}</span>
           </div>
         ) : null}
+        {routeMeshId && selectedMesh && authoritative ? (
+          <div className="connection-group-list" aria-label={t('connections.members')}>
+            {selectedMembers.filter((node) => !profiles.some((candidate) => nodeForProfile(candidate, authoritative, controls[candidate.instanceId])?.nodeId === node.nodeId)).map((node) => {
+              const state = node.lastError ? 'attention' : isConverged(node) ? 'current' : 'applying'
+              return (
+                <div className="connection-card-heading" key={node.nodeId}>
+                  <div>
+                    <strong>{node.nodeId}</strong>
+                    <p className="muted">{operationalLabel(state, t)}</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : null}
         {routeMeshId && authoritative?.managed ? (
           <details className="mesh-technical-details">
             <summary>{t('connections.technicalDetails')}</summary>
@@ -962,7 +978,7 @@ export function Connections() {
                     <article className="panel connection-card" key={profile.instanceId}>
                       <div className="connection-card-heading">
                         <div>
-                          <h3>{profile.displayName}</h3>
+                          <h3>{routeMeshId ? <Link className="text-link" to={serverRoute(profile.instanceId)} state={returnToState(meshRoute(routeMeshId))}>{profile.displayName}</Link> : profile.displayName}</h3>
                           <p className="muted">{profile.origin}</p>
                         </div>
                         <span className={'status connection-status-' + (state?.status ?? 'stored')}>

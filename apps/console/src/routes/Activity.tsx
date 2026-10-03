@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Icon } from '../components/Icon'
-import { Link, useSearchParams } from 'react-router-dom'
 
 import type { ActivityFeedReadModel } from '../api/models'
+import { returnToState } from '../navigation/context'
 import { agentRoute, taskRoute } from '../navigation/routes'
 import { filterActivityEvents, mergeActivityEvents, type ActivityCategory } from '../activity/timeline'
+import { activityStateCache, type ActivityFeedState } from '../activity/stateCache'
 import { activityFullTimestamp, activityTime, actorHue, projectActivity, renderActivity } from '../activity/chatProjection'
 import { captureActivityScrollAnchor, restoreActivityScrollAnchor, type ActivityScrollAnchor } from '../activity/scrollAnchor'
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
@@ -20,19 +22,7 @@ const BOTTOM_EDGE = 24
 const TOP_EDGE = 96
 const SCROLL_IDLE_MS = 140
 
-type FeedState = {
-  events: ActivityFeedReadModel['events']
-  cursor: number
-  highWater: number
-  oldestSeq?: number
-  gap: boolean
-  initialized: boolean
-  loading: boolean
-  historyMode: boolean
-  error?: string
-}
-
-const emptyFeed = (): FeedState => ({
+const emptyFeed = (): ActivityFeedState => ({
   events: [], cursor: 0, highWater: 0, gap: false, initialized: false, loading: false, historyMode: false,
 })
 
@@ -92,15 +82,20 @@ function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
 
 export function Activity({ instances = [], loadActivity }: { instances?: FleetInstanceView[]; loadActivity?: ActivityLoader }) {
   const { t, locale } = useI18n()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [category, setCategory] = useState<ActivityCategory>('all')
-  const [feeds, setFeeds] = useState<Record<string, FeedState>>({})
+  const requestedAtMount = searchParams.get('server') ?? ''
+  const cachedAtMount = activityStateCache.get(requestedAtMount)
+  const [category, setCategory] = useState<ActivityCategory>(() => cachedAtMount?.category ?? 'all')
+  const [feeds, setFeeds] = useState<Record<string, ActivityFeedState>>(() => Object.fromEntries(
+    [...activityStateCache].map(([instanceId, state]) => [instanceId, state.feed]),
+  ))
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set())
-  const [newItemsCount, setNewItemsCount] = useState(0)
+  const [newItemsCount, setNewItemsCount] = useState(() => cachedAtMount?.newItemsCount ?? 0)
   const [enteringItems, setEnteringItems] = useState<Set<string>>(() => new Set())
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const stickToBottom = useRef(true)
-  const pendingHistoryAnchor = useRef<ActivityScrollAnchor | null>(null)
+  const stickToBottom = useRef(cachedAtMount?.stickToBottom ?? true)
+  const pendingHistoryAnchor = useRef<ActivityScrollAnchor | null>(cachedAtMount?.anchor ?? null)
   const historyRequestPending = useRef(false)
   const pendingOlderPage = useRef<ActivityFeedReadModel | null>(null)
   const scrollState = useRef<'idle' | 'dragging' | 'flinging'>('idle')
@@ -122,6 +117,47 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   const initialBefore = Math.max(1, realtimeHighWater + 1)
   const firstEventSeq = feed.events[0]?.seq
   const lastEventSeq = feed.events.at(-1)?.seq
+  const restoredServerRef = useRef<string>('')
+
+  useLayoutEffect(() => {
+    if (!selectedId || restoredServerRef.current === selectedId) return
+    restoredServerRef.current = selectedId
+    const cached = activityStateCache.get(selectedId)
+    if (!cached) {
+      setCategory('all')
+      setNewItemsCount(0)
+      stickToBottom.current = true
+      awayFromBottom.current = false
+      pendingHistoryAnchor.current = null
+      return
+    }
+    setFeeds((current) => current[selectedId]?.initialized ? current : { ...current, [selectedId]: cached.feed })
+    setCategory(cached.category)
+    setNewItemsCount(cached.newItemsCount)
+    stickToBottom.current = cached.stickToBottom
+    awayFromBottom.current = !cached.stickToBottom
+    pendingHistoryAnchor.current = cached.anchor ?? null
+    if (!requestedAgentId && cached.agentId) {
+      const next = new URLSearchParams(searchParams)
+      next.set('agent', cached.agentId)
+      setSearchParams(next, { replace: true })
+    }
+  }, [requestedAgentId, searchParams, selectedId, setSearchParams])
+
+  useLayoutEffect(() => {
+    if (!selectedId) return
+    const node = scrollRef.current
+    return () => {
+      activityStateCache.set(selectedId, {
+        feed,
+        category,
+        agentId: requestedAgentId,
+        anchor: node && feed.initialized ? captureActivityScrollAnchor(node) : undefined,
+        newItemsCount,
+        stickToBottom: stickToBottom.current,
+      })
+    }
+  }, [category, feed, newItemsCount, requestedAgentId, selectedId])
 
   useLayoutEffect(() => {
     const node = scrollRef.current
@@ -347,21 +383,13 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   )
   const chatItems = useMemo(() => renderActivity(logicalItems, locale), [logicalItems, locale])
 
-  useLayoutEffect(() => {
-    setExpandedEvents(new Set())
-    setNewItemsCount(0)
-    setEnteringItems(new Set())
-    stickToBottom.current = true
-    awayFromBottom.current = false
-    const node = scrollRef.current
-    if (node) node.scrollTop = node.scrollHeight
-  }, [selectedId, category, requestedAgentId])
-
   const chooseServer = (instanceId: string) => {
     const next = new URLSearchParams(searchParams)
     if (instanceId) next.set('server', instanceId)
     else next.delete('server')
-    next.delete('agent')
+    const cached = instanceId ? activityStateCache.get(instanceId) : undefined
+    if (cached?.agentId) next.set('agent', cached.agentId)
+    else next.delete('agent')
     setSearchParams(next, { replace: true })
   }
   const clearAgent = () => {
@@ -438,13 +466,13 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                   </div>
                   <div className={'activity-chat-content' + (item.commands?.length ? ' activity-command-bubble' : '') + (item.commands?.length && expanded ? ' is-expanded' : '')}>
                     {item.showIdentity ? <div className="activity-chat-header">
-                      {item.actorId ? <Link className="activity-actor-name" to={agentRoute(selectedId, item.actorId)}>{actorName}</Link> : <strong className="activity-actor-name">{actorName}</strong>}
+                      {item.actorId ? <Link className="activity-actor-name" to={agentRoute(selectedId, item.actorId)} state={returnToState(location.pathname, location.search)}>{actorName}</Link> : <strong className="activity-actor-name">{actorName}</strong>}
                       <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
                     </div> : <time className="activity-continuation-time" dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>}
                     <div className="activity-message-line">
                       <p>{item.content}</p>
                       {item.secondary ? <small>{item.secondary}</small> : null}
-                      {item.taskNamespace && item.taskId ? <Link className="activity-context-link text-link" to={taskRoute(selectedId, item.taskNamespace, item.taskId)}>{t('common.task')} {item.taskId}</Link> : null}
+                      {item.taskNamespace && item.taskId ? <Link className="activity-context-link text-link" to={taskRoute(selectedId, item.taskNamespace, item.taskId)} state={returnToState(location.pathname, location.search)}>{t('common.task')} {item.taskId}</Link> : null}
                     </div>
                     <button type="button" className="activity-details-toggle" aria-label={item.commands?.length ? item.content : t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
                       onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>

@@ -105,3 +105,20 @@ test('standard links preserve browser history for Back', async () => {
   await userEvent.click(screen.getByRole('button', { name: 'Back' }))
   expect(screen.getAllByRole('link', { name: 'SameName' })).toHaveLength(2)
 })
+
+
+test('known agent without an active session keeps a last-known detail surface', () => {
+  const staleSnapshot: ConsoleSnapshotReadModel = {
+    ...snapshot,
+    agents: [{ ...snapshot.agents[0], status: 'suspended', logicalSessionStatus: undefined, intent: 'Last known work' }],
+  }
+  const stale: FleetInstanceView = {
+    ...instance('offline'),
+    runtime: { ...instance('offline').runtime, realtime: instance('offline').runtime.realtime ? { ...instance('offline').runtime.realtime!, snapshot: staleSnapshot } : null },
+  }
+  renderAgents('/servers/alpha/agents/SameName-1111', [stale])
+  expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
+  expect(screen.getByText('Last known state')).toBeInTheDocument()
+  expect(screen.getByText('Last known work')).toBeInTheDocument()
+  expect(screen.queryByText('Agent session unavailable')).not.toBeInTheDocument()
+})
