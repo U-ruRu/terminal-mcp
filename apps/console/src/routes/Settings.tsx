@@ -1,3 +1,4 @@
+import { APK_VERSION_LABEL } from '../appVersion'
 import { supportedLocales, type Locale } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { ThemeSelect } from '../theme/ThemeSelect'
@@ -50,6 +51,7 @@ export function Settings() {
           </label>
         </section>
       </div>
+      <small className="settings-version">{APK_VERSION_LABEL}</small>
     </section>
   )
 }

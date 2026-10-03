@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 import { navigationReturnTo, serverSwitchDestination } from '../navigation/context'
+import { APK_VERSION_LABEL } from '../appVersion'
 
 import type { FleetServerReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
@@ -331,6 +332,7 @@ export function AppShell({
             </div>
           ) : null}
           {menuOpen && servers.length === 0 ? <p className="navigation-hint">{t('nav.chooseServerHint')}</p> : null}
+          <small className="navigation-version">{APK_VERSION_LABEL}</small>
         </nav>
 
         <main className={'content' + (current === 'activity' ? ' content-activity' : '')}>

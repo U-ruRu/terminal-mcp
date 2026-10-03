@@ -209,7 +209,7 @@ class FakeService:
             "agent_name": "Kilo" if agent_id else "anonymous",
             "pending_messages": [],
             "application": "terminal-mcp",
-            "version": "0.10.1",
+            "version": "0.10.2",
             "storage": "ok",
             "auth_mode": auth_mode,
             "terminal": {
@@ -320,7 +320,7 @@ async def test_mcp_code_free_read_paths_use_canonical_tools():
 
     health = _text_json(await tools["health"].run({}, convert_result=True))
     assert health["ok"] is True
-    assert health["version"] == "0.10.1"
+    assert health["version"] == "0.10.2"
     assert health["agent_name"] == "anonymous"
 
     read = _text_json(
