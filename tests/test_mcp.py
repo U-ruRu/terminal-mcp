@@ -3,6 +3,7 @@ import json
 import pytest
 
 from terminal_mcp.mcp.server import build_mcp
+from terminal_mcp.version import __version__
 
 
 class FakeService:
@@ -209,7 +210,7 @@ class FakeService:
             "agent_name": "Kilo" if agent_id else "anonymous",
             "pending_messages": [],
             "application": "terminal-mcp",
-            "version": "0.10.2",
+            "version": __version__,
             "storage": "ok",
             "auth_mode": auth_mode,
             "terminal": {
@@ -320,7 +321,7 @@ async def test_mcp_code_free_read_paths_use_canonical_tools():
 
     health = _text_json(await tools["health"].run({}, convert_result=True))
     assert health["ok"] is True
-    assert health["version"] == "0.10.2"
+    assert health["version"] == __version__
     assert health["agent_name"] == "anonymous"
 
     read = _text_json(

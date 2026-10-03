@@ -4,7 +4,10 @@ from pathlib import Path
 from terminal_mcp.version import __version__
 
 
-def test_package_version_matches_pyproject():
+def test_package_version_has_single_source():
     project = tomllib.loads(Path("pyproject.toml").read_text())
-    assert __version__ == "0.10.2"
-    assert project["project"]["version"] == __version__
+    major, minor, patch = __version__.split(".")
+    assert all(part.isdigit() for part in (major, minor, patch))
+    assert "version" not in project["project"]
+    assert "version" in project["project"]["dynamic"]
+    assert project["tool"]["hatch"]["version"]["path"] == "src/terminal_mcp/version.py"

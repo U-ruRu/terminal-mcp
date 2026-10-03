@@ -12,6 +12,7 @@ from terminal_mcp.app import create_app
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
+from terminal_mcp.version import __version__
 
 
 def pkce(verifier: str) -> str:
@@ -108,14 +109,14 @@ def test_bearer_actions_and_openapi(tmp_path):
     with TestClient(app) as client:
         live = client.get("/health/live")
         assert live.status_code == 200
-        assert live.json()["version"] == "0.10.2"
+        assert live.json()["version"] == __version__
         assert client.get("/actions/health").status_code == 401
         headers = {"Authorization": "Bearer alpha"}
         agent_id = start_agent(client, headers)
         health = client.get("/actions/health", headers=headers)
         assert health.status_code == 200
         assert health.json()["agent_name"] == "anonymous"
-        assert health.json()["version"] == "0.10.2"
+        assert health.json()["version"] == __version__
 
         empty_context = client.post("/actions/context", json={"action": "list"}, headers=headers)
         assert empty_context.status_code == 200
@@ -220,7 +221,7 @@ def test_bearer_actions_and_openapi(tmp_path):
             "/actions/console/snapshot",
         }
         assert set(schema["paths"]) == expected_paths
-        assert schema["info"]["version"] == "0.10.2"
+        assert schema["info"]["version"] == __version__
         assert schema["paths"]["/actions/run"]["post"]["operationId"] == "runCommand"
         run_request = schema["components"]["schemas"]["RunRequest"]
         assert set(run_request["required"]) == {"agent_id", "cmd", "task_scope"}
