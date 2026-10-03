@@ -446,33 +446,39 @@ test('managed mesh membership supports standalone attach move and detach with ex
   )
 
   const betaCard = () => screen.getByRole('heading', { name: 'Beta' }).closest('article')!
-  await waitFor(() => expect(within(betaCard()).getByLabelText('Mesh membership')).toBeEnabled())
-  expect(within(betaCard()).getByLabelText('Mesh membership')).toHaveValue('')
+  const betaTarget = () => within(betaCard()).getByRole('group', { name: 'Target state' })
+  const applyMembership = () => within(betaCard()).getByRole('button', { name: 'Apply membership' })
+  await waitFor(() => expect(applyMembership()).toBeEnabled())
+  expect(within(betaTarget()).getByRole('button', { name: 'Standalone' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('heading', { name: 'Standalone' })).toBeInTheDocument()
 
-  await userEvent.selectOptions(within(betaCard()).getByLabelText('Mesh membership'), 'mesh-a')
+  await userEvent.click(within(betaTarget()).getByRole('button', { name: 'Production' }))
+  expect(within(betaTarget()).getByRole('button', { name: 'Production' })).toHaveAttribute('aria-pressed', 'true')
+  await userEvent.click(applyMembership())
   await waitFor(() => {
     expect(fetcher.mock.calls.filter(
       ([input]) => new URL(String(input)).pathname.endsWith('/nodes/upsert'),
     )).toHaveLength(1)
   })
-  await waitFor(() => expect(within(betaCard()).getByLabelText('Mesh membership')).toHaveValue('mesh-a'))
+  await waitFor(() => expect(within(betaCard()).getByText('Authoritative state: Production')).toBeInTheDocument())
 
-  await userEvent.selectOptions(within(betaCard()).getByLabelText('Mesh membership'), 'mesh-b')
+  await userEvent.click(within(betaTarget()).getByRole('button', { name: 'Staging' }))
+  await userEvent.click(applyMembership())
   await waitFor(() => {
     expect(fetcher.mock.calls.filter(
       ([input]) => new URL(String(input)).pathname.endsWith('/nodes/move'),
     )).toHaveLength(1)
   })
-  await waitFor(() => expect(within(betaCard()).getByLabelText('Mesh membership')).toHaveValue('mesh-b'))
+  await waitFor(() => expect(within(betaCard()).getByText('Authoritative state: Staging')).toBeInTheDocument())
 
-  await userEvent.selectOptions(within(betaCard()).getByLabelText('Mesh membership'), '')
+  await userEvent.click(within(betaTarget()).getByRole('button', { name: 'Standalone' }))
+  await userEvent.click(applyMembership())
   await waitFor(() => {
     expect(fetcher.mock.calls.filter(
       ([input]) => new URL(String(input)).pathname.endsWith('/nodes/detach'),
     )).toHaveLength(1)
   })
-  await waitFor(() => expect(within(betaCard()).getByLabelText('Mesh membership')).toHaveValue(''))
+  await waitFor(() => expect(within(betaCard()).getByText('Authoritative state: Standalone')).toBeInTheDocument())
 
   expect(screen.getAllByText(/Reachability:/)).toHaveLength(2)
   const rotateButtons = screen.getAllByRole('button', { name: 'Rotate trust' })
@@ -615,14 +621,16 @@ test('rejected managed membership mutation rolls the optimistic projection back 
   )
 
   const betaCard = () => screen.getByRole('heading', { name: 'Beta' }).closest('article')!
-  const membership = () => within(betaCard()).getByLabelText('Mesh membership')
-  await waitFor(() => expect(membership()).toBeEnabled())
-  expect(membership()).toHaveValue('')
+  const target = () => within(betaCard()).getByRole('group', { name: 'Target state' })
+  const apply = () => within(betaCard()).getByRole('button', { name: 'Apply membership' })
+  await waitFor(() => expect(apply()).toBeEnabled())
+  expect(within(target()).getByRole('button', { name: 'Standalone' })).toHaveAttribute('aria-pressed', 'true')
 
-  await userEvent.selectOptions(membership(), 'mesh-a')
+  await userEvent.click(within(target()).getByRole('button', { name: 'Production' }))
+  await userEvent.click(apply())
   await waitFor(() => expect(within(betaCard()).getByText('Applying')).toBeInTheDocument())
-  expect(membership()).toHaveValue('')
-  expect(membership()).toBeDisabled()
+  expect(within(target()).getByRole('button', { name: 'Production' })).toHaveAttribute('aria-pressed', 'true')
+  expect(apply()).toBeDisabled()
 
   rejectUpsert?.(new Response(JSON.stringify({
     ok: false,
@@ -630,10 +638,11 @@ test('rejected managed membership mutation rolls the optimistic projection back 
     error: 'revision_conflict',
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
-  await waitFor(() => expect(membership()).toHaveValue(''))
+  await waitFor(() => expect(apply()).toBeEnabled())
   expect(within(betaCard()).getByText('Attention required')).toBeInTheDocument()
   expect(within(betaCard()).queryByText(/revision_conflict/)).not.toBeInTheDocument()
   expect(within(betaCard()).getByText('Mesh: Standalone')).toBeInTheDocument()
+  expect(within(betaCard()).getByText('Authoritative state: Standalone')).toBeInTheDocument()
 })
 
 test('creates a second mesh on an independently selected standalone control node', async () => {
@@ -875,13 +884,16 @@ test('moves a member between meshes with different authorities via detach then j
   )
 
   const gammaCard = () => screen.getByRole('heading', { name: 'Gamma' }).closest('article')!
-  await waitFor(() => expect(within(gammaCard()).getByLabelText('Mesh membership')).toHaveValue('mesh-a'))
-  await userEvent.selectOptions(within(gammaCard()).getByLabelText('Mesh membership'), 'mesh-b')
+  const gammaTarget = () => within(gammaCard()).getByRole('group', { name: 'Target state' })
+  const applyGamma = () => within(gammaCard()).getByRole('button', { name: 'Apply membership' })
+  await waitFor(() => expect(within(gammaTarget()).getByRole('button', { name: 'Production' })).toHaveAttribute('aria-pressed', 'true'))
+  await userEvent.click(within(gammaTarget()).getByRole('button', { name: 'Staging' }))
+  await userEvent.click(applyGamma())
 
   await waitFor(() => {
     expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/detach'))).toHaveLength(1)
     expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/upsert'))).toHaveLength(1)
     expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/move'))).toHaveLength(0)
   })
-  await waitFor(() => expect(within(gammaCard()).getByLabelText('Mesh membership')).toHaveValue('mesh-b'))
+  await waitFor(() => expect(within(gammaCard()).getByText('Authoritative state: Staging')).toBeInTheDocument())
 })

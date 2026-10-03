@@ -77,15 +77,43 @@ function normalizedOrigin(value: string | undefined): string {
   return (value ?? '').replace(/\/+$/, '').toLowerCase()
 }
 
+function compareCandidateRecency(
+  left: { entry: CachedFleetControl },
+  right: { entry: CachedFleetControl },
+): number {
+  const a = left.entry.control
+  const b = right.entry.control
+  if (a.fleetId === b.fleetId && a.controlNodeId === b.controlNodeId) {
+    const topology = b.revisions.topology - a.revisions.topology
+    if (topology !== 0) return topology
+  }
+  return right.entry.observedAt - left.entry.observedAt
+}
+
+export function isFleetControlRevisionRegression(
+  candidate: ManagedFleetControlReadModel,
+  current: ManagedFleetControlReadModel | undefined,
+): boolean {
+  if (
+    !current
+    || candidate.fleetId !== current.fleetId
+    || candidate.controlNodeId !== current.controlNodeId
+  ) return false
+  return (
+    candidate.revisions.topology < current.revisions.topology
+    || candidate.revisions.trust < current.revisions.trust
+    || candidate.revisions.accessPolicy < current.revisions.accessPolicy
+  )
+}
+
 export function loadCachedFleetControlForProfile(
   instanceId: string,
   origin: string | undefined,
 ): CachedFleetControl | undefined {
   const document = readDocument()
   const direct = document.entries[instanceId]
-  if (direct) return direct
   const expectedOrigin = normalizedOrigin(origin)
-  if (!expectedOrigin) return undefined
+  if (!expectedOrigin) return direct
 
   const candidates = Object.values(document.entries)
     .filter((entry) => entry.control.managed)
@@ -97,17 +125,16 @@ export function loadCachedFleetControlForProfile(
       )),
     }))
     .filter((item): item is typeof item & { node: NonNullable<typeof item.node> } => Boolean(item.node))
+    .sort(compareCandidateRecency)
 
-  const memberCandidates = candidates
-    .filter((item) => Boolean(item.node.meshId))
-    .sort((a, b) => b.entry.observedAt - a.entry.observedAt)
-  const selected = memberCandidates[0]
-  if (!selected) {
-    const standaloneAuthorities = new Set(candidates.map((item) => item.entry.control.controlNodeId))
-    if (standaloneAuthorities.size !== 1) return undefined
-  }
-  const resolved = selected ?? candidates.sort((a, b) => b.entry.observedAt - a.entry.observedAt)[0]
-  if (!resolved) return undefined
+  const resolved = candidates[0]
+  if (!resolved) return direct
+  if (
+    direct
+    && !direct.control.managed
+    && direct.observedAt >= resolved.entry.observedAt
+  ) return direct
+
   const mesh = resolved.node.meshId
     ? resolved.entry.control.meshes.find((candidate) => candidate.meshId === resolved.node.meshId)
     : undefined
