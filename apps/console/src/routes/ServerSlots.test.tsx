@@ -222,15 +222,17 @@ test('delete requires explicit confirmation and only succeeds through a live aut
     ok: true,
     payload: { ok: true },
   })) as PersistentMutator
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
   renderSlots([instance('live', slot())], mutate)
 
   await user.click(screen.getByRole('button', { name: 'Delete' }))
-  expect(confirm).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole('dialog', { name: 'Delete' })).toBeInTheDocument()
   expect(mutate).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('dialog', { name: 'Delete' })).not.toBeInTheDocument()
 
   await user.click(screen.getByRole('button', { name: 'Delete' }))
-  expect(confirm).toHaveBeenCalledTimes(2)
+  const dialog = screen.getByRole('dialog', { name: 'Delete' })
+  await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
   expect(mutate).toHaveBeenCalledWith(
     'alpha',
     '/actions/persistent/slots/delete',
@@ -261,8 +263,7 @@ test('expanded slot detail exposes session, generations and admission policy', a
   expect(screen.getByText('ws_alpha')).toBeInTheDocument()
   expect(screen.getByText('2026-09-30T12:02:00Z')).toBeInTheDocument()
   expect(screen.getByText('bearer')).toBeInTheDocument()
-  expect(screen.queryByText('la_alpha')).not.toBeInTheDocument()
-  expect(screen.getAllByText('Alpha Slot').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('la_alpha · Alpha Slot').length).toBeGreaterThan(0)
 })
 
 
@@ -470,7 +471,6 @@ test('unpaired projected slot can load audit through Fleet ingress while mutatio
 
 test('Persistent Access code stays visible on the slot card, copies exactly, and rotates', async () => {
   const user = userEvent.setup()
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
   const mutate = vi.fn()
     .mockResolvedValueOnce({
       ok: true,
@@ -498,10 +498,12 @@ test('Persistent Access code stays visible on the slot card, copies exactly, and
     { logical_agent_id: 'la_alpha' },
   )
   expect(screen.getByText('0042')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Copy Access code — Alpha Slot' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Copy Access code — Alpha · Alpha Slot' })).toBeEnabled()
   expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_alpha')).toContain('0042')
 
   await user.click(screen.getByRole('button', { name: 'Rotate Access code' }))
+  const rotateDialog = screen.getByRole('dialog', { name: 'Rotate Access code' })
+  await user.click(within(rotateDialog).getByRole('button', { name: 'Rotate Access code' }))
   expect(mutate).toHaveBeenLastCalledWith(
     'alpha',
     '/actions/persistent/slots/rotate-access-code',
@@ -518,7 +520,6 @@ test('Persistent Access code stays visible on the slot card, copies exactly, and
 
 test('existing Access generation without a local code offers rotation and stores the replacement', async () => {
   const user = userEvent.setup()
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
   const item = slot()
   item.access = { publicName: 'Alpha', accessGeneration: 3, status: 'active' }
   const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({
@@ -532,6 +533,7 @@ test('existing Access generation without a local code offers rotation and stores
 
   expect(screen.getByText('Access code is not stored on this device. Rotate it to obtain a new local copy.')).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Rotate Access code' }))
+  await user.click(within(screen.getByRole('dialog', { name: 'Rotate Access code' })).getByRole('button', { name: 'Rotate Access code' }))
 
   expect(screen.getByText('9007')).toBeInTheDocument()
   expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_alpha')).toContain('9007')
@@ -588,6 +590,7 @@ test('Legacy toggle is optimistic and rolls back visibly when authoritative muta
 
 test('slot creation exposes and stores the issued Access code in the same flow', async () => {
   const user = userEvent.setup()
+  const clipboard = vi.spyOn(navigator.clipboard, 'writeText')
   const mutate = vi.fn(async (_instanceId: string, path: string): Promise<PersistentMutationResult> => {
     if (path === '/actions/persistent/slots/create') {
       return {
@@ -604,13 +607,13 @@ test('slot creation exposes and stores the issued Access code in the same flow',
 
   renderSlots([instance('live', slot())], mutate)
 
-  await user.type(screen.getByRole('textbox', { name: 'Slot name' }), 'Builder')
   await user.click(screen.getByRole('button', { name: 'Create slot' }))
 
   await waitFor(() => expect(screen.getByText('4821')).toBeInTheDocument())
   expect(screen.getByRole('button', { name: 'Copy Access code — Builder' })).toBeEnabled()
   expect(localStorage.getItem('terminal-mcp.console.access-code.v1.la_new')).toContain('4821')
-  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/slots/create', { display_name: 'Builder' })
+  expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/slots/create', { display_name: '' })
+  expect(clipboard).toHaveBeenCalledWith('4821')
 })
 
 test('managed Mesh exposes Persistent slots without a physical-server switcher', () => {
@@ -626,7 +629,7 @@ test('managed Mesh exposes Persistent slots without a physical-server switcher',
   )
 
   expect(screen.queryByRole('combobox', { name: 'Switch server' })).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Alpha Slot' })).toHaveAttribute('href', '/meshes/mesh-prod/persistent/la_alpha')
+  expect(screen.getByRole('link', { name: 'la_alpha · Alpha Slot' })).toHaveAttribute('href', '/meshes/mesh-prod/persistent/la_alpha')
   expect(screen.queryByRole('link', { name: 'Mesh' })).not.toBeInTheDocument()
 })
 

@@ -349,9 +349,9 @@ class PersistentAgentStore:
         expected_revision: int,
         now: str | None = None,
     ) -> PersistentSlot:
+        # display_name remains a required API field, but an empty string is a valid
+        # user-facing value. public_name is the stable visible identity.
         name = display_name.strip()
-        if not name:
-            raise ValueError("display name is required")
         stamp = now or utc_text()
         async with self._connect("persistent_slot_rename") as db:
             cur = await db.execute(
@@ -523,23 +523,17 @@ class PersistentAgentStore:
                     ).fetchone()
                     if arm_row is None or arm_row[7] is not None or arm_row[8] is not None:
                         raise PersistentStoreError("slot_not_armed")
-                    if current >= parse_utc(arm_row[2]):
-                        await db.execute(
-                            "UPDATE logical_agent_arms SET revoked_at=? WHERE logical_agent_id=? "
-                            "AND generation=? AND revoked_at IS NULL",
-                            (stamp, logical_agent_id, int(arm_row[0])),
-                        )
-                        await db.execute(
-                            "UPDATE logical_agents SET state='suspended',"
-                            "slot_revision=slot_revision+1,"
-                            "updated_at=? WHERE logical_agent_id=? AND state='armed'",
-                            (stamp, logical_agent_id),
-                        )
-                        await db.commit()
-                        raise PersistentStoreError("arm_expired")
+                    # Ready/armed is durable. armed_until/captured_duration_seconds are
+                    # retained only as legacy audit data for existing databases; they are
+                    # not a TTL and never expire a Ready slot.
                     if int(arm_row[4]) != int(row[5]) or int(arm_row[5]) != int(row[6]):
                         raise PersistentStoreError("policy_incompatible")
-                    hard_expires_at = utc_text(current + timedelta(seconds=int(arm_row[3])))
+                    if session_duration_seconds is None or session_duration_seconds < 1:
+                        raise PersistentStoreError("policy_incompatible")
+                    # D starts at the actual work-session Start, not at Play/Create.
+                    hard_expires_at = utc_text(
+                        current + timedelta(seconds=int(session_duration_seconds))
+                    )
                 elif row[1] == "suspended":
                     pending_rearm = await (
                         await db.execute(
@@ -650,9 +644,7 @@ class PersistentAgentStore:
                     ),
                 )
                 await db.commit()
-            except PersistentStoreError as exc:
-                if exc.code == "arm_expired":
-                    raise
+            except PersistentStoreError:
                 await db.rollback()
                 raise
             except Exception:

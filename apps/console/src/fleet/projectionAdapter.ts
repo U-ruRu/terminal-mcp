@@ -136,7 +136,7 @@ function persistent(
     const session = workSession(latestSession(sessions, id))
     return {
       logicalAgentId: id,
-      displayName: text(p.display_name, id),
+      displayName: typeof p.display_name === 'string' ? p.display_name : id,
       state: text(p.state, 'suspended'),
       authorityNodeId: text(p.authority_node_id, item.authorityNodeId ?? source),
       authorityEpoch: integer(p.authority_epoch, item.authorityEpoch ?? 1),

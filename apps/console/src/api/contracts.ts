@@ -399,6 +399,16 @@ function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
           status: string(value.status, path + '.access.status'),
         }
       })()
+  const rawRearm = item.rearm
+  const rearm = rawRearm === undefined || rawRearm === null
+    ? undefined
+    : (() => {
+        const value = record(rawRearm, path + '.rearm')
+        return {
+          workSessionId: string(value.work_session_id, path + '.rearm.work_session_id'),
+          rearmAt: string(value.rearm_at, path + '.rearm.rearm_at'),
+        }
+      })()
   const rawSession = item.work_session
   const workSession = rawSession === undefined || rawSession === null
     ? undefined
@@ -430,6 +440,7 @@ function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
     updatedAt: string(slot.updated_at, path + '.slot.updated_at'),
     serverNow: string(item.server_now, path + '.server_now'),
     workSession,
+    rearm,
     claims: array(item.claims ?? [], path + '.claims').map((raw, index) => {
       const claim = record(raw, `${path}.claims[${index}]`)
       return {
