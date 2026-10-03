@@ -459,6 +459,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   margin-top: calc(var(--space-2) * -1);
   color: var(--color-stale, var(--color-muted));
 }
+.server-card-age-slot { min-height: var(--font-caption-line, 16px); }
 
 .server-card-chevron {
   position: absolute;
