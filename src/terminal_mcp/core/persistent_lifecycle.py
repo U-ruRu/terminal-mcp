@@ -186,10 +186,12 @@ class PersistentLifecycleCoordinator:
             raise PersistentLifecycleError("slot_not_found")
         selector = await self.store.active_selector(logical_agent_id)
         session = await self.store.active_session_for_slot(logical_agent_id)
+        pending_rearm = await self.store.pending_rearm(logical_agent_id)
         return {
             "slot": asdict(slot),
             "selector": selector,
             "work_session": asdict(session) if session else None,
+            "rearm": pending_rearm,
             "server_now": utc_text(),
         }
 

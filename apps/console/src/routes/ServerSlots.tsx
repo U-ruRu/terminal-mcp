@@ -53,22 +53,54 @@ function slotTiming(slot: PersistentSlotReadModel, authorityNowMs: number, durat
 
 export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFleetControl, mutateFleetControl }: { instances: FleetInstanceView[]; mutatePersistent?: PersistentMutator; loadSlotAudit?: (instanceId: string, logicalAgentId: string) => Promise<PersistentAuditReadModel[]>; loadFleetControl?: FleetControlLoader; mutateFleetControl?: FleetControlMutator }) {
   const { t, locale } = useI18n(); const { instanceId: routeInstanceId = '', logicalAgentId, meshId = '' } = useParams()
+  const knownMeshMemberOrigins = new Set(
+    meshId
+      ? instances.flatMap((candidate) => {
+          const control = loadCachedFleetControlForProfile(candidate.profile.instanceId, candidate.profile.origin)?.control
+          return control?.managed
+            ? control.nodes.filter((node) => node.meshId === meshId).map((node) => normalizedOrigin(node.origin))
+            : []
+        })
+      : [],
+  )
   const meshCandidates = meshId
     ? instances.map((candidate) => ({
         candidate,
         control: loadCachedFleetControlForProfile(candidate.profile.instanceId, candidate.profile.origin)?.control,
       })).filter(({ candidate, control }) => {
-        if (!control?.managed) return false
+        if (!control?.managed) return knownMeshMemberOrigins.has(normalizedOrigin(candidate.profile.origin))
         const localNode = control.nodes.find((node) => (
           node.nodeId === control.nodeId
           || normalizedOrigin(node.origin) === normalizedOrigin(candidate.profile.origin)
         ))
-        return control.mesh?.meshId === meshId || localNode?.meshId === meshId
+        return control.mesh?.meshId === meshId
+          || localNode?.meshId === meshId
+          || knownMeshMemberOrigins.has(normalizedOrigin(candidate.profile.origin))
       }).sort((a, b) => Number(b.candidate.runtime.authStatus === 'connected') - Number(a.candidate.runtime.authStatus === 'connected'))
     : []
   const instance = meshId ? meshCandidates[0]?.candidate : instances.find((item) => item.profile.instanceId === routeInstanceId)
   const instanceId = instance?.profile.instanceId ?? routeInstanceId
-  const persistent = instance?.runtime.realtime?.snapshot?.persistent; const slots = persistent?.slots ?? []; const selected = logicalAgentId ? slots.find((slot) => slot.logicalAgentId === logicalAgentId) : undefined
+  const persistent = instance?.runtime.realtime?.snapshot?.persistent
+  const meshSlotEntries = new Map<string, { slot: PersistentSlotReadModel; instanceId: string; authorityMatch: boolean }>()
+  if (meshId) {
+    for (const { candidate, control } of meshCandidates) {
+      for (const slot of candidate.runtime.realtime?.snapshot?.persistent?.slots ?? []) {
+        const authorityMatch = control?.nodeId === slot.authorityNodeId || candidate.profile.instanceId === slot.authorityNodeId
+        const prior = meshSlotEntries.get(slot.logicalAgentId)
+        if (!prior || (authorityMatch && !prior.authorityMatch) || (authorityMatch === prior.authorityMatch && slot.slotRevision > prior.slot.slotRevision)) {
+          meshSlotEntries.set(slot.logicalAgentId, { slot, instanceId: candidate.profile.instanceId, authorityMatch })
+        }
+      }
+    }
+  }
+  const slotEntries = meshId
+    ? [...meshSlotEntries.values()]
+    : (persistent?.slots ?? []).map((slot) => ({ slot, instanceId, authorityMatch: true }))
+  const slots = slotEntries.map(({ slot }) => slot).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.slotRevision - a.slotRevision)
+  const selectedEntry = logicalAgentId ? slotEntries.find(({ slot }) => slot.logicalAgentId === logicalAgentId) : undefined
+  const selected = selectedEntry?.slot
+  const selectedInstanceId = selectedEntry?.instanceId ?? instanceId
+  const instanceIdForSlot = (slot: PersistentSlotReadModel): string => slotEntries.find((entry) => entry.slot.logicalAgentId === slot.logicalAgentId)?.instanceId ?? instanceId
   const [clock, setClock] = useState(() => Date.now()); const [anchor, setAnchor] = useState(() => ({ server: '', serverMs: Date.now(), localMs: Date.now() })); const [busy, setBusy] = useState(''); const [message, setMessage] = useState(''); const [createName, setCreateName] = useState(''); const [reassignTarget, setReassignTarget] = useState('')
   const [accessCodeRevision, setAccessCodeRevision] = useState(0)
   const [createdAccess, setCreatedAccess] = useState<{ logicalAgentId: string; displayName: string; code: string; generation: number } | null>(null)
@@ -77,6 +109,7 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   const [fleetControl, setFleetControl] = useState<ManagedFleetControlReadModel | null>(() => loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)?.control ?? null)
   const [fleetControlFreshness, setFleetControlFreshness] = useState<FleetControlFreshness>(() => loadCachedFleetControlForProfile(instanceId, instance?.profile.origin) ? 'stale' : 'unknown')
   const [legacyOverride, setLegacyOverride] = useState<{ value: boolean; phase: 'pending' | 'confirmed' | 'failed' } | null>(null)
+  const [confirmAction, setConfirmAction] = useState<{ kind: 'rotate' | 'delete'; logicalAgentId: string } | null>(null)
   useEffect(() => {
     let cancelled = false
     const handle = window.setTimeout(() => {
@@ -108,16 +141,16 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   const selectedLogicalAgentId = selected?.logicalAgentId
   useEffect(() => {
     if (!selectedLogicalAgentId || !loadSlotAudit) return
-    const key = instanceId + ':' + selectedLogicalAgentId
+    const key = selectedInstanceId + ':' + selectedLogicalAgentId
     let cancelled = false
-    void loadSlotAudit(instanceId, selectedLogicalAgentId)
+    void loadSlotAudit(selectedInstanceId, selectedLogicalAgentId)
       .then((values) => { if (!cancelled) setLoadedAudit({ key, values }) })
       .catch((error: unknown) => {
         if (!cancelled) setLoadedAudit({ key, error: error instanceof Error ? error.message : 'slot_audit_unavailable' })
       })
     return () => { cancelled = true }
-  }, [instanceId, loadSlotAudit, selectedLogicalAgentId])
-  const selectedAuditKey = selected ? instanceId + ':' + selected.logicalAgentId : ''
+  }, [loadSlotAudit, selectedInstanceId, selectedLogicalAgentId])
+  const selectedAuditKey = selected ? selectedInstanceId + ':' + selected.logicalAgentId : ''
   const selectedAudit = loadedAudit.key === selectedAuditKey && loadedAudit.values
     ? loadedAudit.values
     : (selected?.audit ?? [])
@@ -162,10 +195,28 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   // Read freshness and write reachability are separate planes. A cached projection must not
   // suppress an authenticated direct-authority mutation attempt.
   const canMutate = Boolean(mutatePersistent && persistent?.enabled && instance?.runtime.authStatus === 'connected')
+  const canMutateSlot = (slot: PersistentSlotReadModel) => {
+    const target = instances.find((candidate) => candidate.profile.instanceId === instanceIdForSlot(slot))
+    return Boolean(mutatePersistent && target?.runtime.authStatus === 'connected')
+  }
   const policyCanMutate = managedPolicy
     ? Boolean(mutateFleetControl && managedAuthorityInstanceId && managedAuthorityInstance?.runtime.authStatus === 'connected')
     : standaloneConfirmed ? canMutate : false
-  const mutation = async (key: string, path: string, body: Record<string, unknown>) => { if (!canMutate || !mutatePersistent) { setMessage(t('slots.liveRequired')); return false } setBusy(key); setMessage(''); try { const result = await mutatePersistent(instanceId, path, body); if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return false } setMessage(t('slots.mutationApplied')); return true } catch (error) { setMessage(error instanceof Error ? error.message : t('slots.mutationFailed')); return false } finally { setBusy('') } }
+  const mutationAt = async (targetInstanceId: string, key: string, path: string, body: Record<string, unknown>) => {
+    const target = instances.find((candidate) => candidate.profile.instanceId === targetInstanceId)
+    if (!mutatePersistent || target?.runtime.authStatus !== 'connected') { setMessage(t('slots.liveRequired')); return false }
+    setBusy(key); setMessage('')
+    try {
+      const result = await mutatePersistent(targetInstanceId, path, body)
+      if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return false }
+      setMessage(t('slots.mutationApplied'))
+      return true
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t('slots.mutationFailed'))
+      return false
+    } finally { setBusy('') }
+  }
+  const mutation = (key: string, path: string, body: Record<string, unknown>) => mutationAt(instanceId, key, path, body)
   const managedPolicyMutation = async (key: string, path: string, body: Record<string, unknown>) => {
     if (!mutateFleetControl || !managedAuthorityInstanceId || managedAuthorityInstance?.runtime.authStatus !== 'connected') { setMessage(t('slots.liveRequired')); return false }
     setBusy(key); setMessage('')
@@ -185,7 +236,7 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     } catch (error) { setMessage(error instanceof Error ? error.message : t('slots.mutationFailed')); return false }
     finally { setBusy('') }
   }
-  const mutateSlot = (slot: PersistentSlotReadModel, action: 'play' | 'suspend' | 'delete') => mutation(`${slot.logicalAgentId}:${action}`, `/actions/persistent/slots/${action}`, { logical_agent_id: slot.logicalAgentId, expected_revision: slot.slotRevision, idempotency_key: idempotencyKey() })
+  const mutateSlot = (slot: PersistentSlotReadModel, action: 'play' | 'suspend' | 'delete') => mutationAt(instanceIdForSlot(slot), `${slot.logicalAgentId}:${action}`, `/actions/persistent/slots/${action}`, { logical_agent_id: slot.logicalAgentId, expected_revision: slot.slotRevision, idempotency_key: idempotencyKey() })
   const timingPolicyLocked = slots.some((slot) => ['armed', 'active', 'stopping'].includes(slot.state))
   const saveTimingPolicy = async () => {
     const durationSeconds = parseDuration(draft.duration, locale); const warningAfterSeconds = parseDuration(draft.warning, locale); const alertAfterSeconds = parseDuration(draft.alert, locale); const rearmAfterSeconds = parseDuration(draft.rearm, locale)
@@ -239,6 +290,9 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   if (!instance) return meshId
     ? <FeedbackState variant="partial" title={t('title.mesh')} detail={t('slots.liveRequired')} />
     : <Navigate to="/" replace />
+  const writeClipboard = async (code: string): Promise<boolean> => {
+    try { await navigator.clipboard.writeText(code); return true } catch { return false }
+  }
   const createSlot = async (displayName: string) => {
     if (!canMutate || !mutatePersistent) { setMessage(t('slots.liveRequired')); return }
     setBusy('create'); setMessage(''); setCreatedAccess(null)
@@ -262,7 +316,8 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
         setAccessCodeRevision((value) => value + 1)
         setCreatedAccess({ logicalAgentId, displayName: publicName, code, generation })
         setCreateName('')
-        setMessage(t('slots.mutationApplied'))
+        const copied = await writeClipboard(code)
+        setMessage(copied ? t('slots.mutationApplied') + ' ' + t('slots.accessCodeCopied') : t('slots.mutationApplied') + ' ' + t('slots.copyFailed'))
         return
       }
       setMessage(t('slots.accessCodeUnavailable'))
@@ -273,15 +328,14 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     }
   }
   const mutateAccess = async (slot: PersistentSlotReadModel, action: 'setup' | 'rotate') => {
-    if (!canMutate || !mutatePersistent) { setMessage(t('slots.liveRequired')); return }
-    if (action === 'rotate' && !window.confirm(slot.displayName + ': ' + t('slots.rotateAccessConfirm'))) return
+    if (!canMutateSlot(slot) || !mutatePersistent) { setMessage(t('slots.liveRequired')); return }
     const path = action === 'setup'
       ? '/actions/persistent/slots/migrate-access'
       : '/actions/persistent/slots/rotate-access-code'
     setBusy(`${slot.logicalAgentId}:access:${action}`)
     setMessage('')
     try {
-      const result = await mutatePersistent(instanceId, path, { logical_agent_id: slot.logicalAgentId })
+      const result = await mutatePersistent(instanceIdForSlot(slot), path, { logical_agent_id: slot.logicalAgentId })
       if (!result.ok) { setMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return }
       const raw = result.payload.access
       const access = raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -295,7 +349,9 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
       if (/^[0-9]{4}$/.test(code) && generation > 0) {
         saveAccessCode(slot.logicalAgentId, { code, publicName, generation })
         setAccessCodeRevision((value) => value + 1)
-        setMessage(t('slots.mutationApplied'))
+        if (createdAccess?.logicalAgentId === slot.logicalAgentId) setCreatedAccess(null)
+        const copied = await writeClipboard(code)
+        setMessage(copied ? t('slots.mutationApplied') + ' ' + t('slots.accessCodeCopied') : t('slots.mutationApplied') + ' ' + t('slots.copyFailed'))
         return
       }
       setMessage(
@@ -310,43 +366,68 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     }
   }
   const copyAccessCode = async (code: string) => {
-    try {
-      await navigator.clipboard.writeText(code)
-      setMessage(t('slots.accessCodeCopied'))
-    } catch {
-      setMessage(t('slots.copyFailed'))
-    }
+    setMessage(await writeClipboard(code) ? t('slots.accessCodeCopied') : t('slots.copyFailed'))
   }
   const storedAccessCode = (slot: PersistentSlotReadModel) => {
     void accessCodeRevision
     return loadAccessCode(slot.logicalAgentId, slot.access?.accessGeneration ?? 0)
   }
-  const slotHref = (slot: PersistentSlotReadModel) => meshId ? meshPersistentSlotRoute(meshId, slot.logicalAgentId) : slotRoute(instanceId, slot.logicalAgentId)
+  const slotIdentity = (slot: PersistentSlotReadModel): string => {
+    const publicName = slot.access?.publicName ?? storedAccessCode(slot)?.publicName ?? slot.logicalAgentId
+    const displayName = slot.displayName.trim()
+    return displayName && displayName !== publicName ? publicName + ' · ' + displayName : publicName
+  }
+  const slotStateLabel = (slot: PersistentSlotReadModel): string => {
+    if (slot.state === 'suspended' && slot.rearm) {
+      const remaining = Math.max(0, Math.floor((Date.parse(slot.rearm.rearmAt) - authorityNowMs) / 1000))
+      return t('slots.rearmAfterSeconds') + ': ' + formatDuration(remaining, locale)
+    }
+    return localizedSlotState(t, slot.state)
+  }
+  const confirmSlot = confirmAction ? slots.find((slot) => slot.logicalAgentId === confirmAction.logicalAgentId) : undefined
+  const performConfirmedAction = async () => {
+    const action = confirmAction
+    const slot = confirmSlot
+    if (!action || !slot) { setConfirmAction(null); return }
+    setConfirmAction(null)
+    if (action.kind === 'rotate') {
+      await mutateAccess(slot, 'rotate')
+      return
+    }
+    const ok = await mutateSlot(slot, 'delete')
+    if (ok) {
+      clearAccessCode(slot.logicalAgentId)
+      setAccessCodeRevision((value) => value + 1)
+      if (createdAccess?.logicalAgentId === slot.logicalAgentId) setCreatedAccess(null)
+    }
+  }
+  const slotHref = (slot: PersistentSlotReadModel) => meshId ? meshPersistentSlotRoute(meshId, slot.logicalAgentId) : slotRoute(instanceIdForSlot(slot), slot.logicalAgentId)
   return <section className="stack compact-operational-surface slots-surface" aria-label={t('nav.slots')}>
     <p className="muted page-supporting-copy">{t('slots.description')}</p>
     <div className="operational-status-slot" aria-live="polite">{instance.runtime.status !== 'live' ? <div className="attention-strip" role="status">{t('slots.cachedReadOnly')} {localizedRuntimeState(t, instance.runtime.status)}.</div> : null}</div>
     {persistent && !persistent.enabled && <FeedbackState variant="empty" title={t('slots.disabled')} />}
     {persistent?.enabled && !persistent.available && <FeedbackState variant="error" title={t('slots.unavailable')} detail={persistent.error ?? undefined} />}
     {(message || (persistent?.enabled && loadFleetControl && !fleetControl)) ? <div className="floating-status-stack" aria-live="polite">{message ? <div className="attention-strip" role="status"><span>{message}</span></div> : null}{persistent?.enabled && loadFleetControl && !fleetControl ? <div className="attention-strip" role="status">{t('slots.policyScope')}: {t('slots.policyScopeUnknown')}</div> : null}</div> : null}
+    {confirmAction && confirmSlot ? <div className="floating-status-stack confirmation-surface"><div className="panel" role="dialog" aria-modal="true" aria-label={confirmAction.kind === 'rotate' ? t('slots.rotateAccessCode') : t('slots.delete')}><p><strong>{slotIdentity(confirmSlot)}</strong></p><p>{confirmAction.kind === 'rotate' ? t('slots.rotateAccessConfirm') : t('slots.deleteConfirm')}</p><div className="server-actions"><button type="button" className="secondary-action" onClick={() => setConfirmAction(null)}>{t('slots.confirmCancel')}</button><button type="button" className={confirmAction.kind === 'delete' ? 'destructive-action' : 'primary-action'} onClick={() => void performConfirmedAction()}>{confirmAction.kind === 'delete' ? t('slots.delete') : t('slots.rotateAccessCode')}</button></div></div></div> : null}
     {persistent?.enabled && effectivePolicy && (persistent.policy.policyControlSupported || managedPolicy) && <article className="surface-section policy-controls"><div className="section-heading"><div><p className="eyebrow">{t('slots.policy')}</p><h3>{t('slots.policyControls')}</h3><p className="muted">{t('slots.policyScope')}: {managedPolicy ? `${t('slots.policyScopeManaged')}${managedMeshName ? ` · ${managedMeshName}` : ''}${fleetControlFreshness === 'stale' ? ` · ${t('connections.stale')}` : ''}` : t('slots.policyScopeLocal')}</p></div></div><p className="muted">{t('slots.policyValueHint')}</p><div className="policy-controls-grid"><label className="ui-field"><span>{t('slots.durationSeconds')}</span><input aria-label={t('slots.durationSeconds')} inputMode="text" type="text" value={draft.duration} onChange={(event) => setPolicyDraft({ ...draft, duration: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.warningAfterSeconds')}</span><input aria-label={t('slots.warningAfterSeconds')} inputMode="text" type="text" value={draft.warning} onChange={(event) => setPolicyDraft({ ...draft, warning: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.alertAfterSeconds')}</span><input aria-label={t('slots.alertAfterSeconds')} inputMode="text" type="text" value={draft.alert} onChange={(event) => setPolicyDraft({ ...draft, alert: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label><label className="ui-field"><span>{t('slots.rearmAfterSeconds')}</span><input aria-label={t('slots.rearmAfterSeconds')} inputMode="text" type="text" value={draft.rearm} onChange={(event) => setPolicyDraft({ ...draft, rearm: event.target.value })} disabled={!policyCanMutate || Boolean(busy)} /></label></div><div className="server-actions"><button type="button" className="primary-action" disabled={!policyCanMutate || Boolean(busy)} onClick={() => void saveTimingPolicy()}>{t('slots.savePolicy')}</button>{managedPolicy && <button type="button" className="secondary-action" disabled={!policyCanMutate || Boolean(busy)} onClick={() => void resetManagedPolicy()}>{t('slots.resetPolicy')}</button>}</div>{!managedPolicy && timingPolicyLocked && <p className="muted">{t('slots.policyLocked')}</p>}<label className="policy-toggle"><input aria-label={t('slots.legacyToggle')} type="checkbox" checked={effectiveLegacyAdmission ?? false} disabled={!policyCanMutate || Boolean(busy)} onChange={() => void toggleLegacy()} /><span><strong>{t('slots.legacyToggle')}</strong><small>{t('slots.legacyHint')}</small></span></label><p className={'mutation-status-slot ' + (legacyOverride?.phase === 'failed' ? 'connection-error' : 'muted')} role={legacyOverride ? 'status' : undefined} aria-live={legacyOverride ? 'polite' : undefined}>{legacyOverride?.phase === 'pending' ? t('connections.pending') : legacyOverride?.phase === 'confirmed' ? t('connections.confirmed') : legacyOverride?.phase === 'failed' ? t('connections.failed') : '\u00a0'}</p></article>}
-    {persistent?.enabled && <form className="slot-create surface-section" onSubmit={(event) => { event.preventDefault(); const displayName = createName.trim(); if (!displayName) return; void createSlot(displayName) }}><label className="ui-field"><span>{t('slots.createName')}</span><input value={createName} onChange={(event) => setCreateName(event.target.value)} maxLength={120} /></label><button type="submit" className="primary-action" disabled={!canMutate || busy === 'create'}>{t('slots.create')}</button>{createdAccess ? <div className="slot-access-code" role="status"><span>{createdAccess.displayName} · {t('slots.accessCodeTitle')}</span><code>{createdAccess.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + createdAccess.displayName} onClick={() => void copyAccessCode(createdAccess.code)}>{t('slots.copyAccessCode')}</button></div> : null}</form>}
-    {selected && persistent && <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{selected.displayName}</h3></div><span className="chip">{localizedSlotState(t, selected.state)}</span></div><div className="slot-access-code"><span>{t('slots.accessCodeTitle')}</span>{storedAccessCode(selected) ? <><code>{storedAccessCode(selected)!.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + selected.displayName} onClick={() => void copyAccessCode(storedAccessCode(selected)!.code)}>{t('slots.copyAccessCode')}</button></> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</div><details className="technical-details"><summary>{t('slots.technicalDetails')}</summary><dl className="slot-details-grid"><div><dt>{t('slots.rawState')}</dt><dd><code>{selected.state}</code></dd></div><div><dt>{t('slots.legacySelector')}</dt><dd><code>{selected.selector}</code></dd></div><div><dt>{t('slots.selectorGeneration')}</dt><dd>{selected.selectorGeneration}</dd></div><div><dt>{t('slots.authGeneration')}</dt><dd>{selected.authGeneration}</dd></div><div><dt>{t('slots.accessPublicName')}</dt><dd>{selected.access?.publicName ?? storedAccessCode(selected)?.publicName ?? selected.displayName}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.access?.accessGeneration ?? 0}</dd></div><div><dt>{t('slots.accessCodeTitle')}</dt><dd>{storedAccessCode(selected) ? <span className="access-code-inline"><code>{storedAccessCode(selected)?.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + selected.displayName} onClick={() => void copyAccessCode(storedAccessCode(selected)!.code)}>{t('slots.copyAccessCode')}</button></span> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.authorityNodeId} · e{selected.authorityEpoch}</dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slotRevision}</dd></div><div><dt>{t('slots.session')}</dt><dd>{activeSession ? <code>{activeSession.workSessionId}</code> : t('slots.noSession')}</dd></div><div><dt>{t('slots.sessionEpoch')}</dt><dd>{activeSession?.sessionEpoch ?? '—'}</dd></div><div><dt>{t('slots.hardExpiresAt')}</dt><dd>{activeSession?.hardExpiresAt ?? '—'}</dd></div><div><dt>{t('slots.policy')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : <>{t('slots.durationSeconds')} {formatDuration(persistent.policy.durationSeconds, locale)} · {t('slots.warningAfterSeconds')} {formatDuration(persistent.policy.warningAfterSeconds, locale)} · {t('slots.alertAfterSeconds')} {formatDuration(persistent.policy.alertAfterSeconds, locale)} · {t('slots.rearmAfterSeconds')} {formatDuration(persistent.policy.rearmAfterSeconds, locale)}</>}</dd></div><div><dt>{t('slots.manualRearm')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.manualRearm ? t('slots.yes') : t('slots.no')}</dd></div><div><dt>{t('slots.admissionMode')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.admissionMode}</dd></div><div><dt>{t('slots.legacyAdmission')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.legacyAdmissionEnabled ? t('slots.yes') : t('slots.no')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.createdAt}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.updatedAt}</dd></div><div><dt>{t('slots.fleet')}</dt><dd>{selected.attachments.length ? selected.attachments.map((attachment) => <div key={attachment.nodeAttachmentId}><span>{attachment.nodeInstanceId}</span> · <code>{attachment.nodeAttachmentId}</code></div>) : t('slots.noAttachments')}</dd></div><div><dt>{t('slots.audit')}</dt><dd>{selectedAudit.length ? selectedAudit.map((entry) => <div key={entry.id}><code>#{entry.id}</code> · <code>{entry.principalId}</code> · <code>{entry.eventType}</code></div>) : t('slots.noAudit')}</dd></div></dl></details><div className="server-actions">{!accessReady && <button type="button" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateAccess(selected, 'setup')}>{t('slots.setupAccessCode')}</button>}{accessReady && <button type="button" className="secondary-action" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateAccess(selected, 'rotate')}>{t('slots.rotateAccessCode')}</button>}</div>
-      <div className="slot-subsection"><h3>{t('slots.claims')}</h3>{selected.claims.length ? selected.claims.map((claim) => <div className="slot-claim" key={`${claim.namespace}/${claim.taskId}`}><Link className="text-link" to={taskRoute(instanceId, claim.namespace, claim.taskId)}>{claim.namespace}/{claim.taskId}</Link><span>{claim.priority} · {localizedClaimState(t, claim.state)}</span>{activeSession && <div className="server-actions"><button type="button" disabled={!canMutate || Boolean(busy)} onClick={() => void mutation(`release:${claim.namespace}/${claim.taskId}`, '/actions/persistent/claims/release', { namespace: claim.namespace, task_id: claim.taskId, logical_agent_id: selected.logicalAgentId, work_session_id: activeSession.workSessionId, session_epoch: activeSession.sessionEpoch })}>{t('slots.releaseClaim')}</button>{otherSlots.length > 0 && <><select aria-label={t('slots.reassignTarget')} value={reassignTarget} onChange={(event) => setReassignTarget(event.target.value)}><option value="">{t('slots.chooseTarget')}</option>{otherSlots.map((slot) => <option key={slot.logicalAgentId} value={slot.logicalAgentId}>{slot.displayName}</option>)}</select><button type="button" disabled={!canMutate || !reassignTarget || Boolean(busy)} onClick={() => void mutation(`reassign:${claim.namespace}/${claim.taskId}`, '/actions/persistent/claims/reassign', { namespace: claim.namespace, task_id: claim.taskId, logical_agent_id: selected.logicalAgentId, to_logical_agent_id: reassignTarget, work_session_id: activeSession.workSessionId, session_epoch: activeSession.sessionEpoch, expected_revision: selected.slotRevision, idempotency_key: idempotencyKey() })}>{t('slots.reassignClaim')}</button></>}</div>}</div>) : <FeedbackState variant="empty" title={t('slots.noClaims')} />}</div>
+    {persistent?.enabled && <form className="slot-create surface-section" onSubmit={(event) => { event.preventDefault(); void createSlot(createName.trim()) }}><label className="ui-field"><span>{t('slots.createName')}</span><input value={createName} onChange={(event) => setCreateName(event.target.value)} maxLength={120} /></label><button type="submit" className="primary-action" disabled={!canMutate || busy === 'create'}>{t('slots.create')}</button>{createdAccess ? <div className="slot-access-code" role="status"><span>{createdAccess.displayName} · {t('slots.accessCodeTitle')}</span><code>{createdAccess.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + createdAccess.displayName} onClick={() => void copyAccessCode(createdAccess.code)}>{t('slots.copyAccessCode')}</button></div> : null}</form>}
+    {selected && persistent && <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{slotIdentity(selected)}</h3></div><span className="chip">{slotStateLabel(selected)}</span></div><div className="slot-access-code"><span>{t('slots.accessCodeTitle')}</span>{storedAccessCode(selected) ? <><code>{storedAccessCode(selected)!.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + slotIdentity(selected)} onClick={() => void copyAccessCode(storedAccessCode(selected)!.code)}>{t('slots.copyAccessCode')}</button></> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</div><details className="technical-details"><summary>{t('slots.technicalDetails')}</summary><dl className="slot-details-grid"><div><dt>{t('slots.rawState')}</dt><dd><code>{selected.state}</code></dd></div><div><dt>{t('slots.legacySelector')}</dt><dd><code>{selected.selector}</code></dd></div><div><dt>{t('slots.selectorGeneration')}</dt><dd>{selected.selectorGeneration}</dd></div><div><dt>{t('slots.authGeneration')}</dt><dd>{selected.authGeneration}</dd></div><div><dt>{t('slots.accessPublicName')}</dt><dd>{selected.access?.publicName ?? storedAccessCode(selected)?.publicName ?? slotIdentity(selected)}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.access?.accessGeneration ?? 0}</dd></div><div><dt>{t('slots.accessCodeTitle')}</dt><dd>{storedAccessCode(selected) ? <span className="access-code-inline"><code>{storedAccessCode(selected)?.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + slotIdentity(selected)} onClick={() => void copyAccessCode(storedAccessCode(selected)!.code)}>{t('slots.copyAccessCode')}</button></span> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.authorityNodeId} · e{selected.authorityEpoch}</dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slotRevision}</dd></div><div><dt>{t('slots.session')}</dt><dd>{activeSession ? <code>{activeSession.workSessionId}</code> : t('slots.noSession')}</dd></div><div><dt>{t('slots.sessionEpoch')}</dt><dd>{activeSession?.sessionEpoch ?? '—'}</dd></div><div><dt>{t('slots.hardExpiresAt')}</dt><dd>{activeSession?.hardExpiresAt ?? '—'}</dd></div><div><dt>{t('slots.policy')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : <>{t('slots.durationSeconds')} {formatDuration(persistent.policy.durationSeconds, locale)} · {t('slots.warningAfterSeconds')} {formatDuration(persistent.policy.warningAfterSeconds, locale)} · {t('slots.alertAfterSeconds')} {formatDuration(persistent.policy.alertAfterSeconds, locale)} · {t('slots.rearmAfterSeconds')} {formatDuration(persistent.policy.rearmAfterSeconds, locale)}</>}</dd></div><div><dt>{t('slots.manualRearm')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.manualRearm ? t('slots.yes') : t('slots.no')}</dd></div><div><dt>{t('slots.admissionMode')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.admissionMode}</dd></div><div><dt>{t('slots.legacyAdmission')}</dt><dd>{persistent.policy.projected ? t('common.unavailable') : persistent.policy.legacyAdmissionEnabled ? t('slots.yes') : t('slots.no')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.createdAt}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.updatedAt}</dd></div><div><dt>{t('slots.fleet')}</dt><dd>{selected.attachments.length ? selected.attachments.map((attachment) => <div key={attachment.nodeAttachmentId}><span>{attachment.nodeInstanceId}</span> · <code>{attachment.nodeAttachmentId}</code></div>) : t('slots.noAttachments')}</dd></div><div><dt>{t('slots.audit')}</dt><dd>{selectedAudit.length ? selectedAudit.map((entry) => <div key={entry.id}><code>#{entry.id}</code> · <code>{entry.principalId}</code> · <code>{entry.eventType}</code></div>) : t('slots.noAudit')}</dd></div></dl></details><div className="server-actions">{!accessReady && <button type="button" disabled={!canMutateSlot(selected) || Boolean(busy)} onClick={() => void mutateAccess(selected, 'setup')}>{t('slots.setupAccessCode')}</button>}{accessReady && <button type="button" className="secondary-action" disabled={!canMutateSlot(selected) || Boolean(busy)} onClick={() => setConfirmAction({ kind: 'rotate', logicalAgentId: selected.logicalAgentId })}>{t('slots.rotateAccessCode')}</button>}</div>
+      <div className="slot-subsection"><h3>{t('slots.claims')}</h3>{selected.claims.length ? selected.claims.map((claim) => <div className="slot-claim" key={`${claim.namespace}/${claim.taskId}`}><Link className="text-link" to={taskRoute(selectedInstanceId, claim.namespace, claim.taskId)}>{claim.namespace}/{claim.taskId}</Link><span>{claim.priority} · {localizedClaimState(t, claim.state)}</span>{activeSession && <div className="server-actions"><button type="button" disabled={!canMutate || Boolean(busy)} onClick={() => void mutationAt(selectedInstanceId, `release:${claim.namespace}/${claim.taskId}`, '/actions/persistent/claims/release', { namespace: claim.namespace, task_id: claim.taskId, logical_agent_id: selected.logicalAgentId, work_session_id: activeSession.workSessionId, session_epoch: activeSession.sessionEpoch })}>{t('slots.releaseClaim')}</button>{otherSlots.length > 0 && <><select aria-label={t('slots.reassignTarget')} value={reassignTarget} onChange={(event) => setReassignTarget(event.target.value)}><option value="">{t('slots.chooseTarget')}</option>{otherSlots.map((slot) => <option key={slot.logicalAgentId} value={slot.logicalAgentId}>{slotIdentity(slot)}</option>)}</select><button type="button" disabled={!canMutate || !reassignTarget || Boolean(busy)} onClick={() => void mutationAt(selectedInstanceId, `reassign:${claim.namespace}/${claim.taskId}`, '/actions/persistent/claims/reassign', { namespace: claim.namespace, task_id: claim.taskId, logical_agent_id: selected.logicalAgentId, to_logical_agent_id: reassignTarget, work_session_id: activeSession.workSessionId, session_epoch: activeSession.sessionEpoch, expected_revision: selected.slotRevision, idempotency_key: idempotencyKey() })}>{t('slots.reassignClaim')}</button></>}</div>}</div>) : <FeedbackState variant="empty" title={t('slots.noClaims')} />}</div>
       <div className="slot-subsection"><h3>{t('slots.fleet')}</h3>{selected.attachments.length ? selected.attachments.map((attachment) => <p key={attachment.nodeAttachmentId}>{attachment.nodeInstanceId}</p>) : <FeedbackState variant="empty" title={t('slots.noAttachments')} />}</div><div className="slot-subsection"><h3>{t('slots.audit')}</h3>{selectedAudit.length ? <ul className="slot-audit">{selectedAudit.map((entry) => <li key={entry.id}><strong>{localizedAuditEvent(t, entry.eventType)}</strong><span>{entry.createdAt}</span></li>)}</ul> : <p className="muted">{t('slots.noAudit')}</p>}{auditError ? <p className="muted" role="status">{auditError}</p> : null}</div></article>}
     <div className="slot-grid">{slots.map((slot) => {
       const timing = slotTiming(slot, authorityNowMs, persistent?.policy.durationSeconds ?? 0, persistent?.policy.warningAfterSeconds ?? 0, persistent?.policy.alertAfterSeconds ?? 0, locale)
       const saved = storedAccessCode(slot)
       const slotAccessReady = (slot.access?.accessGeneration ?? 0) > 0 || saved !== null
       return <article className={'panel slot-card slot-cue-' + timing.cue} key={slot.logicalAgentId}>
-        <div className="section-heading"><Link className="text-link" to={slotHref(slot)}>{slot.displayName}</Link><span className="chip">{localizedSlotState(t, slot.state)}</span></div>
+        <div className="section-heading"><Link className="text-link" to={slotHref(slot)}>{slotIdentity(slot)}</Link><span className="chip">{slotStateLabel(slot)}</span></div>
         {slot.workSession ? <p className="slot-time" role={timing.cue === 'normal' ? undefined : 'status'}><strong>{timing.cue === 'alert' ? t('slots.alert') : timing.cue === 'warning' ? t('slots.warning') : t('slots.time')}</strong> {timing.text}</p> : null}
-        <div className="slot-access-code"><span>{t('slots.accessCodeTitle')}</span>{saved ? <><code>{saved.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + slot.displayName} onClick={() => void copyAccessCode(saved.code)}>{t('slots.copyAccessCode')}</button></> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</div>
+        <div className="slot-access-code"><span>{t('slots.accessCodeTitle')}</span>{saved ? <><code>{saved.code}</code><button type="button" className="secondary-action" aria-label={t('slots.copyAccessCode') + ' — ' + slotIdentity(slot)} onClick={() => void copyAccessCode(saved.code)}>{t('slots.copyAccessCode')}</button></> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</div>
         <div className="server-actions">
-          {['suspended', 'ended', 'expired'].includes(slot.state) ? <button type="button" className="primary-action" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateSlot(slot, 'play')}>{t('slots.play')}</button> : null}
-          {slot.state === 'armed' ? <button type="button" className="primary-action" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateSlot(slot, 'suspend')}>{t('slots.cancelArm')}</button> : null}
-          {['active', 'stopping'].includes(slot.state) ? <button type="button" className="primary-action" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateSlot(slot, 'suspend')}>{t('slots.suspend')}</button> : null}
-          <details className="slot-more-actions"><summary>{t('slots.moreActions')}</summary><div className="server-actions"><button type="button" className="secondary-action" disabled={!canMutate || Boolean(busy)} onClick={() => void mutateAccess(slot, slotAccessReady ? 'rotate' : 'setup')}>{slotAccessReady ? t('slots.rotateAccessCode') : t('slots.setupAccessCode')}</button>
-          <button type="button" className="destructive-action" disabled={!canMutate || Boolean(busy) || ['deleting', 'deleted'].includes(slot.state)} onClick={() => { if (window.confirm(slot.displayName + ': ' + t('slots.deleteConfirm'))) void mutateSlot(slot, 'delete').then((ok) => { if (ok) { clearAccessCode(slot.logicalAgentId); setAccessCodeRevision((value) => value + 1) } }) }}>{t('slots.delete')}</button>
+          {['suspended', 'ended', 'expired'].includes(slot.state) ? <button type="button" className="primary-action" disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'play')}>{t('slots.play')}</button> : null}
+          {slot.state === 'armed' ? <button type="button" className="primary-action" disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'suspend')}>{t('slots.cancelArm')}</button> : null}
+          {['active', 'stopping'].includes(slot.state) ? <button type="button" className="primary-action" disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'suspend')}>{t('slots.suspend')}</button> : null}
+          <details className="slot-more-actions"><summary>{t('slots.moreActions')}</summary><div className="server-actions"><button type="button" className="secondary-action" disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => slotAccessReady ? setConfirmAction({ kind: 'rotate', logicalAgentId: slot.logicalAgentId }) : void mutateAccess(slot, 'setup')}>{slotAccessReady ? t('slots.rotateAccessCode') : t('slots.setupAccessCode')}</button>
+          <button type="button" className="destructive-action" disabled={!canMutateSlot(slot) || Boolean(busy) || ['deleting', 'deleted'].includes(slot.state)} onClick={() => setConfirmAction({ kind: 'delete', logicalAgentId: slot.logicalAgentId })}>{t('slots.delete')}</button>
           <Link className="nav-link" to={slotHref(slot)}>{t('slots.details')}</Link></div></details>
         </div>
       </article>

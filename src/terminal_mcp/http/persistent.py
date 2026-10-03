@@ -31,7 +31,7 @@ class PersistentPolicyRequest(StrictRequest):
 
 
 class SlotCreateRequest(StrictRequest):
-    display_name: str = Field(min_length=1, max_length=120)
+    display_name: str = Field(max_length=120)
 
 
 class SlotGetRequest(StrictRequest):
@@ -44,7 +44,7 @@ class SlotMutationRequest(SlotGetRequest):
 
 
 class SlotRenameRequest(SlotMutationRequest):
-    display_name: str = Field(min_length=1, max_length=120)
+    display_name: str = Field(max_length=120)
 
 
 class SlotRotateRequest(SlotMutationRequest):

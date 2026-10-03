@@ -222,6 +222,7 @@ export type PersistentSlotReadModel = {
   updatedAt: string
   serverNow: string
   workSession?: PersistentWorkSessionReadModel
+  rearm?: { workSessionId: string; rearmAt: string }
   claims: PersistentClaimReadModel[]
   audit: PersistentAuditReadModel[]
   attachments: PersistentAttachmentReadModel[]

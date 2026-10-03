@@ -42,6 +42,22 @@ def test_persistent_surface_fails_closed_when_transport_auth_is_none(tmp_path):
     assert response.json()["code"] == "persistent_auth_required"
 
 
+def test_slot_create_schema_requires_display_name_field_but_accepts_empty_string(tmp_path):
+    app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
+    headers = {"Authorization": "Bearer alpha-token"}
+    with TestClient(app) as client:
+        missing = client.post("/actions/persistent/slots/create", json={}, headers=headers)
+        empty = client.post(
+            "/actions/persistent/slots/create",
+            json={"display_name": ""},
+            headers=headers,
+        )
+    assert missing.status_code == 422
+    assert empty.status_code == 200
+    assert empty.json()["ok"] is True
+    assert empty.json()["slot"]["display_name"] == ""
+
+
 def test_bearer_persistent_lifecycle_idempotency_and_cancel_fence(tmp_path):
     app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
     headers = {"Authorization": "Bearer alpha-token"}
