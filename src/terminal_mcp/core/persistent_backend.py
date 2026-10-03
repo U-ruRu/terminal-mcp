@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from datetime import timedelta
 
 from terminal_mcp.core.orchestration import normalize_preview, parse_utc, utc_now, utc_text
 from terminal_mcp.core.persistent_admission import (
@@ -924,17 +923,13 @@ class PersistentBackend:
                 limit=max(1, min(int(limit), 500)),
             )
             if not show_all:
-                cutoff = utc_now() - timedelta(seconds=300)
                 open_hashes = {
                     item["message_hash"]
                     for item in await coordinator.store.message_obligations(sender_id)
                 }
-                rows = [
-                    item
-                    for item in rows
-                    if item["message_hash"] in open_hashes
-                    or (item.get("last_seen_at") and parse_utc(item["last_seen_at"]) >= cutoff)
-                ]
+                # Ordinary inbox contains active obligations only. Recently resolved
+                # notifications remain available exclusively through show_all/history.
+                rows = [item for item in rows if item["message_hash"] in open_hashes]
             messages = [await self._persistent_message_entry(item) for item in rows]
             return {
                 "ok": True,

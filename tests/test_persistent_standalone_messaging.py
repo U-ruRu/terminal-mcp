@@ -113,6 +113,12 @@ async def test_standalone_messaging_matches_fleet_delivery_semantics(tmp_path):
     )
     assert all(item["message_hash"] != notify_hash for item in expired["messages"])
 
+    ordinary_inbox = await message(
+        recipient["public_name"],
+        access_code=recipient["code"],
+    )
+    assert all(item["message_hash"] != notify_hash for item in ordinary_inbox["messages"])
+
     history = await message(
         recipient["public_name"],
         access_code=recipient["code"],

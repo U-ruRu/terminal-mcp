@@ -68,7 +68,7 @@ export function FleetDashboard({ model }: { model: FleetReadModel }) {
           <small>
             {number(model.summary.totalServers)} {t('fleet.servers')}
             {' · '}{number(criticalCount)} {t('fleet.offline')}
-            {' · '}{number(resourceAttentionCount)} {t('fleet.needsAttention')}
+            {' · '}{number(problemCount)} {t('fleet.needsAttention')}
             {' · '}{number(staleCount)} {t('fleet.stale')}
           </small>
         </span>

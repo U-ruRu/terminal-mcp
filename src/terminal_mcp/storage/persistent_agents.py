@@ -1576,11 +1576,10 @@ class PersistentAgentStore:
         condition = "logical_agent_id=?"
         params: list[object] = [logical_agent_id]
         if not show_all:
-            condition += " AND (resolved_at IS NULL"
-            if recent_cutoff is not None:
-                condition += " OR (last_seen_at IS NOT NULL AND last_seen_at>=?)"
-                params.append(recent_cutoff)
-            condition += ")"
+            # The ordinary inbox is an active-obligation surface. Once an
+            # obligation is resolved (including notify retention), it belongs
+            # only to history/show-all; recency must never resurrect it.
+            condition += " AND resolved_at IS NULL"
         params.append(max(1, min(int(limit), 500)))
         async with self._connect("persistent_message_inbox") as db:
             rows = await (

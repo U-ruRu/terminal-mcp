@@ -147,6 +147,7 @@ export function AppShell({
   const selectedId = selectedServer?.instanceId
   const serverState = selectedServer ? serverVisualState(selectedServer) : undefined
   const problemCount = servers.filter(needsAttention).length
+  const liveCount = servers.filter((server) => server.connectivity === 'live').length
   const isServerOverview = /^\/servers\/[^/]+\/?$/.test(location.pathname)
   const isMeshOverview = /^\/meshes\/[^/]+\/?$/.test(location.pathname)
   const appBarVariant = isServerOverview || isMeshOverview ? 'detail' : contextual ? 'secondary' : 'root'
@@ -205,7 +206,7 @@ export function AppShell({
             <StatusBadge state={serverState} label={serverStatusLabel(serverState, t)} />
           ) : location.pathname !== '/' ? (
             <span className={'environment-badge' + (problemCount > 0 ? ' environment-badge-attention' : '')}>
-              {problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(servers.length)}
+              {problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(liveCount)}
             </span>
           ) : null}
           {contextual ? (

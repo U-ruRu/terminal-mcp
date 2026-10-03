@@ -38,7 +38,9 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
 test('fleet status action filters problem servers and focuses the compact list', async () => {
   render(dashboard())
 
-  await userEvent.click(screen.getByRole('button', { name: 'Partial / Offline: 2 servers' }))
+  const status = screen.getByRole('button', { name: 'Partial / Offline: 2 servers' })
+  expect(status).toHaveTextContent('2 Needs attention')
+  await userEvent.click(status)
 
   const list = screen.getByRole('generic', { name: 'Servers' })
   expect(list).toHaveFocus()
@@ -62,7 +64,9 @@ test('filters problem servers without refetching fleet state', async () => {
 
 test('updates incrementally when the supplied fleet model changes', () => {
   const { rerender } = render(dashboard())
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'stale')
+  const staleCard = screen.getByRole('article', { name: 'Server B server' })
+  expect(staleCard).toHaveAttribute('data-state', 'stale')
+  expect(staleCard.querySelector('.server-card-age-slot')).toBeInTheDocument()
 
   const updated = {
     ...fixtureFleetModel,
@@ -84,7 +88,9 @@ test('updates incrementally when the supplied fleet model changes', () => {
   }
 
   rerender(dashboard(updated))
-  expect(screen.getByRole('article', { name: 'Server B server' })).toHaveAttribute('data-state', 'healthy')
+  const recoveredCard = screen.getByRole('article', { name: 'Server B server' })
+  expect(recoveredCard).toHaveAttribute('data-state', 'healthy')
+  expect(recoveredCard.querySelector('.server-card-age-slot')).toBeInTheDocument()
   expect(screen.queryByLabelText('Fleet totals')).not.toBeInTheDocument()
 })
 
