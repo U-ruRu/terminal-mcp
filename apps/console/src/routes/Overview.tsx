@@ -190,7 +190,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
                 <div className="slot-card-secondary">
                   <span className="slot-code-cell">{saved ? <span className="access-code-copy"><code>{saved.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)} /></span> : <span className="slot-code-unavailable">—</span>}</span>
                   <IconButton icon="pause" variant="primary" label={t('slots.suspend')} disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'suspend')} />
-                  <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="dots" /></summary><div className="slot-overflow-menu">
+                  <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="more" /></summary><div className="slot-overflow-menu">
                     <UiButton type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'rotate')}><Icon name="rotate" />{t('slots.rotateAccessCode')}</UiButton>
                     <UiButton type="button" variant="destructive" disabled={Boolean(busy)} onClick={() => { if (window.confirm(t('slots.deleteConfirm'))) void mutateSlot(entry, 'delete') }}><Icon name="delete" />{t('slots.delete')}</UiButton>
                     <Link className="nav-link" to={slotHref(entry)}>{t('slots.details')}</Link>
@@ -206,7 +206,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
         <h2 id="fleet-mesh-title" className="fleet-section-title">{t('fleet.meshes')}</h2>
         {loading ? <FeedbackState variant="loading" title={t('status.catchingUp')} /> : unavailable ? <FeedbackState variant="partial" title={t('connections.unknown')} /> : topology.meshes.length === 0 ? <FeedbackState variant="empty" title={t('fleet.noMeshes')} /> : (
           <div className="fleet-mesh-list">{topology.meshes.map((mesh) => (
-            <Link className="fleet-mesh-row" to={meshRoute(mesh.meshId)} key={mesh.meshId}><span className="fleet-mesh-identity"><Icon name="topology-ring-3" /><strong>{mesh.displayName}</strong></span><span className="muted">{number(mesh.members)} {t('fleet.servers')}</span><span className="fleet-mesh-chevron" aria-hidden="true"><Icon name="chevron-right" /></span></Link>
+            <Link className="fleet-mesh-row" to={meshRoute(mesh.meshId)} key={mesh.meshId}><span className="fleet-mesh-identity"><Icon name="mesh" /><strong>{mesh.displayName}</strong></span><span className="muted">{number(mesh.members)} {t('fleet.servers')}</span><span className="fleet-mesh-chevron" aria-hidden="true"><Icon name="chevron-right" /></span></Link>
           ))}</div>
         )}
       </section>

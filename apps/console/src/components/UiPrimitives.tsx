@@ -98,11 +98,11 @@ export function SegmentedControl({
 export type FeedbackVariant = 'empty' | 'loading' | 'error' | 'partial' | 'destructive'
 
 const feedbackIcon: Record<FeedbackVariant, IconName> = {
-  empty: 'info-circle',
-  loading: 'loader',
-  error: 'alert-circle',
-  partial: 'alert-triangle',
-  destructive: 'alert-circle',
+  empty: 'info',
+  loading: 'loading',
+  error: 'error',
+  partial: 'warning',
+  destructive: 'error',
 }
 
 export function FeedbackState({
