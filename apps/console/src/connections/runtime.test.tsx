@@ -86,6 +86,11 @@ test('restores every stored profile into app runtime and removes only the select
   expect(addServer.closest('form')).not.toHaveClass('panel')
   const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
   expect(removeButtons[0]).toHaveClass('destructive-action')
+  const confirmRemove = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  await userEvent.click(removeButtons[0])
+  expect(confirmRemove).toHaveBeenCalledWith('Alpha: Remove this saved server connection? Local connection credentials will be removed and the server must be paired again to restore it.')
+  expect(registry.list().map((profile) => profile.displayName)).toEqual(['Alpha', 'Beta'])
+  confirmRemove.mockReturnValue(true)
   await userEvent.click(removeButtons[0])
 
   await waitFor(() => expect(registry.list().map((profile) => profile.displayName)).toEqual(['Beta']))
@@ -94,7 +99,7 @@ test('restores every stored profile into app runtime and removes only the select
   expect(registry.credential('beta')?.refreshToken).toBe('refresh-beta-next')
 })
 
-afterEach(() => { cleanup(); localStorage.clear() })
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
 
 test('can expose stored profiles without independently rotating refresh tokens', async () => {
   const storage = new MemoryStorage()
@@ -236,7 +241,7 @@ test('managed mesh membership supports standalone attach move and detach with ex
 
   let topologyRevision = 2
   let trustRevision = 2
-  const meshes = [
+  let meshes = [
     {
       mesh_id: 'mesh-a',
       display_name: 'Production',
@@ -411,6 +416,17 @@ test('managed mesh membership supports standalone attach move and detach with ex
         headers: { 'Content-Type': 'application/json' },
       })
     }
+    if (url.pathname === '/actions/fleet/control/mesh/delete' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      expect(url.origin).toBe('https://alpha.example')
+      expect(body).toEqual({ mesh_id: 'mesh-a', expected_topology_revision: topologyRevision })
+      meshes = meshes.filter((mesh) => mesh.mesh_id !== 'mesh-a')
+      topologyRevision += 1
+      return new Response(JSON.stringify(controlEnvelope('alpha')), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     return new Response(JSON.stringify({ error: 'unexpected_request' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
@@ -466,6 +482,17 @@ test('managed mesh membership supports standalone attach move and detach with ex
     expect(fetcher.mock.calls.filter(
       ([input]) => new URL(String(input)).pathname.endsWith('/trust/rotate'),
     )).toHaveLength(1)
+  })
+
+  const confirmDelete = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  const deleteButton = screen.getByRole('button', { name: 'Delete mesh' })
+  await userEvent.click(deleteButton)
+  expect(confirmDelete).toHaveBeenCalledWith('Production: Delete this Mesh? Its Mesh configuration will be removed and this action cannot be undone.')
+  expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/mesh/delete'))).toHaveLength(0)
+  confirmDelete.mockReturnValue(true)
+  await userEvent.click(deleteButton)
+  await waitFor(() => {
+    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/mesh/delete'))).toHaveLength(1)
   })
 })
 

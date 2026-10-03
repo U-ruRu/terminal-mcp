@@ -279,7 +279,9 @@ test('slot detail keeps raw Fleet and audit identifiers inside technical details
   expect(technical).toContainElement(screen.getByText('attach-secret-42'))
   expect(technical).toContainElement(screen.getByText('principal-secret-77'))
   expect(technical).toContainElement(screen.getByText('#77'))
+  expect(technical).toContainElement(screen.getByText('slot.played'))
   const detail = technical.closest('.slot-detail') as HTMLElement
+  expect(within(detail).getByText('Slot made available')).toBeInTheDocument()
   expect(within(detail).getByRole('button', { name: 'Rotate Access code' })).toHaveClass('secondary-action')
 })
 
@@ -458,7 +460,9 @@ test('unpaired projected slot can load audit through Fleet ingress while mutatio
   await user.click(screen.getByRole('link', { name: 'Details' }))
 
   await waitFor(() => expect(loadAudit).toHaveBeenCalledWith('fleet-source-node-b', 'la_alpha'))
-  expect(screen.getByText('session_start')).toBeInTheDocument()
+  expect(screen.getByText('Session started')).toBeInTheDocument()
+  const technical = screen.getByText('Technical details').closest('details') as HTMLElement
+  expect(technical).toContainElement(screen.getByText('session_start'))
   expect(screen.getByRole('button', { name: 'Make available' })).toBeDisabled()
   expect(mutate).not.toHaveBeenCalled()
 })
