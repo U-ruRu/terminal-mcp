@@ -12,7 +12,7 @@ import { captureActivityScrollAnchor, restoreActivityScrollAnchor, type Activity
 import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
-import { FeedbackState } from '../components/UiPrimitives'
+import { FeedbackState, IconButton } from '../components/UiPrimitives'
 
 export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions) => Promise<ActivityFeedReadModel>
 
@@ -406,7 +406,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
         </div>
         {selectedId && requestedAgentId ? (
           <div className="filter-status">
-            <button type="button" onClick={clearAgent}>{t('common.agent')} {requestedAgent?.name ?? requestedAgentId} <Icon name="x" /></button>
+            <span className="filter-status-label">{t('common.agent')} {requestedAgent?.name ?? requestedAgentId}</span><IconButton icon="close" label={t('activity.removeAgentFilter')} onClick={clearAgent} />
           </div>
         ) : null}
       </div>
@@ -423,10 +423,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
               <strong>{t('activity.unavailable')}</strong>
               <span>{userError(feed.error, t)}</span>
             </div>
-            <button type="button" className="activity-error-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={errorExpanded} aria-controls={errorDetailsId}
-              onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(errorKey)) next.delete(errorKey); else next.add(errorKey); return next })}>
-              <Icon name={errorExpanded ? 'chevron-up' : 'chevron-down'} />
-            </button>
+            <IconButton className="activity-error-detail-toggle" icon={errorExpanded ? 'chevron-up' : 'chevron-down'} label={t('activity.rawDetails')} aria-expanded={errorExpanded} aria-controls={errorDetailsId}
+              onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(errorKey)) next.delete(errorKey); else next.add(errorKey); return next })} />
             {errorExpanded ? <code id={errorDetailsId}>{feed.error}</code> : null}
           </div>
         )
@@ -447,10 +445,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                   <div className={'activity-service-event activity-service-' + (item.tone ?? 'neutral') + (enteringItems.has(item.key) ? ' activity-item-entering' : '')} data-activity-key={item.key} data-activity-source-seqs={item.events.map((event) => event.seq).join(' ')} key={item.key}>
                     <span>{item.content}</span>
                     <time dateTime={item.createdAt}>{activityTime(item.createdAt)}</time>
-                    <button type="button" className="activity-details-toggle" aria-label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
-                      onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
-                      <Icon name={expanded ? 'chevron-up' : 'chevron-down'} />
-                    </button>
+                    <IconButton className="activity-details-toggle" icon={expanded ? 'chevron-up' : 'chevron-down'} label={t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
+                      onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })} />
                     {expanded ? <pre id={detailsId} className="activity-technical-payload">{JSON.stringify({
                       timestamp: activityFullTimestamp(item.createdAt), server: selectedServerName,
                       eventType: first.eventType, entityType: first.entityType, entityId: first.entityId, events: item.events,
@@ -474,10 +470,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                       {item.secondary ? <small>{item.secondary}</small> : null}
                       {item.taskNamespace && item.taskId ? <Link className="activity-context-link text-link" to={taskRoute(selectedId, item.taskNamespace, item.taskId)} state={returnToState(location.pathname, location.search)}>{t('common.task')} {item.taskId}</Link> : null}
                     </div>
-                    <button type="button" className="activity-details-toggle" aria-label={item.commands?.length ? item.content : t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
-                      onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })}>
-                      <Icon name={expanded ? 'chevron-up' : 'chevron-down'} />
-                    </button>
+                    <IconButton className="activity-details-toggle" icon={expanded ? 'chevron-up' : 'chevron-down'} label={item.commands?.length ? item.content : t('activity.rawDetails')} aria-expanded={expanded} aria-controls={detailsId}
+                      onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey); return next })} />
                     {expanded && item.commands && item.commands.length > 1 ? (
                       <div id={detailsId} className="activity-command-list">
                         {item.commands.map((command) => {
@@ -491,10 +485,8 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
                                 <time dateTime={command.createdAt}>{activityTime(command.createdAt)}</time>
                                 <small>{commandStateLabel(command.statusKey, t)}</small>
                               </div>
-                              <button type="button" className="activity-command-detail-toggle" aria-label={t('activity.rawDetails')} aria-expanded={commandExpanded} aria-controls={commandDetailsId}
-                                onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(commandKey)) next.delete(commandKey); else next.add(commandKey); return next })}>
-                                <Icon name={commandExpanded ? 'chevron-up' : 'chevron-down'} />
-                              </button>
+                              <IconButton className="activity-command-detail-toggle" icon={commandExpanded ? 'chevron-up' : 'chevron-down'} label={t('activity.rawDetails')} aria-expanded={commandExpanded} aria-controls={commandDetailsId}
+                                onClick={() => setExpandedEvents((current) => { const next = new Set(current); if (next.has(commandKey)) next.delete(commandKey); else next.add(commandKey); return next })} />
                               {commandExpanded ? <pre id={commandDetailsId} className="activity-technical-payload">{JSON.stringify({
                                 timestamp: activityFullTimestamp(command.createdAt),
                                 events: command.events,
@@ -515,13 +507,13 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           {feed.initialized && visible.length === 0 && <div className="activity-chat-empty">{t('activity.noMatches')}</div>}
           </div>
           {newItemsCount > 0 ? (
-            <button className="activity-new-items" type="button" onClick={() => {
+            <IconButton className="activity-new-items" icon="chevron-down" label={t('activity.jumpLatest')} data-count={newItemsCount} onClick={() => {
               const node = scrollRef.current
               if (node) scrollActivityToBottom(node, 'smooth')
               stickToBottom.current = true
               awayFromBottom.current = false
               setNewItemsCount(0)
-            }}><Icon name="chevron-down" /> {newItemsCount}</button>
+            }} />
           ) : null}
         </div>
       ) : null}

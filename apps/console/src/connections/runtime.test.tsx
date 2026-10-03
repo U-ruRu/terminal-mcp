@@ -82,10 +82,10 @@ test('restores every stored profile into app runtime and removes only the select
   expect(fetcher).toHaveBeenCalledTimes(2)
 
   const addServer = screen.getByRole('button', { name: 'Add server' })
-  expect(addServer).toHaveClass('primary-action')
+  expect(addServer).toHaveClass('ui-icon-button', 'ui-button-primary')
   expect(addServer.closest('form')).not.toHaveClass('panel')
   const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
-  expect(removeButtons[0]).toHaveClass('destructive-action')
+  expect(removeButtons[0]).toHaveClass('ui-icon-button', 'ui-button-destructive')
   const confirmRemove = vi.spyOn(window, 'confirm').mockReturnValue(false)
   await userEvent.click(removeButtons[0])
   expect(confirmRemove).toHaveBeenCalledWith('Alpha: Remove this saved server connection? Local connection credentials will be removed and the server must be paired again to restore it.')
@@ -487,7 +487,7 @@ test('managed mesh membership supports standalone attach move and detach with ex
 
   expect(screen.getAllByText(/Reachability:/)).toHaveLength(2)
   const rotateButtons = screen.getAllByRole('button', { name: 'Rotate trust' })
-  expect(rotateButtons[1]).toHaveClass('secondary-action')
+  expect(rotateButtons[1]).toHaveClass('ui-icon-button', 'ui-button-secondary')
   await userEvent.click(rotateButtons[1])
   await waitFor(() => {
     expect(fetcher.mock.calls.filter(
@@ -757,7 +757,7 @@ test('creates a second mesh on an independently selected standalone control node
   await userEvent.selectOptions(screen.getByLabelText('Control node'), 'beta')
   await userEvent.clear(screen.getByLabelText('New mesh name'))
   await userEvent.type(screen.getByLabelText('New mesh name'), 'Staging')
-  expect(screen.getByRole('button', { name: 'Create mesh' })).toHaveClass('primary-action')
+  expect(screen.getByRole('button', { name: 'Create mesh' })).toHaveClass('ui-icon-button', 'ui-button-primary')
   await userEvent.click(screen.getByRole('button', { name: 'Create mesh' }))
 
   await waitFor(() => {

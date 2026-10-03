@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type PropsWithChildren, type ReactNode } from 'react'
 
 import { Icon, type IconName } from './Icon'
 
@@ -11,6 +11,39 @@ export function UiButton({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
   return <button className={['ui-button', 'ui-button-' + variant, className].filter(Boolean).join(' ')} {...props} />
 }
+
+export type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'aria-label' | 'title'> & {
+  label: string
+  icon: IconName
+  variant?: ButtonVariant
+  busy?: boolean
+}
+
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton({
+  label,
+  icon,
+  variant = 'quiet',
+  busy = false,
+  disabled = false,
+  type = 'button',
+  className = '',
+  ...props
+}, ref) {
+  return (
+    <button
+      {...props}
+      ref={ref}
+      type={type}
+      className={['ui-button', 'ui-button-' + variant, 'ui-icon-button', className].filter(Boolean).join(' ')}
+      aria-label={label}
+      aria-busy={busy || undefined}
+      title={label}
+      disabled={disabled || busy}
+    >
+      <Icon name={busy ? 'loading' : icon} />
+    </button>
+  )
+})
 
 export function Field({
   label,

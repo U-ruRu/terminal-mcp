@@ -222,7 +222,7 @@ test('cached/offline read state does not disable a healthy authenticated write r
   renderSlots([instance('offline', slot())], mutate)
   expect(screen.getByText('Paused')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled()
-  expect(screen.getByRole('button', { name: 'Start' })).toHaveClass('primary-action')
+  expect(screen.getByRole('button', { name: 'Start' })).toHaveClass('ui-icon-button', 'ui-button-primary')
   expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
   expect(screen.getByRole('status')).toHaveTextContent('cached')
   await user.click(screen.getByRole('button', { name: 'Start' }))
@@ -302,7 +302,7 @@ test('slot detail keeps raw Fleet and audit identifiers inside technical details
   expect(technical).toContainElement(screen.getByText('slot.played'))
   const detail = technical.closest('.slot-detail') as HTMLElement
   expect(within(detail).getByText('Slot made available')).toBeInTheDocument()
-  expect(within(detail).getByRole('button', { name: 'Rotate Access code' })).toHaveClass('secondary-action')
+  expect(within(detail).getByRole('button', { name: 'Rotate Access code' })).toHaveClass('ui-icon-button', 'ui-button-secondary')
 })
 
 test('policy controls stage D/W/A/R and Legacy together and Save commits one standalone mutation', async () => {
@@ -323,8 +323,8 @@ test('policy controls stage D/W/A/R and Legacy together and Save commits one sta
   expect(legacy).toBeChecked()
   expect(mutate).not.toHaveBeenCalled()
 
-  expect(screen.getByRole('button', { name: 'Save' })).toHaveClass('primary-action')
-  expect(screen.getByRole('button', { name: 'Create slot' })).toHaveClass('primary-action')
+  expect(screen.getByRole('button', { name: 'Save' })).toHaveClass('ui-icon-button', 'ui-button-primary')
+  expect(screen.getByRole('button', { name: 'Create slot' })).toHaveClass('ui-icon-button', 'ui-button-primary')
   await user.click(screen.getByRole('button', { name: 'Save' }))
   expect(mutate).toHaveBeenCalledTimes(1)
   expect(mutate).toHaveBeenCalledWith('alpha', '/actions/persistent/policy', {

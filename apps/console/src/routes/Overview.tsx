@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import type { ManagedFleetControlReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
 import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
 import { FleetDashboard, type FleetServerGroup } from '../components/FleetDashboard'
-import { FeedbackState } from '../components/UiPrimitives'
+import { FeedbackState, IconButton, UiButton } from '../components/UiPrimitives'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
@@ -188,11 +188,11 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
                   <span className="chip">{entry.slot.state === 'stopping' ? t('slots.state.stopping') : t('slots.state.active')}</span>
                 </div>
                 <div className="slot-card-secondary">
-                  <span className="slot-code-cell">{saved ? <button type="button" className="access-code-copy" aria-label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)}><code>{saved.code}</code><Icon name="copy" /></button> : <span className="slot-code-unavailable">—</span>}</span>
-                  <button type="button" className="primary-action" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'suspend')}>{t('slots.suspend')}</button>
+                  <span className="slot-code-cell">{saved ? <span className="access-code-copy"><code>{saved.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)} /></span> : <span className="slot-code-unavailable">—</span>}</span>
+                  <IconButton icon="pause" variant="primary" label={t('slots.suspend')} disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'suspend')} />
                   <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="dots" /></summary><div className="slot-overflow-menu">
-                    <button type="button" className="secondary-action" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'rotate')}>{t('slots.rotateAccessCode')}</button>
-                    <button type="button" className="destructive-action" disabled={Boolean(busy)} onClick={() => { if (window.confirm(t('slots.deleteConfirm'))) void mutateSlot(entry, 'delete') }}>{t('slots.delete')}</button>
+                    <UiButton type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'rotate')}><Icon name="rotate" />{t('slots.rotateAccessCode')}</UiButton>
+                    <UiButton type="button" variant="destructive" disabled={Boolean(busy)} onClick={() => { if (window.confirm(t('slots.deleteConfirm'))) void mutateSlot(entry, 'delete') }}><Icon name="delete" />{t('slots.delete')}</UiButton>
                     <Link className="nav-link" to={slotHref(entry)}>{t('slots.details')}</Link>
                   </div></details>
                 </div>

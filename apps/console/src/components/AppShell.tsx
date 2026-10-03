@@ -7,6 +7,7 @@ import type { FleetServerReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { Icon, type IconName } from './Icon'
+import { IconButton } from './UiPrimitives'
 import { StatusBadge } from './StatusBadge'
 import { needsAttention, serverVisualState, type ServerVisualState } from './serverPresentation'
 
@@ -188,21 +189,19 @@ export function AppShell({
       <header className={'topbar app-bar app-bar-' + appBarVariant} data-variant={appBarVariant}>
         <div className="app-bar-leading">
           {contextual ? (
-            <Link className="app-bar-back" aria-label={t(contextual.ariaKey)} to={contextual.to}>
-              <Icon name="arrow-left" />
+            <Link className="ui-button ui-button-quiet ui-icon-button app-bar-back" aria-label={t(contextual.ariaKey)} title={t(contextual.ariaKey)} to={contextual.to}>
+              <Icon name="back" />
             </Link>
           ) : (
-            <button
+            <IconButton
               ref={toggleRef}
               className="menu-toggle"
-              type="button"
-              aria-label={t('aria.openNavigation')}
+              icon="menu"
+              label={t('aria.openNavigation')}
               aria-expanded={menuOpen}
               aria-controls="global-navigation"
               onClick={() => setMenuOpen(true)}
-            >
-              <Icon name="menu-2" />
-            </button>
+            />
           )}
         </div>
         <div className="brand-block">
@@ -218,17 +217,15 @@ export function AppShell({
             </span>
           ) : null}
           {contextual ? (
-            <button
+            <IconButton
               ref={toggleRef}
               className="menu-toggle menu-toggle-context"
-              type="button"
-              aria-label={t('aria.openNavigation')}
+              icon="menu"
+              label={t('aria.openNavigation')}
               aria-expanded={menuOpen}
               aria-controls="global-navigation"
               onClick={() => setMenuOpen(true)}
-            >
-              <Icon name="menu-2" />
-            </button>
+            />
           ) : null}
         </div>
       </header>
@@ -256,18 +253,16 @@ export function AppShell({
               <p className="eyebrow">{t('nav.navigation')}</p>
               <strong>{selectedServer ? selectedServer.displayName : t('nav.noServerSelected')}</strong>
             </div>
-            <button
+            <IconButton
               ref={closeRef}
               className="menu-close"
-              type="button"
-              aria-label={t('aria.closeNavigation')}
+              icon="close"
+              label={t('aria.closeNavigation')}
               onClick={() => {
                 setMenuOpen(false)
                 toggleRef.current?.focus()
               }}
-            >
-              <Icon name="x" />
-            </button>
+            />
           </div>
 
           {globalNavigation.map((item) => (

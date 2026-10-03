@@ -10,7 +10,7 @@
   -webkit-mask: var(--ui-icon-url) center / contain no-repeat;
   mask: var(--ui-icon-url) center / contain no-repeat;
 }
-.ui-icon-loader { animation: ui-icon-spin 0.9s linear infinite; }
+.ui-icon-loader, .ui-icon-loading { animation: ui-icon-spin 0.9s linear infinite; }
 @keyframes ui-icon-spin { to { transform: rotate(360deg); } }
 .global-navigation .nav-link,
 .navigation-context-group .nav-link {
@@ -897,6 +897,31 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   padding: 8px 14px;
   cursor: pointer;
   font-weight: var(--font-weight-semibold);
+}
+
+.ui-icon-button {
+  width: var(--touch-target);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.ui-icon-button .ui-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.ui-icon-button-row {
+  display: inline-flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-icon-button:focus-visible {
+  outline: var(--border-emphasis, 2px) solid var(--color-focus);
+  outline-offset: 2px;
 }
 
 .ui-button-primary {
@@ -2317,9 +2342,9 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--control-standard);
-  padding: 6px 10px !important;
-  background: transparent !important;
+  min-height: var(--touch-target);
+  padding: 0;
+  background: transparent;
 }
 .access-code-copy code { font-size: 1.15rem; font-weight: 800; letter-spacing: .16em; }
 .slot-more-actions { position: relative; width: auto !important; }
@@ -2448,3 +2473,14 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .feedback-state-icon .ui-icon { width: 1em; height: 1em; }
 
 .activity-history-loading .ui-icon { width: 18px; height: 18px; }
+
+/* M4 IconButton action presentation */
+.activity-new-items::after {
+  content: attr(data-count);
+  min-width: 1.25em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.activity-new-items.ui-icon-button { width: auto; }
+.filter-status-label { min-width: 0; overflow-wrap: anywhere; }
+.filter-status .ui-icon-button { border-radius: 999px; padding: 0; }

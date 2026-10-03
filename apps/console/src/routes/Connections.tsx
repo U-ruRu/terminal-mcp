@@ -7,7 +7,7 @@ import { isFleetControlRevisionRegression, loadCachedFleetControl, propagateCach
 import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
-import { FeedbackState } from '../components/UiPrimitives'
+import { FeedbackState, IconButton } from '../components/UiPrimitives'
 import { returnToState } from '../navigation/context'
 import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
 
@@ -785,9 +785,7 @@ export function Connections() {
             onChange={(event) => setDisplayName(event.target.value)}
           />
         </label>
-        <button type="submit" className="primary-action" disabled={submitting}>
-          {submitting ? t('connections.pairing') : t('connections.addServerAction')}
-        </button>
+        <IconButton type="submit" icon="connect" variant="primary" label={t('connections.addServerAction')} busy={submitting} />
         <p className={'mutation-status-slot ' + (error ? 'connection-error' : 'muted')} role={error ? 'alert' : undefined} aria-live={error ? 'polite' : undefined}>{error || '\u00a0'}</p>
       </form> : null}
 
@@ -875,22 +873,8 @@ export function Connections() {
               />
             </label>
             <div className="connection-actions">
-              <button
-                type="button"
-                className="primary-action"
-                disabled={controlBusy || !writeProfile}
-                onClick={() => void renameMesh()}
-              >
-                {t('connections.renameMesh')}
-              </button>
-              <button
-                type="button"
-                className="destructive-action"
-                disabled={controlBusy || !writeProfile}
-                onClick={() => { if (selectedMesh && window.confirm(selectedMesh.displayName + ': ' + t('connections.deleteMeshConfirm'))) void deleteMesh() }}
-              >
-                {t('connections.deleteMesh')}
-              </button>
+              <IconButton icon="edit" variant="secondary" label={t('connections.renameMesh')} disabled={controlBusy || !writeProfile} onClick={() => void renameMesh()} />
+              <IconButton icon="delete" variant="destructive" label={t('connections.deleteMesh')} disabled={controlBusy || !writeProfile} onClick={() => { if (selectedMesh && window.confirm(selectedMesh.displayName + ': ' + t('connections.deleteMeshConfirm'))) void deleteMesh() }} />
             </div>
           </>
         ) : null}
@@ -918,14 +902,7 @@ export function Connections() {
           </select>
         </label>
         <div className="connection-actions">
-          <button
-            type="button"
-            className="primary-action"
-            disabled={controlBusy || !newMeshControlInstanceId}
-            onClick={() => void createMesh()}
-          >
-            {t('connections.createMesh')}
-          </button>
+          <IconButton icon="create" variant="primary" label={t('connections.createMesh')} disabled={controlBusy || !newMeshControlInstanceId} onClick={() => void createMesh()} />
         </div>
         </> : null}
         <p className={'mutation-status-slot ' + (controlError || meshMutationPhase === 'failed' ? 'connection-error' : 'muted')} role={controlError ? 'alert' : meshMutationPhase || (routeMeshId && authoritativeFreshness !== 'fresh') ? 'status' : undefined} aria-live={controlError || meshMutationPhase || (routeMeshId && authoritativeFreshness !== 'fresh') ? 'polite' : undefined}>
@@ -1026,14 +1003,7 @@ export function Connections() {
                               </button>
                             ))}
                           </div>
-                          <button
-                            type="button"
-                            className="primary-action membership-commit"
-                            disabled={controlBusy || membershipMutation?.phase === 'pending'}
-                            onClick={() => void changeMembership(profile.instanceId, membershipTarget)}
-                          >
-                            {t('connections.applyMembership')}
-                          </button>
+                          <IconButton className="membership-commit" icon="apply" variant="primary" label={t('connections.applyMembership')} busy={membershipMutation?.phase === 'pending'} disabled={controlBusy} onClick={() => void changeMembership(profile.instanceId, membershipTarget)} />
                         </div>
                       ) : null}
                       <p className={'mutation-status-slot connection-card-status-slot ' + (membershipMutation?.phase === 'failed' || member?.lastError || observed?.error || state?.status === 'error' ? 'connection-error' : 'muted')} role={member?.lastError || observed?.error || state?.status === 'error' ? 'alert' : membershipMutation ? 'status' : undefined} aria-live={member?.lastError || observed?.error || state?.status === 'error' || membershipMutation ? 'polite' : undefined}>
@@ -1053,27 +1023,12 @@ export function Connections() {
                       </p>
                       <div className="connection-actions">
                         {!routeMeshId && state?.status === 'error' && state.retryable ? (
-                          <button type="button" className="primary-action" onClick={() => void retry(profile.instanceId)}>
-                            {t('connections.retry')}
-                          </button>
+                          <IconButton icon="retry" variant="primary" label={t('connections.retry')} onClick={() => void retry(profile.instanceId)} />
                         ) : null}
                         {routeMeshId && observed?.control?.managed ? (
-                          <button
-                            type="button"
-                            className="secondary-action"
-                            disabled={controlBusy || state?.status !== 'connected'}
-                            onClick={() => void rotateTrust(profile.instanceId)}
-                          >
-                            {t('connections.rotateTrust')}
-                          </button>
+                          <IconButton icon="rotate" variant="secondary" label={t('connections.rotateTrust')} disabled={controlBusy || state?.status !== 'connected'} onClick={() => void rotateTrust(profile.instanceId)} />
                         ) : null}
-                        {!routeMeshId ? <button
-                          type="button"
-                          className="destructive-action"
-                          onClick={() => { if (window.confirm(profile.displayName + ': ' + t('connections.removeConfirm'))) disconnect(profile.instanceId) }}
-                        >
-                          {t('connections.remove')}
-                        </button> : null}
+                        {!routeMeshId ? <IconButton icon="disconnect" variant="destructive" label={t('connections.remove')} onClick={() => { if (window.confirm(profile.displayName + ': ' + t('connections.removeConfirm'))) disconnect(profile.instanceId) }} /> : null}
                       </div>
                     </article>
                   )

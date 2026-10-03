@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 
-import { FeedbackState, Field, SegmentedControl, Tabs, UiButton } from './UiPrimitives'
+import { FeedbackState, Field, IconButton, SegmentedControl, Tabs, UiButton } from './UiPrimitives'
 
 test('shared controls expose pressed, selected, disabled and error semantics', async () => {
   const segmentChange = vi.fn()
@@ -40,4 +40,40 @@ test('shared controls expose pressed, selected, disabled and error semantics', a
   expect(tabChange).toHaveBeenCalledWith('tasks')
   expect(screen.getByRole('tab', { name: 'Tasks' })).toHaveFocus()
   expect(screen.getByText('Failed').closest('[role="alert"]')).toHaveTextContent('Try again')
+})
+
+
+test('IconButton exposes semantic icon, accessible label, stable busy state and button semantics', async () => {
+  const click = vi.fn()
+  const { rerender } = render(
+    <IconButton
+      icon="save"
+      label="Save policy"
+      variant="primary"
+      aria-expanded="false"
+      aria-controls="policy-panel"
+      onClick={click}
+    />,
+  )
+  const button = screen.getByRole('button', { name: 'Save policy' })
+  expect(button).toHaveAttribute('type', 'button')
+  expect(button).toHaveAttribute('title', 'Save policy')
+  expect(button).toHaveAttribute('aria-expanded', 'false')
+  expect(button).toHaveAttribute('aria-controls', 'policy-panel')
+  expect(button.querySelector('.ui-icon-save')).not.toBeNull()
+  await userEvent.click(button)
+  expect(click).toHaveBeenCalledTimes(1)
+
+  rerender(<IconButton icon="save" label="Save policy" variant="primary" busy onClick={click} />)
+  expect(button).toBeDisabled()
+  expect(button).toHaveAttribute('aria-busy', 'true')
+  expect(button.querySelector('.ui-icon-loading')).not.toBeNull()
+
+  rerender(<IconButton icon="create" label="Create slot" type="submit" variant="primary" />)
+  expect(screen.getByRole('button', { name: 'Create slot' })).toHaveAttribute('type', 'submit')
+})
+
+test.each(['primary', 'secondary', 'quiet', 'destructive'] as const)('IconButton supports %s variant', (variant) => {
+  render(<IconButton icon="copy" label={variant} variant={variant} />)
+  expect(screen.getByRole('button', { name: variant })).toHaveClass('ui-icon-button', 'ui-button-' + variant)
 })

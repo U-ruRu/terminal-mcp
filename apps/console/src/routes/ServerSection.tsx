@@ -6,7 +6,7 @@ import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
-import { FeedbackState } from '../components/UiPrimitives'
+import { FeedbackState, IconButton } from '../components/UiPrimitives'
 
 type ServerSectionKind = 'agents' | 'context' | 'health'
 
@@ -177,12 +177,8 @@ export function ServerSection({
           <summary>{t('diagnostics.title')} · {number(diagnosticEntries.length)}</summary>
           <p className="muted">{t('diagnostics.description')}</p>
           <div className="diagnostics-actions">
-            <button type="button" className="secondary-action" onClick={() => diagnostics.clear()} disabled={diagnosticEntries.length === 0}>
-              {t('diagnostics.clear')}
-            </button>
-            <button type="button" className="secondary-action" onClick={() => void copyDiagnostics()} disabled={diagnosticEntries.length === 0}>
-              {copied ? t('diagnostics.copied') : t('diagnostics.copy')}
-            </button>
+            <IconButton icon="delete" variant="destructive" label={t('diagnostics.clear')} onClick={() => diagnostics.clear()} disabled={diagnosticEntries.length === 0} />
+            <IconButton icon="copy" variant="secondary" label={copied ? t('diagnostics.copied') : t('diagnostics.copy')} onClick={() => void copyDiagnostics()} disabled={diagnosticEntries.length === 0} />
           </div>
           {diagnosticEntries.length === 0 ? <FeedbackState variant="empty" title={t('diagnostics.empty')} /> : (
             <div className="diagnostics-log" aria-label={t('diagnostics.title')}>
