@@ -2239,3 +2239,40 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   font-weight: var(--font-weight-regular);
 }
 .server-card-metrics-attention .resource-metric-unavailable dd { color: var(--color-warning); }
+
+/* Authoritative Mesh membership target/commit control. */
+.membership-target-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.membership-target-options .chip {
+  min-height: var(--control-standard);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.membership-target-options .chip.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+}
+.membership-target-options .chip:disabled,
+.membership-commit:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.membership-commit {
+  min-height: var(--control-standard);
+  justify-self: start;
+  padding-inline: 14px;
+}
+.server-slots-link {
+  text-decoration: none;
+  min-height: var(--control-standard);
+  display: inline-flex;
+  align-items: center;
+}

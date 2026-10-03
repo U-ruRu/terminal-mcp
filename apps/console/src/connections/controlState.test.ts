@@ -80,7 +80,7 @@ describe('fleet control cache', () => {
     expect(loadCachedFleetControl('firstbyte-profile')?.observedAt).toBe(100)
   })
 
-  test('prefers confirmed membership over a newer standalone fallback from another authority', () => {
+  test('prefers a newer authoritative standalone projection over stale mesh membership', () => {
     const member = control('main')
     const standalone = {
       ...control('firstbyte'),
@@ -92,11 +92,13 @@ describe('fleet control cache', () => {
     saveCachedFleetControl('standalone-authority', standalone, 200)
 
     const projected = loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')
-    expect(projected?.control.controlNodeId).toBe('main')
-    expect(projected?.control.mesh?.meshId).toBe('mesh-prod')
+    expect(projected?.control.controlNodeId).toBe('firstbyte')
+    expect(projected?.control.mesh).toBeUndefined()
+    expect(projected?.control.nodes.find((node) => node.nodeId === 'firstbyte')?.meshId).toBeUndefined()
+    expect(projected?.observedAt).toBe(200)
   })
 
-  test('returns unknown for ambiguous standalone fallbacks from different authorities', () => {
+  test('uses the newest standalone authority instead of treating standalone as ambiguous', () => {
     const mainStandalone = {
       ...control('main'),
       nodes: control('main').nodes.map((node) => node.nodeId === 'firstbyte' ? { ...node, meshId: undefined } : node),
@@ -109,7 +111,28 @@ describe('fleet control cache', () => {
     saveCachedFleetControl('main-authority', mainStandalone, 100)
     saveCachedFleetControl('firstbyte-authority', firstbyteStandalone, 200)
 
-    expect(loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')).toBeUndefined()
+    const projected = loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')
+    expect(projected?.control.controlNodeId).toBe('firstbyte')
+    expect(projected?.control.mesh).toBeUndefined()
+    expect(projected?.observedAt).toBe(200)
+  })
+
+  test('prefers a newer topology revision from the same authority even when observed earlier', () => {
+    const staleMember = control('main')
+    const detached = {
+      ...control('main'),
+      revisions: { ...control('main').revisions, topology: 3 },
+      nodes: control('main').nodes.map((node) => node.nodeId === 'firstbyte'
+        ? { ...node, meshId: undefined, desiredTopologyRevision: 3, appliedTopologyRevision: 3 }
+        : { ...node, desiredTopologyRevision: 3, appliedTopologyRevision: 3 }),
+    }
+    saveCachedFleetControl('stale-member', staleMember, 300)
+    saveCachedFleetControl('authority-detach', detached, 200)
+
+    const projected = loadCachedFleetControlForProfile('missing-profile', 'https://firstbyte.example')
+    expect(projected?.control.revisions.topology).toBe(3)
+    expect(projected?.control.mesh).toBeUndefined()
+    expect(projected?.control.nodes.find((node) => node.nodeId === 'firstbyte')?.meshId).toBeUndefined()
   })
 
   test('projects a managed peer cache onto a profile by authoritative node origin', () => {

@@ -4,11 +4,12 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import { ServerCard } from '../components/ServerCard'
 import { FeedbackState } from '../components/UiPrimitives'
 import type { ManagedFleetControlReadModel } from '../api/models'
+import { isFleetControlRevisionRegression, loadCachedFleetControlForProfile, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
-import { agentRoute, meshRoute, taskRoute } from '../navigation/routes'
+import { agentRoute, meshRoute, slotsRoute, taskRoute } from '../navigation/routes'
 
 
 
@@ -23,17 +24,65 @@ export function ServerWorkspace({
 }) {
   const { t, number, dateTime, locale } = useI18n()
   const { instanceId } = useParams()
-  const [controlState, setControlState] = useState<{ instanceId: string; control?: ManagedFleetControlReadModel; unavailable?: boolean }>({ instanceId: '' })
   const server = model.servers.find((item) => item.instanceId === instanceId)
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
+  const [controlState, setControlState] = useState<{
+    instanceId: string
+    control?: ManagedFleetControlReadModel
+    unavailable?: boolean
+    freshness: FleetControlFreshness
+  }>(() => {
+    if (!instanceId) return { instanceId: '', freshness: 'unknown' }
+    const cached = loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)
+    return cached
+      ? { instanceId, control: cached.control, freshness: 'stale' }
+      : { instanceId, freshness: 'unknown' }
+  })
   useEffect(() => {
     if (!instanceId || !loadFleetControl) return
     let cancelled = false
     void loadFleetControl(instanceId)
-      .then((control) => { if (!cancelled) setControlState({ instanceId, control }) })
-      .catch(() => { if (!cancelled) setControlState({ instanceId, unavailable: true }) })
+      .then((control) => {
+        if (cancelled) return
+        const cached = loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)
+        if (isFleetControlRevisionRegression(control, cached?.control)) {
+          setControlState({
+            instanceId,
+            control: cached?.control,
+            unavailable: !cached,
+            freshness: cached ? 'stale' : 'unknown',
+          })
+          return
+        }
+        const observedAt = Date.now()
+        saveCachedFleetControl(instanceId, control, observedAt)
+        propagateCachedFleetControl(control, observedAt)
+        const resolved = loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)
+        const selected = resolved?.control ?? control
+        const selectedIsDirect = (
+          selected.fleetId === control.fleetId
+          && selected.controlNodeId === control.controlNodeId
+          && selected.nodeId === control.nodeId
+          && selected.revisions.topology === control.revisions.topology
+        )
+        setControlState({
+          instanceId,
+          control: selected,
+          freshness: selectedIsDirect ? 'fresh' : 'stale',
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        const cached = loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)
+        setControlState({
+          instanceId,
+          control: cached?.control,
+          unavailable: !cached,
+          freshness: cached ? 'stale' : 'unknown',
+        })
+      })
     return () => { cancelled = true }
-  }, [instanceId, loadFleetControl])
+  }, [instance?.profile.origin, instanceId, loadFleetControl])
 
   if (!server) return <Navigate to="/" replace />
 
@@ -54,7 +103,9 @@ export function ServerWorkspace({
           {!membershipKnown ? t('status.catchingUp') : controlState.unavailable ? t('connections.unknown') : mesh ? (
             <Link className="text-link" to={meshRoute(mesh.meshId)}>{mesh.displayName}</Link>
           ) : localNode || control?.managed === false ? t('connections.standalone') : t('connections.unknown')}
+          {controlState.freshness === 'stale' ? ' · ' + t('connections.stale') : ''}
         </span>
+        <Link className="server-slots-link chip" to={slotsRoute(server.instanceId)}>{t('nav.slots')}</Link>
       </div>
 
       {server.connectivity !== 'live' ? (
