@@ -781,6 +781,55 @@ test('each global Slot timer cue uses its owner policy, not the selected setting
   expect(await screen.findByRole('combobox', { name: 'Applies to' })).toHaveValue('server:alpha')
 })
 
+test('Mesh-owned Slot card and detail use managed control.policy over stale member persistent.policy', async () => {
+  const user = userEvent.setup()
+  const meshSlot = slot('active', '2026-09-30T12:05:00Z')
+  meshSlot.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const member = instance('live', meshSlot)
+  member.runtime.realtime!.snapshot!.persistent!.policy = {
+    ...member.runtime.realtime!.snapshot!.persistent!.policy,
+    durationSeconds: 1200,
+    warningAfterSeconds: 1000,
+    alertAfterSeconds: 1100,
+    rearmAfterSeconds: 300,
+    legacyAdmissionEnabled: false,
+  }
+  const control = managedControl(true, 9)
+  control.policy = {
+    ...control.policy!,
+    durationSeconds: 600,
+    warningAfterSeconds: 240,
+    alertAfterSeconds: 480,
+    rearmAfterSeconds: 60,
+    legacyAdmissionEnabled: true,
+    revision: 9,
+    updatedAt: '2026-10-03T11:00:00Z',
+  }
+  control.revisions = { ...control.revisions, accessPolicy: 9 }
+  const loadControl = vi.fn(async () => control)
+
+  render(<I18nProvider><MemoryRouter initialEntries={['/slots?filter=mesh%3Amesh-prod']}><Routes>
+    <Route path="/slots" element={<ServerSlots instances={[member]} loadFleetControl={loadControl} />} />
+    <Route path="/slots/:logicalAgentId" element={<ServerSlots instances={[member]} loadFleetControl={loadControl} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+
+  const identity = await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })
+  const card = identity.closest('.slot-card') as HTMLElement
+  expect(card).toHaveClass('slot-cue-warning')
+  expect(within(card).getByText('5m 00s')).toBeInTheDocument()
+
+  await user.click(identity)
+  await user.click(await screen.findByText('Technical details'))
+  const policyLabel = screen.getByText('Session policy')
+  expect(policyLabel.parentElement?.textContent).toContain('Session duration 10 min')
+  expect(policyLabel.parentElement?.textContent).toContain('Warning time 4 min')
+  expect(policyLabel.parentElement?.textContent).toContain('Alert time 8 min')
+  expect(policyLabel.parentElement?.textContent).toContain('Rearm delay 1 min')
+  expect(screen.getByText('Legacy admission').parentElement?.textContent).toContain('Yes')
+  expect(screen.getByText('Manual rearm').parentElement?.textContent).toContain('Unavailable')
+  expect(screen.getByText('Admission mode').parentElement?.textContent).toContain('Unavailable')
+})
+
 test('cold-start authoritative topology does not expose Mesh members as standalone filters', async () => {
   const alphaSlot = slot(); alphaSlot.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
   const alpha = instance('live', alphaSlot)
