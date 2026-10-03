@@ -331,8 +331,9 @@ QUERY_RESOURCES = {
 
 
 class FleetSourceQueryPlane:
-    def __init__(self, runtime_db_path, *, output_db_path=None, metrics=None, events=None):
+    def __init__(self, runtime_db_path, *, output_db_path=None, auth_db_path=None, metrics=None, events=None):
         self.runtime_db_path = Path(runtime_db_path)
+        self.auth_db_path = Path(auth_db_path) if auth_db_path else None
         self.output_db_path = Path(output_db_path) if output_db_path else None
         self.metrics = metrics
         self.events = events
@@ -342,6 +343,34 @@ class FleetSourceQueryPlane:
     @staticmethod
     def scope_names():
         return sorted(CURRENT_SCOPES)
+
+    async def access_identities(self) -> dict[str, dict[str, Any]]:
+        if self.auth_db_path is None:
+            return {}
+        try:
+            async with aiosqlite.connect(self.auth_db_path, timeout=1.0) as db:
+                rows = await (await db.execute(
+                    "SELECT logical_agent_id,public_name,access_generation,status FROM auth_access_slots WHERE status='active'"
+                )).fetchall()
+        except aiosqlite.Error:
+            return {}
+        return {
+            str(row[0]): {
+                "public_name": str(row[1]),
+                "access_generation": int(row[2]),
+                "access_status": str(row[3]),
+            }
+            for row in rows
+        }
+
+    @staticmethod
+    def _enrich_access_identity(entity: dict[str, Any], identities: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        payload = entity.get("payload") or {}
+        logical_agent_id = str(payload.get("logical_agent_id") or entity.get("entity_id") or "")
+        identity = identities.get(logical_agent_id)
+        if identity:
+            entity["payload"] = {**payload, **identity}
+        return entity
 
     def _observe(self, operation, started, *, rows=0, size=0, reason="ok"):
         elapsed = time.monotonic() - started
@@ -416,11 +445,14 @@ class FleetSourceQueryPlane:
             raise
         has_more = len(rows) > limit
         rows = rows[:limit]
+        identities = await self.access_identities() if scope == 'logical_agents' else {}
         entities, oversize, page_bytes = [], [], 0
         consumed = decoded
         for row in rows:
             key = tuple(row[name] for name in spec.keys)
             entity = self._current_entity(scope, spec, row, barrier)
+            if identities:
+                entity = self._enrich_access_identity(entity, identities)
             size = len(json.dumps(entity, ensure_ascii=False, separators=(",", ":")).encode())
             consumed = key
             if page_bytes + size > MAX_PAGE_BYTES:
@@ -494,6 +526,8 @@ class FleetSourceQueryPlane:
             self._sqlite_error(f"current:{scope}")
             raise
         entity = self._current_entity(scope, spec, row, barrier) if row else None
+        if entity is not None and scope == 'logical_agents':
+            entity = self._enrich_access_identity(entity, await self.access_identities())
         size = (
             len(json.dumps(entity, ensure_ascii=False, separators=(",", ":")).encode())
             if entity

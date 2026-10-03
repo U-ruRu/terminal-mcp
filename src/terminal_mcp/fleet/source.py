@@ -39,6 +39,7 @@ class FleetSourceService:
         *,
         runtime_health_provider=None,
         output_db_path=None,
+        auth_db_path=None,
         metrics=None,
         events=None,
     ):
@@ -49,6 +50,7 @@ class FleetSourceService:
         self.query_plane = FleetSourceQueryPlane(
             runtime_db_path,
             output_db_path=output_db_path,
+            auth_db_path=auth_db_path,
             metrics=metrics,
             events=events,
         )
@@ -392,6 +394,7 @@ class FleetSourceService:
                 )
             ).fetchall()
 
+        identities = await self.query_plane.access_identities()
         entities: list[dict[str, Any]] = []
         for row in logical_agents:
             entities.append(
@@ -402,6 +405,7 @@ class FleetSourceService:
                     {
                         "logical_agent_id": row[0],
                         "display_name": row[1],
+                        **identities.get(str(row[0]), {}),
                         "state": row[2],
                         "authority_node_id": row[3],
                         "authority_epoch": int(row[4]),
