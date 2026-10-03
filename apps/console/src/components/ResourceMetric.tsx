@@ -14,7 +14,7 @@ function byteCapacity(bytes: number | undefined): string | undefined {
 }
 
 function capacity(server: FleetServerReadModel, kind: ResourceKind): string | undefined {
-  if (server.connectivity === 'offline' || !server.resources) return undefined
+  if (!server.resources) return undefined
   if (kind === 'cpu') {
     const cores = server.resources.cpu.status === 'available' ? server.resources.cpu.logicalCores : undefined
     return cores ? cores + ' CPU' : undefined

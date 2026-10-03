@@ -324,15 +324,9 @@ function unavailableResources(): HostResourcesReadModel {
   }
 }
 
-const RUNTIME_OVERLAY_MAX_AGE_MS = 10_000
-
-function projectedResources(cache: FleetCacheView, source: string, nowMs: number): HostResourcesReadModel {
+function projectedResources(cache: FleetCacheView, source: string): HostResourcesReadModel {
   const overlay = cache.runtimeOverlays.find((item) => item.sourceNodeId === source)
-  if (!overlay || overlay.freshness !== 'fresh') return unavailableResources()
-  const observedAt = Date.parse(overlay.observedAt)
-  if (!Number.isFinite(observedAt) || nowMs - observedAt > RUNTIME_OVERLAY_MAX_AGE_MS) {
-    return unavailableResources()
-  }
+  if (!overlay) return unavailableResources()
   const raw = overlay.payload.resources
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return unavailableResources()
   const data = raw as Record<string, unknown>
@@ -390,13 +384,15 @@ function snapshot(
   sourceDegraded = overlayDegraded(cache, source),
 ): ConsoleSnapshotReadModel {
   const projectedAgents = agents(cache, source, nowMs)
+  const runtimeOverlay = cache.runtimeOverlays.find((item) => item.sourceNodeId === source)
+  const runtimePayload = runtimeOverlay?.payload ?? {}
   return {
     highWaterSeq: cache.appliedProjectionSeq,
     replayFromSeq: cache.appliedProjectionSeq,
     duplicateEventsPossible: false,
     instance: {
-      application: 'terminal-mcp',
-      version: 'fleet-v1',
+      application: text(runtimePayload.application, 'terminal-mcp'),
+      version: text(runtimePayload.version),
       publicBaseUrl: profile.origin,
       healthy: !sourceDegraded,
       health: {
@@ -404,7 +400,7 @@ function snapshot(
         projection_epoch: cache.projectionEpoch,
         projection_seq: cache.appliedProjectionSeq,
       },
-      resources: projectedResources(cache, source, nowMs),
+      resources: projectedResources(cache, source),
     },
     agents: projectedAgents,
     tasks: tasks(cache, source, nowMs),

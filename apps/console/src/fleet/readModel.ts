@@ -398,7 +398,7 @@ export function buildFleetReadModel(
       connectionState: connectionState(instance),
       freshness: freshness(instance),
       healthState: healthState(snapshot, counts, communication),
-      version: snapshot?.instance.version,
+      version: snapshot?.instance.version || undefined,
       healthy: snapshot?.instance.healthy,
       resources: snapshot?.instance.resources,
       contexts: snapshot?.contexts ?? [],

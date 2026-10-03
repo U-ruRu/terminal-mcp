@@ -63,6 +63,8 @@ async def test_pidless_running_is_degraded_until_one_durable_repair_event(tmp_pa
     )
     assert durable["payload"]["status"] == "running"
     overlay = degraded["runtime_overlays"][0]["payload"]
+    assert overlay["application"] == "terminal-mcp"
+    assert overlay["version"]
     assert command.cmd_hash in overlay["stale_running_commands"]
     before_seq = degraded["projection_seq"]
 

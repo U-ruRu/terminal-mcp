@@ -22,6 +22,7 @@ import { FleetVisibilityController, type FleetVisibilitySource } from './policy'
 import { buildProjectedFleetInstances, projectedActivity, projectedSourceNodeId, projectedTask, taskFromQueryItem, type FleetSourceBinding } from './projectionAdapter'
 import { buildFleetReadModel } from './readModel'
 import type { FleetInstanceView } from './types'
+import { preserveSavedServerInstances } from './instanceSet'
 
 type QueryPageData<T> = {
   items?: T[]
@@ -266,7 +267,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
     projectedInstances.length > 0 &&
     (adaptiveState.status !== 'fallback' || !directHasSnapshot),
   )
-  const instances = useProjected ? projectedInstances : directInstances
+  const instances = useProjected ? preserveSavedServerInstances(projectedInstances, directInstances) : directInstances
 
   useEffect(() => {
     const present = new Set<string>()

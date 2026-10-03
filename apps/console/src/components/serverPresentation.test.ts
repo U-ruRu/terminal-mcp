@@ -46,13 +46,25 @@ test('treats RAM and disk at 80 percent as attention', () => {
   expect(resourceVisualState(server, 'filesystem')).toBe('attention')
 })
 
-test('offline state hides last-known resource values', () => {
-  const server = { ...healthy, connectivity: 'offline' as const, freshness: 'offline' as const }
+test('offline transport preserves availability of cached resource observations', () => {
+  const server = { ...healthy, connectivity: 'offline' as const, freshness: 'stale' as const }
 
-  expect(resourceDisplayValue(server, 'cpu', 'Unavailable', 'load')).toBe('Unavailable')
-  expect(resourceDisplayValue(server, 'memory', 'Unavailable', 'load')).toBe('Unavailable')
-  expect(resourceVisualState(server, 'filesystem')).toBe('unavailable')
+  expect(resourceDisplayValue(server, 'cpu', 'Unavailable', 'load')).toBe('28%')
+  expect(resourceDisplayValue(server, 'memory', 'Unavailable', 'load')).toBe('45%')
+  expect(resourceVisualState(server, 'filesystem')).toBe('normal')
   expect(serverVisualState(server)).toBe('offline')
+})
+
+test('metric availability stays independent for a partial cached observation', () => {
+  const server = {
+    ...healthy,
+    connectivity: 'offline' as const,
+    freshness: 'stale' as const,
+    resources: { ...healthy.resources!, memory: { status: 'unavailable' as const } },
+  }
+  expect(resourceVisualState(server, 'cpu')).toBe('normal')
+  expect(resourceVisualState(server, 'memory')).toBe('unavailable')
+  expect(resourceVisualState(server, 'filesystem')).toBe('normal')
 })
 
 test('problem ordering is offline or critical, then attention, then stale, then alphabetical', () => {
