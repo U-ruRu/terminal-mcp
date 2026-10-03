@@ -2379,3 +2379,28 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   .slot-card-primary { grid-template-columns: minmax(0, 1fr) 13ch auto; gap: var(--space-2); }
   .slot-card-secondary { grid-template-columns: minmax(6rem, auto) minmax(6.5rem, auto) var(--touch-target); }
 }
+
+
+/* Fleet Overview grouped operational surface */
+.fleet-overview-primary { gap: var(--space-4); }
+.fleet-status-card { height: 88px; min-height: 88px; max-height: 88px; overflow: hidden; }
+.fleet-status-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-server-filter .segmented-control { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); flex-wrap: nowrap; }
+.fleet-server-filter .segmented-control button { min-width: 0; width: 100%; padding-inline: var(--space-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fleet-server-groups, .fleet-server-group, .fleet-agent-sessions, .fleet-session-group { display: grid; gap: var(--space-3); }
+.fleet-server-groups:focus { outline: none; }
+.fleet-server-groups:focus-visible { outline: var(--border-emphasis, 2px) solid var(--color-focus); outline-offset: var(--space-2); }
+.fleet-group-title, .fleet-section-title { margin: 0; }
+.fleet-group-title { color: var(--color-muted); font-size: var(--font-label-size, 13px); line-height: var(--font-label-line, 20px); font-weight: var(--font-weight-semibold); }
+.fleet-section-title { font-size: var(--font-section-size, 20px); line-height: var(--font-section-line, 28px); }
+.fleet-agent-sessions, .fleet-mesh-index { padding-top: var(--space-2); }
+.fleet-mesh-index { display: grid; gap: var(--space-3); }
+.server-card-problem { margin: 0; color: var(--color-muted); font-size: var(--font-caption-size, 11px); line-height: var(--font-caption-line, 16px); overflow-wrap: anywhere; }
+.server-card-offline .server-card-problem, .server-card-critical .server-card-problem { color: var(--color-danger); }
+.server-card-loading .server-card-problem, .server-card-stale .server-card-problem { color: var(--color-stale, var(--color-muted)); }
+.fleet-slot-grid { display: grid; gap: var(--space-3); }
+@media (max-width: 420px) {
+  .fleet-server-filter .segmented-control { gap: var(--space-1); }
+  .fleet-server-filter .segmented-control button { font-size: var(--font-caption-size, 11px); padding-inline: 4px; }
+  .fleet-status-card { padding: var(--space-3); }
+}

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { FleetServerReadModel } from '../fleet/readModel'
@@ -29,6 +30,16 @@ export function ServerCard({
   const state = serverVisualState(server)
   const resourceStates = (['cpu', 'memory', 'filesystem'] as const).map((kind) => resourceVisualState(server, kind))
   const resourceIssue = server.connectivity !== 'offline' && resourceStates.some((resourceState) => resourceState !== 'normal')
+  const [now, setNow] = useState(() => Date.now())
+  const timedProblem = state === 'offline' || state === 'loading' || state === 'stale'
+  useEffect(() => {
+    if (!timedProblem) return
+    const handle = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(handle)
+  }, [timedProblem])
+  const problemStartedAt = server.lastSeenAt ? Date.parse(server.lastSeenAt) : Number.NaN
+  const problemSeconds = Number.isFinite(problemStartedAt) ? Math.max(0, Math.floor((now - problemStartedAt) / 1000)) : undefined
+  const problemReason = server.lastError || server.staleReason || (state === 'loading' ? t('status.catchingUp') : state === 'offline' ? t('status.offline') : state === 'stale' ? t('status.stale') : '')
 
   const content = (
     <>
@@ -60,6 +71,10 @@ export function ServerCard({
             <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
           </dl>
         </details>
+      ) : null}
+
+      {variant === 'compact' && timedProblem ? (
+        <p className="server-card-problem">{problemReason}{problemSeconds !== undefined ? ` · ${number(problemSeconds)}s` : ''}</p>
       ) : null}
 
       {variant === 'large' ? (
