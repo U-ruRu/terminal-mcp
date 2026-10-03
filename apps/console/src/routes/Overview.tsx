@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import type { ManagedFleetControlReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
 import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
 import { FleetDashboard, type FleetServerGroup } from '../components/FleetDashboard'
-import { FeedbackState, IconButton, UiButton } from '../components/UiPrimitives'
+import { ConfirmationDialog, FeedbackState, IconButton, UiButton } from '../components/UiPrimitives'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
@@ -31,6 +31,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
   const [slotMessage, setSlotMessage] = useState('')
   const [busy, setBusy] = useState('')
   const [, setAccessRevision] = useState(0)
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState<ActiveSlotEntry | null>(null)
 
   useEffect(() => {
     if (!loadFleetControl || model.servers.length === 0) return
@@ -173,6 +174,23 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
     <div className="stack fleet-overview">
       <FleetDashboard model={model} groups={serverGroups} />
 
+      {confirmDeleteEntry ? <ConfirmationDialog
+        title={t('slots.delete')}
+        subject={slotName(confirmDeleteEntry.slot)}
+        detail={t('slots.deleteConfirm')}
+        cancelLabel={t('slots.confirmCancel')}
+        confirmLabel={t('slots.delete')}
+        confirmIcon="delete"
+        confirmVariant="destructive"
+        busy={Boolean(busy)}
+        onCancel={() => setConfirmDeleteEntry(null)}
+        onConfirm={() => {
+          const entry = confirmDeleteEntry
+          setConfirmDeleteEntry(null)
+          void mutateSlot(entry, 'delete')
+        }}
+      /> : null}
+
       <section className="fleet-agent-sessions" aria-labelledby="fleet-agent-sessions-title">
         <h2 id="fleet-agent-sessions-title" className="fleet-section-title">{t('fleet.agentSessions')}</h2>
         {slotMessage ? <div className="attention-strip" role="status">{slotMessage}</div> : null}
@@ -192,7 +210,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
                   <IconButton icon="pause" variant="primary" label={t('slots.suspend')} disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'suspend')} />
                   <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="more" /></summary><div className="slot-overflow-menu">
                     <UiButton type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'rotate')}><Icon name="rotate" />{t('slots.rotateAccessCode')}</UiButton>
-                    <UiButton type="button" variant="destructive" disabled={Boolean(busy)} onClick={() => { if (window.confirm(t('slots.deleteConfirm'))) void mutateSlot(entry, 'delete') }}><Icon name="delete" />{t('slots.delete')}</UiButton>
+                    <UiButton type="button" variant="destructive" disabled={Boolean(busy)} onClick={() => setConfirmDeleteEntry(entry)}><Icon name="delete" />{t('slots.delete')}</UiButton>
                     <Link className="nav-link" to={slotHref(entry)}>{t('slots.details')}</Link>
                   </div></details>
                 </div>

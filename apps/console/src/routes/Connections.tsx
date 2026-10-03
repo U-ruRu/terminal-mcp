@@ -7,7 +7,7 @@ import { isFleetControlRevisionRegression, loadCachedFleetControl, propagateCach
 import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
-import { FeedbackState, IconButton } from '../components/UiPrimitives'
+import { ConfirmationDialog, FeedbackState, IconButton, IconButtonRow } from '../components/UiPrimitives'
 import { returnToState } from '../navigation/context'
 import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
 
@@ -138,6 +138,7 @@ export function Connections() {
   const [meshMutationPhase, setMeshMutationPhase] = useState<MutationPhase | null>(null)
   const [membershipMutations, setMembershipMutations] = useState<Record<string, MembershipMutation>>({})
   const [membershipTargets, setMembershipTargets] = useState<Record<string, string>>({})
+  const [confirmation, setConfirmation] = useState<{ kind: 'delete-mesh'; label: string } | { kind: 'remove-connection'; instanceId: string; label: string } | null>(null)
 
   const refreshControls = useCallback(async () => {
     const results = await Promise.all(
@@ -872,10 +873,10 @@ export function Connections() {
                 onChange={(event) => setMeshName(event.target.value)}
               />
             </label>
-            <div className="connection-actions">
+            <IconButtonRow className="connection-actions">
               <IconButton icon="edit" variant="secondary" label={t('connections.renameMesh')} disabled={controlBusy || !writeProfile} onClick={() => void renameMesh()} />
-              <IconButton icon="delete" variant="destructive" label={t('connections.deleteMesh')} disabled={controlBusy || !writeProfile} onClick={() => { if (selectedMesh && window.confirm(selectedMesh.displayName + ': ' + t('connections.deleteMeshConfirm'))) void deleteMesh() }} />
-            </div>
+              <IconButton icon="delete" variant="destructive" label={t('connections.deleteMesh')} disabled={controlBusy || !writeProfile} onClick={() => { if (selectedMesh) setConfirmation({ kind: 'delete-mesh', label: selectedMesh.displayName }) }} />
+            </IconButtonRow>
           </>
         ) : null}
 
@@ -919,6 +920,24 @@ export function Connections() {
                     : '\u00a0'}
         </p>
       </article>
+
+      {confirmation ? <ConfirmationDialog
+        title={confirmation.kind === 'delete-mesh' ? t('connections.deleteMesh') : t('connections.remove')}
+        subject={confirmation.label}
+        detail={confirmation.kind === 'delete-mesh' ? t('connections.deleteMeshConfirm') : t('connections.removeConfirm')}
+        cancelLabel={t('connections.handoff.cancel')}
+        confirmLabel={confirmation.kind === 'delete-mesh' ? t('connections.deleteMesh') : t('connections.remove')}
+        confirmIcon={confirmation.kind === 'delete-mesh' ? 'delete' : 'disconnect'}
+        confirmVariant="destructive"
+        busy={confirmation.kind === 'delete-mesh' && controlBusy}
+        onCancel={() => setConfirmation(null)}
+        onConfirm={() => {
+          const current = confirmation
+          setConfirmation(null)
+          if (current.kind === 'delete-mesh') void deleteMesh()
+          else disconnect(current.instanceId)
+        }}
+      /> : null}
 
       <div className="connection-list">
         {profiles.length === 0 ? (
@@ -1021,15 +1040,15 @@ export function Connections() {
                                     ? t('connections.actionRequired')
                                     : '\u00a0'}
                       </p>
-                      <div className="connection-actions">
+                      <IconButtonRow className="connection-actions">
                         {!routeMeshId && state?.status === 'error' && state.retryable ? (
                           <IconButton icon="retry" variant="primary" label={t('connections.retry')} onClick={() => void retry(profile.instanceId)} />
                         ) : null}
                         {routeMeshId && observed?.control?.managed ? (
                           <IconButton icon="rotate" variant="secondary" label={t('connections.rotateTrust')} disabled={controlBusy || state?.status !== 'connected'} onClick={() => void rotateTrust(profile.instanceId)} />
                         ) : null}
-                        {!routeMeshId ? <IconButton icon="disconnect" variant="destructive" label={t('connections.remove')} onClick={() => { if (window.confirm(profile.displayName + ': ' + t('connections.removeConfirm'))) disconnect(profile.instanceId) }} /> : null}
-                      </div>
+                        {!routeMeshId ? <IconButton icon="disconnect" variant="destructive" label={t('connections.remove')} onClick={() => setConfirmation({ kind: 'remove-connection', instanceId: profile.instanceId, label: profile.displayName })} /> : null}
+                      </IconButtonRow>
                     </article>
                   )
                 })}

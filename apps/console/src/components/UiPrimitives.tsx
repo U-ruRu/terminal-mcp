@@ -1,4 +1,4 @@
-import { forwardRef, type ButtonHTMLAttributes, type PropsWithChildren, type ReactNode } from 'react'
+import { forwardRef, useId, useState, type ButtonHTMLAttributes, type HTMLAttributes, type PropsWithChildren, type ReactNode } from 'react'
 
 import { Icon, type IconName } from './Icon'
 
@@ -29,21 +29,93 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   className = '',
   ...props
 }, ref) {
+  const tooltipId = useId()
+  const [tooltipVisible, setTooltipVisible] = useState(false)
+  const { style, onFocus, onBlur, onMouseEnter, onMouseLeave, ...buttonProps } = props
+  const describedBy = tooltipVisible
+    ? [buttonProps['aria-describedby'], tooltipId].filter(Boolean).join(' ')
+    : buttonProps['aria-describedby']
   return (
     <button
-      {...props}
+      {...buttonProps}
       ref={ref}
       type={type}
       className={['ui-button', 'ui-button-' + variant, 'ui-icon-button', className].filter(Boolean).join(' ')}
+      style={{ minWidth: 44, minHeight: 44, ...style }}
       aria-label={label}
+      aria-describedby={describedBy}
       aria-busy={busy || undefined}
-      title={label}
       disabled={disabled || busy}
+      onFocus={(event) => { setTooltipVisible(true); onFocus?.(event) }}
+      onBlur={(event) => { setTooltipVisible(false); onBlur?.(event) }}
+      onMouseEnter={(event) => { setTooltipVisible(true); onMouseEnter?.(event) }}
+      onMouseLeave={(event) => { setTooltipVisible(false); onMouseLeave?.(event) }}
     >
       <Icon name={busy ? 'loading' : icon} />
+      {tooltipVisible ? (
+        <span id={tooltipId} className="ui-icon-button-tooltip" role="tooltip">
+          {label}
+        </span>
+      ) : null}
     </button>
   )
 })
+
+export function IconButtonRow({
+  className = '',
+  style,
+  ...props
+}: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      {...props}
+      className={['ui-icon-button-row', className].filter(Boolean).join(' ')}
+      style={{ display: 'flex', flexFlow: 'row nowrap', alignItems: 'center', gap: 'var(--space-2)', ...style }}
+    />
+  )
+}
+
+export type ConfirmationDialogProps = {
+  title: string
+  detail: ReactNode
+  cancelLabel: string
+  confirmLabel: string
+  confirmIcon: IconName
+  onCancel: () => void
+  onConfirm: () => void
+  subject?: ReactNode
+  confirmVariant?: Extract<ButtonVariant, 'primary' | 'destructive'>
+  busy?: boolean
+}
+
+export function ConfirmationDialog({
+  title,
+  detail,
+  cancelLabel,
+  confirmLabel,
+  confirmIcon,
+  onCancel,
+  onConfirm,
+  subject,
+  confirmVariant = 'destructive',
+  busy = false,
+}: ConfirmationDialogProps) {
+  return (
+    <div className="floating-status-stack confirmation-surface">
+      <div className="panel ui-confirmation-dialog" role="dialog" aria-modal="true" aria-label={title}>
+        {subject ? <p><strong>{subject}</strong></p> : null}
+        <p>{detail}</p>
+        <IconButtonRow className="ui-confirmation-actions">
+          <IconButton icon="cancel" variant="secondary" label={cancelLabel} onClick={onCancel} disabled={busy} />
+          <UiButton type="button" variant={confirmVariant} onClick={onConfirm} disabled={busy}>
+            <Icon name={busy ? 'loading' : confirmIcon} />
+            {confirmLabel}
+          </UiButton>
+        </IconButtonRow>
+      </div>
+    </div>
+  )
+}
 
 export function Field({
   label,

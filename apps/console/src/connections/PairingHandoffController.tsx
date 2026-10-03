@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { attachAppUrlSource, inspectPairingHandoff, PRODUCTION_CONSOLE_ORIGIN } from './handoff'
 import { useI18n } from '../i18n/useI18n'
-import { IconButton } from '../components/UiPrimitives'
+import { IconButton, IconButtonRow } from '../components/UiPrimitives'
 import { useConnectionRuntime } from './runtime'
 
 type Pending = { url: string; origin: string; name: string }
@@ -73,10 +73,10 @@ export function PairingHandoffController() {
     {pending ? <>
       <p>{t('connections.handoff.connectPrefix')} <strong>{pending.origin}</strong>?</p>
       <p className="muted">{t('connections.handoff.secretMemory')}</p>
-      <div className="connection-actions">
+      <IconButtonRow className="connection-actions">
         <IconButton icon="connect" variant="primary" label={t('connections.handoff.pairServer')} busy={submitting} onClick={() => void confirm()} />
         <IconButton icon="cancel" variant="secondary" label={t('connections.handoff.cancel')} onClick={close} />
-      </div>
+      </IconButtonRow>
     </> : <>
       <p className="connection-error" role="alert">{handoffError}</p>
       <IconButton icon="close" label={t('connections.handoff.dismiss')} onClick={close} />

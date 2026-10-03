@@ -1,8 +1,8 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 
-import { FeedbackState, Field, IconButton, SegmentedControl, Tabs, UiButton } from './UiPrimitives'
+import { ConfirmationDialog, FeedbackState, Field, IconButton, IconButtonRow, SegmentedControl, Tabs, UiButton } from './UiPrimitives'
 
 test('shared controls expose pressed, selected, disabled and error semantics', async () => {
   const segmentChange = vi.fn()
@@ -57,7 +57,15 @@ test('IconButton exposes semantic icon, accessible label, stable busy state and 
   )
   const button = screen.getByRole('button', { name: 'Save policy' })
   expect(button).toHaveAttribute('type', 'button')
-  expect(button).toHaveAttribute('title', 'Save policy')
+  expect(button).toHaveStyle({ minWidth: '44px', minHeight: '44px' })
+  expect(button.querySelector('.ui-icon-button-tooltip')).toBeNull()
+  button.focus()
+  expect(button).toHaveFocus()
+  await waitFor(() => expect(button.querySelector('.ui-icon-button-tooltip')).not.toBeNull())
+  const tooltip = button.querySelector('.ui-icon-button-tooltip') as HTMLElement
+  expect(tooltip).toHaveAttribute('role', 'tooltip')
+  expect(tooltip).toHaveTextContent('Save policy')
+  expect(button).toHaveAttribute('aria-describedby', tooltip.id)
   expect(button).toHaveAttribute('aria-expanded', 'false')
   expect(button).toHaveAttribute('aria-controls', 'policy-panel')
   expect(button.querySelector('.ui-icon-save')).not.toBeNull()
@@ -76,4 +84,45 @@ test('IconButton exposes semantic icon, accessible label, stable busy state and 
 test.each(['primary', 'secondary', 'quiet', 'destructive'] as const)('IconButton supports %s variant', (variant) => {
   render(<IconButton icon="copy" label={variant} variant={variant} />)
   expect(screen.getByRole('button', { name: variant })).toHaveClass('ui-icon-button', 'ui-button-' + variant)
+})
+
+
+test('ConfirmationDialog keeps cancel icon-only and confirm action explicit', async () => {
+  const onCancel = vi.fn()
+  const onConfirm = vi.fn()
+  render(
+    <ConfirmationDialog
+      title="Delete mesh"
+      subject="Production"
+      detail="This action cannot be undone."
+      cancelLabel="Cancel"
+      confirmLabel="Delete mesh"
+      confirmIcon="delete"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />,
+  )
+  const dialog = screen.getByRole('dialog', { name: 'Delete mesh' })
+  expect(within(dialog).getByText('Production')).toBeInTheDocument()
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveClass('ui-icon-button')
+  const confirm = within(dialog).getByRole('button', { name: 'Delete mesh' })
+  expect(confirm).toHaveClass('ui-button-destructive')
+  expect(confirm.querySelector('.ui-icon-delete')).not.toBeNull()
+  expect(confirm).toHaveTextContent('Delete mesh')
+  await userEvent.click(confirm)
+  expect(onConfirm).toHaveBeenCalledTimes(1)
+})
+
+
+test('IconButtonRow is a compact non-wrapping horizontal action group', () => {
+  render(
+    <IconButtonRow className="connection-actions" data-testid="actions">
+      <IconButton icon="retry" label="Retry" />
+      <IconButton icon="disconnect" label="Remove" />
+    </IconButtonRow>,
+  )
+  const row = screen.getByTestId('actions')
+  expect(row).toHaveClass('ui-icon-button-row', 'connection-actions')
+  expect(row).toHaveStyle({ display: 'flex', flexFlow: 'row nowrap', alignItems: 'center' })
+  expect(within(row).getAllByRole('button')).toHaveLength(2)
 })

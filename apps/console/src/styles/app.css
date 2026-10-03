@@ -908,6 +908,40 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   flex: 0 0 auto;
 }
 
+.ui-icon-button {
+  position: relative;
+}
+
+.ui-icon-button-tooltip {
+  position: absolute;
+  z-index: 70;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  width: max-content;
+  max-width: min(240px, calc(100vw - 24px));
+  transform: translateX(-50%);
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-overlay);
+  color: var(--color-text);
+  box-shadow: 0 6px 18px var(--color-shadow);
+  font-size: var(--font-caption-size);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--font-caption-line);
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms linear;
+}
+
+.ui-icon-button:hover .ui-icon-button-tooltip,
+.ui-icon-button:focus-visible .ui-icon-button-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
 .ui-icon-button .ui-icon {
   width: 20px;
   height: 20px;
@@ -2486,3 +2520,30 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .activity-new-items.ui-icon-button { width: auto; }
 .filter-status-label { min-width: 0; overflow-wrap: anywhere; }
 .filter-status .ui-icon-button { border-radius: 999px; padding: 0; }
+
+/* M4 IconButton review contract: compact action rows stay horizontal on mobile. */
+.ui-confirmation-actions {
+  align-items: center;
+}
+
+@media (max-width: 700px) {
+  .connection-actions.ui-icon-button-row,
+  .server-actions.ui-icon-button-row,
+  .ui-confirmation-actions.ui-icon-button-row {
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+    justify-content: flex-start;
+    grid-template-columns: none;
+  }
+
+  .connection-actions.ui-icon-button-row > .ui-icon-button,
+  .server-actions.ui-icon-button-row > .ui-icon-button,
+  .ui-confirmation-actions.ui-icon-button-row > .ui-icon-button {
+    width: var(--touch-target);
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    flex: 0 0 auto;
+  }
+}
