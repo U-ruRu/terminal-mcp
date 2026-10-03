@@ -36,6 +36,7 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
   }
 
   if (selected) {
+    const hasCurrentSession = selected.logicalSessionStatus === 'active' || (!('logicalSessionStatus' in selected) && selected.status === 'active')
     const relatedTasks = tasks.filter((task) =>
       task.owner?.agentId === selected.agentId ||
       (task.participants ?? []).some((participant) => participant.agentId === selected.agentId),
@@ -48,12 +49,13 @@ export function ServerAgents({ instances }: { instances: FleetInstanceView[] }) 
             <h2 id="agent-title">{selected.name}</h2>
             <p className="muted">{t('agents.exactSession')} {selected.agentId}</p>
           </div>
-          <span className={'status status-' + instance.runtime.status}>{localizedAgentState(t, selected.status)}</span>
+          <span className={'status status-' + instance.runtime.status}>{hasCurrentSession ? localizedAgentState(t, selected.status) : selected.status}</span>
         </div>
         <article className="panel">
-          <h3>{t('agents.currentSession')}</h3>
+          <h3>{hasCurrentSession ? t('agents.currentSession') : t('agents.lastKnownState')}</h3>
           <p>{selected.intent || t('agents.noIntent')}</p>
-          <p className="muted">{t('agents.sessionLabel')} {formatDuration(selected.sessionAgeSeconds, locale, t('common.unknown'))} · {t('agents.idleLabel')} {formatDuration(selected.idleSeconds, locale, t('common.unknown'))}</p>
+          {hasCurrentSession ? <p className="muted">{t('agents.sessionLabel')} {formatDuration(selected.sessionAgeSeconds, locale, t('common.unknown'))} · {t('agents.idleLabel')} {formatDuration(selected.idleSeconds, locale, t('common.unknown'))}</p> : null}
+          {selected.lastActivity ? <p className="muted">{t('server.lastActivity')} {selected.lastActivity}</p> : null}
           {selected.taskSummary && <p className="muted">{selected.taskSummary}</p>}
         </article>
         <article className="panel">

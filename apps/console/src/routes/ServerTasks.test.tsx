@@ -146,3 +146,24 @@ test('task detail route is a dedicated surface without the task list', () => {
   expect(screen.queryByRole('link', { name: 'T-1 · Clickable task' })).not.toBeInTheDocument()
   expect(screen.queryByRole('link', { name: 'Back to tasks' })).not.toBeInTheDocument()
 })
+
+
+test('task detail exposes Server, owner and participant entity links', () => {
+  const related: TaskReadModel = {
+    ...task,
+    owner: { agentId: 'owner-1', agentName: 'Owner Human', claimedAt: '2026-09-28T11:00:00Z', claimAgeSeconds: 1, claimIntent: 'Own', role: 'owner' },
+    participants: [{ agentId: 'participant-1', agentName: 'Participant Human', claimedAt: '2026-09-28T11:00:00Z', claimAgeSeconds: 1, claimIntent: 'Help', role: 'participant' }],
+  }
+  const withRelations: FleetInstanceView = {
+    ...instance,
+    runtime: { ...instance.runtime, realtime: instance.runtime.realtime ? { ...instance.runtime.realtime, snapshot: { ...snapshot, tasks: [related] } } : null },
+  }
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/servers/alpha/tasks/console/T-1']}>
+      <Routes><Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={[withRelations]} />} /></Routes>
+    </MemoryRouter></I18nProvider>,
+  )
+  expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute('href', '/servers/alpha')
+  expect(screen.getByRole('link', { name: 'Owner Human' })).toHaveAttribute('href', '/servers/alpha/agents/owner-1')
+  expect(screen.getByRole('link', { name: 'Participant Human' })).toHaveAttribute('href', '/servers/alpha/agents/participant-1')
+})

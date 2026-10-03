@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
+import { navigationReturnTo, serverSwitchDestination } from '../navigation/context'
+
 import type { FleetServerReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
@@ -72,30 +74,30 @@ type ContextNavigation = {
   titleKey: MessageKey
 }
 
-function contextNavigation(pathname: string, search: string): ContextNavigation | null {
+function contextNavigation(pathname: string, search: string, returnTo?: string): ContextNavigation | null {
   const parts = pathname.split('/').filter(Boolean)
-  if (parts[0] === 'slots' && parts.length >= 2) return { to: '/slots' + search, ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
+  if (parts[0] === 'slots' && parts.length >= 2) return { to: returnTo ?? '/slots' + search, ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
   if (parts[0] === 'servers' && parts[1]) {
     const serverPath = '/servers/' + parts[1]
-    if (parts[2] === 'slots' && parts.length >= 4) return { to: serverPath + '/slots', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
-    if (parts[2] === 'slots') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'title.serverSlots' }
-    if (parts[2] === 'tasks' && parts.length >= 5) return { to: serverPath + '/tasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
-    if (parts[2] === 'tasks') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
-    if (parts[2] === 'agents' && parts.length >= 4) return { to: serverPath + '/agents', ariaKey: 'agents.backToAgents', titleKey: 'nav.agents' }
-    if (parts[2] === 'agents') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.agents' }
-    if (parts[2] === 'context') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.context' }
-    if (parts[2] === 'health') return { to: serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.health' }
-    return { to: '/', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
+    if (parts[2] === 'slots' && parts.length >= 4) return { to: returnTo ?? serverPath + '/slots', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
+    if (parts[2] === 'slots') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'title.serverSlots' }
+    if (parts[2] === 'tasks' && parts.length >= 5) return { to: returnTo ?? serverPath + '/tasks', ariaKey: 'nav.goBackToTasks', titleKey: 'title.taskDetail' }
+    if (parts[2] === 'tasks') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'title.serverTasks' }
+    if (parts[2] === 'agents' && parts.length >= 4) return { to: returnTo ?? serverPath + '/agents', ariaKey: 'agents.backToAgents', titleKey: 'nav.agents' }
+    if (parts[2] === 'agents') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.agents' }
+    if (parts[2] === 'context') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.context' }
+    if (parts[2] === 'health') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.health' }
+    return { to: returnTo ?? '/', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
   }
   if (parts[0] === 'meshes' && parts[1]) {
     const meshPath = '/meshes/' + parts[1]
-    if (parts[2] === 'persistent' && parts.length >= 4) return { to: meshPath + '/persistent', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
-    if (parts[2] === 'persistent') return { to: meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.serverSlots' }
-    return { to: '/connections', ariaKey: 'nav.goBackToConnections', titleKey: 'title.mesh' }
+    if (parts[2] === 'persistent' && parts.length >= 4) return { to: returnTo ?? meshPath + '/persistent', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
+    if (parts[2] === 'persistent') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.serverSlots' }
+    return { to: returnTo ?? '/connections', ariaKey: 'nav.goBackToConnections', titleKey: 'title.mesh' }
   }
   if (pathname === '/activity') {
     const server = new URLSearchParams(search).get('server')
-    if (server) return { to: '/servers/' + encodeURIComponent(server), ariaKey: 'nav.goBackToServer', titleKey: 'title.activity' }
+    if (server) return { to: returnTo ?? '/servers/' + encodeURIComponent(server), ariaKey: 'nav.goBackToServer', titleKey: 'title.activity' }
   }
   return null
 }
@@ -145,7 +147,7 @@ export function AppShell({
   }, [menuOpen])
 
   const current = activeKey(location.pathname)
-  const contextual = contextNavigation(location.pathname, location.search)
+  const contextual = contextNavigation(location.pathname, location.search, navigationReturnTo(location.state))
   const selectedId = selectedServer?.instanceId
   const serverState = selectedServer ? serverVisualState(selectedServer) : undefined
   const problemCount = servers.filter(needsAttention).length
@@ -319,7 +321,7 @@ export function AppShell({
                 <Link
                   key={server.instanceId}
                   className={'navigation-server-link' + (server.instanceId === selectedId ? ' active' : '')}
-                  to={'/servers/' + encodeURIComponent(server.instanceId)}
+                  to={serverSwitchDestination(location.pathname, location.search, server.instanceId)}
                   onClick={() => setMenuOpen(false)}
                 >
                   {server.displayName}

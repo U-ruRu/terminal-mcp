@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 
 import type { TaskReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState } from '../components/UiPrimitives'
-import { agentRoute, taskRoute } from '../navigation/routes'
+import { returnToState } from '../navigation/context'
+import { agentRoute, serverRoute, taskRoute } from '../navigation/routes'
 
 export type ServerTaskLoader = (
   instanceId: string,
@@ -44,6 +45,7 @@ export function ServerTasks({
   loadTask?: ServerTaskLoader
 }) {
   const { t } = useI18n()
+  const location = useLocation()
   const { instanceId = '', namespace, taskId } = useParams()
   const instance = instances.find((item) => item.profile.instanceId === instanceId)
   const tasks = useMemo(
@@ -119,14 +121,15 @@ export function ServerTasks({
               <div><dt>{t('tasks.operationalStatus')}</dt><dd><span className="chip">{taskStatusLabel(detail.operationalStatus, t)}</span></dd></div>
               <div><dt>{t('tasks.priority')}</dt><dd>{detail.priority}</dd></div>
               <div><dt>{t('tasks.lane')}</dt><dd>{detail.lane}</dd></div>
-              <div className="task-detail-wide"><dt>{t('common.owner')}</dt><dd>{detail.owner?.agentId ? <Link className="text-link" to={agentRoute(instanceId, detail.owner.agentId)}>{detail.owner.agentName}</Link> : detail.owner?.agentName ?? '—'}</dd></div>
+              <div className="task-detail-wide"><dt>{t('common.server')}</dt><dd><Link className="text-link" to={serverRoute(instanceId)} state={returnToState(location.pathname, location.search)}>{instance.profile.displayName}</Link></dd></div>
+              <div className="task-detail-wide"><dt>{t('common.owner')}</dt><dd>{detail.owner?.agentId ? <Link className="text-link" to={agentRoute(instanceId, detail.owner.agentId)} state={returnToState(location.pathname, location.search)}>{detail.owner.agentName}</Link> : detail.owner?.agentName ?? '—'}</dd></div>
               {detail.candidateRef ? <div className="task-detail-wide"><dt>{t('common.candidate')}</dt><dd><code>{detail.candidateRef}</code></dd></div> : null}
             </dl>
             {(detail.participants ?? []).length > 0 ? (
               <div className="task-participants">
                 <span className="muted">{t('tasks.participants')}</span>
                 <div className="chip-row">
-                  {(detail.participants ?? []).map((participant) => participant.agentId ? <Link className="text-link" key={participant.agentId} to={agentRoute(instanceId, participant.agentId)}>{participant.agentName}</Link> : <span className="chip" key={`${participant.agentName}:${participant.claimedAt}`}>{participant.agentName}</span>)}
+                  {(detail.participants ?? []).map((participant) => participant.agentId ? <Link className="text-link" key={participant.agentId} to={agentRoute(instanceId, participant.agentId)} state={returnToState(location.pathname, location.search)}>{participant.agentName}</Link> : <span className="chip" key={`${participant.agentName}:${participant.claimedAt}`}>{participant.agentName}</span>)}
                 </div>
               </div>
             ) : null}

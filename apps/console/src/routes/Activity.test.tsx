@@ -6,9 +6,10 @@ import { afterEach, expect, test, vi } from 'vitest'
 import type { ActivityFeedReadModel } from '../api/models'
 import type { FleetInstanceView } from '../fleet/types'
 import { I18nProvider } from '../i18n/I18nProvider'
+import { resetActivityStateCacheForTests } from '../activity/stateCache'
 import { Activity } from './Activity'
 
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); resetActivityStateCacheForTests() })
 
 function instance(instanceId: string, displayName: string, cursor: number): FleetInstanceView {
   return {
@@ -236,4 +237,46 @@ test('shows connection failures as a compact service row with nested technical c
   await userEvent.click(screen.getByRole('button', { name: 'Technical details' }))
   expect(screen.getByText('direct_authority_auth_revoked')).toBeInTheDocument()
   expect(document.querySelector('.activity-error-state')).not.toBeInTheDocument()
+})
+
+
+test('restores per-server feed and filters after Activity is unmounted by detail navigation', async () => {
+  const load = activityLoader()
+  const view = render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+  await screen.findByText('Ship it')
+  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
+  expect(screen.getByLabelText('Category')).toHaveValue('messages')
+  view.unmount()
+
+  const callsBeforeReturn = load.mock.calls.length
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+  expect(screen.getByLabelText('Category')).toHaveValue('messages')
+  expect(screen.getByText('Ship it')).toBeInTheDocument()
+  await waitFor(() => expect(load.mock.calls.length).toBe(callsBeforeReturn))
+})
+
+test('keeps Activity filter state independently for each server', async () => {
+  const load = activityLoader()
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=alpha']}>
+      <Activity instances={[instance('alpha', 'Alpha', 2), instance('beta', 'Beta', 7)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+  await screen.findByText('Ship it')
+  await userEvent.selectOptions(screen.getByLabelText('Category'), 'messages')
+  await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
+  await screen.findByText('Beta is online again')
+  expect(screen.getByLabelText('Category')).toHaveValue('all')
+  await userEvent.selectOptions(screen.getByLabelText('Category'), 'health')
+  await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
+  expect(screen.getByLabelText('Category')).toHaveValue('messages')
+  expect(screen.getByText('Ship it')).toBeInTheDocument()
 })

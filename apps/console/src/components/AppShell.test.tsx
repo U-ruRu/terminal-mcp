@@ -101,3 +101,16 @@ test('global status reports the same live population as the Fleet live filter', 
   const appBar = document.querySelector('.app-bar') as HTMLElement
   expect(within(appBar).getByText('Live 1')).toBeInTheDocument()
 })
+
+
+test('entity navigation state overrides canonical Back while direct deep links remain canonical', () => {
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={[{ pathname: '/servers/server-a/agents/agent-1', state: { returnTo: '/servers/server-a/tasks/core/T-1' } }]}>
+        <AppShell servers={[]}><div>Agent</div></AppShell>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+  const appBar = document.querySelector('.app-bar') as HTMLElement
+  expect(within(appBar).getByRole('link', { name: 'Back to agents' })).toHaveAttribute('href', '/servers/server-a/tasks/core/T-1')
+})

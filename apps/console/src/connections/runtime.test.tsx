@@ -151,6 +151,7 @@ test('cold start preserves last authoritative Production membership while contro
       ['bacloud', 'https://bacloud.example'],
       ['firstbyte', 'https://firstbyte.example'],
       ['tokyo', 'https://tokyo.example'],
+      ['control-only-node', 'https://control-only.example'],
     ].map(([nodeId, origin]) => ({
       nodeId,
       origin,
@@ -199,6 +200,10 @@ test('cold start preserves last authoritative Production membership while contro
     expect(card).toHaveTextContent('Mesh: Production · Stale')
     expect(within(card).getByText('Synchronization: Unavailable')).toBeInTheDocument()
   }
+  expect(screen.getByRole('link', { name: 'Main' })).toHaveAttribute('href', '/servers/main-profile')
+  expect(screen.getByRole('link', { name: 'BacLOUD' })).toHaveAttribute('href', '/servers/bacloud-profile')
+  expect(screen.getAllByText('control-only-node').length).toBeGreaterThan(0)
+  expect(screen.queryByRole('link', { name: 'control-only-node' })).not.toBeInTheDocument()
   expect(screen.getByText('Mesh state: Unavailable')).toBeInTheDocument()
   expect(screen.getByText('Technical details')).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Standalone' })).not.toBeInTheDocument()
