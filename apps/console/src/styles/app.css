@@ -2335,3 +2335,47 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   .duration-control { grid-template-columns: minmax(0, 1fr) 7.5rem; }
   .slot-overflow-menu { right: 0; }
 }
+
+/* Slots rework: stable two-row cards and fixed policy actions */
+.policy-actions { display: flex !important; flex-wrap: nowrap; align-items: center; gap: var(--space-2); }
+.policy-actions > button { flex: 0 1 auto; }
+.slot-context-statuses { display: grid; gap: var(--space-2); }
+.slot-context-statuses .attention-strip { display: flex; gap: var(--space-2); align-items: baseline; }
+.slot-card { overflow: visible; }
+.slot-card-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 13ch auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.slot-card-identity { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot-timer {
+  display: block;
+  width: 13ch;
+  min-width: 13ch;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  font-weight: 700;
+}
+.slot-timer-warning::before { content: '⚠ '; }
+.slot-timer-alert::before { content: '! '; font-weight: 900; }
+.slot-card-secondary {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, auto) minmax(7rem, auto) var(--touch-target);
+  align-items: center;
+  justify-content: start;
+  gap: var(--space-2);
+  min-height: var(--touch-target);
+}
+.slot-code-cell { min-width: 6.5rem; display: inline-flex; align-items: center; }
+.slot-code-unavailable { width: 100%; text-align: center; color: var(--color-muted); }
+.slot-card-secondary .slot-more-actions { justify-self: start; }
+.slot-card-secondary > button { min-height: var(--control-standard); }
+@media (max-width: 700px) {
+  .policy-actions { display: flex !important; flex-direction: row !important; grid-template-columns: none !important; }
+  .slot-card-primary { grid-template-columns: minmax(0, 1fr) 13ch auto; gap: var(--space-2); }
+  .slot-card-secondary { grid-template-columns: minmax(6rem, auto) minmax(6.5rem, auto) var(--touch-target); }
+}

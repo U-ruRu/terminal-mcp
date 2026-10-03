@@ -29,6 +29,15 @@ export function confirmedWritesFromPersistentMutation(
   const requestId = typeof body.idempotency_key === 'string'
     ? body.idempotency_key
     : [path, entityId, revision, now].join(':')
+  const access = record(result.payload.access)
+  const publicName = typeof access?.public_name === 'string' ? access.public_name : undefined
+  const accessGeneration = integer(access?.access_generation)
+  const payloadPatch = {
+    ...slot,
+    ...(publicName ? { public_name: publicName } : {}),
+    ...(accessGeneration !== undefined ? { access_generation: accessGeneration } : {}),
+    ...(publicName ? { access_status: typeof access?.status === 'string' ? access.status : 'active' } : {}),
+  }
   return [{
     requestId,
     sourceNodeId,
@@ -36,7 +45,7 @@ export function confirmedWritesFromPersistentMutation(
     entityId,
     authorityEpoch: integer(slot.authority_epoch),
     entityRevision: revision,
-    payloadPatch: { ...slot },
+    payloadPatch,
     remove: slot.state === 'deleted',
     createdAt: now,
     state: 'confirmed_pending_projection',
