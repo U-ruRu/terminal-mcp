@@ -145,6 +145,8 @@ function realtime(
     lastError?: string
     staleReason?: string
     reconnectAttempt?: number
+    statusSince?: string
+    freshnessSince?: string
   } = {},
 ): RealtimeState {
   return {
@@ -158,6 +160,8 @@ function realtime(
     catchingUpScopes: [],
     lastError: options.lastError,
     staleReason: options.staleReason,
+    statusSince: options.statusSince,
+    freshnessSince: options.freshnessSince,
     lastEvent: options.lastEventAt
       ? {
           seq: 13,
@@ -187,6 +191,7 @@ function instance(
       realtime: realtime(status, value, options),
       reconnectAttempt: options.reconnectAttempt ?? 0,
       lastError: options.lastError,
+      statusSince: options.statusSince,
     },
   }
 }
@@ -512,4 +517,17 @@ test('keeps duplicate public names separate when their opaque session refs diffe
   expect(model.summary.activeAgents).toBe(2)
   expect(model.sessions.map((session) => session.sessionRef)).toEqual(['session-one', 'session-two'])
   expect(model.sessions.map((session) => session.name)).toEqual(['Alpha', 'Alpha'])
+})
+
+
+test('projects the authoritative current problem transition timestamp instead of last activity', () => {
+  const offline = instance('offline-since', 'Offline Since', 'offline', snapshot('https://offline-since.example', '0.10.1'), {
+    lastError: 'network_error', statusSince: '2026-10-03T12:04:00Z', lastEventAt: '2026-10-03T11:00:00Z',
+  })
+  const stale = instance('stale-since', 'Stale Since', 'stale', snapshot('https://stale-since.example', '0.10.1'), {
+    staleReason: 'cursor_gap', statusSince: '2026-10-03T12:03:00Z', freshnessSince: '2026-10-03T12:05:00Z', lastEventAt: '2026-10-03T10:00:00Z',
+  })
+  const model = buildFleetReadModel([offline, stale])
+  expect(model.servers.find((item) => item.instanceId === 'offline-since')).toMatchObject({ stateSince: '2026-10-03T12:04:00Z', lastSeenAt: '2026-10-03T11:00:00Z' })
+  expect(model.servers.find((item) => item.instanceId === 'stale-since')).toMatchObject({ stateSince: '2026-10-03T12:05:00Z', lastSeenAt: '2026-10-03T10:00:00Z' })
 })

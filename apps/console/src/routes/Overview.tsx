@@ -109,7 +109,10 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
       const groupLabel = membership?.label ?? instance.profile.displayName
       const control = observations.find((item) => item.instanceId === instance.profile.instanceId)?.control
       for (const slot of persistent.slots ?? []) {
-        if (!slot.workSession || !['active', 'stopping'].includes(slot.state)) continue
+        if (!slot.workSession || !['active', 'stopping'].includes(slot.state) || !['active', 'stopping'].includes(slot.workSession.state)) continue
+        const slotServerNow = Date.parse(slot.serverNow)
+        const anchoredNow = Number.isFinite(slotServerNow) ? slotServerNow + (clock - clockOrigin) : clock
+        if (!Number.isFinite(Date.parse(slot.workSession.hardExpiresAt)) || Date.parse(slot.workSession.hardExpiresAt) <= anchoredNow) continue
         const authorityMatch = slot.authorityNodeId === instance.profile.instanceId || slot.authorityNodeId === control?.nodeId
         const key = `${groupKey}:${slot.logicalAgentId}`
         const current = entries.get(key)
@@ -123,7 +126,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
       group.entries.push(entry); groups.set(entry.groupKey, group)
     }
     return Array.from(groups.values()).sort((a, b) => Number(!a.meshId) - Number(!b.meshId) || a.label.localeCompare(b.label)).map((group) => ({ ...group, entries: group.entries.sort((a, b) => (a.slot.access?.publicName ?? a.slot.displayName).localeCompare(b.slot.access?.publicName ?? b.slot.displayName)) }))
-  }, [instances, observations, topology.memberships])
+  }, [clock, clockOrigin, instances, observations, topology.memberships])
 
   const loading = Boolean(loadFleetControl) && model.servers.length > 0 && observations.length === 0
   const unavailable = observations.length > 0 && observations.every((item) => !item.control)

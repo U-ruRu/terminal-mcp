@@ -10,6 +10,7 @@ export type FleetInstanceRuntimeState = {
   realtime: RealtimeState | null
   reconnectAttempt: number
   lastError?: string
+  statusSince?: string
 }
 
 export type FleetInstanceView = {

@@ -90,6 +90,7 @@ export type FleetServerReadModel = FleetSource & {
   resources?: HostResourcesReadModel
   contexts?: ContextReadModel[]
   lastSeenAt?: string
+  stateSince?: string
   reconnectAttempt: number
   lastError?: string
   staleReason?: string
@@ -141,6 +142,15 @@ function freshness(instance: FleetInstanceView): FleetFreshness {
   if (realtime.freshness === 'catching_up') return 'catching_up'
   if (realtime.freshness === 'stale' || instance.runtime.status !== 'live') return 'stale'
   return 'fresh'
+}
+
+
+function problemStateSince(instance: FleetInstanceView): string | undefined {
+  const realtime = instance.runtime.realtime
+  if (instance.runtime.status === 'offline') return instance.runtime.statusSince ?? realtime?.statusSince
+  if (realtime?.freshness === 'stale' || realtime?.freshness === 'catching_up') return realtime.freshnessSince ?? realtime.statusSince ?? instance.runtime.statusSince
+  if (instance.runtime.status === 'connecting' || instance.runtime.status === 'reconnecting') return instance.runtime.statusSince ?? realtime?.statusSince
+  return undefined
 }
 
 function healthState(snapshot: ConsoleSnapshotReadModel | null, counts: FleetTaskCounts, communication: FleetCommunicationCounts): FleetHealthState {
@@ -395,6 +405,7 @@ export function buildFleetReadModel(
       lastSeenAt: snapshot
         ? snapshotLastSeen(snapshot, instance.runtime.realtime?.lastEvent)
         : undefined,
+      stateSince: problemStateSince(instance),
       reconnectAttempt: instance.runtime.reconnectAttempt,
       lastError: instance.runtime.lastError,
       staleReason: instance.runtime.realtime?.staleReason,
