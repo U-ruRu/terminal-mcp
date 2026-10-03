@@ -16,6 +16,7 @@ from terminal_mcp.storage.output import (
     DEFAULT_LINE_MAX_BYTES,
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_ROWS,
+    DEFAULT_PRUNE_ROWS,
     DEFAULT_TARGET_BYTES,
     OutputStore,
 )
@@ -41,7 +42,7 @@ class SqliteRepository:
         output_target_bytes=DEFAULT_TARGET_BYTES,
         output_max_bytes=DEFAULT_MAX_BYTES,
         output_max_rows=DEFAULT_MAX_ROWS,
-        output_prune_rows=100_000,
+        output_prune_rows=DEFAULT_PRUNE_ROWS,
     ):
         self.path = path
         output_path = output_path or Path(path).with_name("output.sqlite3")

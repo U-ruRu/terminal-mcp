@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     output_retention_target_bytes: int = 192 * 1024 * 1024
     output_retention_max_bytes: int = 256 * 1024 * 1024
     output_retention_max_rows: int = 1_000_000
-    output_retention_prune_rows: int = 100_000
+    output_retention_prune_rows: int = 500_000
     shell: str = "/bin/bash"
     cwd: Path = Path("/")
     terminal_user: str = "root"
