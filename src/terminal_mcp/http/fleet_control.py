@@ -200,6 +200,18 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
             raise HTTPException(status_code=401, detail="invalid fleet peer")
         return peer
 
+    @router.get("/internal/fleet/control/state", include_in_schema=False)
+    async def internal_state(
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        await authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            control = await controller.authoritative_replication_snapshot()
+        except (FleetControlError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "control": control}
+
     @router.post("/internal/fleet/control/mutate/{operation}", include_in_schema=False)
     async def internal_mutate(
         operation: str,

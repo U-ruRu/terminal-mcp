@@ -6,9 +6,9 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from terminal_mcp.fleet.config import FleetConfig
+from terminal_mcp.fleet.config import FleetConfig, FleetPeer
 from terminal_mcp.fleet.control_plane import ManagedFleetControl
-from terminal_mcp.fleet.control_storage import FleetControlStore
+from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlStore
 
 
 def keypair():
@@ -173,3 +173,154 @@ async def test_deleted_mesh_replica_restores_standalone_policy_without_losing_pa
     local = next(node for node in state["nodes"] if node["node_id"] == "member")
     assert local["mesh_id"] is None
     assert local["state"] == "active"
+
+class ControlResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+class ControlClient:
+    def __init__(self, *, post_handler=None, get_handler=None):
+        self.post_handler = post_handler
+        self.get_handler = get_handler
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, *, headers, json):
+        if self.post_handler is None:
+            raise AssertionError(f"unexpected POST {url}")
+        return await self.post_handler(url, headers, json)
+
+    async def get(self, url, *, headers):
+        if self.get_handler is None:
+            raise AssertionError(f"unexpected GET {url}")
+        return await self.get_handler(url, headers)
+
+
+@pytest.mark.asyncio
+async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_back(tmp_path):
+    home_private, home_public = keypair()
+    member_private, member_public = keypair()
+    home_config = FleetConfig(
+        "home",
+        home_private,
+        (FleetPeer("member", "https://member.example", member_public, "member-token"),),
+        1.0,
+        1.0,
+    )
+    member_config = FleetConfig(
+        "member",
+        member_private,
+        (FleetPeer("home", "https://home.example", home_public, "home-token"),),
+        1.0,
+        1.0,
+    )
+    home_store = FleetControlStore(
+        tmp_path / "home-convergence.sqlite3",
+        fleet_id="fleet-a",
+        node_id="home",
+        control_node_id="home",
+    )
+    member_store = FleetControlStore(
+        tmp_path / "member-convergence.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="home",
+    )
+    await home_store.initialize()
+    await member_store.initialize()
+    home_policy = PolicyProbe()
+    member_policy = PolicyProbe()
+    member = ManagedFleetControl(
+        member_store,
+        member_config,
+        member_policy,
+        public_base_url="https://member.example",
+    )
+    delivery_mode = "apply"
+    attached_snapshot = None
+
+    async def push(url, headers, body):
+        assert url.endswith("/internal/fleet/control/apply")
+        if delivery_mode == "stale_ack":
+            return ControlResponse({"ok": True, "control": attached_snapshot})
+        applied = await member.apply_replica(body["state"], source_node_id="home")
+        return ControlResponse({"ok": True, "control": applied})
+
+    home = ManagedFleetControl(
+        home_store,
+        home_config,
+        home_policy,
+        public_base_url="https://home.example",
+        client_factory=lambda: ControlClient(post_handler=push),
+    )
+    adopted = await home.adopt(mesh_id="mesh-a", display_name="Production")
+    attached = await home.upsert_node(
+        node_id="member",
+        mesh_id="mesh-a",
+        origin="https://member.example",
+        public_key=member_public,
+        auth_token="member-token",
+        expected_topology_revision=adopted["revisions"]["topology"],
+    )
+    attached_snapshot = await home.authoritative_replication_snapshot()
+    member_before = await member.snapshot()
+    assert member_before["mesh"]["mesh_id"] == "mesh-a"
+
+    delivery_mode = "stale_ack"
+    detached = await home.detach_node(
+        "member",
+        expected_topology_revision=attached["revisions"]["topology"],
+    )
+    authority_member = next(node for node in detached["nodes"] if node["node_id"] == "member")
+    assert authority_member["mesh_id"] is None
+    assert authority_member["desired_topology_revision"] > authority_member["applied_topology_revision"]
+    assert authority_member["last_error"] == "reconcile_failed:RuntimeError"
+    assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
+
+    async def pull(url, headers):
+        assert url.endswith("/internal/fleet/control/state")
+        return ControlResponse(
+            {"ok": True, "control": await home.authoritative_replication_snapshot()}
+        )
+
+    member.client_factory = lambda: ControlClient(get_handler=pull)
+    recovered = await member.reconcile_pending()
+    local_member = next(node for node in recovered["nodes"] if node["node_id"] == "member")
+    assert recovered["mesh"] is None
+    assert local_member["mesh_id"] is None
+    assert recovered["revisions"]["topology"] == detached["revisions"]["topology"]
+    assert member_policy.current == member_policy.local
+
+    with pytest.raises(FleetControlError, match="managed_snapshot_stale"):
+        await member.apply_replica(attached_snapshot, source_node_id="home")
+    assert (await member.snapshot())["mesh"] is None
+
+    delivery_mode = "apply"
+    converged = await home.reconcile_pending()
+    authority_member = next(node for node in converged["nodes"] if node["node_id"] == "member")
+    assert authority_member["last_error"] is None
+    assert authority_member["desired_topology_revision"] == authority_member["applied_topology_revision"]
+
+    rejoined = await home.upsert_node(
+        node_id="member",
+        mesh_id="mesh-a",
+        origin=None,
+        public_key=None,
+        auth_token=None,
+        expected_topology_revision=converged["revisions"]["topology"],
+    )
+    assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
+    authority_member = next(node for node in rejoined["nodes"] if node["node_id"] == "member")
+    assert authority_member["mesh_id"] == "mesh-a"
+    assert authority_member["desired_topology_revision"] == authority_member["applied_topology_revision"]
