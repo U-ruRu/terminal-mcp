@@ -2276,3 +2276,62 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   display: inline-flex;
   align-items: center;
 }
+
+/* M4 Slots global operator surface */
+.slots-global-filter { grid-template-columns: minmax(0, 20rem); }
+.slots-global-filter select,
+.slots-context-select select,
+.duration-control select {
+  min-height: var(--control-standard);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  padding: 8px 10px;
+}
+.slot-create { grid-template-columns: 1fr; align-items: stretch; }
+.slot-create-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--space-3); }
+.duration-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }
+.duration-control select { min-width: 7rem; }
+.access-code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-standard);
+  padding: 6px 10px !important;
+  background: transparent !important;
+}
+.access-code-copy code { font-size: 1.15rem; font-weight: 800; letter-spacing: .16em; }
+.slot-more-actions { position: relative; width: auto !important; }
+.slot-more-actions > summary {
+  width: var(--touch-target) !important;
+  min-width: var(--touch-target);
+  justify-content: center;
+  list-style: none;
+  border-radius: var(--radius-sm);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+.slot-more-actions > summary::-webkit-details-marker { display: none; }
+.slot-more-actions[open] > summary { margin-bottom: 0; background: var(--color-surface-raised); }
+.slot-overflow-menu {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  width: max-content;
+  min-width: 12rem;
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: 0 12px 32px rgb(0 0 0 / .28);
+}
+.slot-overflow-menu > * { width: 100%; justify-content: flex-start; }
+@media (max-width: 700px) {
+  .slot-create-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .duration-control { grid-template-columns: minmax(0, 1fr) 7.5rem; }
+  .slot-overflow-menu { right: 0; }
+}
