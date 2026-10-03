@@ -15,7 +15,7 @@ describe('IconButton acceptance regressions', () => {
     expect(slotsSource).toContain('<IconButtonRow className="server-actions">')
   })
 
-  it('keeps destructive confirmation inside the shared UI instead of native confirm', () => {
+  it('keeps destructive confirmation inside the shared modal UI instead of native confirm', () => {
     expect(connectionsSource).not.toContain('window.confirm(')
     expect(overviewSource).not.toContain('window.confirm(')
     expect(connectionsSource).toContain('<ConfirmationDialog')

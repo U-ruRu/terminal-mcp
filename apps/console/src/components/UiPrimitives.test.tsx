@@ -1,8 +1,11 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, test, vi } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 
 import { ConfirmationDialog, FeedbackState, Field, IconButton, IconButtonRow, SegmentedControl, Tabs, UiButton } from './UiPrimitives'
+
+afterEach(() => cleanup())
 
 test('shared controls expose pressed, selected, disabled and error semantics', async () => {
   const segmentChange = vi.fn()
@@ -125,4 +128,72 @@ test('IconButtonRow is a compact non-wrapping horizontal action group', () => {
   expect(row).toHaveClass('ui-icon-button-row', 'connection-actions')
   expect(row).toHaveStyle({ display: 'flex', flexFlow: 'row nowrap', alignItems: 'center' })
   expect(within(row).getAllByRole('button')).toHaveLength(2)
+})
+
+
+test('ConfirmationDialog is a real modal with inert background, focus containment, Escape and focus restoration', async () => {
+  const onCancel = vi.fn()
+  const onConfirm = vi.fn()
+
+  function Harness() {
+    const [open, setOpen] = useState(false)
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>Open confirmation</button>
+        <button type="button">Background action</button>
+        {open ? (
+          <ConfirmationDialog
+            title="Delete slot"
+            detail="This action cannot be undone."
+            cancelLabel="Cancel"
+            confirmLabel="Delete"
+            confirmIcon="delete"
+            onCancel={() => { onCancel(); setOpen(false) }}
+            onConfirm={() => { onConfirm(); setOpen(false) }}
+          />
+        ) : null}
+      </>
+    )
+  }
+
+  const user = userEvent.setup()
+  const { container } = render(<Harness />)
+  const trigger = screen.getByRole('button', { name: 'Open confirmation' })
+  const background = screen.getByRole('button', { name: 'Background action' })
+
+  await user.click(trigger)
+
+  const dialog = screen.getByRole('dialog', { name: 'Delete slot' })
+  const layer = dialog.parentElement as HTMLElement
+  const cancel = within(dialog).getByRole('button', { name: 'Cancel' })
+  const confirm = within(dialog).getByRole('button', { name: 'Delete' })
+
+  expect(layer).toHaveClass('ui-modal-layer')
+  expect(layer).not.toHaveClass('floating-status-stack')
+  expect(dialog).toHaveAttribute('aria-modal', 'true')
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus())
+  expect(container).toHaveAttribute('inert')
+  expect(container).toHaveAttribute('aria-hidden', 'true')
+  expect(document.body.style.overflow).toBe('hidden')
+
+  await user.tab({ shift: true })
+  expect(confirm).toHaveFocus()
+  await user.tab()
+  expect(cancel).toHaveFocus()
+
+  background.focus()
+  await waitFor(() => expect(cancel).toHaveFocus())
+
+  await user.keyboard('{Escape}')
+  expect(onCancel).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(trigger).toHaveFocus())
+  expect(container).not.toHaveAttribute('inert')
+  expect(container).not.toHaveAttribute('aria-hidden')
+  expect(document.body.style.overflow).toBe('')
+
+  await user.click(trigger)
+  const reopened = screen.getByRole('dialog', { name: 'Delete slot' })
+  await user.click(within(reopened).getByRole('button', { name: 'Delete' }))
+  expect(onConfirm).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(trigger).toHaveFocus())
 })

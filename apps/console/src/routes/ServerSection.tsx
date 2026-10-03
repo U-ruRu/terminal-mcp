@@ -6,7 +6,7 @@ import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
-import { FeedbackState, IconButton } from '../components/UiPrimitives'
+import { FeedbackState, IconButton, IconButtonRow } from '../components/UiPrimitives'
 
 type ServerSectionKind = 'agents' | 'context' | 'health'
 
@@ -176,10 +176,10 @@ export function ServerSection({
         <details className="panel diagnostics-panel">
           <summary>{t('diagnostics.title')} · {number(diagnosticEntries.length)}</summary>
           <p className="muted">{t('diagnostics.description')}</p>
-          <div className="diagnostics-actions">
+          <IconButtonRow className="diagnostics-actions">
             <IconButton icon="delete" variant="destructive" label={t('diagnostics.clear')} onClick={() => diagnostics.clear()} disabled={diagnosticEntries.length === 0} />
             <IconButton icon="copy" variant="secondary" label={copied ? t('diagnostics.copied') : t('diagnostics.copy')} onClick={() => void copyDiagnostics()} disabled={diagnosticEntries.length === 0} />
-          </div>
+          </IconButtonRow>
           {diagnosticEntries.length === 0 ? <FeedbackState variant="empty" title={t('diagnostics.empty')} /> : (
             <div className="diagnostics-log" aria-label={t('diagnostics.title')}>
               {diagnosticEntries.map((event) => (

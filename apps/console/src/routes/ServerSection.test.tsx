@@ -67,7 +67,11 @@ test('health exposes the persistent local diagnostic journal on demand', () => {
   expect(screen.getByText(/#1 app_background/)).toBeInTheDocument()
   expect(screen.getByText(/#2 connection_state/)).toBeInTheDocument()
   expect(screen.getByText(/code=dns_error/)).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Copy as text' })).toBeInTheDocument()
+  const copy = screen.getByRole('button', { name: 'Copy as text' })
+  const clear = screen.getByRole('button', { name: 'Clear log' })
+  expect(copy).toBeInTheDocument()
+  expect(clear.closest('.diagnostics-actions')).toHaveClass('ui-icon-button-row')
+  expect(copy.closest('.diagnostics-actions')).toBe(clear.closest('.diagnostics-actions'))
 })
 
 

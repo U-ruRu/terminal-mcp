@@ -278,7 +278,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 
 .diagnostics-panel > summary { cursor: pointer; font-weight: 700; }
 .diagnostics-panel[open] > summary { margin-bottom: var(--space-3); }
-.diagnostics-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; margin-block: var(--space-2); }
+.diagnostics-actions { justify-content: flex-end; margin-block: var(--space-2); }
 .diagnostics-log { max-height: 420px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 .diagnostics-entry { padding: 10px 12px; border-bottom: 1px solid var(--color-border); overflow-wrap: anywhere; }
 .diagnostics-entry:last-child { border-bottom: 0; }
@@ -2258,6 +2258,42 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   align-items: flex-start;
 }
 .operational-status-slot:empty { visibility: hidden; }
+
+.ui-modal-layer {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding:
+    max(var(--space-4), env(safe-area-inset-top))
+    max(var(--space-4), env(safe-area-inset-right))
+    max(var(--space-4), env(safe-area-inset-bottom))
+    max(var(--space-4), env(safe-area-inset-left));
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  pointer-events: auto;
+}
+
+.ui-confirmation-dialog {
+  width: min(30rem, 100%);
+  max-height: min(80vh, 40rem);
+  overflow: auto;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  box-shadow: 0 18px 60px color-mix(in srgb, var(--color-bg) 82%, transparent);
+}
+
+.ui-confirmation-dialog:focus {
+  outline: none;
+}
+
+.ui-confirmation-dialog > p {
+  margin: 0;
+}
+
 .floating-status-stack {
   position: fixed;
   z-index: 35;
