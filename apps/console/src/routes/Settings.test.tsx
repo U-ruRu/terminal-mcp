@@ -28,7 +28,7 @@ afterEach(() => {
 test('applies and restores localized application preferences from Settings', async () => {
   const first = renderSettings()
   expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
-  expect(document.querySelector('.settings-version')).toHaveTextContent('APK 0.2.24 · code 26')
+  expect(document.querySelector('.settings-version')).toHaveTextContent('APK 0.2.26 · code 28')
 
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Language' }), 'ru')
   expect(screen.getByRole('heading', { name: 'Настройки' })).toBeInTheDocument()
