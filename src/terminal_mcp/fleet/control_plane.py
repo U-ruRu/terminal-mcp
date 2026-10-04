@@ -292,6 +292,11 @@ class ManagedFleetControl:
                 public_key=str(payload.get("public_key") or ""),
                 expected_trust_revision=payload.get("expected_trust_revision"),
             )
+        if operation == "release-node":
+            node_id = str(payload.get("node_id") or "")
+            if authenticated_peer_id is not None and authenticated_peer_id != node_id:
+                raise FleetControlError("control_release_peer_mismatch")
+            return await self.release_node(node_id)
         if operation == "reconcile":
             return await self.replicate()
         raise FleetControlError("control_operation_invalid")
@@ -401,6 +406,13 @@ class ManagedFleetControl:
                 },
             )
         if not self.is_control_node:
+            previous_control = self.store.control_node_id
+            if previous_control != self.store.node_id:
+                await self._forward_mutation_to(
+                    previous_control,
+                    "release-node",
+                    {"node_id": self.store.node_id},
+                )
             await self.store.claim_local_control_authority()
             self._sync_control_node(self.store.control_node_id)
         state = await self.store.adopt_managed(
@@ -408,6 +420,7 @@ class ManagedFleetControl:
             display_name=display_name,
             nodes=self._initial_control_node(),
             policy=self.policy_controller.snapshot(),
+            attach_local_control=True,
         )
         await self._apply_local(state)
         await self.replicate()
@@ -495,6 +508,14 @@ class ManagedFleetControl:
             auth_token=auth_token or (bootstrap.auth_token if bootstrap else None),
             expected_topology_revision=expected_topology_revision,
         )
+        await self._apply_local(state)
+        await self.replicate()
+        return await self.snapshot()
+
+    async def release_node(self, node_id: str) -> dict:
+        if not self.is_control_node:
+            return await self._forward_mutation("release-node", {"node_id": node_id})
+        state = await self.store.release_managed_node(node_id)
         await self._apply_local(state)
         await self.replicate()
         return await self.snapshot()

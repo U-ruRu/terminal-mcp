@@ -439,3 +439,130 @@ async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_
     authority_member = next(node for node in rejoined["nodes"] if node["node_id"] == "member")
     assert authority_member["mesh_id"] == "mesh-a"
     assert authority_member["desired_topology_revision"] == authority_member["applied_topology_revision"]
+
+
+@pytest.mark.asyncio
+async def test_standalone_self_adopt_releases_old_authority_and_owns_new_mesh(tmp_path):
+    home_store = FleetControlStore(
+        tmp_path / "home-release.sqlite3",
+        fleet_id="fleet-a",
+        node_id="home",
+        control_node_id="home",
+    )
+    member_store = FleetControlStore(
+        tmp_path / "member-release.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="home",
+    )
+    await home_store.initialize()
+    await member_store.initialize()
+
+    home_private, home_public = keypair()
+    member_private, member_public = keypair()
+    policy = {
+        "duration_seconds": 1380,
+        "warning_after_seconds": 1200,
+        "alert_after_seconds": 1320,
+        "rearm_after_seconds": 180,
+        "legacy_admission_enabled": True,
+    }
+
+    await home_store.adopt_managed(
+        mesh_id="mesh-prod",
+        display_name="Production",
+        nodes=[{"node_id": "home"}],
+        policy=policy,
+    )
+    state = await home_store.upsert_managed_node(
+        node_id="home",
+        mesh_id="mesh-prod",
+        origin="https://home.example",
+        public_key=home_public,
+        auth_token="home-token",
+        expected_topology_revision=1,
+    )
+    state = await home_store.upsert_managed_node(
+        node_id="member",
+        mesh_id="mesh-prod",
+        origin="https://member.example",
+        public_key=member_public,
+        auth_token="member-token",
+        expected_topology_revision=state["revisions"]["topology"],
+    )
+    detached = await home_store.detach_managed_node(
+        "member",
+        expected_topology_revision=state["revisions"]["topology"],
+    )
+
+    home = ManagedFleetControl(
+        home_store,
+        FleetConfig("home", home_private, (), 1.0, 1.0),
+        PolicyProbe(),
+        public_base_url="https://home.example",
+    )
+    member = ManagedFleetControl(
+        member_store,
+        FleetConfig(
+            "member",
+            member_private,
+            (
+                FleetPeer(
+                    "home",
+                    "https://home.example",
+                    home_public,
+                    "home-token",
+                ),
+            ),
+            1.0,
+            1.0,
+        ),
+        PolicyProbe(),
+        public_base_url="https://member.example",
+    )
+
+    initial = await home.authoritative_replication_snapshot()
+    await member.apply_replica(initial, source_node_id="home")
+    local_before = next(
+        node for node in (await member.snapshot())["nodes"] if node["node_id"] == "member"
+    )
+    assert local_before["mesh_id"] is None
+    assert local_before["state"] == "active"
+
+    async def forward_release(url, headers, body):
+        assert url.endswith("/internal/fleet/control/mutate/release-node")
+        released = await home.execute_forwarded(
+            "release-node",
+            body["payload"],
+            authenticated_peer_id="member",
+        )
+        return ControlResponse({"ok": True, "control": released})
+
+    member.client_factory = lambda: ControlClient(post_handler=forward_release)
+    adopted = await member.adopt(
+        mesh_id="mesh-new",
+        display_name="New Mesh",
+        control_node_id="member",
+    )
+
+    assert adopted["control_node_id"] == "member"
+    assert adopted["mesh"]["mesh_id"] == "mesh-new"
+    local_after = next(node for node in adopted["nodes"] if node["node_id"] == "member")
+    assert local_after["mesh_id"] == "mesh-new"
+    assert local_after["state"] == "active"
+
+    old_view = await home_store.managed_node("member")
+    assert old_view is not None
+    assert old_view["state"] == "detached"
+    assert old_view["mesh_id"] is None
+    assert all(
+        item["node_id"] != "member"
+        for item in await home_store.managed_peer_material()
+    )
+
+    with pytest.raises(FleetControlError, match="control_node_mismatch"):
+        await member.apply_replica(initial, source_node_id="home")
+
+    after_stale = await member.snapshot()
+    assert after_stale["control_node_id"] == "member"
+    assert after_stale["mesh"]["mesh_id"] == "mesh-new"

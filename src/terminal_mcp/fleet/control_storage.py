@@ -721,6 +721,7 @@ class FleetControlStore:
         nodes: list[dict],
         policy: dict,
         now: str | None = None,
+        attach_local_control: bool = False,
     ) -> dict:
         if self.node_id != self.control_node_id:
             raise FleetControlError("control_authority_required")
@@ -849,6 +850,13 @@ class FleetControlStore:
                                 item["node_id"],
                             ),
                         )
+                if attach_local_control:
+                    await db.execute(
+                        "UPDATE managed_nodes SET mesh_id=?,state='active',"
+                        "desired_topology_revision=?,last_error=NULL,updated_at=? "
+                        "WHERE node_id=?",
+                        (mesh_id, topology, stamp, self.node_id),
+                    )
                 await db.execute(
                     "UPDATE managed_nodes SET desired_topology_revision=? "
                     "WHERE state!='detached'",
@@ -1059,6 +1067,52 @@ class FleetControlStore:
                         "WHERE state!='detached'",
                         (trust,),
                     )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return await self.control_state(include_secrets=False)
+
+    async def release_managed_node(self, node_id: str, *, now: str | None = None) -> dict:
+        """Release one standalone/member node from this control domain.
+
+        Unlike detach_managed_node, this marks the node detached from the authority
+        itself. Trust material is retained so a later explicit rejoin can reactivate
+        the same identity without repairing server files.
+        """
+        if self.node_id != self.control_node_id:
+            raise FleetControlError("control_authority_required")
+        node_id = validate_protocol_id(node_id, "node_id")
+        stamp = now or utc_text()
+        async with self._connect("fleet_control_node_release") as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT state FROM managed_nodes WHERE node_id=?",
+                        (node_id,),
+                    )
+                ).fetchone()
+                if row is None:
+                    raise FleetControlError("managed_node_not_found")
+                if row[0] == "detached":
+                    await db.commit()
+                    return await self.control_state(include_secrets=False)
+
+                topology, trust, _ = await self._control_revisions(db)
+                topology = await self._bump_revision(db, "topology", stamp)
+                trust = await self._bump_revision(db, "trust", stamp)
+                await db.execute(
+                    "UPDATE managed_nodes SET mesh_id=NULL,state='detached',"
+                    "desired_topology_revision=?,desired_trust_revision=?,"
+                    "last_error=NULL,updated_at=? WHERE node_id=?",
+                    (topology, trust, stamp, node_id),
+                )
+                await db.execute(
+                    "UPDATE managed_nodes SET desired_topology_revision=?,"
+                    "desired_trust_revision=? WHERE state!='detached'",
+                    (topology, trust),
+                )
                 await db.commit()
             except Exception:
                 await db.rollback()
