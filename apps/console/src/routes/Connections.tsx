@@ -318,7 +318,7 @@ export function Connections() {
     if (states[profile.instanceId]?.status !== 'connected') return false
     const observed = controls[profile.instanceId]?.control
     if (!observed) return false
-    return confirmedStandalone(profile) || (observed.managed && observed.nodeId === observed.controlNodeId)
+    return confirmedStandalone(profile)
   }), [confirmedStandalone, controls, profiles, states])
 
   useEffect(() => {

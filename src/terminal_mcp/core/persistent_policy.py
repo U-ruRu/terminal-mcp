@@ -95,7 +95,7 @@ class PersistentPolicyController:
                 blockers = []
                 for item in slots.get("slots") or []:
                     slot = item.get("slot") or {}
-                    if slot.get("state") in {"armed", "active", "stopping"}:
+                    if slot.get("state") in {"active", "stopping"}:
                         blockers.append(
                             {
                                 "logical_agent_id": slot.get("logical_agent_id"),

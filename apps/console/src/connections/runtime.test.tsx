@@ -678,10 +678,10 @@ test('creates a second mesh on an independently selected standalone control node
     revision: 1,
     updated_at: '2026-10-02T06:00:00Z',
   }
-  const node = (nodeId: string) => ({
+  const node = (nodeId: string, meshId: string | null) => ({
     node_id: nodeId,
     origin: `https://${nodeId}.example`,
-    mesh_id: null,
+    mesh_id: meshId,
     state: 'active',
     desired_topology_revision: 1,
     applied_topology_revision: 1,
@@ -712,7 +712,7 @@ test('creates a second mesh on an independently selected standalone control node
     const mesh = nodeId === 'beta' ? meshB : meshA
     return { ok: true, control: {
       schema_version: 3, fleet_id: 'fleet-a', node_id: nodeId, control_node_id: controlNodeId,
-      managed: true, mesh: null, meshes: [mesh], nodes: [node(nodeId)], policy,
+      managed: true, mesh: null, meshes: [mesh], nodes: [node(nodeId, mesh.mesh_id)], policy,
       revisions: { routing: 1, topology: 1, trust: 1, access_policy: 1 },
       updated_at: '2026-10-02T06:30:00Z',
     } }
@@ -761,6 +761,8 @@ test('creates a second mesh on an independently selected standalone control node
 
   await waitFor(() => expect(screen.getByRole('link', { name: 'Production' })).toHaveAttribute('href', '/meshes/mesh-a'))
   await waitFor(() => expect(screen.getByLabelText('Control node')).toBeEnabled())
+  expect(within(screen.getByLabelText('Control node')).queryByRole('option', { name: 'Alpha' })).not.toBeInTheDocument()
+  expect(within(screen.getByLabelText('Control node')).getByRole('option', { name: 'Beta' })).toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Control node'), 'beta')
   await userEvent.clear(screen.getByLabelText('New mesh name'))
   await userEvent.type(screen.getByLabelText('New mesh name'), 'Staging')
@@ -773,6 +775,9 @@ test('creates a second mesh on an independently selected standalone control node
     ))).toBe(true)
   })
   await waitFor(() => expect(screen.getByRole('link', { name: 'Staging' })).toBeInTheDocument())
+  await waitFor(() => {
+    expect(within(screen.getByLabelText('Control node')).queryByRole('option', { name: 'Beta' })).not.toBeInTheDocument()
+  })
 })
 
 test('moves a member between meshes with different authorities via detach then join', async () => {
