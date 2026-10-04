@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 CMD=${1:-install}
+[ $# -eq 0 ] || shift
+ALLOW_DOWNGRADE=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --allow-downgrade) ALLOW_DOWNGRADE=true ;;
+    *) echo "Unknown option: $1" >&2; echo 'Usage: install.sh {install|update [--allow-downgrade]|ingress|doctor}' >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ "$ALLOW_DOWNGRADE" = true ] && [ "$CMD" != update ]; then
+  echo '--allow-downgrade is valid only with update' >&2
+  exit 2
+fi
 ROOT=${TERMINAL_MCP_INSTALL_ROOT:-/opt/terminal-mcp}
 ENV_DIR=${TERMINAL_MCP_ENV_DIR:-/etc/terminal-mcp}
 ENV_FILE=$ENV_DIR/terminal-mcp.env
@@ -488,6 +501,77 @@ stage(){
     return 1
   fi
 }
+release_version(){
+  release=$1
+  "$release/bin/python" -c 'import importlib.metadata as metadata; print(metadata.version("terminal-mcp"))'
+}
+version_relation(){
+  current=$1
+  candidate=$2
+  python3 - "$current" "$candidate" <<'PY_VERSION'
+import re
+import sys
+
+
+def parse(value: str) -> tuple[int, ...]:
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
+        raise ValueError(value)
+    return tuple(int(part) for part in value.split("."))
+
+
+try:
+    current = parse(sys.argv[1])
+    candidate = parse(sys.argv[2])
+except ValueError as exc:
+    print(f"uncomparable:{exc.args[0]}")
+    raise SystemExit(0)
+
+width = max(len(current), len(candidate))
+current += (0,) * (width - len(current))
+candidate += (0,) * (width - len(candidate))
+print("downgrade" if candidate < current else "ok")
+PY_VERSION
+}
+guard_downgrade(){
+  staged=$1
+  current=$ROOT/current
+  [ -x "$current/bin/python" ] || return 0
+
+  current_version=$(release_version "$current") || {
+    echo "Unable to determine current Terminal MCP version; refusing update" >&2
+    rm -rf "$staged"
+    return 1
+  }
+  candidate_version=$(release_version "$staged") || {
+    echo "Unable to determine staged Terminal MCP version; refusing update" >&2
+    rm -rf "$staged"
+    return 1
+  }
+  relation=$(version_relation "$current_version" "$candidate_version")
+  case "$relation" in
+    downgrade)
+      if [ "$ALLOW_DOWNGRADE" = true ]; then
+        echo "WARNING: explicit downgrade allowed: $current_version -> $candidate_version" >&2
+        return 0
+      fi
+      echo "Downgrade blocked: current=$current_version candidate=$candidate_version" >&2
+      echo "Re-run with: install.sh update --allow-downgrade" >&2
+      rm -rf "$staged"
+      return 1
+      ;;
+    ok) return 0 ;;
+    uncomparable:*)
+      echo "Unable to compare Terminal MCP versions safely: current=$current_version candidate=$candidate_version" >&2
+      rm -rf "$staged"
+      return 1
+      ;;
+    *)
+      echo "Unexpected version comparison result: $relation" >&2
+      rm -rf "$staged"
+      return 1
+      ;;
+  esac
+}
 backup(){
   local release=$1
   local stamp
@@ -641,8 +725,8 @@ find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0
 [ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
 case "$CMD" in
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; configure_console_caddy; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
- update) ensure_env_defaults; stage; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
+ update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
  ingress) ensure_env_defaults; configure_console_caddy ;;
  doctor) $SYSTEMCTL status terminal-mcp --no-pager; curl -fsS "$HEALTH_URL"; check_public_fleet_ingress; check_public_console_ingress ;;
- *) echo 'Usage: install.sh {install|update|ingress|doctor}'; exit 1 ;;
+ *) echo 'Usage: install.sh {install|update [--allow-downgrade]|ingress|doctor}'; exit 1 ;;
 esac

@@ -741,3 +741,94 @@ def test_installer_allows_v2_to_v3_when_access_state_is_empty(tmp_path):
     assert result.returncode == 0, result.stderr
     assert version_after == 2
     assert slot_rows == 0
+
+
+def _run_release_version_guard(
+    tmp_path,
+    *,
+    current_version: str,
+    candidate_version: str,
+    allow_downgrade: bool,
+):
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+    functions = "release_version(){" + script.split("release_version(){", 1)[1].split(
+        "\n}\nbackup(){", 1
+    )[0] + "\n}"
+    root = tmp_path / "install"
+    current = root / "current"
+    staged = root / "staged"
+    for release, version in ((current, current_version), (staged, candidate_version)):
+        (release / "bin").mkdir(parents=True)
+        python = release / "bin" / "python"
+        python.write_text(f"#!/bin/sh\nprintf '%s\\n' {version!r}\n")
+        python.chmod(0o755)
+
+    runner = tmp_path / "guard.sh"
+    runner.write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        f"ROOT={str(root)!r}\n"
+        f"ALLOW_DOWNGRADE={'true' if allow_downgrade else 'false'}\n"
+        + functions
+        + "\n"
+        + f"guard_downgrade {str(staged)!r}\n"
+    )
+    return subprocess.run(
+        ["bash", str(runner)],
+        capture_output=True,
+        text=True,
+        check=False,
+    ), staged
+
+
+def test_installer_blocks_release_downgrade_without_override(tmp_path):
+    result, staged = _run_release_version_guard(
+        tmp_path,
+        current_version="0.11.2",
+        candidate_version="0.10.1",
+        allow_downgrade=False,
+    )
+
+    assert result.returncode != 0
+    assert "Downgrade blocked: current=0.11.2 candidate=0.10.1" in result.stderr
+    assert "install.sh update --allow-downgrade" in result.stderr
+    assert not staged.exists()
+
+
+def test_installer_allows_release_downgrade_with_explicit_override(tmp_path):
+    result, staged = _run_release_version_guard(
+        tmp_path,
+        current_version="0.11.2",
+        candidate_version="0.10.1",
+        allow_downgrade=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "WARNING: explicit downgrade allowed: 0.11.2 -> 0.10.1" in result.stderr
+    assert staged.exists()
+
+
+@pytest.mark.parametrize("candidate_version", ["0.11.2", "0.11.3", "0.12.0"])
+def test_installer_allows_equal_or_newer_release(tmp_path, candidate_version):
+    result, staged = _run_release_version_guard(
+        tmp_path,
+        current_version="0.11.2",
+        candidate_version=candidate_version,
+        allow_downgrade=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert staged.exists()
+
+
+def test_allow_downgrade_flag_is_update_only():
+    result = subprocess.run(
+        ["bash", "deploy/install.sh", "doctor", "--allow-downgrade"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--allow-downgrade is valid only with update" in result.stderr
