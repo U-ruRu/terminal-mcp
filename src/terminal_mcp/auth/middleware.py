@@ -110,6 +110,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return ["terminal:read", "terminal:execute"]
         if path == "/actions/fleet/control" and method.upper() == "GET":
             return ["terminal:read"]
+        if path == "/actions/fleet/control/enrollment" and method.upper() == "GET":
+            return ["terminal:read", "terminal:execute"]
         if path.startswith("/actions/fleet/control/") and method.upper() == "POST":
             return ["terminal:read", "terminal:execute"]
         return None

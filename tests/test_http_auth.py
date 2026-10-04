@@ -655,6 +655,17 @@ def test_agent_facing_oauth_uses_one_read_scope():
         assert AuthMiddleware._scopes(path, "POST") == ["terminal:read"]
 
 
+def test_paired_console_fleet_enrollment_requires_execute_scope():
+    from terminal_mcp.auth.middleware import AuthMiddleware
+
+    assert (
+        AuthMiddleware._paired_console_scopes(
+            "/actions/fleet/control/enrollment", "GET"
+        )
+        == ["terminal:read", "terminal:execute"]
+    )
+
+
 def test_refresh_rotation_is_single_use_under_concurrency(tmp_path):
     async def scenario():
         store = OAuthStore(tmp_path / "refresh-race.sqlite3")
