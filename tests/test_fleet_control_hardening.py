@@ -123,6 +123,37 @@ async def test_replica_explicit_null_mesh_id_overrides_legacy_mesh_fallback(tmp_
 
 
 @pytest.mark.asyncio
+async def test_replica_refreshes_existing_node_auth_token_from_authoritative_material(tmp_path):
+    store = FleetControlStore(
+        tmp_path / "refresh-token.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="control",
+    )
+    await store.initialize()
+    snapshot = _managed_replica_snapshot(
+        include_member_mesh_id=True,
+        member_mesh_id="mesh-a",
+    )
+
+    await store.apply_managed_replica(
+        snapshot,
+        bootstrap_tokens={"member": "stale-token", "control": "control-token"},
+    )
+    before = await store.managed_node("member")
+    assert before is not None
+    assert before["auth_token"] == "stale-token"
+
+    await store.apply_managed_replica(
+        snapshot,
+        bootstrap_tokens={"member": "rotated-token", "control": "control-token"},
+    )
+    after = await store.managed_node("member")
+    assert after is not None
+    assert after["auth_token"] == "rotated-token"
+
+
+@pytest.mark.asyncio
 async def test_replica_missing_mesh_id_keeps_legacy_mesh_fallback(tmp_path):
     store = FleetControlStore(
         tmp_path / "missing-mesh-id.sqlite3",

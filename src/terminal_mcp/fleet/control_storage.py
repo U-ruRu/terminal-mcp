@@ -1466,7 +1466,7 @@ class FleetControlStore:
                         ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(node_id) DO UPDATE SET "
                         "origin=excluded.origin,public_key=excluded.public_key,"
-                        "auth_token=COALESCE(managed_nodes.auth_token,excluded.auth_token),"
+                        "auth_token=COALESCE(excluded.auth_token,managed_nodes.auth_token),"
                         "mesh_id=excluded.mesh_id,state=excluded.state,"
                         "desired_topology_revision=excluded.desired_topology_revision,"
                         "applied_topology_revision=excluded.applied_topology_revision,"
