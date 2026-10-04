@@ -90,22 +90,6 @@ class PersistentPolicyController:
                 or alert != current["alert_after_seconds"]
                 or rearm != current["rearm_after_seconds"]
             )
-            if timing_changed:
-                slots = await self.service.persistent.slot_list()
-                blockers = []
-                for item in slots.get("slots") or []:
-                    slot = item.get("slot") or {}
-                    if slot.get("state") in {"active", "stopping"}:
-                        blockers.append(
-                            {
-                                "logical_agent_id": slot.get("logical_agent_id"),
-                                "display_name": slot.get("display_name"),
-                                "state": slot.get("state"),
-                            }
-                        )
-                if blockers:
-                    raise PersistentPolicyError("policy_in_use", blockers=blockers)
-
             updates: dict[str, str] = {}
             if timing_changed:
                 updates.update(

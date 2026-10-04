@@ -306,28 +306,6 @@ export function Connections() {
     return () => window.clearTimeout(handle)
   }, [routeMeshId, selectedMesh, selectedMeshId])
 
-  const confirmedStandalone = useCallback((profile: ConnectionProfile): boolean => {
-    const observed = controls[profile.instanceId]
-    if (!observed?.control) return false
-    if (!observed.control.managed) return true
-    const node = nodeForProfile(profile, observed.control, observed)
-    return Boolean(node && !node.meshId)
-  }, [controls])
-
-  const eligibleControlProfiles = useMemo(() => profiles.filter((profile) => {
-    if (states[profile.instanceId]?.status !== 'connected') return false
-    const observed = controls[profile.instanceId]?.control
-    if (!observed) return false
-    return confirmedStandalone(profile)
-  }), [confirmedStandalone, controls, profiles, states])
-
-  useEffect(() => {
-    const preferred = eligibleControlProfiles[0]?.instanceId ?? ''
-    if (newMeshControlInstanceId && eligibleControlProfiles.some((profile) => profile.instanceId === newMeshControlInstanceId)) return
-    const handle = window.setTimeout(() => setNewMeshControlInstanceId(preferred), 0)
-    return () => window.clearTimeout(handle)
-  }, [eligibleControlProfiles, newMeshControlInstanceId])
-
   const mutateControl = useCallback(
     async (authority: AuthorityView | undefined, path: string, body: Record<string, unknown> = {}): Promise<ManagedFleetMutationResult> => {
       const profile = authority?.profile
@@ -464,6 +442,22 @@ export function Connections() {
     }
     return { kind: 'unknown', freshness: observed?.freshness ?? 'unknown' }
   }, [authorityViews, controls])
+
+  const eligibleControlProfiles = useMemo(() => profiles.filter((profile) => {
+    if (states[profile.instanceId]?.status !== 'connected') return false
+    const membership = membershipFor(profile)
+    return membership.kind === 'standalone' && membership.freshness === 'fresh'
+  }), [membershipFor, profiles, states])
+
+  useEffect(() => {
+    const preferred = eligibleControlProfiles[0]?.instanceId ?? ''
+    if (
+      newMeshControlInstanceId
+      && eligibleControlProfiles.some((profile) => profile.instanceId === newMeshControlInstanceId)
+    ) return
+    const handle = window.setTimeout(() => setNewMeshControlInstanceId(preferred), 0)
+    return () => window.clearTimeout(handle)
+  }, [eligibleControlProfiles, newMeshControlInstanceId])
 
   const projectMembershipControl = useCallback((
     instanceId: string,

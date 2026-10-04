@@ -657,6 +657,124 @@ test('rejected managed membership mutation rolls the optimistic projection back 
   expect(within(betaCard()).getByText('Authoritative state: Standalone')).toBeInTheDocument()
 })
 
+test('mesh controller choices exclude nodes whose authoritative membership is already a mesh', async () => {
+  const storage = new MemoryStorage()
+  let nextId = 0
+  const registry = new BrowserConnectionRegistry(
+    storage,
+    () => 10_000,
+    () => ['alpha', 'beta'][nextId++] ?? 'fallback',
+  )
+  registry.add(connection('https://alpha.example', 'alpha'), 'Alpha')
+  registry.add(connection('https://beta.example', 'beta'), 'Beta')
+
+  const mesh = {
+    mesh_id: 'mesh-a',
+    display_name: 'Production',
+    adopted: true,
+    adopted_at: '2026-10-02T05:00:00Z',
+    updated_at: '2026-10-02T06:00:00Z',
+  }
+  const policy = {
+    duration_seconds: 1380,
+    warning_after_seconds: 1200,
+    alert_after_seconds: 1320,
+    rearm_after_seconds: 180,
+    legacy_admission_enabled: true,
+    revision: 1,
+    updated_at: '2026-10-02T06:00:00Z',
+  }
+  const node = (nodeId: string) => ({
+    node_id: nodeId,
+    origin: 'https://' + nodeId + '.example',
+    mesh_id: 'mesh-a',
+    state: 'active',
+    desired_topology_revision: 4,
+    applied_topology_revision: 4,
+    desired_trust_revision: 4,
+    applied_trust_revision: 4,
+    desired_policy_revision: 1,
+    applied_policy_revision: 1,
+    updated_at: '2026-10-02T06:00:00Z',
+  })
+  const alphaControl = {
+    ok: true,
+    control: {
+      schema_version: 3,
+      fleet_id: 'fleet-a',
+      node_id: 'alpha',
+      control_node_id: 'alpha',
+      managed: true,
+      mesh,
+      meshes: [mesh],
+      nodes: [node('alpha'), node('beta')],
+      policy,
+      revisions: { routing: 1, topology: 4, trust: 4, access_policy: 1 },
+      updated_at: '2026-10-02T06:00:00Z',
+    },
+  }
+  const staleBetaStandalone = {
+    ok: true,
+    control: {
+      schema_version: 3,
+      fleet_id: 'fleet-a',
+      node_id: 'beta',
+      control_node_id: 'beta',
+      managed: false,
+      mesh: null,
+      meshes: [],
+      nodes: [],
+      policy: null,
+      revisions: { routing: 0, topology: 0, trust: 0, access_policy: 0 },
+      updated_at: '2026-10-02T05:59:00Z',
+    },
+  }
+
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    const nodeId = url.origin.includes('alpha') ? 'alpha' : 'beta'
+    if (url.pathname.includes('oauth') || url.pathname.includes('token')) {
+      return new Response(JSON.stringify({
+        access_token: 'access-' + nodeId,
+        token_type: 'Bearer',
+        expires_in: 120,
+        refresh_token: 'refresh-' + nodeId + '-next',
+        scope: 'terminal:read terminal:execute',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.pathname === '/actions/fleet/control') {
+      if (nodeId === 'alpha') {
+        await new Promise((resolve) => window.setTimeout(resolve, 15))
+        return new Response(JSON.stringify(alphaControl), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify(staleBetaStandalone), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ error: 'unexpected_request' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  render(
+    <I18nProvider>
+      <ConnectionRuntimeProvider registry={registry} transport={new PairingTransport(fetcher)}>
+        <Connections />
+      </ConnectionRuntimeProvider>
+    </I18nProvider>,
+  )
+
+  const selector = screen.getByLabelText('Control node')
+  await waitFor(() => expect(selector).toBeDisabled())
+  expect(within(selector).queryByRole('option', { name: 'Beta' })).not.toBeInTheDocument()
+})
+
 test('creates a second mesh on an independently selected standalone control node', async () => {
   const storage = new MemoryStorage()
   let nextId = 0
