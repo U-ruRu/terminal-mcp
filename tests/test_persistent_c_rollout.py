@@ -265,7 +265,7 @@ def test_persistent_policy_control_updates_next_arm_and_persists_env(tmp_path):
     assert 'TERMINAL_MCP_LEGACY_AGENT_ADMISSION_ENABLED="true"' in persisted
 
 
-def test_persistent_timing_policy_rejects_armed_slot_but_legacy_switch_remains_live(tmp_path):
+def test_persistent_timing_policy_allows_armed_slot_and_legacy_switch_remains_live(tmp_path):
     app = create_app(_settings(tmp_path, persistent_agents_enabled=True))
     headers = {"Authorization": "Bearer console-token"}
     with TestClient(app) as client:
@@ -283,14 +283,21 @@ def test_persistent_timing_policy_rejects_armed_slot_but_legacy_switch_remains_l
         ).json()
         assert played["slot"]["state"] == "armed"
 
-        blocked = client.post(
+        changed = client.post(
             "/actions/persistent/policy",
             headers=headers,
-            json={"duration_seconds": 180, "warning_after_seconds": 60, "alert_after_seconds": 120},
+            json={
+                "duration_seconds": 180,
+                "warning_after_seconds": 60,
+                "alert_after_seconds": 120,
+                "rearm_after_seconds": 15,
+            },
         ).json()
-        assert blocked["ok"] is False
-        assert blocked["code"] == "policy_in_use"
-        assert blocked["blockers"][0]["logical_agent_id"] == created["slot"]["logical_agent_id"]
+        assert changed["ok"] is True
+        assert changed["policy"]["duration_seconds"] == 180
+        assert changed["policy"]["warning_after_seconds"] == 60
+        assert changed["policy"]["alert_after_seconds"] == 120
+        assert changed["policy"]["rearm_after_seconds"] == 15
 
         legacy = client.post(
             "/actions/persistent/policy", headers=headers, json={"legacy_admission_enabled": True}
