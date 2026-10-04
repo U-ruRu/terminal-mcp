@@ -1378,16 +1378,16 @@ class FleetControlStore:
         )
         for item in incoming_nodes:
             node_id = validate_protocol_id(str(item.get("node_id") or ""), "node_id")
-            raw_mesh_id = item.get("mesh_id")
-            mesh_id = (
-                validate_protocol_id(str(raw_mesh_id), "mesh_id")
-                if raw_mesh_id
-                else (
-                    legacy_mesh_id
-                    if legacy_mesh_id and str(item.get("state") or "active") != "detached"
+            state = str(item.get("state") or "active")
+            if "mesh_id" in item:
+                raw_mesh_id = item.get("mesh_id")
+                mesh_id = (
+                    validate_protocol_id(str(raw_mesh_id), "mesh_id")
+                    if raw_mesh_id is not None
                     else None
                 )
-            )
+            else:
+                mesh_id = legacy_mesh_id if legacy_mesh_id and state != "detached" else None
             if mesh_id is not None and mesh_id not in active_mesh_ids:
                 raise FleetControlError("managed_node_mesh_missing")
             normalized_nodes.append(
@@ -1396,7 +1396,7 @@ class FleetControlStore:
                     "origin": str(item.get("origin") or "").strip() or None,
                     "public_key": str(item.get("public_key") or "").strip() or None,
                     "mesh_id": mesh_id,
-                    "state": str(item.get("state") or "active"),
+                    "state": state,
                     "applied_topology_revision": int(item.get("applied_topology_revision") or 0),
                     "applied_trust_revision": int(item.get("applied_trust_revision") or 0),
                     "applied_policy_revision": int(item.get("applied_policy_revision") or 0),

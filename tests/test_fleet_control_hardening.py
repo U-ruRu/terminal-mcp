@@ -56,6 +56,90 @@ class PolicyProbe:
         return dict(self.current)
 
 
+def _managed_replica_snapshot(*, include_member_mesh_id: bool, member_mesh_id=None) -> dict:
+    member = {
+        "node_id": "member",
+        "origin": "https://member.example",
+        "public_key": "pub-member",
+        "state": "active",
+        "applied_topology_revision": 2,
+        "applied_trust_revision": 2,
+        "applied_policy_revision": 2,
+    }
+    if include_member_mesh_id:
+        member["mesh_id"] = member_mesh_id
+    return {
+        "managed": True,
+        "fleet_id": "fleet-a",
+        "control_node_id": "control",
+        "mesh": {
+            "mesh_id": "mesh-a",
+            "display_name": "Alpha",
+            "adopted": True,
+        },
+        "meshes": [{"mesh_id": "mesh-a", "display_name": "Alpha", "adopted": True}],
+        "nodes": [
+            {
+                "node_id": "control",
+                "origin": "https://control.example",
+                "public_key": "pub-control",
+                "mesh_id": "mesh-a",
+                "state": "active",
+                "applied_topology_revision": 2,
+                "applied_trust_revision": 2,
+                "applied_policy_revision": 2,
+            },
+            member,
+        ],
+        "policy": {
+            "duration_seconds": 1380,
+            "warning_after_seconds": 1200,
+            "alert_after_seconds": 1320,
+            "rearm_after_seconds": 180,
+            "legacy_admission_enabled": True,
+        },
+        "revisions": {"topology": 2, "trust": 2, "access_policy": 2},
+    }
+
+
+@pytest.mark.asyncio
+async def test_replica_explicit_null_mesh_id_overrides_legacy_mesh_fallback(tmp_path):
+    store = FleetControlStore(
+        tmp_path / "explicit-null.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="control",
+    )
+    await store.initialize()
+
+    state = await store.apply_managed_replica(
+        _managed_replica_snapshot(include_member_mesh_id=True, member_mesh_id=None)
+    )
+
+    member = next(node for node in state["nodes"] if node["node_id"] == "member")
+    control = next(node for node in state["nodes"] if node["node_id"] == "control")
+    assert member["mesh_id"] is None
+    assert control["mesh_id"] == "mesh-a"
+
+
+@pytest.mark.asyncio
+async def test_replica_missing_mesh_id_keeps_legacy_mesh_fallback(tmp_path):
+    store = FleetControlStore(
+        tmp_path / "missing-mesh-id.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="control",
+    )
+    await store.initialize()
+
+    state = await store.apply_managed_replica(
+        _managed_replica_snapshot(include_member_mesh_id=False)
+    )
+
+    member = next(node for node in state["nodes"] if node["node_id"] == "member")
+    assert member["mesh_id"] == "mesh-a"
+
+
 @pytest.mark.asyncio
 async def test_detached_local_member_restores_standalone_policy(tmp_path):
     store = FleetControlStore(
