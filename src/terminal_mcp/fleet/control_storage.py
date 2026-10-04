@@ -329,8 +329,10 @@ class FleetControlStore:
                 await db.rollback()
                 raise
 
-    async def claim_local_control_authority(self, *, now: str | None = None) -> str:
-        """Make this standalone node the managed-control authority without server-file edits."""
+    async def claim_local_control_authority(
+        self, *, policy: dict | None = None, now: str | None = None
+    ) -> str:
+        """Make this standalone node its own control-domain authority."""
         stamp = now or utc_text()
         async with self._connect("fleet_control_claim_local_authority") as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -348,6 +350,11 @@ class FleetControlStore:
                     "updated_at=? WHERE singleton=1",
                     (self.node_id, stamp),
                 )
+                ingress_token = secrets.token_urlsafe(32)
+                await db.execute(
+                    "UPDATE managed_identity SET ingress_token=?,updated_at=? WHERE singleton=1",
+                    (ingress_token, stamp),
+                )
                 # Old authority observations remain historical only. Trust material is kept
                 # in rows so an explicit rejoin does not require pairing or file repair.
                 await db.execute("UPDATE managed_meshes SET active=0,updated_at=?", (stamp,))
@@ -358,11 +365,41 @@ class FleetControlStore:
                 )
                 if row is not None:
                     await db.execute(
-                        "UPDATE managed_nodes SET state='active',mesh_id=NULL,updated_at=? "
+                        "UPDATE managed_nodes SET state='active',mesh_id=NULL,auth_token=?,"
+                        "updated_at=? "
                         "WHERE node_id=?",
-                        (stamp, self.node_id),
+                        (ingress_token, stamp, self.node_id),
                     )
-                await db.execute("DELETE FROM access_policy")
+                if policy is None:
+                    await db.execute("DELETE FROM access_policy")
+                else:
+                    duration = int(policy["duration_seconds"])
+                    warning = int(policy["warning_after_seconds"])
+                    alert = int(policy["alert_after_seconds"])
+                    rearm = int(policy["rearm_after_seconds"])
+                    legacy = int(bool(policy["legacy_admission_enabled"]))
+                    if duration <= 0 or not (0 < warning < alert < duration) or rearm <= 0:
+                        raise ValueError("invalid access policy")
+                    revision_row = await (
+                        await db.execute(
+                            "SELECT access_policy_revision FROM control_meta WHERE singleton=1"
+                        )
+                    ).fetchone()
+                    revision = int(revision_row[0]) if revision_row else 1
+                    await db.execute(
+                        "INSERT INTO access_policy("
+                        "singleton,duration_seconds,warning_after_seconds,alert_after_seconds,"
+                        "rearm_after_seconds,legacy_admission_enabled,revision,updated_at"
+                        ") VALUES(1,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(singleton) DO UPDATE SET "
+                        "duration_seconds=excluded.duration_seconds,"
+                        "warning_after_seconds=excluded.warning_after_seconds,"
+                        "alert_after_seconds=excluded.alert_after_seconds,"
+                        "rearm_after_seconds=excluded.rearm_after_seconds,"
+                        "legacy_admission_enabled=excluded.legacy_admission_enabled,"
+                        "revision=excluded.revision,updated_at=excluded.updated_at",
+                        (duration, warning, alert, rearm, legacy, revision, stamp),
+                    )
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -1146,10 +1183,16 @@ class FleetControlStore:
                     topology = await self._bump_revision(db, "topology", stamp)
                     trust = await self._bump_revision(db, "trust", stamp)
                     await db.execute(
-                        "UPDATE managed_nodes SET mesh_id=NULL,state='active',"
+                        "UPDATE managed_nodes SET mesh_id=NULL,state=?,"
                         "desired_topology_revision=?,desired_trust_revision=?,"
                         "last_error=NULL,updated_at=? WHERE node_id=?",
-                        (topology, trust, stamp, node_id),
+                        (
+                            "active" if node_id == self.node_id else "draining",
+                            topology,
+                            trust,
+                            stamp,
+                            node_id,
+                        ),
                     )
                     await db.execute(
                         "UPDATE managed_nodes SET desired_topology_revision=?,"
