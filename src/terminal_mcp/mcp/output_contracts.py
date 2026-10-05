@@ -651,11 +651,16 @@ class TerminalHealth(_Strict):
     output_cache: OutputCacheHealth | None = None
 
 
+class WorkflowReviewCounts(_Strict):
+    BLOCKING: int | None = None
+    NON_BLOCKING: int | None = None
+
+
 class WorkflowHealth(_Strict):
     by_state: dict[str, int] = Field(default_factory=dict)
     by_lane: dict[str, int] = Field(default_factory=dict)
     active_claims: int | None = None
-    reviews: dict[str, Any] = Field(default_factory=dict)
+    reviews: WorkflowReviewCounts = Field(default_factory=WorkflowReviewCounts)
     unreleased_claims: int | None = None
     live_claims: int | None = None
     stale_claims: int | None = None
