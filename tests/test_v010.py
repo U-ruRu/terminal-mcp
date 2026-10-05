@@ -819,8 +819,10 @@ def test_mcp_schema_has_unified_task_contract():
     assert set(tools) == {"session", "observe", "message", "task", "cmd", "context", "health"}
 
     task = tools["task"].parameters
-    assert task["required"] == ["code", "action", "namespace"]
-    assert set(task["properties"]["action"]["enum"]) == {
+    assert task["required"] == ["request"]
+    request = task["properties"]["request"]
+    assert request["discriminator"]["propertyName"] == "action"
+    assert set(request["discriminator"]["mapping"]) == {
         "create",
         "claim",
         "release",
@@ -834,8 +836,11 @@ def test_mcp_schema_has_unified_task_contract():
         "archive",
         "review",
     }
-    assert task["properties"]["code"]["minLength"] == 4
-    assert task["properties"]["code"]["maxLength"] == 4
+    assert len(request["oneOf"]) == 12
+    assert "payload" not in task["properties"]
+    claim = task["$defs"]["TaskClaimRequest"]
+    assert claim["properties"]["code"]["minLength"] == 4
+    assert claim["properties"]["code"]["maxLength"] == 4
 
     observe = tools["observe"].parameters["properties"]
     assert observe["subject"]["enum"] == ["sessions", "tasks", "namespaces"]
