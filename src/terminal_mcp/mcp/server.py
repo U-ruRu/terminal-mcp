@@ -61,6 +61,8 @@ from terminal_mcp.mcp.output_contracts import (
     session_result,
     task_result,
 )
+from terminal_mcp.mcp.task_contract import TaskRequest as AccessTaskRequest
+from terminal_mcp.mcp.task_contract import task_request_to_backend
 from terminal_mcp.telemetry import observed
 
 _SAFE_READ_ONLY = ToolAnnotations(
@@ -1288,17 +1290,14 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Mutate a managed task under an active unified Access session. Claim ownership is "
-            "durable per logical slot; WIP is one live managed-task claim per slot."
+            "Mutate a managed task under an active unified Access session using a strict "
+            "action-discriminated request. Claim ownership is durable per logical slot; "
+            "WIP is one live managed-task claim per slot."
         ),
     )
-    async def access_task_tool(
-        code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")],
-        action: TaskAction,
-        namespace: str,
-        task_id: str | None = None,
-        payload: dict[str, object] | None = None,
-    ) -> dict:
+    async def access_task_tool(request: AccessTaskRequest) -> dict:
+        code, namespace, task_id, backend_request = task_request_to_backend(request)
+        action = backend_request.pop("action")
         identity, failure = await access_identity(code)
         if failure is not None:
             return failure
@@ -1310,7 +1309,7 @@ def build_mcp(
             action=action,
             namespace=namespace,
             task_id=task_id,
-            **(payload or {}),
+            **backend_request,
         )
 
     @mcp.tool(
@@ -1513,7 +1512,7 @@ def build_mcp(
         ),
     )
     install_public_output_contract(
-        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, kw["action"])
+        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, kw["request"].action)
     )
     install_public_output_contract(
         mcp, "cmd", CmdOutput, lambda raw, kw: cmd_result(raw, kw["request"].action)
