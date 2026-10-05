@@ -924,3 +924,110 @@ async def test_claim_wip_one_per_owner_is_atomic_and_same_task_is_idempotent(tmp
         assert busy["warnings"][0]["context"]["current_task_id"] == "ONE"
     finally:
         await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_compact_task_snapshot_is_bounded_and_preserves_full_history(tmp_path):
+    from terminal_mcp.mcp.server import _task_summary
+
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        owner = (await register(service, "snapshot-owner"))["self"]["agent_id"]
+        description = "x" * 1700
+        await service.task(
+            owner,
+            action="create",
+            isolation_hint="none",
+            namespace="project",
+            task_id="DEP-SNAPSHOT",
+            title="blocking dependency",
+        )
+        await service.task(
+            owner,
+            action="create",
+            isolation_hint="none",
+            namespace="project",
+            task_id="SNAPSHOT-1",
+            title="compact snapshot",
+            lane="implementation",
+            priority="P0",
+            description=description,
+            next_action="continue from checkpoint",
+            dependencies=[{"namespace": "project", "task_id": "DEP-SNAPSHOT"}],
+        )
+        claimed = await service.task(
+            owner,
+            action="claim",
+            namespace="project",
+            task_id="SNAPSHOT-1",
+            claim_intent="exercise compact snapshot",
+            force=True,
+            force_reason="snapshot test keeps dependency intentionally open",
+        )
+        assert claimed["ok"] is True
+        # Internal service semantics stay compatible; compaction is a public MCP contract.
+        assert "claims" in claimed["task"]
+        await service.task(
+            owner,
+            action="checkpoint",
+            namespace="project",
+            task_id="SNAPSHOT-1",
+            checkpoint="first checkpoint",
+        )
+        await service.task(
+            owner,
+            action="checkpoint",
+            namespace="project",
+            task_id="SNAPSHOT-1",
+            checkpoint="second checkpoint",
+        )
+
+        compact = await service.tasks(
+            namespace="project", task_id="SNAPSHOT-1", snapshot=True
+        )
+        snapshot = compact["task"]
+        assert set(snapshot) == {
+            "namespace", "task_id", "title", "lane", "priority", "state",
+            "operational_status", "revision", "claim", "next_action",
+            "description_preview", "description_truncated", "latest_checkpoint",
+            "blocking_dependencies",
+        }
+        assert snapshot["description_preview"] == description[:1500]
+        assert len(snapshot["description_preview"]) == 1500
+        assert snapshot["description_truncated"] is True
+        assert snapshot["claim"]["agent_name"] == public_agent_name(owner)
+        assert snapshot["latest_checkpoint"]["text"] == "second checkpoint"
+        assert snapshot["latest_checkpoint"]["author"] == public_agent_name(owner)
+        assert snapshot["latest_checkpoint"]["revision"] == snapshot["revision"]
+        assert [dep["task_id"] for dep in snapshot["blocking_dependencies"]] == [
+            "DEP-SNAPSHOT"
+        ]
+
+        listed = await service.tasks(namespace="project", show_done=True)
+        raw_item = next(item for item in listed["tasks"] if item["task_id"] == "SNAPSHOT-1")
+        item = _task_summary(raw_item)
+        assert set(item) == {
+            "namespace", "task_id", "title", "lane", "priority", "state",
+            "operational_status", "revision", "claimed_by", "blocking_count",
+            "has_checkpoint",
+        }
+        assert item["claimed_by"] == public_agent_name(owner)
+        assert item["blocking_count"] == 1
+        assert item["has_checkpoint"] is True
+
+        full = await service.tasks(
+            namespace="project", task_id="SNAPSHOT-1", show_details=True
+        )
+        assert full["task"]["description"] == description
+        checkpoint_history = [
+            event["payload"]["checkpoint"]
+            for event in reversed(full["task"]["events"])
+            if "checkpoint" in event.get("payload", {})
+        ]
+        assert checkpoint_history[-2:] == ["first checkpoint", "second checkpoint"]
+        assert "events" not in snapshot
+        assert "reviews" not in snapshot
+        assert "relations" not in snapshot
+        assert "output_states" not in snapshot
+    finally:
+        await terminal.stop()

@@ -37,6 +37,20 @@ TASK = {
     "lane": "implementation", "priority": "P1", "state": "in_progress",
     "operational_status": "in_progress", "revision": 4, "isolation_hint": "task/T-1",
 }
+TASK_LIST_ITEM = {
+    "namespace": "project", "task_id": "T-1", "title": "Task",
+    "lane": "implementation", "priority": "P1", "state": "in_progress",
+    "operational_status": "in_progress", "revision": 4, "claimed_by": None,
+    "blocking_count": 0, "has_checkpoint": False,
+}
+TASK_SNAPSHOT = {
+    "namespace": "project", "task_id": "T-1", "title": "Task",
+    "lane": "implementation", "priority": "P1", "state": "in_progress",
+    "operational_status": "in_progress", "revision": 4, "claim": None,
+    "next_action": "continue", "description_preview": "bounded",
+    "description_truncated": False, "latest_checkpoint": None,
+    "blocking_dependencies": [],
+}
 
 
 def test_discovery_has_closed_success_output_schema_for_all_public_tools():
@@ -70,7 +84,7 @@ def test_session_variants(action, raw):
 
 @pytest.mark.parametrize("subject,raw", [
     ("sessions", {"ok": True, "sessions": [{"public_name": "Alpha", "mode": "persistent", "authority_node_id": "main", "access_generation": 1}]}),
-    ("tasks", {"ok": True, "summary": {"visible": 1, "returned": 1}, "tasks": [TASK], "tag_counts": {}, "namespaces": ["project"], "next_cursor": None}),
+    ("tasks", {"ok": True, "summary": {"visible": 1, "returned": 1}, "tasks": [TASK_LIST_ITEM], "tag_counts": {}, "namespaces": ["project"], "next_cursor": None}),
     ("namespaces", {"ok": True, "namespaces": ["project"], "next_cursor": None}),
 ])
 def test_observe_variants(subject, raw):
@@ -90,7 +104,8 @@ def test_message_variants(kwargs, raw):
 
 @pytest.mark.parametrize("action", ["create","claim","release","update","checkpoint","comment","relate","unrelate","state","done","archive","review"])
 def test_task_variants(action):
-    validate(TaskOutput, task_result({"ok": True, "task": TASK, "warnings": []}, action))
+    task = TASK_SNAPSHOT if action == "claim" else TASK
+    validate(TaskOutput, task_result({"ok": True, "task": task, "warnings": []}, action))
 
 
 @pytest.mark.parametrize("action,raw", [

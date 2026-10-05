@@ -165,20 +165,19 @@ def _read_error(code: str, reason: str | None = None) -> dict:
 def _task_summary(item: dict) -> dict:
     owner = item.get("owner")
     owner_name = owner.get("agent_name") if isinstance(owner, dict) else owner
+    checkpoint = item.get("checkpoint")
     return {
-        key: value
-        for key, value in {
-            "namespace": item.get("namespace"),
-            "task_id": item.get("task_id"),
-            "title": item.get("title"),
-            "lane": item.get("lane"),
-            "priority": item.get("priority"),
-            "state": item.get("state"),
-            "operational_status": item.get("operational_status"),
-            "owner": owner_name,
-            "revision": item.get("revision"),
-        }.items()
-        if value is not None
+        "namespace": item.get("namespace"),
+        "task_id": item.get("task_id"),
+        "title": item.get("title"),
+        "lane": item.get("lane"),
+        "priority": item.get("priority"),
+        "state": item.get("state"),
+        "operational_status": item.get("operational_status"),
+        "revision": item.get("revision"),
+        "claimed_by": owner_name,
+        "blocking_count": len(item.get("blocking_dependencies") or []),
+        "has_checkpoint": checkpoint not in (None, "", {}, []),
     }
 
 
@@ -1151,6 +1150,7 @@ def build_mcp(
             operational_status=operational_status,
             tags=tags,
             show_details=detail == "full",
+            snapshot=detail == "summary" and task_id is not None,
             show_done=show_done,
             show_archived=show_archived,
             limit=limit,
@@ -1161,15 +1161,13 @@ def build_mcp(
                 result["code"] = "resource_not_found"
             return result
         if task_id:
-            if detail == "summary" and result.get("task"):
-                result["task"] = _task_summary(result["task"])
-            elif result.get("task"):
+            if result.get("task"):
                 try:
                     bounded_page(
                         [result["task"]],
                         limit=1,
                         cursor=None,
-                        scope={"kind": "task-detail"},
+                        scope={"kind": "task-detail", "detail": detail},
                     )
                 except OutputItemTooLarge as exc:
                     return _read_error("output_item_too_large", str(exc))
@@ -1560,7 +1558,12 @@ def build_mcp(
         mcp, "session", SessionOutput, lambda raw, kw: session_result(raw, kw["action"])
     )
     install_public_output_contract(
-        mcp, "observe", ObserveOutput, lambda raw, kw: observe_result(raw, kw["subject"])
+        mcp,
+        "observe",
+        ObserveOutput,
+        lambda raw, kw: observe_result(
+            raw, kw["subject"], detail=kw.get("detail", "summary"), task_id=kw.get("task_id")
+        )
     )
     install_public_output_contract(
         mcp,
