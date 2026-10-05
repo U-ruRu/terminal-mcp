@@ -34,13 +34,15 @@ def validate_context_request(
     content=None,
     primary=None,
     show_details=False,
+    limit=None,
+    offset=0,
 ):
     if action == "list":
         if any(value is not None for value in (context_id, summary, content, primary)):
-            return "context.list: list accepts only show_details"
+            return "context.list: list accepts only read controls"
         return None
-    if show_details:
-        return f"context.{action}: show_details is only valid for list"
+    if show_details or limit is not None or offset:
+        return f"context.{action}: read controls are only valid for list"
     if action == "create":
         if context_id is not None:
             return "context.create: create does not accept id"
@@ -1075,6 +1077,8 @@ class TerminalService:
         content=None,
         primary=None,
         show_details=False,
+        limit=None,
+        offset=0,
     ):
         if not self.context_store:
             return {"ok": False, "error": "instance context unavailable"}
@@ -1085,12 +1089,18 @@ class TerminalService:
             content=content,
             primary=primary,
             show_details=show_details,
+            limit=limit,
+            offset=offset,
         )
         if validation_error:
             return {"ok": False, "error": validation_error}
         try:
             if action == "list":
-                entries = await self.context_store.list()
+                entries = await self.context_store.list(
+                    limit=limit,
+                    offset=offset,
+                    primary_first=limit is not None,
+                )
 
                 def compact(entry):
                     item = {"id": entry["id"], "summary": entry["summary"]}

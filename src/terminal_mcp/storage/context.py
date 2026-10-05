@@ -48,13 +48,24 @@ class ContextStore:
             "primary": bool(row[3]),
         }
 
-    async def list(self):
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        primary_first: bool = False,
+    ):
+        order = "is_primary DESC,id ASC" if primary_first else "id ASC"
+        query = (
+            "SELECT id,summary,content,is_primary FROM instance_context "
+            f"ORDER BY {order}"
+        )
+        params: list[int] = []
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend((max(1, int(limit)), max(0, int(offset))))
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
-            rows = await (
-                await db.execute(
-                    "SELECT id,summary,content,is_primary FROM instance_context ORDER BY id ASC"
-                )
-            ).fetchall()
+            rows = await (await db.execute(query, params)).fetchall()
         return [self._entry(row) for row in rows]
 
     async def get(self, context_id: int):

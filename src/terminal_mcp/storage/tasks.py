@@ -427,16 +427,32 @@ class TaskStore:
             "CASE WHEN state='ready' THEN 0 ELSE 1 END,"
             "COALESCE(ready_since,created_at) ASC,updated_at DESC,namespace,task_id"
         )
+        required_tags = set(tags or [])
+        offset = max(0, int(offset))
+        if not required_tags and limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend((max(1, min(int(limit), 1000)), offset))
+            async with self._connect() as db:
+                rows = await (await db.execute(query, params)).fetchall()
+            return [self._task(row) for row in rows]
         async with self._connect() as db:
             rows = await (await db.execute(query, params)).fetchall()
         tasks = [self._task(row) for row in rows]
-        required_tags = set(tags or [])
         if required_tags:
             tasks = [task for task in tasks if required_tags.issubset(set(task["tags"]))]
-        offset = max(0, int(offset))
         if limit is None:
             return tasks[offset:]
         return tasks[offset : offset + max(1, min(int(limit), 1000))]
+
+    async def list_namespaces(self, *, limit: int = 20, offset: int = 0) -> list[str]:
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT DISTINCT namespace FROM work_items ORDER BY namespace LIMIT ? OFFSET ?",
+                    (max(1, min(int(limit), 1000)), max(0, int(offset))),
+                )
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     async def runtime_state_snapshot(self):
         # Batch claims and dependency state for task list projection.

@@ -1064,17 +1064,13 @@ def build_mcp(
                     "code": "policy_incompatible",
                     "error": "policy_incompatible",
                 }
-            result = await backend.access_observe_slots()
+            result = await backend.access_observe_slots(
+                limit=limit + 1,
+                offset=offset,
+            )
             if not result.get("ok"):
                 return result
-            rows = sorted(
-                result.get("sessions") or [],
-                key=lambda item: (
-                    str(item.get("public_name") or ""),
-                    str(item.get("authority_node_id") or ""),
-                    str(item.get("mode") or ""),
-                ),
-            )
+            rows = list(result.get("sessions") or [])
             if detail == "summary":
                 rows = [
                     {
@@ -1086,29 +1082,37 @@ def build_mcp(
                     for item in rows
                 ]
             try:
-                page, next_cursor = bounded_page(
-                    rows, limit=limit, cursor=cursor, scope=scope
+                page, _unused_cursor = bounded_page(
+                    rows, limit=limit, cursor=None, scope=scope
                 )
             except InvalidCursor as exc:
                 return _read_error("invalid_cursor", str(exc))
             except OutputItemTooLarge as exc:
                 return _read_error("output_item_too_large", str(exc))
+            has_more = len(page) < len(rows)
+            next_cursor = (
+                encode_cursor(offset + len(page), scope) if has_more else None
+            )
             return {"ok": True, "sessions": page, "next_cursor": next_cursor}
 
         if subject == "namespaces":
             store = getattr(service, "task_store", None)
             if store is None:
                 return {"ok": False, "code": "resource_not_found", "error": "resource_not_found"}
-            rows = await store.list_tasks(
-                show_done=True, show_archived=True, limit=None, offset=0
-            )
-            namespaces = [{"namespace": value} for value in sorted({item["namespace"] for item in rows})]
+            namespaces = [
+                {"namespace": value}
+                for value in await store.list_namespaces(limit=limit + 1, offset=offset)
+            ]
             try:
-                page, next_cursor = bounded_page(
-                    namespaces, limit=limit, cursor=cursor, scope=scope
+                page, _unused_cursor = bounded_page(
+                    namespaces, limit=limit, cursor=None, scope=scope
                 )
-            except InvalidCursor as exc:
-                return _read_error("invalid_cursor", str(exc))
+            except OutputItemTooLarge as exc:
+                return _read_error("output_item_too_large", str(exc))
+            has_more = len(page) < len(namespaces)
+            next_cursor = (
+                encode_cursor(offset + len(page), scope) if has_more else None
+            )
             return {
                 "ok": True,
                 "namespaces": [item["namespace"] for item in page],
@@ -1158,9 +1162,17 @@ def build_mcp(
         except OutputItemTooLarge as exc:
             return _read_error("output_item_too_large", str(exc))
         consumed = len(page)
-        internal_more = result.get("next_cursor") is not None
-        has_more = consumed < len(rows) or internal_more
-        next_cursor = encode_cursor(offset + consumed, scope) if has_more else None
+        cursor_positions = list(result.pop("_cursor_positions", []) or [])
+        internal_cursor = result.get("next_cursor")
+        if consumed < len(rows):
+            raw_next_cursor = cursor_positions[consumed - 1] if consumed else offset
+        elif internal_cursor is not None:
+            raw_next_cursor = int(internal_cursor)
+        else:
+            raw_next_cursor = None
+        next_cursor = (
+            encode_cursor(raw_next_cursor, scope) if raw_next_cursor is not None else None
+        )
         raw_summary = result.get("summary") or {}
         if detail == "summary":
             summary = {
@@ -1241,14 +1253,15 @@ def build_mcp(
             alert=alert,
             mode=mode,
             show_all=history,
-            limit=max(limit, min(500, offset + limit + 1)) if is_read else limit,
+            limit=min(500, limit + 1) if is_read else limit,
+            offset=offset if is_read else 0,
             namespace=namespace,
             task_id=task_id,
         )
         if not is_read or not result.get("ok"):
             return result
         raw = list(result.get("messages") or result.get("inbox") or [])
-        candidate = raw[offset : offset + limit]
+        candidate = raw[:limit]
         rows = [summary_message(item) for item in candidate] if detail == "summary" else candidate
         try:
             page, _ignored = bounded_page(
@@ -1257,7 +1270,7 @@ def build_mcp(
         except OutputItemTooLarge as exc:
             return _read_error("output_item_too_large", str(exc))
         consumed = len(page)
-        has_more = consumed < len(candidate) or len(raw) > offset + consumed
+        has_more = consumed < len(candidate) or len(raw) > consumed
         next_cursor = encode_cursor(offset + consumed, scope) if has_more else None
         result["messages"] = page
         result.pop("inbox", None)
@@ -1425,7 +1438,10 @@ def build_mcp(
             scope = {"kind": "context.list", "detail": request.detail}
             try:
                 raw = await service.context(
-                    "list", show_details=request.detail == "full"
+                    "list",
+                    show_details=request.detail == "full",
+                    limit=request.limit + 1,
+                    offset=decode_cursor(request.cursor, scope),
                 )
                 if not raw.get("ok"):
                     return raw
@@ -1436,11 +1452,17 @@ def build_mcp(
                     {**item, "_primary": False}
                     for item in sorted(raw.get("additional") or [], key=lambda value: value["id"])
                 ]
-                page, next_cursor = bounded_page(
+                page, _unused_cursor = bounded_page(
                     rows,
                     limit=request.limit,
-                    cursor=request.cursor,
+                    cursor=None,
                     scope=scope,
+                )
+                start = decode_cursor(request.cursor, scope)
+                next_cursor = (
+                    encode_cursor(start + len(page), scope)
+                    if len(page) < len(rows)
+                    else None
                 )
             except InvalidCursor as exc:
                 return _read_error("invalid_cursor", str(exc))

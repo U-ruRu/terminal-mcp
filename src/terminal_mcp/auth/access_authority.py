@@ -242,17 +242,26 @@ class AccessCodeAuthority:
         finally:
             await db.close()
 
-    async def list_slots(self, *, include_deleted: bool = False) -> list[dict]:
+    async def list_slots(
+        self,
+        *,
+        include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
         db = await self.foundation._connect()
         try:
             where = "" if include_deleted else " WHERE status='active'"
-            rows = await (
-                await db.execute(
-                    "SELECT logical_agent_id,public_name,slot_kind,display_suffix,"
-                    "authority_node_id,access_generation,status,created_at,updated_at,deleted_at "
-                    "FROM auth_access_slots" + where + " ORDER BY created_at,logical_agent_id"
-                )
-            ).fetchall()
+            query = (
+                "SELECT logical_agent_id,public_name,slot_kind,display_suffix,"
+                "authority_node_id,access_generation,status,created_at,updated_at,deleted_at "
+                "FROM auth_access_slots" + where + " ORDER BY created_at,logical_agent_id"
+            )
+            params: list[int] = []
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                params.extend((max(1, int(limit)), max(0, int(offset))))
+            rows = await (await db.execute(query, params)).fetchall()
             return [self._slot(row) for row in rows]
         finally:
             await db.close()

@@ -69,7 +69,13 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
             or bridge._access_control_node_id() != bridge.config.instance_id
         ):
             return {"ok": False, "code": "authority_unavailable"}
-        return {"ok": True, "access": await bridge.access_authority.access_slots()}
+        raw_limit = payload.get("limit")
+        limit = max(1, int(raw_limit)) if raw_limit is not None else None
+        offset = max(0, int(payload.get("offset") or 0))
+        return {
+            "ok": True,
+            "access": await bridge.access_authority.access_slots(limit=limit, offset=offset),
+        }
 
     @router.post("/internal/fleet/persistent/access/by-name", include_in_schema=False)
     async def access_by_name(
@@ -522,6 +528,7 @@ def build_persistent_fleet_router(replication, bridge, backend=None) -> APIRoute
                 recent_cutoff=payload.get("recent_cutoff"),
                 show_all=bool(payload.get("show_all")),
                 limit=int(payload.get("limit") or 50),
+                offset=max(0, int(payload.get("offset") or 0)),
             )
         except PersistentStoreError as exc:
             raise_store_error(exc)

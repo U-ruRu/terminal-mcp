@@ -116,6 +116,8 @@ class FakeService:
         content=None,
         primary=None,
         show_details=False,
+        limit=None,
+        offset=0,
     ):
         if action == "list":
             first = {"id": 1, "summary": "Git workflow"}

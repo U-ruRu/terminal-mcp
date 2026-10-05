@@ -196,24 +196,32 @@ class PersistentFleetBridge:
         data = await self._remote_access_call("resolve", {"access_code": access_code})
         return dict(data["access"])
 
-    async def list_access_slots(self) -> list[dict]:
+    async def list_access_slots(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
         control_id = self._access_control_node_id()
         if control_id != self.config.instance_id:
             try:
-                data = await self._remote_access_call("list", {})
+                payload = {"offset": max(0, int(offset))}
+                if limit is not None:
+                    payload["limit"] = max(1, int(limit))
+                data = await self._remote_access_call("list", payload)
                 return [dict(item) for item in data.get("access", [])]
             except PersistentStoreError as exc:
                 if exc.code != "route_unavailable":
                     raise
                 access = []
-                for slot in await self.store.list_slots():
+                for slot in await self.store.list_slots(limit=limit, offset=offset):
                     item = await self.get_access_slot(slot.logical_agent_id)
                     if item is not None:
                         access.append(item)
                 return access
         if self.access_authority is None:
             raise PersistentStoreError("authority_unavailable")
-        return await self.access_authority.access_slots()
+        return await self.access_authority.access_slots(limit=limit, offset=offset)
 
     async def get_access_slot_by_public_name(self, public_name: str) -> dict | None:
         control_id = self._access_control_node_id()
@@ -746,6 +754,7 @@ class PersistentFleetBridge:
         show_all: bool = False,
         recent_seconds: int = 300,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict]:
         route = await self.route_info(logical_agent_id)
         authority_node_id = (
@@ -765,6 +774,7 @@ class PersistentFleetBridge:
                 recent_cutoff=cutoff,
                 show_all=show_all,
                 limit=limit,
+                offset=offset,
             )
         else:
             peer = self.config.peers_by_id.get(authority_node_id)
@@ -783,6 +793,7 @@ class PersistentFleetBridge:
                             "show_all": bool(show_all),
                             "recent_cutoff": cutoff,
                             "limit": int(limit),
+                            "offset": max(0, int(offset)),
                         },
                     )
                 except Exception as exc:

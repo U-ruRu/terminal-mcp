@@ -305,18 +305,27 @@ class PersistentAgentStore:
             ).fetchone()
         return claim is not None
 
-    async def list_slots(self, *, include_deleted: bool = False) -> list[PersistentSlot]:
+    async def list_slots(
+        self,
+        *,
+        include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[PersistentSlot]:
         where = "" if include_deleted else " WHERE state<>'deleted'"
+        query = (
+            "SELECT logical_agent_id,display_name,state,authority_node_id,authority_epoch,"
+            "slot_revision,selector_generation,auth_generation,created_at,updated_at,"
+            "deleted_at,tombstone_reason FROM logical_agents"
+            + where
+            + " ORDER BY created_at,logical_agent_id"
+        )
+        params: list[int] = []
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend((max(1, int(limit)), max(0, int(offset))))
         async with self._connect("persistent_slot_list") as db:
-            rows = await (
-                await db.execute(
-                    "SELECT logical_agent_id,display_name,state,authority_node_id,authority_epoch,"
-                    "slot_revision,selector_generation,auth_generation,created_at,updated_at,"
-                    "deleted_at,tombstone_reason FROM logical_agents"
-                    + where
-                    + " ORDER BY created_at,logical_agent_id"
-                )
-            ).fetchall()
+            rows = await (await db.execute(query, params)).fetchall()
         return [self._slot(row) for row in rows]
 
     async def all_selectors(self) -> list[str]:
@@ -1564,6 +1573,7 @@ class PersistentAgentStore:
         recent_cutoff: str | None = None,
         show_all: bool = False,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict]:
         condition = "logical_agent_id=?"
         params: list[object] = [logical_agent_id]
@@ -1572,7 +1582,7 @@ class PersistentAgentStore:
             # obligation is resolved (including notify retention), it belongs
             # only to history/show-all; recency must never resurrect it.
             condition += " AND resolved_at IS NULL"
-        params.append(max(1, min(int(limit), 500)))
+        params.extend((max(1, min(int(limit), 500)), max(0, int(offset))))
         async with self._connect("persistent_message_inbox") as db:
             rows = await (
                 await db.execute(
@@ -1580,7 +1590,7 @@ class PersistentAgentStore:
                     "gate_revision,created_at,first_seen_at,last_seen_at,seen_count,"
                     "read_at,replied_at,reply_message_ref,resolved_at,resolution "
                     "FROM persistent_message_obligations "
-                    f"WHERE {condition} ORDER BY created_at DESC,message_ref DESC LIMIT ?",
+                    f"WHERE {condition} ORDER BY created_at DESC,message_ref DESC LIMIT ? OFFSET ?",
                     params,
                 )
             ).fetchall()

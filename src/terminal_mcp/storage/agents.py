@@ -759,10 +759,9 @@ class AgentStore:
             "reply_message_hash": row[6],
         }
 
-    async def message_obligations(self, agent_id):
+    async def message_obligations(self, agent_id, *, limit=None, offset=0):
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
-            rows = await (
-                await db.execute(
+            query = (
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
                     "m.require_reply,m.alert,m.delivery_mode,m.task_namespace,m.task_id,"
                     "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
@@ -775,10 +774,13 @@ class AgentStore:
                     "(m.delivery_mode='alert' AND r.replied_at IS NULL) OR "
                     "(m.delivery_mode='legacy' AND (r.read_at IS NULL OR "
                     "((m.require_reply=1 OR m.alert=1) AND r.replied_at IS NULL)))) "
-                    "ORDER BY m.alert DESC,m.created_at,m.rowid",
-                    (agent_id,),
-                )
-            ).fetchall()
+                    "ORDER BY m.alert DESC,m.created_at,m.rowid"
+            )
+            params = [agent_id]
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                params.extend((max(1, int(limit)), max(0, int(offset))))
+            rows = await (await db.execute(query, params)).fetchall()
         keys = (
             "message_hash",
             "sender_agent_id",
@@ -807,13 +809,13 @@ class AgentStore:
             result.append(item)
         return result
 
-    async def message_journal(self, agent_id, cutoff=None, limit=100):
+    async def message_journal(self, agent_id, cutoff=None, limit=100, offset=0):
         condition = "r.recipient_agent_id=?"
         params = [agent_id]
         if cutoff:
             condition += " AND m.created_at>=?"
             params.append(cutoff)
-        params.append(limit)
+        params.extend((max(1, int(limit)), max(0, int(offset))))
         async with aiosqlite.connect(self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
@@ -823,7 +825,7 @@ class AgentStore:
                     "r.read_at,r.replied_at,r.reply_message_hash "
                     "FROM coordination_message_recipients r "
                     "JOIN coordination_messages m ON m.message_hash=r.message_hash "
-                    f"WHERE {condition} ORDER BY m.created_at DESC,m.rowid DESC LIMIT ?",
+                    f"WHERE {condition} ORDER BY m.created_at DESC,m.rowid DESC LIMIT ? OFFSET ?",
                     params,
                 )
             ).fetchall()

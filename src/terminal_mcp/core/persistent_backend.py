@@ -1036,12 +1036,17 @@ class PersistentBackend:
             "task_id": task_id,
         }
 
-    async def access_observe_slots(self) -> dict:
+    async def access_observe_slots(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> dict:
         try:
             if self.fleet_bridge is not None:
-                slots = await self.fleet_bridge.list_access_slots()
+                slots = await self.fleet_bridge.list_access_slots(limit=limit, offset=offset)
             elif self.access_authority is not None:
-                slots = await self.access_authority.access_slots()
+                slots = await self.access_authority.access_slots(limit=limit, offset=offset)
             else:
                 raise PersistentStoreError("authority_unavailable")
             public = []

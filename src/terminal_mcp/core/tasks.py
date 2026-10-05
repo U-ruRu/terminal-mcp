@@ -581,24 +581,9 @@ class TaskCoordinator:
                 "error": None if task else "task not found",
             }
 
-        offset = max(0, int(cursor or 0))
-        vocabulary_rows = await self.store.list_tasks(
-            namespace=namespace,
-            lane=lane,
-            state=state,
-            tags=None,
-            show_done=show_done,
-            show_archived=show_archived,
-            limit=None,
-            offset=0,
-        )
+        raw_cursor = max(0, int(cursor or 0))
+        page_limit = max(1, min(int(limit), 1000))
         required_tags = set(normalized_tags or [])
-        all_rows = (
-            [item for item in vocabulary_rows if required_tags.issubset(set(item.get("tags", [])))]
-            if required_tags
-            else vocabulary_rows
-        )
-        tag_counts = Counter(tag for item in vocabulary_rows for tag in item.get("tags", []))
         runtime_state = await self.store.runtime_state_snapshot()
         sessions_by_agent = {}
         if self.agent_store is not None:
@@ -606,77 +591,114 @@ class TaskCoordinator:
                 session["agent_id"]: session for session in await self.agent_store.active_sessions()
             }
         now = utc_now()
-        compact = [
-            self._decorate_prefetched(
-                item,
-                runtime_state["claims"].get((item["namespace"], item["task_id"]), []),
-                runtime_state["dependencies"].get((item["namespace"], item["task_id"]), []),
-                sessions_by_agent,
-                now=now,
-                reveal_agent_ids=reveal_agent_ids,
-            )
-            for item in all_rows
-        ]
-        if operational_status is not None:
-            compact = [item for item in compact if item["operational_status"] == operational_status]
-        lane_counts = Counter(
-            item["lane"]
-            for item in compact
-            if item["state"] != "done" and item.get("archived_at") is None
-        )
-        state_counts = Counter(item["state"] for item in compact)
-        operational_status_counts = Counter(item["operational_status"] for item in compact)
+        lane_counts = Counter()
+        state_counts = Counter()
+        operational_status_counts = Counter()
         pressure = Counter()
+        tag_counts = Counter()
         recommended = None
         claimable_count = 0
         oldest_claimable_ready_since = None
         missing_dependency_count = 0
-        for item in compact:
-            blocking = item["blocking_dependencies"]
-            missing_dependency_count += sum(dep["state"] == "missing" for dep in blocking)
-            eligible, _, _ = await self._claimability(
-                item, claims=item["claims"], dependencies=blocking
-            )
-            if not eligible:
-                continue
-            claimable_count += 1
-            pressure[item["lane"]] += PRESSURE_WEIGHT[item["priority"]]
-            ready_since = item.get("ready_since")
-            if ready_since and (
-                oldest_claimable_ready_since is None or ready_since < oldest_claimable_ready_since
-            ):
-                oldest_claimable_ready_since = ready_since
-            if recommended is None:
-                recommended = {
-                    "namespace": item["namespace"],
-                    "task_id": item["task_id"],
-                    "lane": item["lane"],
-                    "priority": item["priority"],
-                    "title": item["title"],
-                    "operational_status": item["operational_status"],
-                    "tags": item.get("tags", []),
-                    "ready_since": ready_since,
-                }
+        visible_count = 0
+        page_matches: list[tuple[int, dict]] = []
+        scan_offset = 0
+        scan_limit = max(50, min(200, page_limit * 2))
 
+        while True:
+            batch = await self.store.list_tasks(
+                namespace=namespace,
+                lane=lane,
+                state=state,
+                tags=None,
+                show_done=show_done,
+                show_archived=show_archived,
+                limit=scan_limit,
+                offset=scan_offset,
+            )
+            if not batch:
+                break
+            for index, row in enumerate(batch):
+                raw_position = scan_offset + index + 1
+                tag_counts.update(row.get("tags", []))
+                if required_tags and not required_tags.issubset(set(row.get("tags", []))):
+                    continue
+                item = self._decorate_prefetched(
+                    row,
+                    runtime_state["claims"].get((row["namespace"], row["task_id"]), []),
+                    runtime_state["dependencies"].get((row["namespace"], row["task_id"]), []),
+                    sessions_by_agent,
+                    now=now,
+                    reveal_agent_ids=reveal_agent_ids,
+                )
+                if (
+                    operational_status is not None
+                    and item["operational_status"] != operational_status
+                ):
+                    continue
+                visible_count += 1
+                if item["state"] != "done" and item.get("archived_at") is None:
+                    lane_counts[item["lane"]] += 1
+                state_counts[item["state"]] += 1
+                operational_status_counts[item["operational_status"]] += 1
+                blocking = item["blocking_dependencies"]
+                missing_dependency_count += sum(
+                    dep["state"] == "missing" for dep in blocking
+                )
+                eligible, _, _ = await self._claimability(
+                    item, claims=item["claims"], dependencies=blocking
+                )
+                if eligible:
+                    claimable_count += 1
+                    pressure[item["lane"]] += PRESSURE_WEIGHT[item["priority"]]
+                    ready_since = item.get("ready_since")
+                    if ready_since and (
+                        oldest_claimable_ready_since is None
+                        or ready_since < oldest_claimable_ready_since
+                    ):
+                        oldest_claimable_ready_since = ready_since
+                    if recommended is None:
+                        recommended = {
+                            "namespace": item["namespace"],
+                            "task_id": item["task_id"],
+                            "lane": item["lane"],
+                            "priority": item["priority"],
+                            "title": item["title"],
+                            "operational_status": item["operational_status"],
+                            "tags": item.get("tags", []),
+                            "ready_since": ready_since,
+                        }
+                if raw_position > raw_cursor and len(page_matches) < page_limit + 1:
+                    page_matches.append((raw_position, item))
+            scan_offset += len(batch)
+            if len(batch) < scan_limit:
+                break
+
+        selected = page_matches[:page_limit]
+        if show_details:
+            tasks = []
+            for _position, item in selected:
+                stored = await self.store.get_task(item["namespace"], item["task_id"])
+                tasks.append(
+                    await self._decorate(
+                        stored,
+                        details=True,
+                        reveal_agent_ids=reveal_agent_ids,
+                    )
+                )
+        else:
+            tasks = [item for _position, item in selected]
+
+        has_more = len(page_matches) > page_limit
+        next_cursor = selected[-1][0] if has_more and selected else None
         oldest_age = None
         if oldest_claimable_ready_since:
             oldest_age = max(
                 0,
                 int((utc_now() - parse_utc(oldest_claimable_ready_since)).total_seconds()),
             )
-        page = compact[offset : offset + max(1, min(int(limit), 1000))]
-        if show_details:
-            tasks = []
-            for item in page:
-                stored = await self.store.get_task(item["namespace"], item["task_id"])
-                tasks.append(
-                    await self._decorate(stored, details=True, reveal_agent_ids=reveal_agent_ids)
-                )
-        else:
-            tasks = page
-        next_cursor = offset + len(page) if offset + len(page) < len(compact) else None
         summary = {
-            "visible": len(compact),
+            "visible": visible_count,
             "returned": len(tasks),
             "by_lane": dict(lane_counts),
             "by_state": dict(state_counts),
@@ -695,6 +717,7 @@ class TaskCoordinator:
             "recommended": recommended,
             "tasks": tasks,
             "next_cursor": next_cursor,
+            "_cursor_positions": [position for position, _item in selected],
         }
 
     async def mutate(
