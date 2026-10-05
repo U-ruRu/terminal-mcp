@@ -381,7 +381,21 @@ class _RecordingBackend:
 
     async def task(self, **kwargs):
         self.task_calls.append(kwargs)
-        return {"ok": True}
+        return {
+            "ok": True,
+            "task": {
+                "namespace": kwargs["namespace"],
+                "task_id": kwargs["task_id"],
+                "title": "Task",
+                "lane": "implementation",
+                "priority": "P1",
+                "state": "in_progress",
+                "operational_status": "in_progress",
+                "revision": 2,
+                "isolation_hint": "task/TASK-001",
+            },
+            "warnings": [],
+        }
 
 
 class _Service:

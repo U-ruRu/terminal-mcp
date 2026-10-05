@@ -55,6 +55,11 @@ class PolicyProbe:
         self.restored += 1
         return dict(self.current)
 
+    async def update(self, **policy):
+        self.current = dict(policy)
+        self.local = dict(policy)
+        return dict(self.current)
+
 
 def _managed_replica_snapshot(*, include_member_mesh_id: bool, member_mesh_id=None) -> dict:
     member = {
@@ -409,7 +414,19 @@ async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_
             {"ok": True, "control": await home.authoritative_replication_snapshot()}
         )
 
-    member.client_factory = lambda: ControlClient(get_handler=pull)
+    async def release_post(url, headers, body):
+        assert url.endswith("/internal/fleet/control/mutate/release-node")
+        released = await home.execute_forwarded(
+            "release-node",
+            body["payload"],
+            authenticated_peer_id="member",
+        )
+        return ControlResponse({"ok": True, "control": released})
+
+    member.client_factory = lambda: ControlClient(
+        get_handler=pull,
+        post_handler=release_post,
+    )
     recovered = await member.reconcile_pending()
     local_member = next(node for node in recovered["nodes"] if node["node_id"] == "member")
     assert recovered["mesh"] is None
@@ -417,25 +434,280 @@ async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_
     assert recovered["revisions"]["topology"] == detached["revisions"]["topology"]
     assert member_policy.current == member_policy.local
 
-    with pytest.raises(FleetControlError, match="managed_snapshot_stale"):
+    with pytest.raises(FleetControlError, match="control_rejoin_credential_required"):
         await member.apply_replica(attached_snapshot, source_node_id="home")
     assert (await member.snapshot())["mesh"] is None
 
     delivery_mode = "apply"
     converged = await home.reconcile_pending()
     authority_member = next(node for node in converged["nodes"] if node["node_id"] == "member")
-    assert authority_member["last_error"] is None
-    assert authority_member["desired_topology_revision"] == authority_member["applied_topology_revision"]
+    assert authority_member["state"] == "detached"
+    assert authority_member["mesh_id"] is None
 
+    enrollment = await member.enrollment_descriptor()
     rejoined = await home.upsert_node(
         node_id="member",
         mesh_id="mesh-a",
-        origin=None,
-        public_key=None,
-        auth_token=None,
+        origin=enrollment["origin"],
+        public_key=enrollment["public_key"],
+        auth_token=enrollment["auth_token"],
         expected_topology_revision=converged["revisions"]["topology"],
     )
     assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
     authority_member = next(node for node in rejoined["nodes"] if node["node_id"] == "member")
     assert authority_member["mesh_id"] == "mesh-a"
     assert authority_member["desired_topology_revision"] == authority_member["applied_topology_revision"]
+
+
+@pytest.mark.asyncio
+async def test_standalone_self_adopt_releases_old_authority_and_owns_new_mesh(tmp_path):
+    home_store = FleetControlStore(
+        tmp_path / "home-release.sqlite3",
+        fleet_id="fleet-a",
+        node_id="home",
+        control_node_id="home",
+    )
+    member_store = FleetControlStore(
+        tmp_path / "member-release.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="home",
+    )
+    await home_store.initialize()
+    await member_store.initialize()
+
+    home_private, home_public = keypair()
+    member_private, member_public = keypair()
+    policy = {
+        "duration_seconds": 1380,
+        "warning_after_seconds": 1200,
+        "alert_after_seconds": 1320,
+        "rearm_after_seconds": 180,
+        "legacy_admission_enabled": True,
+    }
+
+    await home_store.adopt_managed(
+        mesh_id="mesh-prod",
+        display_name="Production",
+        nodes=[{"node_id": "home"}],
+        policy=policy,
+    )
+    state = await home_store.upsert_managed_node(
+        node_id="home",
+        mesh_id="mesh-prod",
+        origin="https://home.example",
+        public_key=home_public,
+        auth_token="home-token",
+        expected_topology_revision=1,
+    )
+    state = await home_store.upsert_managed_node(
+        node_id="member",
+        mesh_id="mesh-prod",
+        origin="https://member.example",
+        public_key=member_public,
+        auth_token="member-token",
+        expected_topology_revision=state["revisions"]["topology"],
+    )
+    await home_store.detach_managed_node(
+        "member",
+        expected_topology_revision=state["revisions"]["topology"],
+    )
+
+    home = ManagedFleetControl(
+        home_store,
+        FleetConfig("home", home_private, (), 1.0, 1.0),
+        PolicyProbe(),
+        public_base_url="https://home.example",
+    )
+    member = ManagedFleetControl(
+        member_store,
+        FleetConfig(
+            "member",
+            member_private,
+            (
+                FleetPeer(
+                    "home",
+                    "https://home.example",
+                    home_public,
+                    "home-token",
+                ),
+            ),
+            1.0,
+            1.0,
+        ),
+        PolicyProbe(),
+        public_base_url="https://member.example",
+    )
+
+    async def forward_release(url, headers, body):
+        assert url.endswith("/internal/fleet/control/mutate/release-node")
+        released = await home.execute_forwarded(
+            "release-node",
+            body["payload"],
+            authenticated_peer_id="member",
+        )
+        return ControlResponse({"ok": True, "control": released})
+
+    member.client_factory = lambda: ControlClient(post_handler=forward_release)
+    initial = await home.authoritative_replication_snapshot()
+    await member.apply_replica(initial, source_node_id="home")
+    local_before = next(
+        node for node in (await member.snapshot())["nodes"] if node["node_id"] == "member"
+    )
+    assert local_before["mesh_id"] is None
+    assert local_before["state"] == "active"
+
+    adopted = await member.adopt(
+        mesh_id="mesh-new",
+        display_name="New Mesh",
+        control_node_id="member",
+    )
+
+    assert adopted["control_node_id"] == "member"
+    assert adopted["mesh"]["mesh_id"] == "mesh-new"
+    local_after = next(node for node in adopted["nodes"] if node["node_id"] == "member")
+    assert local_after["mesh_id"] == "mesh-new"
+    assert local_after["state"] == "active"
+
+    old_view = await home_store.managed_node("member")
+    assert old_view is not None
+    assert old_view["state"] == "detached"
+    assert old_view["mesh_id"] is None
+    assert all(
+        item["node_id"] != "member"
+        for item in await home_store.managed_peer_material()
+    )
+
+    with pytest.raises(FleetControlError, match="control_rejoin_credential_required"):
+        await member.apply_replica(initial, source_node_id="home")
+
+    after_stale = await member.snapshot()
+    assert after_stale["control_node_id"] == "member"
+    assert after_stale["mesh"]["mesh_id"] == "mesh-new"
+
+
+@pytest.mark.asyncio
+async def test_detached_standalone_policy_is_independent_from_old_mesh_policy(tmp_path):
+    home_private, home_public = keypair()
+    member_private, member_public = keypair()
+    home_store = FleetControlStore(
+        tmp_path / "policy-home.sqlite3",
+        fleet_id="fleet-a",
+        node_id="home",
+        control_node_id="home",
+    )
+    member_store = FleetControlStore(
+        tmp_path / "policy-member.sqlite3",
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="home",
+    )
+    await home_store.initialize()
+    await member_store.initialize()
+
+    home_policy = PolicyProbe()
+    member_policy = PolicyProbe()
+    member_policy.local = {
+        "duration_seconds": 900,
+        "warning_after_seconds": 600,
+        "alert_after_seconds": 800,
+        "rearm_after_seconds": 60,
+        "legacy_admission_enabled": True,
+    }
+    member_policy.current = dict(member_policy.local)
+
+    member = ManagedFleetControl(
+        member_store,
+        FleetConfig(
+            "member",
+            member_private,
+            (FleetPeer("home", "https://home.example", home_public, "home-token"),),
+            1.0,
+            1.0,
+        ),
+        member_policy,
+        public_base_url="https://member.example",
+    )
+
+    async def release_to_home(url, headers, body):
+        assert url.endswith("/internal/fleet/control/mutate/release-node")
+        released = await home.execute_forwarded(
+            "release-node",
+            body["payload"],
+            authenticated_peer_id="member",
+        )
+        return ControlResponse({"ok": True, "control": released})
+
+    member.client_factory = lambda: ControlClient(post_handler=release_to_home)
+
+    async def push_to_member(url, headers, body):
+        assert url.endswith("/internal/fleet/control/apply")
+        applied = await member.apply_replica(body["state"], source_node_id="home")
+        return ControlResponse({"ok": True, "control": applied})
+
+    home = ManagedFleetControl(
+        home_store,
+        FleetConfig(
+            "home",
+            home_private,
+            (FleetPeer("member", "https://member.example", member_public, "member-token"),),
+            1.0,
+            1.0,
+        ),
+        home_policy,
+        public_base_url="https://home.example",
+        client_factory=lambda: ControlClient(post_handler=push_to_member),
+    )
+
+    adopted = await home.adopt(mesh_id="mesh-prod", display_name="Production")
+    enrollment = await member.enrollment_descriptor()
+    attached = await home.upsert_node(
+        node_id="member",
+        mesh_id="mesh-prod",
+        origin=enrollment["origin"],
+        public_key=enrollment["public_key"],
+        auth_token=enrollment["auth_token"],
+        expected_topology_revision=adopted["revisions"]["topology"],
+    )
+    assert member_policy.current == home_policy.current
+
+    detached = await home.detach_node(
+        "member",
+        expected_topology_revision=attached["revisions"]["topology"],
+    )
+    home_member = next(node for node in detached["nodes"] if node["node_id"] == "member")
+    assert home_member["state"] == "detached"
+    member_state = await member.snapshot()
+    assert member_state["control_node_id"] == "member"
+    assert member_state["mesh"] is None
+    assert member_policy.current == member_policy.local
+
+    production_before = dict((await home.snapshot())["policy"])
+    standalone_revision = member_state["policy"]["revision"]
+    changed_standalone = await member.update_policy(
+        duration_seconds=901,
+        warning_after_seconds=601,
+        alert_after_seconds=801,
+        rearm_after_seconds=61,
+        legacy_admission_enabled=False,
+        expected_revision=standalone_revision,
+    )
+    assert changed_standalone["policy"]["duration_seconds"] == 901
+    assert changed_standalone["policy"]["rearm_after_seconds"] == 61
+    assert changed_standalone["policy"]["legacy_admission_enabled"] is False
+    assert (await home.snapshot())["policy"] == production_before
+
+    home_state = await home.snapshot()
+    changed_prod = await home.update_policy(
+        duration_seconds=1381,
+        warning_after_seconds=1200,
+        alert_after_seconds=1320,
+        rearm_after_seconds=181,
+        legacy_admission_enabled=True,
+        expected_revision=home_state["policy"]["revision"],
+    )
+    assert changed_prod["policy"]["duration_seconds"] == 1381
+    member_after = await member.snapshot()
+    assert member_after["policy"]["duration_seconds"] == 901
+    assert member_after["policy"]["rearm_after_seconds"] == 61
+    assert member_after["policy"]["legacy_admission_enabled"] is False
