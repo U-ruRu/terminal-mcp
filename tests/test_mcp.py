@@ -280,9 +280,27 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert "active unified session" in tools["message"].description
 
     task = tools["task"].parameters
-    assert task["required"] == ["code", "action", "namespace"]
-    assert task["properties"]["code"]["minLength"] == 4
-    assert task["properties"]["code"]["maxLength"] == 4
+    assert task["required"] == ["request"]
+    task_request = task["properties"]["request"]
+    assert task_request["discriminator"]["propertyName"] == "action"
+    assert set(task_request["discriminator"]["mapping"]) == {
+        "create",
+        "claim",
+        "release",
+        "update",
+        "checkpoint",
+        "comment",
+        "relate",
+        "unrelate",
+        "state",
+        "done",
+        "archive",
+        "review",
+    }
+    assert len(task_request["oneOf"]) == 12
+    assert "payload" not in task["properties"]
+    assert task["$defs"]["TaskClaimRequest"]["properties"]["code"]["minLength"] == 4
+    assert task["$defs"]["TaskClaimRequest"]["properties"]["code"]["maxLength"] == 4
     assert "WIP is one live managed-task claim per slot" in tools["task"].description
 
     cmd = tools["cmd"].parameters
@@ -359,7 +377,15 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
 
     task = _text_json(
         await tools["task"].run(
-            {"code": "1234", "action": "claim", "namespace": "project", "task_id": "REV-1"},
+            {
+                "request": {
+                    "action": "claim",
+                    "code": "1234",
+                    "namespace": "project",
+                    "task_id": "REV-1",
+                    "claim_intent": "inspect",
+                }
+            },
             convert_result=True,
         )
     )
