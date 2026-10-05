@@ -86,8 +86,9 @@ class FakeFleetBridge:
         show_all=False,
         recent_seconds=300,
         limit=50,
+        offset=0,
     ):
-        return list(self.inbox)[:limit]
+        return list(self.inbox)[offset : offset + limit]
 
 
 def make_backend():
@@ -357,3 +358,31 @@ async def test_roaming_inbox_preserves_logical_sender_identity():
         }
     ]
     assert result["inbox"] == result["messages"]
+
+
+@pytest.mark.asyncio
+async def test_persistent_message_read_propagates_offset_to_fleet_bridge():
+    backend, bridge, _, _ = make_backend()
+    bridge.inbox = [
+        {
+            "message_ref": f"home:msg:{index}",
+            "sender_agent_id": "la_recipient",
+            "text": f"message-{index}",
+            "require_reply": False,
+            "alert": False,
+            "created_at": f"2026-10-02T00:00:0{index}Z",
+            "seen_count": 0,
+        }
+        for index in range(3)
+    ]
+
+    result = await backend.access_message(
+        "Sender",
+        access_code="0042",
+        show_all=True,
+        limit=1,
+        offset=1,
+    )
+
+    assert result["ok"] is True
+    assert [item["message_hash"] for item in result["messages"]] == ["home:msg:1"]

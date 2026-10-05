@@ -10,6 +10,7 @@ from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.persistent_execution import PersistentExecutionFence
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.service import TerminalService
+from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
@@ -223,3 +224,119 @@ async def test_standalone_messaging_matches_fleet_delivery_semantics(tmp_path):
         mode="notify",
     )
     assert inactive["code"] == "recipient_not_active"
+
+
+@pytest.mark.asyncio
+async def test_public_message_tool_paginates_and_mutates_with_real_persistent_backend(tmp_path):
+    backend, _lifecycle, sender, recipient, _ctx = await standalone_fixture(tmp_path)
+    backend.service.persistent = backend
+    tools = {
+        tool.name: tool
+        for tool in build_mcp(backend.service)._tool_manager.list_tools()
+    }
+    message_tool = tools["message"]
+
+    async def call(**kwargs):
+        result = await message_tool.run(kwargs, convert_result=True)
+        return result.structuredContent
+
+    sent_hashes = []
+    for index in range(3):
+        sent = await call(
+            sender=sender["public_name"],
+            code=sender["code"],
+            target=recipient["public_name"],
+            text=f"page-message-{index}",
+            mode="notify",
+        )
+        assert sent["ok"] is True
+        assert sent["action"] == "send"
+        sent_hashes.append(sent["message"]["message_hash"])
+
+    page1 = await call(
+        sender=recipient["public_name"],
+        code=recipient["code"],
+        limit=2,
+    )
+    assert page1["ok"] is True
+    assert page1["action"] == "inbox"
+    assert len(page1["messages"]) == 2
+    assert page1["next_cursor"] is not None
+
+    page2 = await call(
+        sender=recipient["public_name"],
+        code=recipient["code"],
+        limit=2,
+        cursor=page1["next_cursor"],
+    )
+    assert page2["ok"] is True
+    assert page2["action"] == "inbox"
+    assert page2["messages"]
+    assert {
+        item["message_hash"] for item in page1["messages"]
+    }.isdisjoint({
+        item["message_hash"] for item in page2["messages"]
+    })
+
+    history1 = await call(
+        sender=recipient["public_name"],
+        code=recipient["code"],
+        history=True,
+        limit=2,
+    )
+    assert history1["ok"] is True
+    assert history1["action"] == "history"
+    assert len(history1["messages"]) == 2
+    assert history1["next_cursor"] is not None
+
+    history2 = await call(
+        sender=recipient["public_name"],
+        code=recipient["code"],
+        history=True,
+        limit=2,
+        cursor=history1["next_cursor"],
+    )
+    assert history2["ok"] is True
+    assert history2["messages"]
+    assert {
+        item["message_hash"] for item in history1["messages"]
+    }.isdisjoint({
+        item["message_hash"] for item in history2["messages"]
+    })
+
+    ack_message = await call(
+        sender=sender["public_name"],
+        code=sender["code"],
+        target=recipient["public_name"],
+        text="ack-smoke",
+        mode="ack",
+    )
+    acked = await call(
+        sender=recipient["public_name"],
+        code=recipient["code"],
+        message_hash=ack_message["message"]["message_hash"],
+    )
+    assert acked["ok"] is True
+    assert acked["action"] == "acknowledge"
+
+    alert_message = await call(
+        sender=sender["public_name"],
+        code=sender["code"],
+        target=recipient["public_name"],
+        text="reply-smoke",
+        mode="alert",
+    )
+    replied = await call(
+        sender=recipient["public_name"],
+        code=recipient["code"],
+        message_hash=alert_message["message"]["message_hash"],
+        text="reply-ok",
+    )
+    assert replied["ok"] is True
+    assert replied["action"] == "reply"
+    assert replied["message"]["reply_to"] == alert_message["message"]["message_hash"]
+
+    assert set(sent_hashes) <= {
+        item["message_hash"]
+        for item in (history1["messages"] + history2["messages"])
+    }

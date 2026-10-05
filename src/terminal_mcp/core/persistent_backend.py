@@ -405,6 +405,7 @@ class PersistentBackend:
         mode: str | None = None,
         show_all: bool = False,
         limit: int = 50,
+        offset: int = 0,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
@@ -435,6 +436,7 @@ class PersistentBackend:
                 mode=normalized_mode,
                 show_all=show_all,
                 limit=limit,
+                offset=offset,
                 namespace=namespace,
                 task_id=task_id,
             )
@@ -462,6 +464,7 @@ class PersistentBackend:
                 mode=normalized_mode,
                 show_all=show_all,
                 limit=limit,
+                offset=offset,
                 namespace=namespace,
                 task_id=task_id,
             )
@@ -475,6 +478,7 @@ class PersistentBackend:
             alert=alert,
             show_all=show_all,
             limit=limit,
+            offset=offset,
             namespace=namespace,
             task_id=task_id,
         )
@@ -617,6 +621,7 @@ class PersistentBackend:
         alert: bool,
         show_all: bool,
         limit: int,
+        offset: int,
         namespace: str | None,
         task_id: str | None,
     ) -> dict:
@@ -733,6 +738,7 @@ class PersistentBackend:
                     show_all=show_all,
                     recent_seconds=300,
                     limit=max(1, min(int(limit), 500)),
+                    offset=max(0, int(offset)),
                 )
             except PersistentStoreError as exc:
                 return {"ok": False, "code": exc.code, "error": exc.code}
@@ -860,6 +866,7 @@ class PersistentBackend:
         mode: str = "notify",
         show_all: bool = False,
         limit: int = 50,
+        offset: int = 0,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
@@ -918,18 +925,43 @@ class PersistentBackend:
                 session_epoch=int(sender["session_epoch"]),
                 surface=True,
             )
-            rows = await coordinator.store.message_journal(
-                sender_id,
-                limit=max(1, min(int(limit), 500)),
-            )
-            if not show_all:
+            page_limit = max(1, min(int(limit), 500))
+            page_offset = max(0, int(offset))
+            if show_all:
+                rows = await coordinator.store.message_journal(
+                    sender_id,
+                    limit=page_limit,
+                    offset=page_offset,
+                )
+            else:
                 open_hashes = {
                     item["message_hash"]
                     for item in await coordinator.store.message_obligations(sender_id)
                 }
-                # Ordinary inbox contains active obligations only. Recently resolved
-                # notifications remain available exclusively through show_all/history.
-                rows = [item for item in rows if item["message_hash"] in open_hashes]
+                rows = []
+                scan_offset = 0
+                skipped = 0
+                scan_limit = max(50, min(500, page_limit * 2))
+                while len(rows) < page_limit:
+                    batch = await coordinator.store.message_journal(
+                        sender_id,
+                        limit=scan_limit,
+                        offset=scan_offset,
+                    )
+                    if not batch:
+                        break
+                    for item in batch:
+                        if item["message_hash"] not in open_hashes:
+                            continue
+                        if skipped < page_offset:
+                            skipped += 1
+                            continue
+                        rows.append(item)
+                        if len(rows) >= page_limit:
+                            break
+                    scan_offset += len(batch)
+                    if len(batch) < scan_limit:
+                        break
             messages = [await self._persistent_message_entry(item) for item in rows]
             return {
                 "ok": True,
