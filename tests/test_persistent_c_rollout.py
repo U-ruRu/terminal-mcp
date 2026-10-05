@@ -155,6 +155,52 @@ def test_console_snapshot_projects_persistent_slot_policy_and_audit(tmp_path):
         assert slot["audit"][0]["principal_id"]
 
 
+def test_console_snapshot_enriches_many_persistent_slots_concurrently(tmp_path, monkeypatch):
+    app = create_app(
+        _settings(
+            tmp_path,
+            persistent_agents_enabled=True,
+            mcp_auth_mode="oauth",
+            actions_auth_mode="bearer",
+        )
+    )
+    with TestClient(app):
+        service = app.state.service
+        backend = service.persistent
+        slot_ids = [f"logical-{index}" for index in range(16)]
+
+        async def fake_slot_list():
+            return {
+                "ok": True,
+                "server_now": "2026-10-05T20:00:00Z",
+                "slots": [
+                    {"slot": {"logical_agent_id": logical_agent_id}, "work_session": None}
+                    for logical_agent_id in slot_ids
+                ],
+            }
+
+        active = 0
+        peak = 0
+
+        async def delayed_empty(*_args, **_kwargs):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return []
+
+        monkeypatch.setattr(backend, "slot_list", fake_slot_list)
+        monkeypatch.setattr(service.task_store, "claims_for_owner", delayed_empty)
+        monkeypatch.setattr(backend.lifecycle.store, "audit_events", delayed_empty)
+
+        projected = asyncio.run(service._persistent_console_snapshot({"enabled": True}))
+
+        assert peak > 1
+        assert [item["slot"]["logical_agent_id"] for item in projected["slots"]] == slot_ids
+        assert all(item["claims"] == [] and item["audit"] == [] for item in projected["slots"])
+
+
 def test_installer_persists_persistent_rollout_defaults_without_overwriting_operator_keys():
     root = Path(__file__).resolve().parents[1]
     script = (root / "deploy" / "install.sh").read_text()

@@ -189,21 +189,15 @@ export function AppShell({
     <div className={'app-shell' + (current === 'activity' ? ' app-shell-activity' : '')}>
       <header className={'topbar app-bar app-bar-' + appBarVariant} data-variant={appBarVariant}>
         <div className="app-bar-leading">
-          {contextual ? (
-            <Link className="ui-button ui-button-quiet ui-icon-button app-bar-back" aria-label={t(contextual.ariaKey)} title={t(contextual.ariaKey)} to={contextual.to}>
-              <Icon name="back" />
-            </Link>
-          ) : (
-            <IconButton
-              ref={toggleRef}
-              className="menu-toggle"
-              icon="menu"
-              label={t('aria.openNavigation')}
-              aria-expanded={menuOpen}
-              aria-controls="global-navigation"
-              onClick={() => setMenuOpen(true)}
-            />
-          )}
+          <IconButton
+            ref={toggleRef}
+            className="menu-toggle"
+            icon="menu"
+            label={t('aria.openNavigation')}
+            aria-expanded={menuOpen}
+            aria-controls="global-navigation"
+            onClick={() => setMenuOpen(true)}
+          />
         </div>
         <div className="brand-block">
           <p className="eyebrow">{appBarEyebrow}</p>
@@ -216,17 +210,6 @@ export function AppShell({
             <span className={'environment-badge' + (problemCount > 0 ? ' environment-badge-attention' : '')}>
               {problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(liveCount)}
             </span>
-          ) : null}
-          {contextual ? (
-            <IconButton
-              ref={toggleRef}
-              className="menu-toggle menu-toggle-context"
-              icon="menu"
-              label={t('aria.openNavigation')}
-              aria-expanded={menuOpen}
-              aria-controls="global-navigation"
-              onClick={() => setMenuOpen(true)}
-            />
           ) : null}
         </div>
       </header>

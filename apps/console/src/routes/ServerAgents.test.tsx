@@ -104,14 +104,13 @@ test('reconnect preserves agent detail and its returnTo navigation context', asy
   )
   const view = render(tree([live]))
   expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Back to agents' })).toHaveAttribute('href', '/activity?server=alpha&agent=SameName-2222')
+  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Back to agents' })).not.toBeInTheDocument()
   view.rerender(tree([reconnecting]))
   expect(screen.getByText('Exact session SameName-2222')).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'SameName' })).toBeInTheDocument()
-  const back = screen.getByRole('link', { name: 'Back to agents' })
-  expect(back).toHaveAttribute('href', '/activity?server=alpha&agent=SameName-2222')
-  await userEvent.click(back)
-  expect(screen.getByText('Agent activity return destination')).toBeInTheDocument()
+  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Back to agents' })).not.toBeInTheDocument()
 })
 
 test('direct reload route resolves exact session and only its related task from cached offline state', () => {

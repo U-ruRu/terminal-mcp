@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 
 import type { ManagedAccessPolicyReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentAuditReadModel, PersistentConsoleReadModel, PersistentMutationResult, PersistentPolicyReadModel, PersistentSlotReadModel } from '../api/models'
@@ -342,7 +342,16 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     if (!globalMode || !activeContext) return
     sessionStorage.setItem('slots-settings-context', activeContext.key)
   }, [activeContext, globalMode])
-  const [clockOrigin] = useState(() => Date.now()); const [clock, setClock] = useState(() => Date.now()); const [anchor, setAnchor] = useState(() => ({ server: '', serverMs: Date.now(), localMs: Date.now() })); const [busy, setBusy] = useState(''); const [message, setMessage] = useState(''); const [createName, setCreateName] = useState(''); const [reassignTarget, setReassignTarget] = useState('')
+  const [clockOrigin] = useState(() => Date.now())
+  const [clock, setClock] = useState(() => Date.now())
+  const [anchor, setAnchor] = useState(() => ({ server: '', serverMs: Date.now(), localMs: Date.now() }))
+  const [busy, setBusy] = useState('')
+  const [message, setMessage] = useState('')
+  const [toastLeaving, setToastLeaving] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [reassignTarget, setReassignTarget] = useState('')
+  const toastStartX = useRef<number | null>(null)
+  const toastDismissTimer = useRef<number | undefined>(undefined)
   const [accessCodeRevision, setAccessCodeRevision] = useState(0)
   const [createdAccess, setCreatedAccess] = useState<{ logicalAgentId: string; publicName: string; displayName: string; code: string; generation: number } | null>(null)
   const [policyDraft, setPolicyDraft] = useState<TimingDraft | null>(null)
@@ -350,6 +359,69 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
   const [fleetControl, setFleetControl] = useState<ManagedFleetControlReadModel | null>(() => loadCachedFleetControlForProfile(instanceId, instance?.profile.origin)?.control ?? null)
   const [, setFleetControlFreshness] = useState<FleetControlFreshness>(() => loadCachedFleetControlForProfile(instanceId, instance?.profile.origin) ? 'stale' : 'unknown')
   const [confirmAction, setConfirmAction] = useState<{ kind: 'rotate' | 'delete'; logicalAgentId: string } | null>(null)
+  useEffect(() => {
+    if (!message) return
+    const reset = window.setTimeout(() => setToastLeaving(false), 0)
+    const fade = window.setTimeout(() => setToastLeaving(true), 2600)
+    const clear = window.setTimeout(() => setMessage(''), 3000)
+    return () => {
+      window.clearTimeout(reset)
+      window.clearTimeout(fade)
+      window.clearTimeout(clear)
+    }
+  }, [message])
+  useEffect(() => () => {
+    if (toastDismissTimer.current !== undefined) window.clearTimeout(toastDismissTimer.current)
+  }, [])
+  const dismissToast = () => {
+    if (!message) return
+    setToastLeaving(true)
+    if (toastDismissTimer.current !== undefined) window.clearTimeout(toastDismissTimer.current)
+    toastDismissTimer.current = window.setTimeout(() => setMessage(''), 220)
+  }
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      document.querySelectorAll<HTMLDetailsElement>('.slot-more-actions[open]').forEach((details) => {
+        if (!details.contains(target)) {
+          details.open = false
+          details.classList.remove('slot-more-actions-up')
+        }
+      })
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [])
+  const positionSlotMenu = (details: HTMLDetailsElement) => {
+    if (!details.open) {
+      details.classList.remove('slot-more-actions-up')
+      return
+    }
+    document.querySelectorAll<HTMLDetailsElement>('.slot-more-actions[open]').forEach((other) => {
+      if (other !== details) {
+        other.open = false
+        other.classList.remove('slot-more-actions-up')
+      }
+    })
+    requestAnimationFrame(() => {
+      if (!details.open) return
+      const trigger = details.querySelector<HTMLElement>('summary')
+      const menu = details.querySelector<HTMLElement>('.slot-overflow-menu')
+      if (!trigger || !menu) return
+      const triggerRect = trigger.getBoundingClientRect()
+      const navigation = document.querySelector<HTMLElement>('.mobile-bottom-navigation')
+      const navigationTop = navigation?.getBoundingClientRect().top
+      const viewportBottom = window.visualViewport
+        ? window.visualViewport.offsetTop + window.visualViewport.height
+        : window.innerHeight
+      const safeBottom = navigationTop && navigationTop > 0 ? Math.min(navigationTop, viewportBottom) : viewportBottom
+      const below = Math.max(0, safeBottom - triggerRect.bottom)
+      const above = Math.max(0, triggerRect.top)
+      const needed = menu.getBoundingClientRect().height + 8
+      details.classList.toggle('slot-more-actions-up', below < needed && above > below)
+    })
+  }
   useEffect(() => {
     let cancelled = false
     const handle = window.setTimeout(() => {
@@ -640,7 +712,19 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
     {!globalMode && persistent && !persistent.enabled && <FeedbackState variant="empty" title={t('slots.disabled')} />}
     {!globalMode && persistent?.enabled && !persistent.available && <FeedbackState variant="error" title={t('slots.unavailable')} detail={persistent.error ?? undefined} />}
     {globalMode && !selected ? <div className="slot-context-statuses">{filteredContexts.filter((context) => !context.available).map((context) => <div className="attention-strip" role="status" key={context.key}><strong>{context.label}</strong><span>{t('slots.unavailable')}{context.error ? ` · ${context.error}` : ''}</span></div>)}{instances.filter((candidate) => !globalControls[candidate.profile.instanceId]).map((candidate) => <div className="attention-strip" role="status" key={'unresolved:' + candidate.profile.instanceId}><strong>{candidate.profile.displayName}</strong><span>{t('slots.policyScopeUnknown')} · {controlErrors[candidate.profile.instanceId] ?? localizedRuntimeState(t, candidate.runtime.status)}</span></div>)}</div> : null}
-    {(message || (persistent?.enabled && loadFleetControl && !fleetControl)) ? <div className="floating-status-stack" aria-live="polite">{message ? <div className="attention-strip" role="status"><span>{message}</span></div> : null}{persistent?.enabled && loadFleetControl && !fleetControl ? <div className="attention-strip" role="status">{t('slots.policyScopeUnknown')}</div> : null}</div> : null}
+    {message ? <div
+      className={'transient-toast' + (toastLeaving ? ' transient-toast-exit' : '')}
+      role="status"
+      aria-live="polite"
+      onPointerDown={(event) => { toastStartX.current = event.clientX }}
+      onPointerUp={(event) => {
+        const start = toastStartX.current
+        toastStartX.current = null
+        if (start !== null && Math.abs(event.clientX - start) >= 48) dismissToast()
+      }}
+      onPointerCancel={() => { toastStartX.current = null }}
+    ><span>{message}</span></div> : null}
+    {persistent?.enabled && loadFleetControl && !fleetControl ? <div className="slot-context-statuses"><div className="attention-strip" role="status">{t('slots.policyScopeUnknown')}</div></div> : null}
     {confirmAction && confirmSlot ? <ConfirmationDialog
       title={confirmAction.kind === 'rotate' ? t('slots.rotateAccessCode') : t('slots.delete')}
       subject={slotIdentity(confirmSlot)}
@@ -673,11 +757,13 @@ export function ServerSlots({ instances, mutatePersistent, loadSlotAudit, loadFl
         </div>
         <div className="slot-card-secondary">
           <span className="slot-code-cell">{saved ? <span className="access-code-copy"><code>{saved.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + slotIdentity(slot)} onClick={() => void copyAccessCode(saved.code)} /></span> : <span className="slot-code-unavailable" aria-hidden="true">—</span>}</span>
-          {['suspended', 'ended', 'expired'].includes(slot.state) ? <IconButton icon="play" variant="primary" label={t('slots.play')} disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'play')} /> : null}
-          {['armed', 'active', 'stopping'].includes(slot.state) ? <IconButton icon={slot.state === 'armed' ? 'stop' : 'pause'} variant="primary" label={slot.state === 'armed' ? t('slots.cancelArm') : t('slots.suspend')} disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'suspend')} /> : null}
-          <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="more" /></summary><div className="slot-overflow-menu"><UiButton type="button" variant="secondary" disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => slotAccessReady ? setConfirmAction({ kind: 'rotate', logicalAgentId: slot.logicalAgentId }) : void mutateAccess(slot, 'setup')}><Icon name={slotAccessReady ? 'rotate' : 'access'} />{slotAccessReady ? t('slots.rotateAccessCode') : t('slots.setupAccessCode')}</UiButton>
-          <UiButton type="button" variant="destructive" disabled={!canMutateSlot(slot) || Boolean(busy) || ['deleting', 'deleted'].includes(slot.state)} onClick={() => setConfirmAction({ kind: 'delete', logicalAgentId: slot.logicalAgentId })}><Icon name="delete" />{t('slots.delete')}</UiButton>
-          <Link className="nav-link" to={slotHref(slot)} onClick={rememberGlobalScroll}>{t('slots.details')}</Link></div></details>
+          <div className="slot-card-actions">
+            {['suspended', 'ended', 'expired'].includes(slot.state) ? <IconButton icon="play" variant="primary" label={t('slots.play')} disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'play')} /> : null}
+            {['armed', 'active', 'stopping'].includes(slot.state) ? <IconButton icon={slot.state === 'armed' ? 'stop' : 'pause'} variant="primary" label={slot.state === 'armed' ? t('slots.cancelArm') : t('slots.suspend')} disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => void mutateSlot(slot, 'suspend')} /> : null}
+            <details className="slot-more-actions" onToggle={(event) => positionSlotMenu(event.currentTarget)}><summary aria-label={t('slots.moreActions')}><Icon name="more" /></summary><div className="slot-overflow-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button,a')) (event.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open') }}><UiButton type="button" variant="secondary" disabled={!canMutateSlot(slot) || Boolean(busy)} onClick={() => slotAccessReady ? setConfirmAction({ kind: 'rotate', logicalAgentId: slot.logicalAgentId }) : void mutateAccess(slot, 'setup')}><Icon name={slotAccessReady ? 'rotate' : 'access'} />{slotAccessReady ? t('slots.rotateAccessCode') : t('slots.setupAccessCode')}</UiButton>
+            <UiButton type="button" variant="destructive" disabled={!canMutateSlot(slot) || Boolean(busy) || ['deleting', 'deleted'].includes(slot.state)} onClick={() => setConfirmAction({ kind: 'delete', logicalAgentId: slot.logicalAgentId })}><Icon name="delete" />{t('slots.delete')}</UiButton>
+            <Link className="nav-link" to={slotHref(slot)} onClick={rememberGlobalScroll}>{t('slots.details')}</Link></div></details>
+          </div>
         </div>
       </article>
     })}{slots.length === 0 && <FeedbackState variant="empty" title={t('slots.empty')} />}</div>}

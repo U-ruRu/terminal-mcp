@@ -2583,3 +2583,79 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
     flex: 0 0 auto;
   }
 }
+
+/* Android Slots hotfix: compact geometry, transient status, and safe overflow menus. */
+.slots-surface { gap: var(--space-3); }
+.slots-surface .operational-status-slot { min-height: 0; }
+.slots-surface .operational-status-slot:empty { display: none; }
+.slots-surface > .surface-section { padding-block: var(--space-3); }
+
+.slot-card-secondary {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target);
+}
+.slot-card-secondary .slot-code-cell { margin-inline-end: auto; }
+.slot-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+}
+.slot-card-actions > button { min-height: var(--control-standard); }
+.slot-card-actions .slot-more-actions { justify-self: auto; }
+.slot-more-actions .slot-overflow-menu {
+  z-index: 45;
+  max-height: min(60vh, 22rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.slot-more-actions-up .slot-overflow-menu {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+}
+
+.transient-toast {
+  position: fixed;
+  z-index: 32;
+  top: calc(env(safe-area-inset-top) + var(--control-large) + var(--space-3));
+  left: 50%;
+  width: min(34rem, calc(100vw - (2 * var(--space-4))));
+  transform: translateX(-50%);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  color: var(--color-text);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--color-bg) 48%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  touch-action: pan-y;
+  pointer-events: auto;
+  animation: transient-toast-in 180ms ease-out both;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+.transient-toast-exit {
+  opacity: 0;
+  transform: translate(-50%, -8px);
+}
+@keyframes transient-toast-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (max-width: 700px) {
+  .slots-surface { gap: var(--space-2); }
+  .slots-surface > .surface-section { padding-block: var(--space-2); }
+  .slot-card-secondary { display: flex; }
+  .slot-card-actions { gap: var(--space-2); }
+  .slot-overflow-menu { max-height: calc(100dvh - 9rem - env(safe-area-inset-bottom)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transient-toast { animation: none; transition: none; }
+}
