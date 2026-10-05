@@ -255,6 +255,44 @@ class TaskClaim(_Strict):
     role: Literal["owner", "participant"]
 
 
+class TaskCheckpointSnapshot(_Strict):
+    text: Annotated[str, Field(max_length=4000)]
+    author: str
+    created_at: str
+    revision: Annotated[int, Field(ge=1)]
+
+
+class TaskListItem(_Strict):
+    namespace: Namespace
+    task_id: TaskId
+    title: str
+    lane: TaskLane
+    priority: TaskPriority
+    state: TaskState
+    operational_status: TaskOperationalStatus
+    revision: int
+    claimed_by: str | None
+    blocking_count: Annotated[int, Field(ge=0)]
+    has_checkpoint: bool
+
+
+class TaskSnapshot(_Strict):
+    namespace: Namespace
+    task_id: TaskId
+    title: str
+    lane: TaskLane
+    priority: TaskPriority
+    state: TaskState
+    operational_status: TaskOperationalStatus
+    revision: int
+    claim: TaskClaim | None
+    next_action: str
+    description_preview: Annotated[str, Field(max_length=1500)]
+    description_truncated: bool
+    latest_checkpoint: TaskCheckpointSnapshot | None
+    blocking_dependencies: list[TaskDependency] = Field(default_factory=list)
+
+
 class WorkflowWarning(_Strict):
     code: str
     severity: str = "warning"
@@ -343,8 +381,8 @@ class ObserveTasksResult(_Strict):
     summary: TaskListSummary | None = None
     tag_counts: dict[str, int] = Field(default_factory=dict)
     recommended: TaskRecommendation | None = None
-    tasks: list[TaskRecord] = Field(default_factory=list)
-    task: TaskRecord | None = None
+    tasks: list[TaskListItem | TaskRecord] = Field(default_factory=list)
+    task: TaskSnapshot | TaskRecord | None = None
     next_cursor: Cursor | None
     namespaces: list[Namespace] = Field(default_factory=list)
 
@@ -442,7 +480,6 @@ class TaskMutationResult(_Strict):
     ok: Literal[True]
     action: Literal[
         "create",
-        "claim",
         "release",
         "update",
         "checkpoint",
@@ -458,8 +495,18 @@ class TaskMutationResult(_Strict):
     warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
-class TaskOutput(RootModel[TaskMutationResult | AccessError]):
-    __success_type__: ClassVar[Any] = TaskMutationResult
+class TaskClaimMutationResult(_Strict):
+    ok: Literal[True]
+    action: Literal["claim"]
+    task: TaskSnapshot
+    warnings: list[WorkflowWarning] = Field(default_factory=list)
+
+
+TaskSuccess = Annotated[TaskMutationResult | TaskClaimMutationResult, Field(discriminator="action")]
+
+
+class TaskOutput(RootModel[TaskSuccess | AccessError]):
+    __success_type__: ClassVar[Any] = TaskSuccess
 
     @classmethod
     def success_schema(cls) -> dict[str, Any]:
@@ -901,6 +948,34 @@ def _message_record(raw: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     return _known(MessageRecord, item).model_dump(mode="json", exclude_unset=True)
 
 
+def _task_list_item(raw: dict[str, Any]) -> dict[str, Any]:
+    return _known(TaskListItem, raw).model_dump(mode="json", exclude_unset=True)
+
+
+def _task_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
+    item = {
+        name: raw[name]
+        for name in TaskSnapshot.model_fields
+        if name in raw and name not in {"claim", "latest_checkpoint", "blocking_dependencies"}
+    }
+    claim = raw.get("claim")
+    item["claim"] = (
+        _known(TaskClaim, claim).model_dump(mode="json", exclude_unset=True)
+        if isinstance(claim, dict)
+        else None
+    )
+    checkpoint = raw.get("latest_checkpoint")
+    item["latest_checkpoint"] = (
+        _known(TaskCheckpointSnapshot, checkpoint).model_dump(mode="json", exclude_unset=True)
+        if isinstance(checkpoint, dict)
+        else None
+    )
+    item["blocking_dependencies"] = [
+        _task_dependency(value) for value in raw.get("blocking_dependencies") or []
+    ]
+    return TaskSnapshot.model_validate(item).model_dump(mode="json", exclude_unset=True)
+
+
 def _task_record(raw: dict[str, Any]) -> dict[str, Any]:
     item = {
         name: raw[name]
@@ -975,7 +1050,13 @@ def session_result(raw: dict[str, Any], action: str) -> CallToolResult:
     return _result("session", action, SessionOutput, raw, structured)
 
 
-def observe_result(raw: dict[str, Any], subject: str) -> CallToolResult:
+def observe_result(
+    raw: dict[str, Any],
+    subject: str,
+    *,
+    detail: str = "summary",
+    task_id: str | None = None,
+) -> CallToolResult:
     if not raw.get("ok"):
         return _result("observe", subject, ObserveOutput, raw, {})
     if subject == "sessions":
@@ -1013,13 +1094,20 @@ def observe_result(raw: dict[str, Any], subject: str) -> CallToolResult:
         structured = {
             "ok": True,
             "subject": "tasks",
-            "tasks": [_task_record(item) for item in raw.get("tasks", [])],
+            "tasks": [
+                _task_list_item(item) if detail == "summary" else _task_record(item)
+                for item in raw.get("tasks", [])
+            ],
             "tag_counts": raw.get("tag_counts") or {},
             "next_cursor": None if next_cursor is None else str(next_cursor),
             "namespaces": raw.get("namespaces") or [],
         }
         if isinstance(raw.get("task"), dict):
-            structured["task"] = _task_record(raw["task"])
+            structured["task"] = (
+                _task_snapshot(raw["task"])
+                if detail == "summary" and task_id is not None
+                else _task_record(raw["task"])
+            )
         if summary is not None:
             structured["summary"] = summary
         if recommended is not None:
@@ -1112,7 +1200,11 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
     structured = {
         "ok": True,
         "action": action,
-        "task": _task_record(raw.get("task") or {}),
+        "task": (
+            _task_snapshot(raw.get("task") or {})
+            if action == "claim"
+            else _task_record(raw.get("task") or {})
+        ),
         "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
     }
     return _result("task", action, TaskOutput, raw, structured)

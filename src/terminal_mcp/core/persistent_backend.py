@@ -1872,6 +1872,14 @@ class PersistentBackend:
                         work_session_id=work_session_id,
                         session_epoch=session_epoch,
                     )
+                    if action == "claim":
+                        snapshot = await self.task_coordinator.list(
+                            namespace=actual_task["namespace"],
+                            task_id=actual_task["task_id"],
+                            snapshot=True,
+                        )
+                        if snapshot.get("ok") and snapshot.get("task") is not None:
+                            result["task"] = snapshot["task"]
                 return result
         except PersistentLifecycleError as exc:
             return self._error(exc)

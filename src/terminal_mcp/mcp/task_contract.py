@@ -27,12 +27,13 @@ TaskRef = Annotated[str, Field(min_length=1, max_length=512)]
 Tag = Annotated[str, Field(min_length=1, max_length=64)]
 ExpectedRevision = Annotated[int, Field(ge=1)]
 ResultValue = str | dict[str, object] | list[object]
+CheckpointText = Annotated[str, Field(max_length=4000)]
 CheckpointValue = Annotated[
-    str | dict[str, object] | list[object],
+    CheckpointText | dict[str, object] | list[object],
     WithJsonSchema(
         {
             "oneOf": [
-                {"type": "string"},
+                {"type": "string", "maxLength": 4000},
                 {"type": "object"},
                 {"type": "array"},
             ]

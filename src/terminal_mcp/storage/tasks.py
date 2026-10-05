@@ -780,6 +780,9 @@ class TaskStore:
                             for dep_ns, dep_id in normalized
                         ],
                     )
+                stored_event_payload = dict(event_payload or {})
+                if "checkpoint" in stored_event_payload:
+                    stored_event_payload["revision"] = int(exists[0]) + 1
                 await db.execute(
                     "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) "
                     "VALUES(?,?,?,?,?,?)",
@@ -788,7 +791,7 @@ class TaskStore:
                         task_id,
                         event_type,
                         event_agent_id,
-                        self._json(event_payload or {}),
+                        self._json(stored_event_payload),
                         now,
                     ),
                 )
@@ -1800,6 +1803,27 @@ class TaskStore:
                 }
             )
         return result
+
+    async def latest_checkpoint_event(self, namespace: str, task_id: str):
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    "SELECT id,event_type,agent_id,payload_json,created_at FROM work_events "
+                    "WHERE namespace=? AND task_id=? "
+                    "AND json_type(payload_json, '$.checkpoint') IS NOT NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (namespace, task_id),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "event_type": row[1],
+            "agent_id": row[2],
+            "payload": self._loads(row[3], {}),
+            "created_at": row[4],
+        }
 
     async def list_events(
         self,
