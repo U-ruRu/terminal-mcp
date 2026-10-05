@@ -292,6 +292,11 @@ class ManagedFleetControl:
                 public_key=str(payload.get("public_key") or ""),
                 expected_trust_revision=payload.get("expected_trust_revision"),
             )
+        if operation == "release-node":
+            node_id = str(payload.get("node_id") or "")
+            if authenticated_peer_id is not None and authenticated_peer_id != node_id:
+                raise FleetControlError("control_release_peer_mismatch")
+            return await self.release_node(node_id)
         if operation == "reconcile":
             return await self.replicate()
         raise FleetControlError("control_operation_invalid")
@@ -401,6 +406,13 @@ class ManagedFleetControl:
                 },
             )
         if not self.is_control_node:
+            previous_control = self.store.control_node_id
+            if previous_control != self.store.node_id:
+                await self._forward_mutation_to(
+                    previous_control,
+                    "release-node",
+                    {"node_id": self.store.node_id},
+                )
             await self.store.claim_local_control_authority()
             self._sync_control_node(self.store.control_node_id)
         state = await self.store.adopt_managed(
@@ -408,6 +420,7 @@ class ManagedFleetControl:
             display_name=display_name,
             nodes=self._initial_control_node(),
             policy=self.policy_controller.snapshot(),
+            attach_local_control=True,
         )
         await self._apply_local(state)
         await self.replicate()
@@ -499,6 +512,14 @@ class ManagedFleetControl:
         await self.replicate()
         return await self.snapshot()
 
+    async def release_node(self, node_id: str) -> dict:
+        if not self.is_control_node:
+            return await self._forward_mutation("release-node", {"node_id": node_id})
+        state = await self.store.release_managed_node(node_id)
+        await self._apply_local(state)
+        await self.replicate()
+        return await self.snapshot()
+
     async def detach_node(
         self, node_id: str, *, expected_topology_revision: int | None = None
     ) -> dict:
@@ -565,6 +586,34 @@ class ManagedFleetControl:
                     "expected_revision": expected_revision,
                 },
             )
+        state_before = await self.snapshot()
+        local = next(
+            (
+                node
+                for node in state_before.get("nodes") or []
+                if node.get("node_id") == self.store.node_id
+            ),
+            None,
+        )
+        local_standalone = (
+            self.is_control_node
+            and local is not None
+            and local.get("state") != "detached"
+            and local.get("mesh_id") is None
+        )
+        if local_standalone:
+            current = state_before.get("policy") or {}
+            current_revision = int(current.get("revision") or 0)
+            if expected_revision is not None and current_revision != int(expected_revision):
+                raise FleetControlError("access_policy_revision_conflict")
+            await self.policy_controller.update(
+                duration_seconds=duration_seconds,
+                warning_after_seconds=warning_after_seconds,
+                alert_after_seconds=alert_after_seconds,
+                rearm_after_seconds=rearm_after_seconds,
+                legacy_admission_enabled=legacy_admission_enabled,
+            )
+
         await self.store.update_access_policy(
             duration_seconds=duration_seconds,
             warning_after_seconds=warning_after_seconds,
@@ -661,12 +710,58 @@ class ManagedFleetControl:
             peer.instance_id: peer.auth_token for peer in self.bootstrap_config.peers
         }
         bootstrap_tokens.update(managed_tokens)
+
+        if (
+            self.is_control_node
+            and incoming_control
+            and incoming_control != self.store.node_id
+        ):
+            identity = await self._ensure_local_identity()
+            presented_local_token = managed_tokens.get(self.store.node_id)
+            if (
+                not presented_local_token
+                or not secrets.compare_digest(
+                    presented_local_token,
+                    str(identity.get("ingress_token") or ""),
+                )
+            ):
+                raise FleetControlError("control_rejoin_credential_required")
+
         state = await self.store.apply_managed_replica(
             public_snapshot,
             bootstrap_tokens=bootstrap_tokens,
         )
         self._sync_control_node(self.store.control_node_id)
         await self._apply_local(state)
+
+        local = next(
+            (
+                node
+                for node in state.get("nodes") or []
+                if node.get("node_id") == self.store.node_id
+            ),
+            None,
+        )
+        should_split_standalone = (
+            local is not None
+            and local.get("state") == "draining"
+            and local.get("mesh_id") is None
+            and self.store.control_node_id != self.store.node_id
+        )
+        if should_split_standalone:
+            acknowledgement = state
+            previous_control = self.store.control_node_id
+            await self._forward_mutation_to(
+                previous_control,
+                "release-node",
+                {"node_id": self.store.node_id},
+            )
+            await self.store.claim_local_control_authority(
+                policy=self.policy_controller.snapshot()
+            )
+            self._sync_control_node(self.store.control_node_id)
+            return acknowledgement
+
         return await self.snapshot()
 
     async def _restore_local_policy(self) -> None:

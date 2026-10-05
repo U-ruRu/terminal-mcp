@@ -59,7 +59,8 @@ class GateService:
 
 
 def body(result):
-    return json.loads(result[0].text)
+    content = result.content if hasattr(result, "content") else result
+    return json.loads(content[0].text)
 
 
 @pytest.mark.asyncio

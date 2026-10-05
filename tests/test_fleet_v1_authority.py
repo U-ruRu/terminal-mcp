@@ -750,7 +750,7 @@ async def test_managed_mesh_topology_trust_and_access_policy_revisions_are_indep
     detached = await store.detach_managed_node("node-b", expected_topology_revision=3)
     assert detached["revisions"]["topology"] == 4
     node_b = next(node for node in detached["nodes"] if node["node_id"] == "node-b")
-    assert node_b["state"] == "active"
+    assert node_b["state"] == "draining"
     assert node_b["mesh_id"] is None
 
 
@@ -1259,6 +1259,16 @@ async def test_detach_is_delivered_before_revocation_and_does_not_restore_stale_
     )
     assert (await remote.snapshot())["mesh"]["mesh_id"] == "mesh-a"
 
+    async def remote_release(url, headers, body):
+        assert url.endswith("/internal/fleet/control/mutate/release-node")
+        released = await home.execute_forwarded(
+            "release-node",
+            body["payload"],
+            authenticated_peer_id="remote",
+        )
+        return _FakeResponse({"ok": True, "control": released})
+
+    remote.client_factory = lambda: _FakeClient(remote_release)
     detached = await home.detach_node(
         "remote",
         expected_topology_revision=attached["revisions"]["topology"],
@@ -1266,10 +1276,14 @@ async def test_detach_is_delivered_before_revocation_and_does_not_restore_stale_
     remote_state = await remote.snapshot()
     assert detached["managed"] is True
     remote_member = next(node for node in detached["nodes"] if node["node_id"] == "remote")
-    assert remote_member["state"] == "active"
+    assert remote_member["state"] == "detached"
     assert remote_member["mesh_id"] is None
     assert remote_state["managed"] is True
     assert remote_state["mesh"] is None
+    assert remote_state["control_node_id"] == "remote"
+    local_remote = next(node for node in remote_state["nodes"] if node["node_id"] == "remote")
+    assert local_remote["state"] == "active"
+    assert local_remote["mesh_id"] is None
     assert home.config.peers == ()
     assert remote.config.peers == ()
 
@@ -1347,7 +1361,7 @@ async def test_multi_mesh_membership_supports_standalone_attach_move_and_detach(
         expected_topology_revision=moved["revisions"]["topology"],
     )
     node_b = next(node for node in detached["nodes"] if node["node_id"] == "node-b")
-    assert node_b["state"] == "active"
+    assert node_b["state"] == "draining"
     assert node_b["mesh_id"] is None
 
 

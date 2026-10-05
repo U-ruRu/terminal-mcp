@@ -44,6 +44,23 @@ from terminal_mcp.core.read_contract import (
     summary_message,
 )
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.mcp.output_contracts import (
+    CmdOutput,
+    ContextOutput,
+    HealthOutput,
+    MessageOutput,
+    ObserveOutput,
+    SessionOutput,
+    TaskOutput,
+    cmd_result,
+    context_result,
+    health_result,
+    install_public_output_contract,
+    message_result,
+    observe_result,
+    session_result,
+    task_result,
+)
 from terminal_mcp.mcp.task_contract import TaskRequest as AccessTaskRequest
 from terminal_mcp.mcp.task_contract import task_request_to_backend
 from terminal_mcp.telemetry import observed
@@ -1470,5 +1487,41 @@ def build_mcp(
     )
     async def access_health_tool() -> dict:
         return await service.health(auth_mode, agent_id=None)
+
+
+    install_public_output_contract(
+        mcp, "session", SessionOutput, lambda raw, kw: session_result(raw, kw["action"])
+    )
+    install_public_output_contract(
+        mcp, "observe", ObserveOutput, lambda raw, kw: observe_result(raw, kw["subject"])
+    )
+    install_public_output_contract(
+        mcp,
+        "message",
+        MessageOutput,
+        lambda raw, kw: message_result(
+            raw,
+            sender=kw["sender"],
+            text=kw.get("text"),
+            target=kw.get("target"),
+            message_hash=kw.get("message_hash"),
+            mode=kw.get("mode"),
+            require_reply=kw.get("require_reply", False),
+            alert=kw.get("alert", False),
+            show_all=kw.get("history", kw.get("show_all", False)),
+        ),
+    )
+    install_public_output_contract(
+        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, kw["request"].action)
+    )
+    install_public_output_contract(
+        mcp, "cmd", CmdOutput, lambda raw, kw: cmd_result(raw, kw["request"].action)
+    )
+    install_public_output_contract(
+        mcp, "context", ContextOutput, lambda raw, kw: context_result(raw, kw["request"].action)
+    )
+    install_public_output_contract(
+        mcp, "health", HealthOutput, lambda raw, kw: health_result(raw)
+    )
 
     return mcp

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from terminal_mcp.core.persistent_policy import PersistentPolicyError
 from terminal_mcp.fleet.control_storage import FleetControlError
 
 
@@ -84,6 +85,11 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
     async def mutation(call):
         try:
             return {"ok": True, "control": await call}
+        except PersistentPolicyError as exc:
+            result = {"ok": False, "code": exc.code, "error": exc.code}
+            if exc.blockers:
+                result["blockers"] = exc.blockers
+            return result
         except (FleetControlError, ValueError) as exc:
             return {"ok": False, "code": str(exc), "error": str(exc)}
 
