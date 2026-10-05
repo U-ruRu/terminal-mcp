@@ -406,6 +406,7 @@ class PersistentBackend:
         show_all: bool = False,
         limit: int = 50,
         offset: int = 0,
+        surface_limit: int | None = None,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
@@ -437,6 +438,7 @@ class PersistentBackend:
                 show_all=show_all,
                 limit=limit,
                 offset=offset,
+                surface_limit=surface_limit,
                 namespace=namespace,
                 task_id=task_id,
             )
@@ -465,6 +467,7 @@ class PersistentBackend:
                 show_all=show_all,
                 limit=limit,
                 offset=offset,
+                surface_limit=surface_limit,
                 namespace=namespace,
                 task_id=task_id,
             )
@@ -479,6 +482,7 @@ class PersistentBackend:
             show_all=show_all,
             limit=limit,
             offset=offset,
+            surface_limit=surface_limit,
             namespace=namespace,
             task_id=task_id,
         )
@@ -523,6 +527,107 @@ class PersistentBackend:
             "reply_message_hash": item.get("reply_message_ref") or item.get("reply_message_hash"),
             "namespace": item.get("task_namespace") or item.get("namespace"),
             "task_id": item.get("task_id"),
+        }
+
+    @staticmethod
+    def _surface_message_views(rows: list[dict], *, seen_at: str) -> None:
+        for item in rows:
+            item["seen_count"] = int(item.get("seen_count") or 0) + 1
+            item["first_seen_at"] = item.get("first_seen_at") or seen_at
+            item["last_seen_at"] = seen_at
+            alert = bool(item.get("alert"))
+            require_reply = bool(item.get("require_reply"))
+            declared_mode = item.get("delivery_mode") or item.get("mode")
+            notify = declared_mode == "notify" or (
+                declared_mode not in {"ack", "alert"} and not require_reply and not alert
+            )
+            if notify:
+                item["read_at"] = item.get("read_at") or seen_at
+
+    async def surface_message_page(
+        self,
+        sender_public_name: str,
+        *,
+        access_code: str | None,
+        message_hashes: list[str],
+    ) -> dict:
+        refs = list(dict.fromkeys(str(ref) for ref in message_hashes if ref))
+        if not refs:
+            return {"ok": True, "seen_at": utc_text(), "surfaced": []}
+
+        if access_code is None:
+            sender = await self.access_sender_identity(sender_public_name)
+        else:
+            sender = await self.access_identity(access_code)
+            if (
+                sender.get("ok")
+                and sender_public_name
+                and sender_public_name.casefold()
+                != str(sender["public_name"]).casefold()
+            ):
+                return {
+                    "ok": False,
+                    "code": "sender_not_authorized",
+                    "error": "sender_not_authorized",
+                }
+        if not sender.get("ok"):
+            return sender
+
+        sender_id = str(sender["logical_agent_id"])
+        seen_at = utc_text()
+        if access_code is None or self.fleet_bridge is None:
+            coordinator = self.service.agent_coordinator
+            if coordinator is None:
+                return {
+                    "ok": False,
+                    "code": "message_unavailable",
+                    "error": "message_unavailable",
+                }
+            await coordinator.store.mark_messages_seen(sender_id, refs, seen_at)
+            return {"ok": True, "seen_at": seen_at, "surfaced": refs}
+
+        work_session_id = str(sender["work_session_id"])
+        session_epoch = int(sender["session_epoch"])
+        try:
+            _session, permit = await self._execution_authority(
+                sender_id,
+                work_session_id,
+                session_epoch,
+                scope="message",
+                access_code=access_code,
+            )
+            if permit is not None:
+                self.fleet_bridge.ensure_permit_valid(permit)
+            inbox = await self.fleet_bridge.inbox_obligations(
+                sender_id,
+                work_session_id=work_session_id,
+                session_epoch=session_epoch,
+            )
+            wanted = set(refs)
+            obligations = [
+                item
+                for item in inbox
+                if str(item.get("message_ref") or "") in wanted
+            ]
+            if obligations:
+                await self.fleet_bridge.surface_obligations(
+                    logical_agent_id=sender_id,
+                    work_session_id=work_session_id,
+                    session_epoch=session_epoch,
+                    obligations=obligations,
+                    retention_calls=5,
+                )
+        except (PersistentLifecycleError, PersistentStoreError) as exc:
+            code = exc.code
+            return {"ok": False, "code": code, "error": code}
+        return {
+            "ok": True,
+            "seen_at": seen_at,
+            "surfaced": [
+                str(item.get("message_ref"))
+                for item in obligations
+                if item.get("message_ref")
+            ],
         }
 
     async def message_state(
@@ -622,6 +727,7 @@ class PersistentBackend:
         show_all: bool,
         limit: int,
         offset: int,
+        surface_limit: int | None,
         namespace: str | None,
         task_id: str | None,
     ) -> dict:
@@ -723,14 +829,6 @@ class PersistentBackend:
 
         if text is None:
             try:
-                if inbox:
-                    await self.fleet_bridge.surface_obligations(
-                        logical_agent_id=sender_id,
-                        work_session_id=work_session_id,
-                        session_epoch=session_epoch,
-                        obligations=inbox,
-                        retention_calls=5,
-                    )
                 rows = await self.fleet_bridge.message_inbox(
                     sender_id,
                     work_session_id=work_session_id,
@@ -740,6 +838,23 @@ class PersistentBackend:
                     limit=max(1, min(int(limit), 500)),
                     offset=max(0, int(offset)),
                 )
+                if not show_all and rows:
+                    count = (
+                        len(rows)
+                        if surface_limit is None
+                        else max(0, min(len(rows), int(surface_limit)))
+                    )
+                    surfaced_rows = rows[:count]
+                    if surfaced_rows:
+                        seen_at = utc_text()
+                        await self.fleet_bridge.surface_obligations(
+                            logical_agent_id=sender_id,
+                            work_session_id=work_session_id,
+                            session_epoch=session_epoch,
+                            obligations=surfaced_rows,
+                            retention_calls=5,
+                        )
+                        self._surface_message_views(surfaced_rows, seen_at=seen_at)
             except PersistentStoreError as exc:
                 return {"ok": False, "code": exc.code, "error": exc.code}
             visible = [await self._persistent_message_entry(item) for item in rows]
@@ -867,6 +982,7 @@ class PersistentBackend:
         show_all: bool = False,
         limit: int = 50,
         offset: int = 0,
+        surface_limit: int | None = None,
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
@@ -919,12 +1035,6 @@ class PersistentBackend:
             }
 
         if not text:
-            await self.message_state(
-                logical_agent_id=sender_id,
-                work_session_id=str(sender["work_session_id"]),
-                session_epoch=int(sender["session_epoch"]),
-                surface=True,
-            )
             page_limit = max(1, min(int(limit), 500))
             page_offset = max(0, int(offset))
             if show_all:
@@ -962,6 +1072,21 @@ class PersistentBackend:
                     scan_offset += len(batch)
                     if len(batch) < scan_limit:
                         break
+            if not show_all and rows:
+                count = (
+                    len(rows)
+                    if surface_limit is None
+                    else max(0, min(len(rows), int(surface_limit)))
+                )
+                surfaced_rows = rows[:count]
+                if surfaced_rows:
+                    seen_at = utc_text()
+                    await coordinator.store.mark_messages_seen(
+                        sender_id,
+                        [item["message_hash"] for item in surfaced_rows],
+                        seen_at,
+                    )
+                    self._surface_message_views(surfaced_rows, seen_at=seen_at)
             messages = [await self._persistent_message_entry(item) for item in rows]
             return {
                 "ok": True,

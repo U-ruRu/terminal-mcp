@@ -1279,6 +1279,7 @@ def build_mcp(
             show_all=history,
             limit=min(500, limit + 1) if is_read else limit,
             offset=offset if is_read else 0,
+            surface_limit=0 if is_read else None,
             namespace=namespace,
             task_id=task_id,
         )
@@ -1296,6 +1297,41 @@ def build_mcp(
         consumed = len(page)
         has_more = consumed < len(candidate) or len(raw) > consumed
         next_cursor = encode_cursor(offset + consumed, scope) if has_more else None
+
+        if not history and page:
+            refs = [
+                str(item.get("message_hash") or item.get("message_id") or "")
+                for item in page
+            ]
+            refs = [ref for ref in refs if ref]
+            surface_page = getattr(backend, "surface_message_page", None)
+            if refs and callable(surface_page):
+                surfaced = await surface_page(
+                    sender,
+                    access_code=code,
+                    message_hashes=refs,
+                )
+                if not surfaced.get("ok"):
+                    return surfaced
+                seen_at = str(surfaced.get("seen_at") or "")
+                for item in page:
+                    mode_value = item.get("mode")
+                    if "seen_count" in item:
+                        item["seen_count"] = int(item.get("seen_count") or 0) + 1
+                    if seen_at:
+                        if "first_seen_at" in item:
+                            item["first_seen_at"] = item.get("first_seen_at") or seen_at
+                        if "last_seen_at" in item:
+                            item["last_seen_at"] = seen_at
+                    if mode_value == "notify":
+                        item["state"] = "read"
+                        if "acknowledged" in item:
+                            item["acknowledged"] = True
+                        if seen_at and "read_at" in item:
+                            item["read_at"] = item.get("read_at") or seen_at
+                    elif item.get("state") == "delivered":
+                        item["state"] = "seen"
+
         result["messages"] = page
         result.pop("inbox", None)
         result["history"] = bool(history)

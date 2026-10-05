@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from terminal_mcp.core.persistent_backend import PersistentBackend
+from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
 
@@ -20,6 +21,7 @@ class FakeFleetBridge:
         self.permits = []
         self.inbox = []
         self.slots = []
+        self.surface_calls = []
 
     def ensure_permit_valid(self, permit):
         self.permits.append(permit)
@@ -67,8 +69,10 @@ class FakeFleetBridge:
         obligations,
         retention_calls=5,
     ):
-        refs = {item["message_ref"] for item in obligations}
-        for item in self.inbox:
+        ordered_refs = [item["message_ref"] for item in obligations]
+        self.surface_calls.append(ordered_refs)
+        refs = set(ordered_refs)
+        for item in list(self.inbox):
             if item.get("message_ref") not in refs:
                 continue
             item["seen_count"] = int(item.get("seen_count") or 0) + 1
@@ -76,6 +80,8 @@ class FakeFleetBridge:
             item["last_seen_at"] = "2026-10-02T00:00:01Z"
             if not item.get("require_reply") and not item.get("alert"):
                 item["read_at"] = item.get("read_at") or "2026-10-02T00:00:01Z"
+                if item["seen_count"] >= retention_calls:
+                    self.inbox.remove(item)
 
     async def message_inbox(
         self,
@@ -88,7 +94,10 @@ class FakeFleetBridge:
         limit=50,
         offset=0,
     ):
-        return list(self.inbox)[offset : offset + limit]
+        return [
+            dict(item)
+            for item in self.inbox[offset : offset + limit]
+        ]
 
 
 def make_backend():
@@ -339,24 +348,17 @@ async def test_roaming_inbox_preserves_logical_sender_identity():
     result = await backend.access_message("Sender", access_code="0042")
 
     assert result["ok"] is True
-    assert result["messages"] == [
-        {
-            "message_hash": "home:msg:1",
-            "sender": "Recipient",
-            "text": "back",
-            "mode": "notify",
-            "state": "read",
-            "created_at": "2026-10-02T00:00:00Z",
-            "first_seen_at": "2026-10-02T00:00:01Z",
-            "last_seen_at": "2026-10-02T00:00:01Z",
-            "seen_count": 1,
-            "read_at": "2026-10-02T00:00:01Z",
-            "replied_at": None,
-            "reply_message_hash": None,
-            "namespace": None,
-            "task_id": None,
-        }
-    ]
+    assert len(result["messages"]) == 1
+    message = result["messages"][0]
+    assert message["message_hash"] == "home:msg:1"
+    assert message["sender"] == "Recipient"
+    assert message["text"] == "back"
+    assert message["mode"] == "notify"
+    assert message["state"] == "read"
+    assert message["seen_count"] == 1
+    assert message["first_seen_at"] is not None
+    assert message["last_seen_at"] is not None
+    assert message["read_at"] is not None
     assert result["inbox"] == result["messages"]
 
 
@@ -386,3 +388,56 @@ async def test_persistent_message_read_propagates_offset_to_fleet_bridge():
 
     assert result["ok"] is True
     assert [item["message_hash"] for item in result["messages"]] == ["home:msg:1"]
+
+
+@pytest.mark.asyncio
+async def test_public_fleet_inbox_pagination_surfaces_only_returned_page():
+    backend, bridge, _, _ = make_backend()
+    backend.service.persistent = backend
+    bridge.inbox = [
+        {
+            "message_ref": f"home:msg:{index:02d}",
+            "sender_agent_id": "la_recipient",
+            "text": f"notify-{index}",
+            "require_reply": False,
+            "alert": False,
+            "created_at": f"2026-10-02T00:00:{index:02d}Z",
+            "seen_count": 0,
+        }
+        for index in range(12)
+    ]
+    expected = [item["message_ref"] for item in bridge.inbox]
+    tools = {
+        tool.name: tool
+        for tool in build_mcp(backend.service)._tool_manager.list_tools()
+    }
+    message_tool = tools["message"]
+
+    cursor = None
+    received = []
+    page_sizes = []
+    while True:
+        arguments = {
+            "sender": "Sender",
+            "code": "0042",
+            "limit": 2,
+        }
+        if cursor is not None:
+            arguments["cursor"] = cursor
+        result = await message_tool.run(arguments, convert_result=True)
+        payload = result.structuredContent
+        assert payload["ok"] is True
+        page_sizes.append(len(payload["messages"]))
+        received.extend(item["message_hash"] for item in payload["messages"])
+        cursor = payload["next_cursor"]
+        if cursor is None:
+            break
+
+    assert page_sizes == [2, 2, 2, 2, 2, 2]
+    assert received == expected
+    assert len(received) == len(set(received)) == 12
+    assert bridge.surface_calls == [
+        expected[index : index + 2]
+        for index in range(0, 12, 2)
+    ]
+    assert all(item["seen_count"] == 1 for item in bridge.inbox)

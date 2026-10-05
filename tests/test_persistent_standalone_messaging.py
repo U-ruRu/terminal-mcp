@@ -241,7 +241,7 @@ async def test_public_message_tool_paginates_and_mutates_with_real_persistent_ba
         return result.structuredContent
 
     sent_hashes = []
-    for index in range(3):
+    for index in range(12):
         sent = await call(
             sender=sender["public_name"],
             code=sender["code"],
@@ -253,56 +253,41 @@ async def test_public_message_tool_paginates_and_mutates_with_real_persistent_ba
         assert sent["action"] == "send"
         sent_hashes.append(sent["message"]["message_hash"])
 
-    page1 = await call(
-        sender=recipient["public_name"],
-        code=recipient["code"],
-        limit=2,
-    )
-    assert page1["ok"] is True
-    assert page1["action"] == "inbox"
-    assert len(page1["messages"]) == 2
-    assert page1["next_cursor"] is not None
+    async def traverse(*, history=False):
+        cursor = None
+        received = []
+        page_sizes = []
+        while True:
+            kwargs = {
+                "sender": recipient["public_name"],
+                "code": recipient["code"],
+                "limit": 2,
+            }
+            if history:
+                kwargs["history"] = True
+            if cursor is not None:
+                kwargs["cursor"] = cursor
+            page = await call(**kwargs)
+            assert page["ok"] is True
+            assert page["action"] == ("history" if history else "inbox")
+            page_sizes.append(len(page["messages"]))
+            received.extend(item["message_hash"] for item in page["messages"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        return received, page_sizes
 
-    page2 = await call(
-        sender=recipient["public_name"],
-        code=recipient["code"],
-        limit=2,
-        cursor=page1["next_cursor"],
-    )
-    assert page2["ok"] is True
-    assert page2["action"] == "inbox"
-    assert page2["messages"]
-    assert {
-        item["message_hash"] for item in page1["messages"]
-    }.isdisjoint({
-        item["message_hash"] for item in page2["messages"]
-    })
+    inbox_received, inbox_sizes = await traverse()
+    assert inbox_sizes == [2, 2, 2, 2, 2, 2]
+    assert len(inbox_received) == 12
+    assert len(set(inbox_received)) == 12
+    assert set(inbox_received) == set(sent_hashes)
 
-    history1 = await call(
-        sender=recipient["public_name"],
-        code=recipient["code"],
-        history=True,
-        limit=2,
-    )
-    assert history1["ok"] is True
-    assert history1["action"] == "history"
-    assert len(history1["messages"]) == 2
-    assert history1["next_cursor"] is not None
-
-    history2 = await call(
-        sender=recipient["public_name"],
-        code=recipient["code"],
-        history=True,
-        limit=2,
-        cursor=history1["next_cursor"],
-    )
-    assert history2["ok"] is True
-    assert history2["messages"]
-    assert {
-        item["message_hash"] for item in history1["messages"]
-    }.isdisjoint({
-        item["message_hash"] for item in history2["messages"]
-    })
+    history_received, history_sizes = await traverse(history=True)
+    assert history_sizes == [2, 2, 2, 2, 2, 2]
+    assert len(history_received) == 12
+    assert len(set(history_received)) == 12
+    assert set(history_received) == set(sent_hashes)
 
     ack_message = await call(
         sender=sender["public_name"],
@@ -335,8 +320,3 @@ async def test_public_message_tool_paginates_and_mutates_with_real_persistent_ba
     assert replied["ok"] is True
     assert replied["action"] == "reply"
     assert replied["message"]["reply_to"] == alert_message["message"]["message_hash"]
-
-    assert set(sent_hashes) <= {
-        item["message_hash"]
-        for item in (history1["messages"] + history2["messages"])
-    }
