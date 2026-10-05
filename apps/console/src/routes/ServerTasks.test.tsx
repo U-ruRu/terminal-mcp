@@ -145,13 +145,12 @@ test('reconnect preserves task detail and its returnTo navigation context', asyn
   )
   const { rerender } = render(tree([instance]))
   expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
-  expect(screen.getByRole('link', { name: 'Go back to tasks' })).toHaveAttribute('href', '/activity?server=alpha')
+  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Go back to tasks' })).not.toBeInTheDocument()
   rerender(tree([reconnecting]))
   expect(screen.getByRole('article', { name: 'Task detail' })).toHaveTextContent('T-1')
-  const back = screen.getByRole('link', { name: 'Go back to tasks' })
-  expect(back).toHaveAttribute('href', '/activity?server=alpha')
-  await userEvent.click(back)
-  expect(screen.getByText('Activity return destination')).toBeInTheDocument()
+  expect(document.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Go back to tasks' })).not.toBeInTheDocument()
 })
 
 test('task detail route is a dedicated surface without the task list', () => {

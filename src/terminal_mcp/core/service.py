@@ -803,35 +803,45 @@ class TerminalService:
             return projection
         projection["available"] = True
         projection["server_now"] = result.get("server_now")
-        rows = []
-        for item in result.get("slots") or []:
-            slot = item.get("slot") or {}
-            logical_agent_id = slot.get("logical_agent_id")
-            claims = []
-            audit = []
-            attachments = []
-            if logical_agent_id and self.task_store:
-                claims = await self.task_store.claims_for_owner(
-                    ClaimOwner.logical_agent(logical_agent_id)
-                )
-                claims = [
-                    {
-                        **claim,
-                        "priority": VALUE_PRIORITY.get(int(claim.get("priority", 0)), "P3"),
-                    }
-                    for claim in claims
-                ]
-            if logical_agent_id:
-                audit = await backend.lifecycle.store.audit_events(logical_agent_id, limit=50)
-            work_session = item.get("work_session")
-            if logical_agent_id and work_session:
-                attachments = await backend.lifecycle.store.attachments_for_session(
-                    logical_agent_id,
-                    work_session["work_session_id"],
-                    int(work_session["session_epoch"]),
-                )
-            rows.append({**item, "claims": claims, "audit": audit, "attachments": attachments})
-        projection["slots"] = rows
+        # Slot enrichment used to run serially. A busy authority with dozens of Persistent
+        # slots could therefore spend more than the Console client request deadline in
+        # this read-only projection, leaving the UI stuck on cached/stale data. Bound the
+        # fan-out so independent SQLite reads overlap without opening an unbounded number
+        # of connections. asyncio.gather preserves the authoritative slot-list order.
+        enrichment_limit = asyncio.Semaphore(8)
+
+        async def enrich_slot(item):
+            async with enrichment_limit:
+                slot = item.get("slot") or {}
+                logical_agent_id = slot.get("logical_agent_id")
+                claims = []
+                audit = []
+                attachments = []
+                if logical_agent_id and self.task_store:
+                    claims = await self.task_store.claims_for_owner(
+                        ClaimOwner.logical_agent(logical_agent_id)
+                    )
+                    claims = [
+                        {
+                            **claim,
+                            "priority": VALUE_PRIORITY.get(int(claim.get("priority", 0)), "P3"),
+                        }
+                        for claim in claims
+                    ]
+                if logical_agent_id:
+                    audit = await backend.lifecycle.store.audit_events(logical_agent_id, limit=50)
+                work_session = item.get("work_session")
+                if logical_agent_id and work_session:
+                    attachments = await backend.lifecycle.store.attachments_for_session(
+                        logical_agent_id,
+                        work_session["work_session_id"],
+                        int(work_session["session_epoch"]),
+                    )
+                return {**item, "claims": claims, "audit": audit, "attachments": attachments}
+
+        projection["slots"] = list(
+            await asyncio.gather(*(enrich_slot(item) for item in (result.get("slots") or [])))
+        )
         return projection
 
     async def console_snapshot(

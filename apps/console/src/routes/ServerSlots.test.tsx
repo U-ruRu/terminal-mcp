@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { useState } from 'react'
@@ -209,6 +209,7 @@ afterEach(() => {
   localStorage.clear()
   sessionStorage.clear()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 test('server-scoped slots derive Server context from the route without a second selector', () => {
@@ -231,6 +232,71 @@ test('cached/offline read state does not disable a healthy authenticated write r
     '/actions/persistent/slots/play',
     expect.objectContaining({ logical_agent_id: 'la_alpha', expected_revision: 7, idempotency_key: expect.any(String) }),
   )
+})
+
+test('mutation confirmation is a top transient toast that auto-dismisses within three seconds', async () => {
+  vi.useFakeTimers()
+  const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+  renderSlots([instance('live', slot())], mutate)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  const toast = screen.getByText('Change acknowledged by authority.')
+  expect(toast.closest('.transient-toast')).toBeInTheDocument()
+  act(() => vi.advanceTimersByTime(2600))
+  expect(toast.closest('.transient-toast')).toHaveClass('transient-toast-exit')
+  act(() => vi.advanceTimersByTime(400))
+  expect(screen.queryByText('Change acknowledged by authority.')).not.toBeInTheDocument()
+})
+
+test('mutation toast supports horizontal swipe dismissal', async () => {
+  vi.useFakeTimers()
+  const mutate = vi.fn(async (): Promise<PersistentMutationResult> => ({ ok: true, payload: { ok: true } })) as PersistentMutator
+  renderSlots([instance('live', slot())], mutate)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  const toast = screen.getByText('Change acknowledged by authority.').closest('.transient-toast') as HTMLElement
+  fireEvent.pointerDown(toast, { clientX: 120 })
+  fireEvent.pointerUp(toast, { clientX: 190 })
+  expect(toast).toHaveClass('transient-toast-exit')
+  act(() => vi.advanceTimersByTime(220))
+  expect(screen.queryByText('Change acknowledged by authority.')).not.toBeInTheDocument()
+})
+
+test('slot card groups the lifecycle and overflow controls at the trailing edge', () => {
+  renderSlots([instance('live', slot())])
+  const card = screen.getByRole('link', { name: /Alpha Slot/ }).closest('.slot-card') as HTMLElement
+  const actions = card.querySelector('.slot-card-actions') as HTMLElement
+  expect(actions).toBeInTheDocument()
+  expect(within(actions).getByRole('button', { name: 'Start' })).toBeInTheDocument()
+  expect(actions.querySelector('.slot-more-actions')).toBeInTheDocument()
+  expect(card.querySelector('.slot-code-cell')?.nextElementSibling).toBe(actions)
+})
+
+test('slot overflow flips above when space below is constrained and closes on outside press', () => {
+  renderSlots([instance('live', slot())])
+  const details = document.querySelector('.slot-more-actions') as HTMLDetailsElement
+  const summary = details.querySelector('summary') as HTMLElement
+  const menu = details.querySelector('.slot-overflow-menu') as HTMLElement
+  const nav = document.createElement('nav')
+  nav.className = 'mobile-bottom-navigation'
+  document.body.appendChild(nav)
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this === summary) return { top: 620, bottom: 664, left: 0, right: 44, width: 44, height: 44, x: 0, y: 620, toJSON: () => ({}) } as DOMRect
+    if (this === menu) return { top: 668, bottom: 868, left: 0, right: 220, width: 220, height: 200, x: 0, y: 668, toJSON: () => ({}) } as DOMRect
+    if (this === nav) return { top: 700, bottom: 764, left: 0, right: 390, width: 390, height: 64, x: 0, y: 700, toJSON: () => ({}) } as DOMRect
+    return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+  })
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => { callback(0); return 1 })
+
+  details.open = true
+  fireEvent(details, new Event('toggle'))
+  expect(details).toHaveClass('slot-more-actions-up')
+  fireEvent.pointerDown(document.body)
+  expect(details.open).toBe(false)
+  rect.mockRestore()
+  nav.remove()
 })
 
 test('delete requires explicit confirmation and only succeeds through a live authority mutation', async () => {

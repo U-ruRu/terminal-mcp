@@ -10,21 +10,26 @@ const servers: FleetServerReadModel[] = []
 function renderShell(path: string, shellServers: FleetServerReadModel[] = servers) {
   return render(<I18nProvider><MemoryRouter initialEntries={[path]}><AppShell servers={shellServers}><div>Page body</div></AppShell></MemoryRouter></I18nProvider>)
 }
-test('offers deterministic contextual back navigation for server and task detail routes', () => {
+test('keeps the navigation menu on the left and omits an in-app Back control on contextual routes', () => {
   renderShell('/servers/server-a')
   let appBar = document.querySelector('.app-bar') as HTMLElement
   expect(appBar).toHaveAttribute('data-variant', 'detail')
-  expect(within(appBar).getByRole('link', { name: 'Go back to fleet' })).toHaveAttribute('href', '/')
+  expect(within(appBar).getByRole('button', { name: 'Open navigation' })).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Go back/ })).not.toBeInTheDocument()
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(appBar.querySelector('.app-bar-trailing .menu-toggle')).not.toBeInTheDocument()
   cleanup()
   renderShell('/servers/server-a/tasks/core/T-1')
   appBar = document.querySelector('.app-bar') as HTMLElement
   expect(appBar).toHaveAttribute('data-variant', 'secondary')
-  expect(within(appBar).getByRole('link', { name: 'Go back to tasks' })).toHaveAttribute('href', '/servers/server-a/tasks')
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Go back/ })).not.toBeInTheDocument()
 })
-test('server-scoped activity exposes a direct return path', () => {
+test('server-scoped activity keeps the menu leading instead of rendering a Back control', () => {
   renderShell('/activity?server=server-a')
   const appBar = document.querySelector('.app-bar') as HTMLElement
-  expect(within(appBar).getByRole('link', { name: 'Go back to server' })).toHaveAttribute('href', '/servers/server-a')
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Go back/ })).not.toBeInTheDocument()
 })
 
 test('renders both mobile drawer navigation and a separate bottom navigation surface', () => {
@@ -38,7 +43,7 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
-  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.27 · code 29')
+  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.29 · code 31')
 })
 
 test('root Fleet app bar leaves aggregate status to the Fleet decision surface', () => {
@@ -64,23 +69,26 @@ test('global app bars use destination-specific screen identity', () => {
   expect(within(appBar).getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
 })
 
-test('Mesh entity route has deterministic return to Connections', () => {
+test('Mesh entity route keeps the leading menu and contextual title without an in-app Back control', () => {
   renderShell('/meshes/mesh-1')
   const appBar = document.querySelector('.app-bar') as HTMLElement
-  expect(within(appBar).getByRole('link', { name: 'Go back to connections' })).toHaveAttribute('href', '/connections')
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Go back/ })).not.toBeInTheDocument()
   expect(appBar).toHaveTextContent('Mesh')
 })
 
 
-test('nested Server and Mesh routes resolve through entity hierarchy', () => {
+test('nested Server and Mesh routes keep entity hierarchy in the drawer while the app bar stays menu-first', () => {
   renderShell('/servers/server-a/agents/agent-1')
   let appBar = document.querySelector('.app-bar') as HTMLElement
-  expect(within(appBar).getByRole('link', { name: 'Back to agents' })).toHaveAttribute('href', '/servers/server-a/agents')
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Back to|Go back/ })).not.toBeInTheDocument()
   cleanup()
 
   renderShell('/meshes/mesh-1/persistent')
   appBar = document.querySelector('.app-bar') as HTMLElement
-  expect(within(appBar).getByRole('link', { name: 'Go back to mesh' })).toHaveAttribute('href', '/meshes/mesh-1')
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Back to|Go back/ })).not.toBeInTheDocument()
   const contextualNav = document.querySelector('.navigation-context-group') as HTMLElement
   expect(within(contextualNav).getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/meshes/mesh-1')
   expect(within(contextualNav).getByRole('link', { name: 'Slots' })).toHaveAttribute('href', '/meshes/mesh-1/persistent')
@@ -104,7 +112,7 @@ test('global status reports the same live population as the Fleet live filter', 
 })
 
 
-test('entity navigation state overrides canonical Back while direct deep links remain canonical', () => {
+test('entity returnTo state never reintroduces a top-bar Back control', () => {
   render(
     <I18nProvider>
       <MemoryRouter initialEntries={[{ pathname: '/servers/server-a/agents/agent-1', state: { returnTo: '/servers/server-a/tasks/core/T-1' } }]}>
@@ -113,5 +121,6 @@ test('entity navigation state overrides canonical Back while direct deep links r
     </I18nProvider>,
   )
   const appBar = document.querySelector('.app-bar') as HTMLElement
-  expect(within(appBar).getByRole('link', { name: 'Back to agents' })).toHaveAttribute('href', '/servers/server-a/tasks/core/T-1')
+  expect(appBar.querySelector('.app-bar-leading .menu-toggle')).toBeInTheDocument()
+  expect(within(appBar).queryByRole('link', { name: /Back to|Go back/ })).not.toBeInTheDocument()
 })
