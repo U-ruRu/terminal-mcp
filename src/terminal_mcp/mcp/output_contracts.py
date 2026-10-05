@@ -111,6 +111,64 @@ class MessageState(str, Enum):
     replied = "replied"
 
 
+class JsonPayload(_Strict):
+    """Explicit extension boundary for backend/domain JSON payloads."""
+
+    serialized: str
+
+
+class TaskResourceContext(_Strict):
+    repo: str | None = None
+    path: str | None = None
+    scope: str | None = None
+
+
+class TaskDependency(_Strict):
+    namespace: Namespace
+    task_id: TaskId
+    state: TaskState | Literal["missing"]
+    archived: bool
+    satisfied: bool
+
+
+class TaskRelation(_Strict):
+    direction: Literal["incoming", "outgoing"]
+    kind: str
+    namespace: Namespace
+    task_id: TaskId
+    created_at: str
+    created_by: str
+
+
+class TaskOutputState(_Strict):
+    output_state_id: int
+    output_refs: list[str] = Field(default_factory=list)
+    created_at: str
+
+
+class TaskEvent(_Strict):
+    id: int
+    event_type: str
+    payload: JsonPayload
+    created_at: str
+    logical_agent_id: str | None = None
+    work_session_id: str | None = None
+    session_epoch: int | None = None
+    agent_name: str | None = None
+
+
+class TaskReview(_Strict):
+    output_state_id: int | None = None
+    output_refs: list[str] = Field(default_factory=list)
+    dimension: Literal["A", "C", "R"]
+    verdict: Literal["NON_BLOCKING", "BLOCKING"]
+    evidence: JsonPayload
+    warnings: JsonPayload
+    reviewed_at: str
+    reviewer: str | None = None
+    agent_name: str | None = None
+
+
 class AccessError(_Strict):
     ok: Literal[False]
     error: str
@@ -202,7 +260,7 @@ class WorkflowWarning(_Strict):
     severity: str = "warning"
     message: str
     task_id: str | None = None
-    context: dict[str, Any] = Field(default_factory=dict)
+    context: JsonPayload | None = None
 
 
 class TaskRecord(_Strict):
@@ -216,21 +274,21 @@ class TaskRecord(_Strict):
     revision: int
     next_action: str = ""
     cooperative: bool = False
-    checkpoint: str | dict[str, Any] = Field(default_factory=dict)
+    checkpoint: str | JsonPayload | None = None
     candidate_ref: str | None = None
-    result: Any | None = None
+    result: str | JsonPayload | None = None
     tags: list[str] = Field(default_factory=list)
     isolation_hint: str = "none"
     input_refs: list[str] = Field(default_factory=list)
     output_refs: list[str] = Field(default_factory=list)
     output_state_id: int | None = None
-    output_states: list[dict[str, Any]] | None = None
-    review_requirements: list[str] = Field(default_factory=list)
+    output_states: list[TaskOutputState] | None = None
+    review_requirements: list[Literal["A", "C", "R"]] = Field(default_factory=list)
     claims: list[TaskClaim] = Field(default_factory=list)
     owner: TaskClaim | str | None = None
     participants: list[TaskClaim] = Field(default_factory=list)
     active: bool = False
-    blocking_dependencies: list[dict[str, Any]] = Field(default_factory=list)
+    blocking_dependencies: list[TaskDependency] = Field(default_factory=list)
     state_changed_at: str | None = None
     ready_since: str | None = None
     archived_at: str | None = None
@@ -238,12 +296,12 @@ class TaskRecord(_Strict):
     created_at: str | None = None
     updated_at: str | None = None
     description: str | None = None
-    resource_context: dict[str, Any] | None = None
-    dependencies: list[dict[str, Any]] | None = None
-    relations: list[dict[str, Any]] | None = None
-    comments: list[dict[str, Any]] | None = None
-    reviews: list[dict[str, Any]] | None = None
-    events: list[dict[str, Any]] | None = None
+    resource_context: TaskResourceContext | None = None
+    dependencies: list[TaskDependency] | None = None
+    relations: list[TaskRelation] | None = None
+    comments: list[TaskEvent] | None = None
+    reviews: list[TaskReview] | None = None
+    events: list[TaskEvent] | None = None
 
 
 class TaskRecommendation(_Strict):
@@ -314,12 +372,17 @@ class ObserveOutput(RootModel[ObserveSuccess | AccessError]):
 
 class MessageRecord(_Strict):
     message_hash: MessageId | None = None
+    message_id: MessageId | None = None
     sender: str | None = None
     target: str | None = None
     text: str | None = None
     mode: MessageMode | None = None
     state: MessageState | None = None
     created_at: str | None = None
+    timestamp: str | None = None
+    acknowledged: bool | None = None
+    replied: bool | None = None
+    truncated: bool | None = None
     first_seen_at: str | None = None
     last_seen_at: str | None = None
     seen_count: int | None = None
@@ -639,6 +702,61 @@ def _known(model: type[BaseModel], raw: dict[str, Any], **overrides: Any) -> Bas
     return model.model_validate(payload)
 
 
+def _json_payload(value: Any) -> dict[str, str]:
+    return {
+        "serialized": json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    }
+
+
+def _task_dependency(raw: dict[str, Any]) -> dict[str, Any]:
+    return _known(TaskDependency, raw).model_dump(mode="json", exclude_unset=True)
+
+
+def _task_relation(raw: dict[str, Any]) -> dict[str, Any]:
+    return _known(TaskRelation, raw).model_dump(mode="json", exclude_unset=True)
+
+
+def _task_output_state(raw: dict[str, Any]) -> dict[str, Any]:
+    return _known(TaskOutputState, raw).model_dump(mode="json", exclude_unset=True)
+
+
+def _task_event(raw: dict[str, Any]) -> dict[str, Any]:
+    item = {
+        name: raw[name]
+        for name in TaskEvent.model_fields
+        if name in raw and name != "payload"
+    }
+    item["payload"] = _json_payload(raw.get("payload") or {})
+    return TaskEvent.model_validate(item).model_dump(mode="json", exclude_unset=True)
+
+
+def _task_review(raw: dict[str, Any]) -> dict[str, Any]:
+    item = {
+        name: raw[name]
+        for name in TaskReview.model_fields
+        if name in raw and name not in {"evidence", "warnings"}
+    }
+    item["evidence"] = _json_payload(raw.get("evidence") or {})
+    item["warnings"] = _json_payload(raw.get("warnings") or [])
+    return TaskReview.model_validate(item).model_dump(mode="json", exclude_unset=True)
+
+
+def _workflow_warning(raw: dict[str, Any]) -> dict[str, Any]:
+    item = {
+        name: raw[name]
+        for name in WorkflowWarning.model_fields
+        if name in raw and name != "context"
+    }
+    if raw.get("context"):
+        item["context"] = _json_payload(raw["context"])
+    return WorkflowWarning.model_validate(item).model_dump(mode="json", exclude_unset=True)
+
+
 def _error_payload(raw: dict[str, Any]) -> dict[str, Any]:
     details = {
         key: value
@@ -750,8 +868,10 @@ def _message_record(raw: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     item = dict(raw)
     if "sender" not in item and "sender_name" in item:
         item["sender"] = item["sender_name"]
-    if "message_hash" not in item and item.get("message_ref"):
-        item["message_hash"] = item["message_ref"]
+    if "message_hash" not in item:
+        item["message_hash"] = item.get("message_ref") or item.get("message_id")
+    if "message_id" not in item and item.get("message_hash"):
+        item["message_id"] = item["message_hash"]
     if item.get("mode") is None:
         item["mode"] = "alert" if item.get("alert") else "ack" if item.get("require_reply") else "notify"
     if item.get("state") is None:
@@ -761,7 +881,52 @@ def _message_record(raw: dict[str, Any], **overrides: Any) -> dict[str, Any]:
 
 
 def _task_record(raw: dict[str, Any]) -> dict[str, Any]:
-    return _known(TaskRecord, raw).model_dump(mode="json", exclude_unset=True)
+    item = {
+        name: raw[name]
+        for name in TaskRecord.model_fields
+        if name in raw
+        and name
+        not in {
+            "checkpoint",
+            "result",
+            "resource_context",
+            "blocking_dependencies",
+            "dependencies",
+            "relations",
+            "comments",
+            "reviews",
+            "events",
+            "output_states",
+        }
+    }
+    if "checkpoint" in raw:
+        checkpoint = raw.get("checkpoint")
+        item["checkpoint"] = checkpoint if isinstance(checkpoint, str) else _json_payload(checkpoint)
+    if "result" in raw and raw.get("result") is not None:
+        result = raw["result"]
+        item["result"] = result if isinstance(result, str) else _json_payload(result)
+    if isinstance(raw.get("resource_context"), dict):
+        item["resource_context"] = {
+            name: raw["resource_context"][name]
+            for name in TaskResourceContext.model_fields
+            if name in raw["resource_context"]
+        }
+    item["blocking_dependencies"] = [
+        _task_dependency(value) for value in raw.get("blocking_dependencies") or []
+    ]
+    if "dependencies" in raw and raw.get("dependencies") is not None:
+        item["dependencies"] = [_task_dependency(value) for value in raw["dependencies"]]
+    if "relations" in raw and raw.get("relations") is not None:
+        item["relations"] = [_task_relation(value) for value in raw["relations"]]
+    if "output_states" in raw and raw.get("output_states") is not None:
+        item["output_states"] = [_task_output_state(value) for value in raw["output_states"]]
+    if "events" in raw and raw.get("events") is not None:
+        item["events"] = [_task_event(value) for value in raw["events"]]
+    if "comments" in raw and raw.get("comments") is not None:
+        item["comments"] = [_task_event(value) for value in raw["comments"]]
+    if "reviews" in raw and raw.get("reviews") is not None:
+        item["reviews"] = [_task_review(value) for value in raw["reviews"]]
+    return TaskRecord.model_validate(item).model_dump(mode="json", exclude_unset=True)
 
 
 def session_result(raw: dict[str, Any], action: str) -> CallToolResult:
@@ -915,10 +1080,7 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
         "ok": True,
         "action": action,
         "task": _task_record(raw.get("task") or {}),
-        "warnings": [
-            _known(WorkflowWarning, item).model_dump(mode="json", exclude_unset=True)
-            for item in raw.get("warnings", [])
-        ],
+        "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
     }
     return _result("task", action, TaskOutput, raw, structured)
 

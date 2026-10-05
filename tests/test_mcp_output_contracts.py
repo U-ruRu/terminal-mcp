@@ -152,3 +152,168 @@ def test_contract_violation_rejects_undeclared_structured_property():
                 "undeclared_backend_field": "must-not-publish",
             },
         )
+
+
+def _has_unbounded_object(node):
+    if isinstance(node, dict):
+        if node.get("additionalProperties") is True:
+            return True
+        return any(_has_unbounded_object(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_unbounded_object(value) for value in node)
+    return False
+
+
+def test_message_compact_summary_preserves_bounded_contract_fields():
+    from terminal_mcp.core.read_contract import summary_message
+
+    compact = summary_message(
+        {
+            "message_hash": "msg-summary-1",
+            "sender": "Alpha",
+            "target": "Bravo",
+            "mode": "ack",
+            "created_at": "2026-10-05T10:00:00.000Z",
+            "state": "read",
+            "read_at": "2026-10-05T10:00:01.000Z",
+            "replied_at": "2026-10-05T10:00:02.000Z",
+            "text": "x" * 4000,
+            "namespace": "terminal-mcp",
+            "task_id": "T-1",
+        }
+    )
+    result = message_result(
+        {
+            "ok": True,
+            "sender": "Bravo",
+            "messages": [compact],
+            "next_cursor": None,
+        },
+        sender="Bravo",
+        target=None,
+        mode=None,
+        require_reply=False,
+        alert=False,
+        text=None,
+        message_hash=None,
+        show_all=False,
+    )
+    validate(MessageOutput, result)
+    message = result.structuredContent["messages"][0]
+    assert message["message_id"] == compact["message_id"] == "msg-summary-1"
+    assert message["message_hash"] == "msg-summary-1"
+    assert message["timestamp"] == compact["timestamp"]
+    assert message["acknowledged"] is True
+    assert message["replied"] is True
+    assert message["truncated"] is True
+    assert message["text"] == compact["text"]
+
+
+def test_task_nested_backend_fields_are_projected_out_and_schema_is_closed():
+    raw_task = {
+        **TASK,
+        "checkpoint": {"step": 2, "backend_only_new_field": "inside-explicit-payload"},
+        "result": {"summary": "done", "backend_only_new_field": "inside-explicit-payload"},
+        "resource_context": {
+            "repo": "terminal-mcp",
+            "path": "src",
+            "scope": "review",
+            "backend_only_new_field": "must-not-publish",
+        },
+        "blocking_dependencies": [
+            {
+                "namespace": "project",
+                "task_id": "D-1",
+                "state": "ready",
+                "archived": False,
+                "satisfied": False,
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+        "dependencies": [
+            {
+                "namespace": "project",
+                "task_id": "D-2",
+                "state": "done",
+                "archived": False,
+                "satisfied": True,
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+        "relations": [
+            {
+                "direction": "outgoing",
+                "kind": "review_of",
+                "namespace": "project",
+                "task_id": "R-1",
+                "created_at": "2026-10-05T10:00:00.000Z",
+                "created_by": "logical-1",
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+        "output_states": [
+            {
+                "output_state_id": 7,
+                "output_refs": ["sha"],
+                "created_at": "2026-10-05T10:00:00.000Z",
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+        "events": [
+            {
+                "id": 10,
+                "event_type": "checkpoint",
+                "payload": {"step": 2},
+                "created_at": "2026-10-05T10:00:00.000Z",
+                "agent_name": "Alpha",
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+        "comments": [
+            {
+                "id": 11,
+                "event_type": "comment",
+                "payload": {"text": "note"},
+                "created_at": "2026-10-05T10:00:01.000Z",
+                "agent_name": "Alpha",
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+        "reviews": [
+            {
+                "output_state_id": 7,
+                "output_refs": ["sha"],
+                "dimension": "C",
+                "verdict": "NON_BLOCKING",
+                "evidence": {"tests": 1},
+                "warnings": [],
+                "reviewed_at": "2026-10-05T10:00:02.000Z",
+                "reviewer": "Bravo",
+                "agent_name": "Bravo",
+                "backend_only_new_field": "must-not-publish",
+            }
+        ],
+    }
+    result = task_result({"ok": True, "task": raw_task, "warnings": []}, "update")
+    validate(TaskOutput, result)
+    structured_task = result.structuredContent["task"]
+
+    assert "backend_only_new_field" not in structured_task["resource_context"]
+    for key in (
+        "blocking_dependencies",
+        "dependencies",
+        "relations",
+        "output_states",
+        "events",
+        "comments",
+        "reviews",
+    ):
+        assert "backend_only_new_field" not in structured_task[key][0]
+
+    # Arbitrary domain payloads remain explicit and schema-stable JSON payloads.
+    assert json.loads(structured_task["checkpoint"]["serialized"])["backend_only_new_field"] == "inside-explicit-payload"
+    assert json.loads(structured_task["result"]["serialized"])["backend_only_new_field"] == "inside-explicit-payload"
+
+    schema = TaskOutput.success_schema()
+    assert not _has_unbounded_object(schema)
+    Draft202012Validator.check_schema(schema)
