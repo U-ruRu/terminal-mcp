@@ -30,6 +30,19 @@ from terminal_mcp.api_models import (
     TaskState,
 )
 from terminal_mcp.core.orchestration import public_agent_name
+from terminal_mcp.core.read_contract import (
+    DEFAULT_CMD_READ_LINES,
+    DEFAULT_PAGE_LIMIT,
+    MAX_CMD_READ_LINES,
+    MAX_PAGE_LIMIT,
+    InvalidCursor,
+    OutputItemTooLarge,
+    bound_rendered_lines,
+    bounded_page,
+    decode_cursor,
+    encode_cursor,
+    summary_message,
+)
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
 from terminal_mcp.mcp.task_contract import TaskRequest as AccessTaskRequest
 from terminal_mcp.mcp.task_contract import task_request_to_backend
@@ -54,8 +67,8 @@ class CmdReadRequest(_StrictRequest):
     action: Literal["read"]
     code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
     cmd_hash: str
-    lines_count: Annotated[int, Field(ge=1, le=MAX_READ_LINES)] = DEFAULT_READ_LINES
-    offset: Annotated[int | None, Field(ge=0)] = None
+    limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
+    cursor: str | None = None
 
 
 class CmdRunRequest(_StrictRequest):
@@ -86,7 +99,9 @@ CmdRequest = Annotated[
 
 class ContextListRequest(_StrictRequest):
     action: Literal["list"]
-    show_details: bool = False
+    detail: Literal["summary", "full"] = "summary"
+    limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT
+    cursor: str | None = None
 
 
 class ContextCreateRequest(_StrictRequest):
@@ -116,6 +131,53 @@ ContextRequest = Annotated[
     ContextListRequest | ContextCreateRequest | ContextUpdateRequest | ContextDeleteRequest,
     Field(discriminator="action"),
 ]
+
+
+def _read_error(code: str, reason: str | None = None) -> dict:
+    result = {"ok": False, "code": code, "error": code}
+    if reason:
+        result["reason"] = reason
+    return result
+
+
+def _task_summary(item: dict) -> dict:
+    owner = item.get("owner")
+    owner_name = owner.get("agent_name") if isinstance(owner, dict) else owner
+    return {
+        key: value
+        for key, value in {
+            "namespace": item.get("namespace"),
+            "task_id": item.get("task_id"),
+            "title": item.get("title"),
+            "lane": item.get("lane"),
+            "priority": item.get("priority"),
+            "state": item.get("state"),
+            "operational_status": item.get("operational_status"),
+            "owner": owner_name,
+            "revision": item.get("revision"),
+        }.items()
+        if value is not None
+    }
+
+
+def _finish_cmd_read_page(result: dict, *, start: int, scope: dict) -> dict:
+    raw_lines = list(result.get("lines") or [])
+    lines, line_truncated = bound_rendered_lines(raw_lines)
+    consumed = len(lines)
+    next_offset = start + consumed
+    total = result.get("overall_lines_count")
+    has_more = bool(
+        len(lines) < len(raw_lines)
+        or (isinstance(total, int) and next_offset < total)
+    )
+    result["lines"] = lines
+    result["displayed_lines_count"] = len(lines)
+    result["has_more"] = has_more
+    result["next_cursor"] = encode_cursor(next_offset, scope) if has_more else None
+    result.pop("next_offset", None)
+    if line_truncated:
+        result["line_truncated"] = True
+    return result
 
 
 def _structured_result(data, summary: str) -> CallToolResult:
@@ -961,25 +1023,42 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_READ_ONLY,
         description=(
-            "Read unified session or task state. Access codes are intentionally absent from "
-            "the observation path."
+            "Read bounded unified session, task, or namespace state. Collection reads default "
+            "to compact summary records and use opaque cursor pagination; request detail=full "
+            "only for expanded domain state."
         ),
     )
     async def access_observe_tool(
-        subject: Literal["sessions", "tasks"] = "sessions",
+        subject: Literal["sessions", "tasks", "namespaces"] = "sessions",
         namespace: str | None = None,
         task_id: str | None = None,
         lane: TaskLane | None = None,
         state: TaskState | None = None,
         operational_status: TaskOperationalStatus | None = None,
         tags: list[str] | None = None,
-        show_details: bool = False,
+        detail: Literal["summary", "full"] = "summary",
         show_done: bool = False,
         show_archived: bool = False,
-        limit: Annotated[int, Field(ge=1, le=1000)] = 50,
+        limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
         cursor: str | None = None,
     ) -> dict:
         backend = access_backend()
+        filters = {
+            "namespace": namespace,
+            "task_id": task_id,
+            "lane": lane,
+            "state": state,
+            "operational_status": operational_status,
+            "tags": tags or [],
+            "show_done": show_done,
+            "show_archived": show_archived,
+        }
+        scope = {"kind": "observe", "subject": subject, "filters": filters, "detail": detail}
+        try:
+            offset = decode_cursor(cursor, scope)
+        except InvalidCursor as exc:
+            return _read_error("invalid_cursor", str(exc))
+
         if subject == "sessions":
             if backend is None:
                 return {
@@ -987,7 +1066,57 @@ def build_mcp(
                     "code": "policy_incompatible",
                     "error": "policy_incompatible",
                 }
-            return await backend.access_observe_slots()
+            result = await backend.access_observe_slots()
+            if not result.get("ok"):
+                return result
+            rows = sorted(
+                result.get("sessions") or [],
+                key=lambda item: (
+                    str(item.get("public_name") or ""),
+                    str(item.get("authority_node_id") or ""),
+                    str(item.get("mode") or ""),
+                ),
+            )
+            if detail == "summary":
+                rows = [
+                    {
+                        "public_name": item.get("public_name"),
+                        "mode": item.get("mode"),
+                        "authority_node_id": item.get("authority_node_id"),
+                        "session_state": item.get("session_state", "inactive"),
+                    }
+                    for item in rows
+                ]
+            try:
+                page, next_cursor = bounded_page(
+                    rows, limit=limit, cursor=cursor, scope=scope
+                )
+            except InvalidCursor as exc:
+                return _read_error("invalid_cursor", str(exc))
+            except OutputItemTooLarge as exc:
+                return _read_error("output_item_too_large", str(exc))
+            return {"ok": True, "sessions": page, "next_cursor": next_cursor}
+
+        if subject == "namespaces":
+            store = getattr(service, "task_store", None)
+            if store is None:
+                return {"ok": False, "code": "resource_not_found", "error": "resource_not_found"}
+            rows = await store.list_tasks(
+                show_done=True, show_archived=True, limit=None, offset=0
+            )
+            namespaces = [{"namespace": value} for value in sorted({item["namespace"] for item in rows})]
+            try:
+                page, next_cursor = bounded_page(
+                    namespaces, limit=limit, cursor=cursor, scope=scope
+                )
+            except InvalidCursor as exc:
+                return _read_error("invalid_cursor", str(exc))
+            return {
+                "ok": True,
+                "namespaces": [item["namespace"] for item in page],
+                "next_cursor": next_cursor,
+            }
+
         result = await service.tasks(
             namespace=namespace,
             task_id=task_id,
@@ -995,16 +1124,66 @@ def build_mcp(
             state=state,
             operational_status=operational_status,
             tags=tags,
-            show_details=show_details,
+            show_details=detail == "full",
             show_done=show_done,
             show_archived=show_archived,
             limit=limit,
-            cursor=cursor,
+            cursor=str(offset),
         )
-        store = getattr(service, "task_store", None)
-        if store is not None:
-            rows = await store.list_tasks(show_done=True, show_archived=True, limit=None, offset=0)
-            result["namespaces"] = sorted({item["namespace"] for item in rows})
+        if not result.get("ok"):
+            if result.get("error") == "task not found":
+                result["code"] = "resource_not_found"
+            return result
+        if task_id:
+            if detail == "summary" and result.get("task"):
+                result["task"] = _task_summary(result["task"])
+            elif result.get("task"):
+                try:
+                    bounded_page(
+                        [result["task"]],
+                        limit=1,
+                        cursor=None,
+                        scope={"kind": "task-detail"},
+                    )
+                except OutputItemTooLarge as exc:
+                    return _read_error("output_item_too_large", str(exc))
+            result.pop("namespaces", None)
+            return result
+
+        rows = list(result.get("tasks") or [])
+        if detail == "summary":
+            rows = [_task_summary(item) for item in rows]
+        try:
+            page, _ignored = bounded_page(
+                rows, limit=limit, cursor=None, scope={"kind": "task-page"}
+            )
+        except OutputItemTooLarge as exc:
+            return _read_error("output_item_too_large", str(exc))
+        consumed = len(page)
+        internal_more = result.get("next_cursor") is not None
+        has_more = consumed < len(rows) or internal_more
+        next_cursor = encode_cursor(offset + consumed, scope) if has_more else None
+        raw_summary = result.get("summary") or {}
+        if detail == "summary":
+            summary = {
+                "visible": raw_summary.get("visible", len(page)),
+                "returned": len(page),
+                "claimable_count": raw_summary.get("claimable_count", 0),
+                "by_state": raw_summary.get("by_state", {}),
+            }
+            return {
+                "ok": True,
+                "summary": summary,
+                "tasks": page,
+                "next_cursor": next_cursor,
+            }
+        result["tasks"] = page
+        result["next_cursor"] = next_cursor
+        if isinstance(result.get("summary"), dict):
+            result["summary"]["returned"] = len(page)
+        result.pop("tag_counts", None)
+        result.pop("recommended", None)
+        result.pop("namespaces", None)
         return result
 
     @mcp.tool(
@@ -1012,12 +1191,9 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Full agent messaging inbox for an active unified session. Send with text+target "
-            "(or broadcast); mode=notify surfaces for five calls, mode=ack blocks new cmd.run "
-            "until explicit acknowledgement, and mode=alert blocks work until reply. With no "
-            "text/message_hash returns inbox; show_all returns history. message_hash alone "
-            "acknowledges; message_hash+text replies. Persistent callers use the same Access code "
-            "used by cmd/task/context across Fleet roaming attachments."
+            "Send, acknowledge, reply to, or read bounded agent messaging for an active unified session using the same Access code used by cmd/task/context. A read (no text and "
+            "no message_hash) defaults to the active inbox; history=true selects history. "
+            "Read pages use limit/cursor and compact summary records by default."
         ),
     )
     async def access_message_tool(
@@ -1031,15 +1207,33 @@ def build_mcp(
         mode: Literal["notify", "ack", "alert"] | None = None,
         require_reply: bool = False,
         alert: bool = False,
-        show_all: bool = False,
-        limit: Annotated[int, Field(ge=1, le=500)] = 50,
+        history: bool = False,
+        limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+        cursor: str | None = None,
+        detail: Literal["summary", "full"] = "summary",
         namespace: str | None = None,
         task_id: str | None = None,
     ) -> dict:
         backend = access_backend()
         if backend is None:
             return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
-        return await backend.access_message(
+        is_read = text is None and message_hash is None
+        scope = {
+            "kind": "message.read",
+            "sender": sender,
+            "authorization": code or sender,
+            "history": history,
+            "detail": detail,
+            "namespace": namespace,
+            "task_id": task_id,
+        }
+        offset = 0
+        if is_read:
+            try:
+                offset = decode_cursor(cursor, scope)
+            except InvalidCursor as exc:
+                return _read_error("invalid_cursor", str(exc))
+        result = await backend.access_message(
             sender,
             access_code=code,
             text=text,
@@ -1048,11 +1242,31 @@ def build_mcp(
             require_reply=require_reply,
             alert=alert,
             mode=mode,
-            show_all=show_all,
-            limit=limit,
+            show_all=history,
+            limit=max(limit, min(500, offset + limit + 1)) if is_read else limit,
             namespace=namespace,
             task_id=task_id,
         )
+        if not is_read or not result.get("ok"):
+            return result
+        raw = list(result.get("messages") or result.get("inbox") or [])
+        candidate = raw[offset : offset + limit]
+        rows = [summary_message(item) for item in candidate] if detail == "summary" else candidate
+        try:
+            page, _ignored = bounded_page(
+                rows, limit=limit, cursor=None, scope={"kind": "message-page"}
+            )
+        except OutputItemTooLarge as exc:
+            return _read_error("output_item_too_large", str(exc))
+        consumed = len(page)
+        has_more = consumed < len(candidate) or len(raw) > offset + consumed
+        next_cursor = encode_cursor(offset + consumed, scope) if has_more else None
+        result["messages"] = page
+        result.pop("inbox", None)
+        result["history"] = bool(history)
+        result["next_cursor"] = next_cursor
+        result.pop("show_all", None)
+        return result
 
     @mcp.tool(
         name="task",
@@ -1094,12 +1308,22 @@ def build_mcp(
     )
     async def access_cmd_tool(request: CmdRequest) -> dict:
         if request.action == "read" and request.code is None:
-            return await service.read(
+            scope = {
+                "kind": "cmd.read",
+                "cmd_hash": request.cmd_hash,
+                "authorization": "anonymous",
+            }
+            try:
+                start = decode_cursor(request.cursor, scope)
+            except InvalidCursor as exc:
+                return _read_error("invalid_cursor", str(exc))
+            result = await service.read(
                 cmd_hash=request.cmd_hash,
-                lines_count=request.lines_count,
-                offset=request.offset,
+                lines_count=request.limit,
+                offset=start,
                 agent_id=None,
             )
+            return _finish_cmd_read_page(result, start=start, scope=scope)
         identity, failure = await access_identity(request.code)
         if failure is not None:
             return failure
@@ -1128,10 +1352,19 @@ def build_mcp(
                 **message_state,
             }
         if request.action == "read":
+            scope = {
+                "kind": "cmd.read",
+                "cmd_hash": request.cmd_hash,
+                "authorization": identity["logical_agent_id"],
+            }
+            try:
+                start = decode_cursor(request.cursor, scope)
+            except InvalidCursor as exc:
+                return _read_error("invalid_cursor", str(exc))
             result = await service.read(
                 cmd_hash=request.cmd_hash,
-                lines_count=request.lines_count,
-                offset=request.offset,
+                lines_count=request.limit,
+                offset=start,
                 agent_id=None,
             )
             result.update(message_state)
@@ -1142,7 +1375,7 @@ def build_mcp(
                     "session_epoch": identity["session_epoch"],
                 }
             )
-            return result
+            return _finish_cmd_read_page(result, start=start, scope=scope)
         if request.action == "run":
             result = await backend.run(
                 request.command,
@@ -1187,11 +1420,46 @@ def build_mcp(
         ),
     )
     async def access_context_tool(request: ContextRequest) -> dict:
+        if request.action == "list":
+            scope = {"kind": "context.list", "detail": request.detail}
+            try:
+                raw = await service.context(
+                    "list", show_details=request.detail == "full"
+                )
+                if not raw.get("ok"):
+                    return raw
+                rows = [
+                    {**item, "_primary": True}
+                    for item in sorted(raw.get("primary") or [], key=lambda value: value["id"])
+                ] + [
+                    {**item, "_primary": False}
+                    for item in sorted(raw.get("additional") or [], key=lambda value: value["id"])
+                ]
+                page, next_cursor = bounded_page(
+                    rows,
+                    limit=request.limit,
+                    cursor=request.cursor,
+                    scope=scope,
+                )
+            except InvalidCursor as exc:
+                return _read_error("invalid_cursor", str(exc))
+            except OutputItemTooLarge as exc:
+                return _read_error("output_item_too_large", str(exc))
+            primary = []
+            additional = []
+            for item in page:
+                is_primary = item.pop("_primary")
+                (primary if is_primary else additional).append(item)
+            return {
+                "ok": True,
+                "primary": primary,
+                "additional": additional,
+                "next_cursor": next_cursor,
+            }
         data = request.model_dump(exclude={"action", "code"}, exclude_none=True)
-        if request.action != "list":
-            _identity, failure = await access_identity(request.code)
-            if failure is not None:
-                return failure
+        _identity, failure = await access_identity(request.code)
+        if failure is not None:
+            return failure
         return await service.context(request.action, **data)
 
     @mcp.tool(

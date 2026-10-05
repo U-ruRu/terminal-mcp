@@ -838,7 +838,7 @@ def test_mcp_schema_has_unified_task_contract():
     assert task["properties"]["code"]["maxLength"] == 4
 
     observe = tools["observe"].parameters["properties"]
-    assert observe["subject"]["enum"] == ["sessions", "tasks"]
+    assert observe["subject"]["enum"] == ["sessions", "tasks", "namespaces"]
     assert "code" not in observe
     assert observe["state"]["anyOf"][0]["enum"] == [
         "ready",
