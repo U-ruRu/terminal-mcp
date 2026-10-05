@@ -20,6 +20,8 @@ def test_cursor_round_trip_and_filter_binding():
     assert decode_cursor(cursor, scope) == 20
     with pytest.raises(InvalidCursor):
         decode_cursor(cursor, {**scope, "detail": "full"})
+    with pytest.raises(InvalidCursor):
+        decode_cursor("7", scope)
 
 
 @pytest.mark.parametrize("limit", [1, 20, 100])

@@ -11,7 +11,14 @@ MAX_PAGE_LIMIT = 100
 DEFAULT_CMD_READ_LINES = 100
 MAX_CMD_READ_LINES = 100
 READ_RESPONSE_BUDGET_BYTES = 64 * 1024
-ITEMS_BUDGET_BYTES = READ_RESPONSE_BUDGET_BYTES - (8 * 1024)
+MCP_RESPONSE_FRAMING_RESERVE_BYTES = 1024
+CALL_TOOL_RESULT_BUDGET_BYTES = (
+    READ_RESPONSE_BUDGET_BYTES - MCP_RESPONSE_FRAMING_RESERVE_BYTES
+)
+# Public structured data is mirrored in text content for compatibility, so keep
+# primary page data at 24 KiB and reserve the other half of the 64 KiB envelope
+# for the second representation, metadata, cursors, and MCP framing.
+ITEMS_BUDGET_BYTES = 24 * 1024
 MESSAGE_PREVIEW_CHARS = 512
 
 
@@ -51,9 +58,6 @@ def decode_cursor(cursor: str | None, scope: dict[str, Any]) -> int:
     if cursor in (None, ""):
         return 0
     text = str(cursor)
-    # Internal migration compatibility only. New public responses never emit numeric cursors.
-    if text.isdecimal():
-        return max(0, int(text))
     try:
         padded = text + "=" * (-len(text) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))

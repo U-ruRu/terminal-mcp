@@ -7,6 +7,11 @@ from typing import Annotated, Any, ClassVar, Literal
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError
 
+from terminal_mcp.core.read_contract import (
+    CALL_TOOL_RESULT_BUDGET_BYTES,
+    READ_RESPONSE_BUDGET_BYTES,
+)
+
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -648,6 +653,43 @@ def _error_payload(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def serialized_call_tool_result_size(result: CallToolResult) -> int:
+    # Measure the conservative Pydantic JSON form including null-valued MCP
+    # envelope fields. Actual transports may omit them, so this does not
+    # underestimate the tool-result body size.
+    return len(
+        result.model_dump_json(
+            by_alias=True,
+            exclude_none=False,
+        ).encode("utf-8")
+    )
+
+
+def _content_projection(data: dict[str, Any]) -> str:
+    return json.dumps(
+        data,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _call_tool_result(
+    data: dict[str, Any],
+    *,
+    content_data: dict[str, Any] | None = None,
+) -> CallToolResult:
+    return CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text=_content_projection(content_data if content_data is not None else data),
+            )
+        ],
+        structuredContent=data,
+        isError=False,
+    )
+
+
 def _result(
     tool: str,
     variant: str,
@@ -665,12 +707,43 @@ def _result(
             f"output_contract_violation tool={tool} variant={variant} "
             f"path={path} offending={offending!r}: {exc}"
         ) from exc
+
     data = validated.model_dump(mode="json", exclude_unset=True)
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(raw, ensure_ascii=False))],
-        structuredContent=data,
-        isError=False,
-    )
+    result = _call_tool_result(data, content_data=raw)
+    serialized_bytes = serialized_call_tool_result_size(result)
+    if serialized_bytes <= CALL_TOOL_RESULT_BUDGET_BYTES:
+        return result
+
+    # Fail closed at the final public serialization boundary. Normal paginated
+    # reads should stay below this via their lower page-data budget; this guard
+    # also covers unexpectedly large coordination/error metadata.
+    bounded_error = {
+        "ok": False,
+        "code": "output_item_too_large",
+        "error": "serialized MCP result exceeds response-size budget",
+        "details": {
+            "tool": tool,
+            "variant": variant,
+            "serialized_bytes": serialized_bytes,
+            "budget_bytes": READ_RESPONSE_BUDGET_BYTES,
+            "tool_result_budget_bytes": CALL_TOOL_RESULT_BUDGET_BYTES,
+        },
+    }
+    try:
+        error_validated = output_model.model_validate(bounded_error)
+    except ValidationError as exc:
+        raise OutputContractViolation(
+            f"output_contract_violation tool={tool} variant={variant} "
+            "could not encode bounded size error"
+        ) from exc
+    error_data = error_validated.model_dump(mode="json", exclude_unset=True)
+    error_result = _call_tool_result(error_data, content_data=error_data)
+    if serialized_call_tool_result_size(error_result) > CALL_TOOL_RESULT_BUDGET_BYTES:
+        raise OutputContractViolation(
+            f"output_contract_violation tool={tool} variant={variant} "
+            "bounded size error exceeds response-size budget"
+        )
+    return error_result
 
 
 def _message_record(raw: dict[str, Any], **overrides: Any) -> dict[str, Any]:
