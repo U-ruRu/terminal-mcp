@@ -2,6 +2,7 @@ import json
 
 import pytest
 from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
 from terminal_mcp.mcp.output_contracts import (
     CmdOutput,
@@ -47,6 +48,8 @@ def test_discovery_has_closed_success_output_schema_for_all_public_tools():
         assert schema["type"] == "object"
         assert '"ok"' in json.dumps(schema)
         assert '"additionalProperties": false' in json.dumps(schema)
+        assert not _has_unbounded_object(schema), tool.name
+        Draft202012Validator.check_schema(schema)
     assert "$defs" in tools["session"].fn_metadata.output_schema
     assert "$defs" in tools["cmd"].fn_metadata.output_schema
     assert "$defs" in tools["task"].fn_metadata.output_schema
@@ -317,3 +320,52 @@ def test_task_nested_backend_fields_are_projected_out_and_schema_is_closed():
     schema = TaskOutput.success_schema()
     assert not _has_unbounded_object(schema)
     Draft202012Validator.check_schema(schema)
+
+
+def test_health_review_counts_are_closed_and_reject_nested_backend_payload():
+    valid = {
+        "ok": True,
+        "application": "terminal-mcp",
+        "version": "0.11.2",
+        "storage": "ok",
+        "auth_mode": "oauth",
+        "terminal": {
+            "ok": True,
+            "user": "root",
+            "uid": 0,
+            "gid": 0,
+            "cwd": "/",
+            "privilege": "root",
+            "shell": "/bin/bash",
+            "terminal_user": "root",
+            "scheduler": "numbered-fifo",
+            "parallelism": 4,
+            "queue_size": 0,
+            "running_commands": [],
+        },
+        "workflow": {
+            "ok": True,
+            "by_state": {},
+            "by_lane": {},
+            "reviews": {"BLOCKING": 2, "NON_BLOCKING": 5},
+        },
+    }
+    result = health_result(valid)
+    validate(HealthOutput, result)
+    assert result.structuredContent["workflow"]["reviews"] == {
+        "BLOCKING": 2,
+        "NON_BLOCKING": 5,
+    }
+
+    leaked = {
+        **valid,
+        "workflow": {
+            **valid["workflow"],
+            "reviews": {"BLOCKING": {"backend_only_new_field": "LEAK"}},
+        },
+    }
+    with pytest.raises(ValidationError):
+        health_result(leaked)
+
+    schema = HealthOutput.success_schema()
+    assert not _has_unbounded_object(schema)
