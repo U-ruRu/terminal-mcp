@@ -19,6 +19,7 @@ from terminal_mcp.mcp.output_contracts import (
     observe_result,
     session_result,
     task_result,
+    _result,
 )
 from terminal_mcp.mcp.server import build_mcp
 class FakeService:
@@ -26,7 +27,7 @@ class FakeService:
 
 
 def validate(model, result):
-    Draft202012Validator(model.model_json_schema()).validate(result.structuredContent)
+    Draft202012Validator(model.success_schema()).validate(result.structuredContent)
     assert json.loads(result.content[0].text)["ok"] is True
 
 
@@ -43,8 +44,12 @@ def test_discovery_has_closed_success_output_schema_for_all_public_tools():
     for tool in tools.values():
         schema = tool.fn_metadata.output_schema
         assert schema
+        assert schema["type"] == "object"
         assert '"ok"' in json.dumps(schema)
         assert '"additionalProperties": false' in json.dumps(schema)
+    assert "$defs" in tools["session"].fn_metadata.output_schema
+    assert "$defs" in tools["cmd"].fn_metadata.output_schema
+    assert "$defs" in tools["task"].fn_metadata.output_schema
 
 
 @pytest.mark.parametrize(
@@ -63,6 +68,7 @@ def test_session_variants(action, raw):
 @pytest.mark.parametrize("subject,raw", [
     ("sessions", {"ok": True, "sessions": [{"public_name": "Alpha", "mode": "persistent", "authority_node_id": "main", "access_generation": 1}]}),
     ("tasks", {"ok": True, "summary": {"visible": 1, "returned": 1}, "tasks": [TASK], "tag_counts": {}, "namespaces": ["project"], "next_cursor": None}),
+    ("namespaces", {"ok": True, "namespaces": ["project"], "next_cursor": None}),
 ])
 def test_observe_variants(subject, raw):
     validate(ObserveOutput, observe_result(raw, subject))
@@ -130,3 +136,19 @@ def test_contract_violation_rejects_bad_implementation_result(bad):
 def test_unknown_backend_field_does_not_expand_public_contract():
     result = session_result({"ok": True, "mode": "persistent", "public_name": "Alpha", "session_ref": "ws", "unexpected": "secret"}, "start")
     assert "unexpected" not in result.structuredContent
+
+
+def test_contract_violation_rejects_undeclared_structured_property():
+    with pytest.raises(OutputContractViolation, match="output_contract_violation tool=cmd"):
+        _result(
+            "cmd",
+            "run",
+            CmdOutput,
+            {"ok": True},
+            {
+                "ok": True,
+                "action": "run",
+                "command": {"cmd_hash": "c1", "status": "queued"},
+                "undeclared_backend_field": "must-not-publish",
+            },
+        )

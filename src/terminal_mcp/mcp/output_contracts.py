@@ -115,26 +115,8 @@ class AccessError(_Strict):
 
 def _success_schema(annotation: Any) -> dict[str, Any]:
     schema = TypeAdapter(annotation).json_schema()
-    definitions = schema.pop("$defs", {})
-
-    def expand(value: Any, stack: tuple[str, ...] = ()) -> Any:
-        if isinstance(value, list):
-            return [expand(item, stack) for item in value]
-        if not isinstance(value, dict):
-            return value
-        ref = value.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            name = ref.rsplit("/", 1)[-1]
-            if name in stack:
-                raise RuntimeError(f"recursive output schema definition: {name}")
-            target = expand(definitions[name], (*stack, name))
-            extras = {key: val for key, val in value.items() if key != "$ref"}
-            if extras:
-                return {**target, **expand(extras, stack)}
-            return target
-        return {key: expand(val, stack) for key, val in value.items()}
-
-    return expand(schema)
+    schema.setdefault("type", "object")
+    return schema
 
 
 class SessionInfo(_Strict):
@@ -186,7 +168,7 @@ class SessionOutput(RootModel[SessionSuccess | AccessError]):
     __success_type__: ClassVar[Any] = SessionSuccess
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -321,7 +303,7 @@ class ObserveOutput(RootModel[ObserveSuccess | AccessError]):
     __success_type__: ClassVar[Any] = ObserveSuccess
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -384,7 +366,7 @@ class MessageOutput(RootModel[MessageSuccess | AccessError]):
     __success_type__: ClassVar[Any] = MessageSuccess
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -402,7 +384,7 @@ class TaskOutput(RootModel[TaskMutationResult | AccessError]):
     __success_type__: ClassVar[Any] = TaskMutationResult
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -501,7 +483,7 @@ class CmdOutput(RootModel[CmdSuccess | AccessError]):
     __success_type__: ClassVar[Any] = CmdSuccess
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -555,7 +537,7 @@ class ContextOutput(RootModel[ContextSuccess | AccessError]):
     __success_type__: ClassVar[Any] = ContextSuccess
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -638,7 +620,7 @@ class HealthOutput(RootModel[HealthResult | AccessError]):
     __success_type__: ClassVar[Any] = HealthResult
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
+    def success_schema(cls) -> dict[str, Any]:
         return _success_schema(cls.__success_type__)
 
 
@@ -1025,5 +1007,5 @@ def install_public_output_contract(mcp, tool_name: str, output_model: type[RootM
 
     tool.fn = contracted
     tool.fn_metadata.output_model = output_model
-    tool.fn_metadata.output_schema = output_model.model_json_schema()
+    tool.fn_metadata.output_schema = output_model.success_schema()
     tool.fn_metadata.wrap_output = False
