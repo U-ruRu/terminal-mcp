@@ -257,7 +257,12 @@ def test_mcp_tools_advertise_canonical_access_surface():
 
     observe = tools["observe"].parameters["properties"]
     assert "code" not in observe
-    assert observe["subject"]["enum"] == ["sessions", "tasks"]
+    assert observe["subject"]["enum"] == ["sessions", "tasks", "namespaces"]
+    assert "show_details" not in observe
+    assert observe["detail"]["enum"] == ["summary", "full"]
+    assert observe["limit"]["default"] == 20
+    assert observe["limit"]["maximum"] == 100
+    assert "cursor" in observe
     assert observe["state"]["anyOf"][0]["enum"] == [
         "ready",
         "in_progress",
@@ -277,7 +282,12 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert message["required"] == ["sender"]
     assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
     assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
-    assert "active unified session" in tools["message"].description
+    assert "show_all" not in message["properties"]
+    assert message["properties"]["detail"]["enum"] == ["summary", "full"]
+    assert message["properties"]["limit"]["default"] == 20
+    assert message["properties"]["limit"]["maximum"] == 100
+    assert "history" in message["properties"]
+    assert "cursor" in message["properties"]
 
     task = tools["task"].parameters
     assert task["required"] == ["code", "action", "namespace"]
@@ -293,6 +303,11 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert "code" in read_schema["properties"]
     assert "code" not in read_schema["required"]
     assert read_schema["required"] == ["action", "cmd_hash"]
+    assert "lines_count" not in read_schema["properties"]
+    assert "offset" not in read_schema["properties"]
+    assert read_schema["properties"]["limit"]["default"] == 100
+    assert read_schema["properties"]["limit"]["maximum"] == 100
+    assert "cursor" in read_schema["properties"]
     for name in ("CmdRunRequest", "CmdCancelRequest", "CmdRecoveryRequest"):
         assert "code" in cmd["$defs"][name]["required"]
         assert cmd["$defs"][name]["properties"]["code"]["minLength"] == 4
@@ -302,6 +317,11 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert context["required"] == ["request"]
     list_schema = context["$defs"]["ContextListRequest"]
     assert "code" not in list_schema["properties"]
+    assert "show_details" not in list_schema["properties"]
+    assert list_schema["properties"]["detail"]["enum"] == ["summary", "full"]
+    assert list_schema["properties"]["limit"]["default"] == 20
+    assert list_schema["properties"]["limit"]["maximum"] == 100
+    assert "cursor" in list_schema["properties"]
     for name in ("ContextCreateRequest", "ContextUpdateRequest", "ContextDeleteRequest"):
         assert "code" in context["$defs"][name]["required"]
 
@@ -337,7 +357,7 @@ async def test_mcp_code_free_read_paths_use_canonical_tools():
 
     context = _text_json(
         await tools["context"].run(
-            {"request": {"action": "list", "show_details": True}},
+            {"request": {"action": "list", "detail": "full"}},
             convert_result=True,
         )
     )
