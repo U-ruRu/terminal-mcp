@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from terminal_mcp.api_models import (
     AgentFinishResponse,
@@ -61,8 +61,13 @@ from terminal_mcp.mcp.output_contracts import (
     session_result,
     task_result,
 )
-from terminal_mcp.mcp.task_contract import TaskRequest as AccessTaskRequest
-from terminal_mcp.mcp.task_contract import task_request_to_backend
+from terminal_mcp.mcp.task_contract import (
+    install_task_input_contract,
+    task_request_action,
+    task_request_to_backend,
+    task_validation_error,
+    validate_task_request,
+)
 from terminal_mcp.telemetry import observed
 
 _SAFE_READ_ONLY = ToolAnnotations(
@@ -1308,8 +1313,12 @@ def build_mcp(
             "WIP is one live managed-task claim per slot."
         ),
     )
-    async def access_task_tool(request: AccessTaskRequest) -> dict:
-        code, namespace, task_id, backend_request = task_request_to_backend(request)
+    async def access_task_tool(request: dict[str, object]) -> dict:
+        try:
+            parsed_request = validate_task_request(request)
+        except ValidationError as exc:
+            return task_validation_error(exc, request)
+        code, namespace, task_id, backend_request = task_request_to_backend(parsed_request)
         action = backend_request.pop("action")
         identity, failure = await access_identity(code)
         if failure is not None:
@@ -1511,6 +1520,8 @@ def build_mcp(
         return await service.health(auth_mode, agent_id=None)
 
 
+    install_task_input_contract(mcp)
+
     install_public_output_contract(
         mcp, "session", SessionOutput, lambda raw, kw: session_result(raw, kw["action"])
     )
@@ -1534,7 +1545,7 @@ def build_mcp(
         ),
     )
     install_public_output_contract(
-        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, kw["request"].action)
+        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, task_request_action(kw["request"]))
     )
     install_public_output_contract(
         mcp, "cmd", CmdOutput, lambda raw, kw: cmd_result(raw, kw["request"].action)

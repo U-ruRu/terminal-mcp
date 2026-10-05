@@ -1,4 +1,5 @@
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import TypeAdapter, ValidationError
 
 from terminal_mcp.mcp.server import build_mcp
@@ -311,7 +312,6 @@ def test_required_fields_are_rejected_per_variant():
         "relate": "related_task_id",
         "unrelate": "relation_kind",
         "state": "state",
-        "done": "result",
         "review": "verdict",
     }
     for action, field in required.items():
@@ -409,23 +409,34 @@ async def test_schema_invalid_task_request_is_rejected_before_backend():
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
         "task"
     ]
-    with pytest.raises(Exception) as exc_info:
-        await tool.run(
-            {
-                "request": {
-                    "action": "claim",
-                    "code": "1234",
-                    "namespace": "example",
-                    "task_id": "TASK-001",
-                    "claim_intnet": "work",
-                }
-            },
-            convert_result=True,
-        )
+    result = await tool.run(
+        {
+            "request": {
+                "action": "claim",
+                "code": "1234",
+                "namespace": "example",
+                "task_id": "TASK-001",
+                "claim_intnet": "work",
+            }
+        },
+        convert_result=True,
+    )
     assert backend.identity_calls == 0
     assert backend.task_calls == []
-    assert "claim_intent" in str(exc_info.value)
-    assert "claim_intnet" in str(exc_info.value)
+    assert result.structuredContent["code"] == "validation_error"
+    errors = result.structuredContent["details"]["validation_errors"]
+    assert errors == [
+        {
+            "error_class": "missing",
+            "path": "request.claim_intent",
+            "description": "Field required",
+        },
+        {
+            "error_class": "extra_forbidden",
+            "path": "request.claim_intnet",
+            "description": "Extra inputs are not permitted",
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -443,3 +454,155 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
     assert call["task_id"] == "TASK-001"
     assert call["claim_intent"] == "Implement contract"
     assert "payload" not in call
+
+
+def test_generated_discovery_schema_matches_runtime_conditionals():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    schema = tool.parameters
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+
+    invalid = [
+        {
+            "request": {
+                "action": "create",
+                "code": "1234",
+                "namespace": "example",
+                "isolation_hint": "none",
+                "state": "done",
+                "result": None,
+            }
+        },
+        {
+            "request": {
+                **_base("state"),
+                "state": "blocked",
+                "blocker_reason": None,
+            }
+        },
+        {"request": {**_base("state"), "state": "done", "result": None}},
+        {"request": {**_base("archive"), "archive_note": None}},
+    ]
+    for payload in invalid:
+        assert list(validator.iter_errors(payload)), payload
+        with pytest.raises(ValidationError):
+            ADAPTER.validate_python(payload["request"])
+
+    valid = [
+        {
+            "request": {
+                "action": "create",
+                "code": "1234",
+                "namespace": "example",
+                "isolation_hint": "none",
+                "state": "done",
+                "result": {"ok": True},
+            }
+        },
+        {
+            "request": {
+                **_base("state"),
+                "state": "blocked",
+                "blocker_reason": "waiting",
+            }
+        },
+        {"request": {**_base("state"), "state": "done", "result": ["artifact"]}},
+        {"request": {**_base("archive"), "note": "legacy-compatible"}},
+    ]
+    for payload in valid:
+        assert not list(validator.iter_errors(payload)), payload
+        ADAPTER.validate_python(payload["request"])
+
+
+def test_generated_discovery_accepts_all_minimal_and_full_variants():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    validator = Draft202012Validator(tool.parameters)
+    for action in ACTIONS:
+        assert not list(validator.iter_errors({"request": MINIMAL_VALID[action]})), action
+        assert not list(validator.iter_errors({"request": FULL_VALID[action]})), action
+
+
+def test_generated_checkpoint_schema_uses_one_of():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    checkpoint = tool.parameters["$defs"]["TaskCheckpointRequest"]["properties"]["checkpoint"]
+    assert "anyOf" not in checkpoint
+    assert checkpoint["oneOf"] == [
+        {"type": "string"},
+        {"type": "object"},
+        {"type": "array"},
+    ]
+
+
+def test_generated_done_schema_preserves_idempotent_compatibility_shape():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    done = tool.parameters["$defs"]["TaskDoneRequest"]
+    assert "result" in done["properties"]
+    assert "result" not in done["required"]
+    description = done["properties"]["result"]["description"]
+    assert "Required for normal completion" in description
+    assert "already-done compatibility" in description
+
+
+@pytest.mark.asyncio
+async def test_done_without_result_reaches_backend_for_idempotent_compatibility():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    await tool.run({"request": _base("done")}, convert_result=True)
+    assert backend.identity_calls == 1
+    assert len(backend.task_calls) == 1
+    call = backend.task_calls[0]
+    assert call["action"] == "done"
+    assert "result" not in call
+
+
+def test_generated_discovery_schema_rejects_regression_inputs():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    validator = Draft202012Validator(tool.parameters)
+    invalid = [
+        {
+            "code": "1234",
+            "action": "claim",
+            "namespace": "example",
+            "task_id": "TASK-001",
+            "payload": {"anything": "accepted"},
+        },
+        {
+            "request": {
+                "action": "claim",
+                "code": "1234",
+                "namespace": "example",
+                "task_id": "TASK-001",
+                "claim_intnet": "work",
+            }
+        },
+        {
+            "request": {
+                "action": "review",
+                "code": "1234",
+                "namespace": "example",
+                "task_id": "TASK-001",
+                "dimensions": ["A"],
+                "verdict": "NON_BLOCKING",
+                "candidate_ref": "sha:abc",
+            }
+        },
+    ]
+    for payload in invalid:
+        assert list(validator.iter_errors(payload)), payload
