@@ -1344,9 +1344,20 @@ class PersistentBackend:
     async def slot_list(self):
         try:
             result = await self.lifecycle.list_slots()
-            for item in result.get("slots") or []:
-                logical_agent_id = item["slot"]["logical_agent_id"]
-                item["access"] = await self._access_get(logical_agent_id)
+            slots = result.get("slots") or []
+            # Access identity may be resolved through Fleet authority. Serial resolution
+            # made a 49-slot Tokyo read exceed the Console request deadline. Bound the
+            # fan-out while preserving slot order and the existing response shape.
+            limit = asyncio.Semaphore(8)
+
+            async def enrich_access(item):
+                async with limit:
+                    logical_agent_id = item["slot"]["logical_agent_id"]
+                    item["access"] = await self._access_get(logical_agent_id)
+                    return item
+
+            if slots:
+                await asyncio.gather(*(enrich_access(item) for item in slots))
             return result
         except PersistentLifecycleError as exc:
             return self._error(exc)

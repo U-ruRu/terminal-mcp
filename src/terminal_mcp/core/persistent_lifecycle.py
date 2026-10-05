@@ -198,10 +198,17 @@ class PersistentLifecycleCoordinator:
     async def list_slots(self) -> dict:
         self._available()
         self._read_admission()
-        rows = []
-        for slot in await self.store.list_slots():
-            current = await self._slot_result(slot.logical_agent_id)
-            rows.append(current)
+        slots = await self.store.list_slots()
+        # Slot read-model assembly performs several independent SQLite reads per slot.
+        # Run a bounded fan-out so a node with dozens of durable slots does not turn
+        # list_slots into an N×round-trip serial path. gather preserves source order.
+        limit = asyncio.Semaphore(8)
+
+        async def project(slot):
+            async with limit:
+                return await self._slot_result(slot.logical_agent_id)
+
+        rows = list(await asyncio.gather(*(project(slot) for slot in slots)))
         return {"ok": True, "slots": rows, "server_now": utc_text()}
 
     async def get_slot(self, logical_agent_id: str) -> dict:
