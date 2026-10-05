@@ -38,7 +38,7 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
-  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.24 · code 26')
+  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.27 · code 29')
 })
 
 test('root Fleet app bar leaves aggregate status to the Fleet decision surface', () => {
