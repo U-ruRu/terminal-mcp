@@ -17,6 +17,7 @@ import { FeedbackState, IconButton } from '../components/UiPrimitives'
 export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions) => Promise<ActivityFeedReadModel>
 
 const ACTIVITY_WINDOW = 100
+const LATEST_ACTIVITY_BEFORE = Number.MAX_SAFE_INTEGER
 const HISTORY_BATCH = 250
 const BOTTOM_EDGE = 24
 const TOP_EDGE = 96
@@ -114,7 +115,6 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
     () => Object.fromEntries((selected?.runtime.realtime?.snapshot?.agents ?? []).map((agent) => [agent.agentId, agent.name])),
     [selected?.runtime.realtime?.snapshot?.agents],
   )
-  const initialBefore = Math.max(1, realtimeHighWater + 1)
   const firstEventSeq = feed.events[0]?.seq
   const lastEventSeq = feed.events.at(-1)?.seq
   const restoredServerRef = useRef<string>('')
@@ -206,7 +206,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
   useEffect(() => {
     if (!selectedId || !loadActivity || feed.initialized) return
     let cancelled = false
-    void loadActivity(selectedId, { before: initialBefore, limit: ACTIVITY_WINDOW }).then((page) => {
+    void loadActivity(selectedId, { before: LATEST_ACTIVITY_BEFORE, limit: ACTIVITY_WINDOW }).then((page) => {
       if (cancelled) return
       stickToBottom.current = true
       setFeeds((current) => ({
@@ -221,7 +221,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
       setFeeds((current) => ({ ...current, [selectedId]: { ...(current[selectedId] ?? emptyFeed()), initialized: true, loading: false, error: reason(error) } }))
     })
     return () => { cancelled = true }
-  }, [selectedId, loadActivity, initialBefore, feed.initialized])
+  }, [selectedId, loadActivity, feed.initialized])
 
   useEffect(() => {
     if (!selectedId || !loadActivity || !feed.initialized || feed.loading || realtimeHighWater <= feed.cursor) return
