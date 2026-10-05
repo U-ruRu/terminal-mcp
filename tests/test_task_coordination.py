@@ -452,6 +452,83 @@ async def test_release_without_claim_does_not_create_false_release_event(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_repeated_state_transitions_do_not_require_transition_context(tmp_path):
+    _, terminal, service = await runtime(tmp_path)
+    try:
+        agent_id = (await register(service, "state-idempotent"))["self"]["agent_id"]
+
+        await service.task(
+            agent_id,
+            action="create",
+            namespace="project",
+            task_id="STATE-DONE",
+            title="Idempotent done state",
+            isolation_hint="none",
+        )
+        await service.task(
+            agent_id,
+            action="claim",
+            namespace="project",
+            task_id="STATE-DONE",
+            claim_intent="complete once, then repeat state",
+        )
+        first_done = await service.task(
+            agent_id,
+            action="state",
+            namespace="project",
+            task_id="STATE-DONE",
+            state="done",
+            result={"summary": "completed"},
+        )
+        assert first_done["ok"] is True
+        repeated_done = await service.task(
+            agent_id,
+            action="state",
+            namespace="project",
+            task_id="STATE-DONE",
+            state="done",
+        )
+        assert repeated_done["ok"] is True
+        assert repeated_done["task"]["state"] == "done"
+
+        await service.task(
+            agent_id,
+            action="create",
+            namespace="project",
+            task_id="STATE-BLOCKED",
+            title="Idempotent blocked state",
+            isolation_hint="none",
+        )
+        await service.task(
+            agent_id,
+            action="claim",
+            namespace="project",
+            task_id="STATE-BLOCKED",
+            claim_intent="block once, then repeat state",
+        )
+        first_blocked = await service.task(
+            agent_id,
+            action="state",
+            namespace="project",
+            task_id="STATE-BLOCKED",
+            state="blocked",
+            blocker_reason="Waiting for dependency",
+        )
+        assert first_blocked["ok"] is True
+        repeated_blocked = await service.task(
+            agent_id,
+            action="state",
+            namespace="project",
+            task_id="STATE-BLOCKED",
+            state="blocked",
+        )
+        assert repeated_blocked["ok"] is True
+        assert repeated_blocked["task"]["state"] == "blocked"
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
 async def test_task_events_preserve_checkpoint_and_result_history(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:

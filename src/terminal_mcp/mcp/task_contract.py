@@ -122,7 +122,13 @@ class TaskClaimRequest(TaskRevisionRequest):
 
 class TaskReleaseRequest(TaskRevisionRequest):
     action: Literal["release"]
-    release_reason: Annotated[str, Field(min_length=1, max_length=4000)]
+    release_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
+        default=None,
+        description=(
+            "Required only when releasing an existing live claim; omitted for the idempotent "
+            "not-claimed path, which TaskCoordinator resolves from current claim state."
+        ),
+    )
 
 
 class TaskUpdateRequest(TaskRevisionRequest):
@@ -172,46 +178,24 @@ class TaskUnrelateRequest(TaskRelationRequest):
 
 
 class TaskStateRequest(TaskRevisionRequest):
-    model_config = ConfigDict(
-        extra="forbid",
-        strict=True,
-        json_schema_extra={
-            "allOf": [
-                {
-                    "if": {
-                        "properties": {"state": {"const": "blocked"}},
-                        "required": ["state"],
-                    },
-                    "then": {
-                        "required": ["blocker_reason"],
-                        "properties": {"blocker_reason": {"not": {"type": "null"}}},
-                    },
-                },
-                {
-                    "if": {"properties": {"state": {"const": "done"}}, "required": ["state"]},
-                    "then": {
-                        "required": ["result"],
-                        "properties": {"result": {"not": {"type": "null"}}},
-                    },
-                },
-            ]
-        },
-    )
-
     action: Literal["state"]
     state: TaskState
-    blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
-    result: ResultValue | None = None
+    blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
+        default=None,
+        description=(
+            "Required by TaskCoordinator only for a real transition into blocked while a live "
+            "claim exists; optional for idempotent blocked state calls."
+        ),
+    )
+    result: ResultValue | None = Field(
+        default=None,
+        description=(
+            "Required by TaskCoordinator only for a real transition into done; optional for "
+            "idempotent already-done state calls."
+        ),
+    )
     force: bool = False
     force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-    @model_validator(mode="after")
-    def require_state_context(self):
-        if self.state == "blocked" and self.blocker_reason is None:
-            raise ValueError("blocker_reason is required when state=blocked")
-        if self.state == "done" and self.result is None:
-            raise ValueError("result is required when state=done")
-        return self
 
 
 class TaskDoneRequest(TaskRevisionRequest):

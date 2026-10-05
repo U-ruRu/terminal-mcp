@@ -185,9 +185,10 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
     assert {"action", "code", "namespace", "task_id", "claim_intent"} <= set(
         defs["TaskClaimRequest"]["required"]
     )
-    assert {"action", "code", "namespace", "task_id", "release_reason"} <= set(
-        defs["TaskReleaseRequest"]["required"]
-    )
+    release = defs["TaskReleaseRequest"]
+    assert {"action", "code", "namespace", "task_id"} <= set(release["required"])
+    assert "release_reason" not in release["required"]
+    assert "release_reason" in release["properties"]
     update_props = defs["TaskUpdateRequest"]["properties"]
     assert "isolation_hint" not in update_props
     assert {"checkpoint", "result", "blocker_reason", "force", "force_reason"} <= set(update_props)
@@ -240,13 +241,11 @@ def test_state_accepts_plain_states(state):
     ADAPTER.validate_python({**_base("state"), "state": state})
 
 
-def test_state_requires_context_for_blocked_and_done():
+def test_state_context_is_optional_at_boundary_for_idempotent_transitions():
     ADAPTER.validate_python({**_base("state"), "state": "blocked", "blocker_reason": "blocked"})
     ADAPTER.validate_python({**_base("state"), "state": "done", "result": {"ok": True}})
-    with pytest.raises(ValidationError):
-        ADAPTER.validate_python({**_base("state"), "state": "blocked"})
-    with pytest.raises(ValidationError):
-        ADAPTER.validate_python({**_base("state"), "state": "done"})
+    ADAPTER.validate_python({**_base("state"), "state": "blocked"})
+    ADAPTER.validate_python({**_base("state"), "state": "done"})
 
 
 @pytest.mark.parametrize("result", ["complete", {"ok": True}, ["artifact"]])
@@ -328,7 +327,6 @@ def test_required_fields_are_rejected_per_variant():
     required = {
         "create": "isolation_hint",
         "claim": "claim_intent",
-        "release": "release_reason",
         "checkpoint": "checkpoint",
         "comment": "comment_text",
         "relate": "related_task_id",
@@ -585,6 +583,36 @@ async def test_public_boundary_preserves_backend_supported_completion_fields(
         assert call[key] == value
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "task_request",
+    [
+        {**_base("state"), "state": "done"},
+        {**_base("state"), "state": "blocked"},
+        _base("release"),
+    ],
+)
+async def test_public_boundary_defers_dynamic_state_and_claim_requirements_to_backend(task_request):
+    backend = _RecordingBackend()
+    mcp = build_mcp(_Service(backend))
+    tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
+    validator = Draft202012Validator(tool.parameters)
+    arguments = {"request": task_request}
+    assert not list(validator.iter_errors(arguments))
+
+    await tool.run(arguments, convert_result=True)
+    assert backend.identity_calls == 1
+    assert len(backend.task_calls) == 1
+    call = backend.task_calls[0]
+    assert call["action"] == task_request["action"]
+    if task_request["action"] == "state":
+        assert call["state"] == task_request["state"]
+        assert "result" not in call
+        assert "blocker_reason" not in call
+    else:
+        assert "release_reason" not in call
+
+
 def test_generated_discovery_schema_matches_runtime_conditionals():
     backend = _RecordingBackend()
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
@@ -605,14 +633,6 @@ def test_generated_discovery_schema_matches_runtime_conditionals():
                 "result": None,
             }
         },
-        {
-            "request": {
-                **_base("state"),
-                "state": "blocked",
-                "blocker_reason": None,
-            }
-        },
-        {"request": {**_base("state"), "state": "done", "result": None}},
         {"request": {**_base("archive"), "archive_note": None}},
     ]
     for payload in invalid:
@@ -638,7 +658,12 @@ def test_generated_discovery_schema_matches_runtime_conditionals():
                 "blocker_reason": "waiting",
             }
         },
+        {"request": {**_base("state"), "state": "blocked"}},
+        {"request": {**_base("state"), "state": "blocked", "blocker_reason": None}},
         {"request": {**_base("state"), "state": "done", "result": ["artifact"]}},
+        {"request": {**_base("state"), "state": "done"}},
+        {"request": {**_base("state"), "state": "done", "result": None}},
+        {"request": _base("release")},
         {"request": {**_base("archive"), "note": "legacy-compatible"}},
     ]
     for payload in valid:
