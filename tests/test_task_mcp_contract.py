@@ -401,21 +401,34 @@ class _RecordingBackend:
 
     async def task(self, **kwargs):
         self.task_calls.append(kwargs)
-        return {
-            "ok": True,
-            "task": {
-                "namespace": kwargs["namespace"],
-                "task_id": kwargs["task_id"],
-                "title": "Task",
-                "lane": "implementation",
-                "priority": "P1",
-                "state": "in_progress",
-                "operational_status": "in_progress",
-                "revision": 2,
-                "isolation_hint": "task/TASK-001",
-            },
-            "warnings": [],
+        task = {
+            "namespace": kwargs["namespace"],
+            "task_id": kwargs["task_id"],
+            "title": "Task",
+            "lane": "implementation",
+            "priority": "P1",
+            "state": "in_progress",
+            "operational_status": "in_progress",
+            "revision": 2,
+            "isolation_hint": "task/TASK-001",
         }
+        if kwargs["action"] == "claim":
+            task = {
+                **{
+                    key: task[key]
+                    for key in (
+                        "namespace", "task_id", "title", "lane", "priority", "state",
+                        "operational_status", "revision",
+                    )
+                },
+                "claim": None,
+                "next_action": "",
+                "description_preview": "",
+                "description_truncated": False,
+                "latest_checkpoint": None,
+                "blocking_dependencies": [],
+            }
+        return {"ok": True, "task": task, "warnings": []}
 
 
 class _Service:
@@ -690,7 +703,7 @@ def test_generated_checkpoint_schema_uses_one_of():
     checkpoint = tool.parameters["$defs"]["TaskCheckpointRequest"]["properties"]["checkpoint"]
     assert "anyOf" not in checkpoint
     assert checkpoint["oneOf"] == [
-        {"type": "string"},
+        {"type": "string", "maxLength": 4000},
         {"type": "object"},
         {"type": "array"},
     ]

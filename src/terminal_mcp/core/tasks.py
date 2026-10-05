@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 from collections import Counter
 
@@ -41,6 +42,8 @@ PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 VALUE_PRIORITY = {value: key for key, value in PRIORITY_VALUE.items()}
 PRESSURE_WEIGHT = {"P0": 8, "P1": 4, "P2": 2, "P3": 1}
 SAFE_PARTICIPANT_FIELDS = frozenset({"title", "description", "next_action", "tags"})
+DESCRIPTION_PREVIEW_LIMIT = 1500
+CHECKPOINT_TEXT_LIMIT = 4000
 
 
 def _warning(code: str, message: str, *, task_id=None, severity="warning", **context):
@@ -328,6 +331,72 @@ class TaskCoordinator:
             result["agent_id"] = item["agent_id"]
         return result
 
+    @staticmethod
+    def _checkpoint_text(value):
+        if value in (None, "", {}, []):
+            return None
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, dict) and isinstance(value.get("text"), str):
+            text = value["text"]
+        else:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return text[:CHECKPOINT_TEXT_LIMIT]
+
+    async def _latest_checkpoint(self, namespace, task_id, task):
+        event = await self.store.latest_checkpoint_event(namespace, task_id)
+        if event is not None:
+            payload = event.get("payload") or {}
+            text = self._checkpoint_text(payload.get("checkpoint"))
+            if text is not None:
+                agent_id = event.get("agent_id")
+                return {
+                    "text": text,
+                    "author": public_agent_name(agent_id) if agent_id else "system",
+                    "created_at": event["created_at"],
+                    "revision": int(payload.get("revision") or task.get("revision") or 1),
+                }
+        text = self._checkpoint_text(task.get("checkpoint"))
+        if text is None:
+            return None
+        return {
+            "text": text,
+            "author": "unknown",
+            "created_at": task.get("updated_at") or task.get("created_at") or utc_text(),
+            "revision": int(task.get("revision") or 1),
+        }
+
+    async def _snapshot(self, task, *, reveal_agent_ids=False):
+        external = self._external_task(task)
+        namespace, task_id = external["namespace"], external["task_id"]
+        claims = await self._live_claims(namespace, task_id)
+        claim = (
+            self._claim_view(claims[0], "owner", reveal_agent_id=reveal_agent_ids)
+            if claims
+            else None
+        )
+        dependencies = await self._dependencies(namespace, task_id)
+        blocking_dependencies = [dep for dep in dependencies if not dep["satisfied"]]
+        description = external.get("description") or ""
+        return {
+            "namespace": namespace,
+            "task_id": task_id,
+            "title": external["title"],
+            "lane": external["lane"],
+            "priority": external["priority"],
+            "state": external["state"],
+            "operational_status": self._operational_status(
+                external, claims, blocking_dependencies
+            ),
+            "revision": external["revision"],
+            "claim": claim,
+            "next_action": external.get("next_action") or "",
+            "description_preview": description[:DESCRIPTION_PREVIEW_LIMIT],
+            "description_truncated": len(description) > DESCRIPTION_PREVIEW_LIMIT,
+            "latest_checkpoint": await self._latest_checkpoint(namespace, task_id, external),
+            "blocking_dependencies": blocking_dependencies,
+        }
+
     def _decorate_prefetched(
         self,
         task,
@@ -546,6 +615,7 @@ class TaskCoordinator:
         operational_status=None,
         tags=None,
         show_details=False,
+        snapshot=False,
         show_done=False,
         show_archived=False,
         limit=50,
@@ -573,11 +643,15 @@ class TaskCoordinator:
             task = await self.store.get_task(namespace, task_id)
             return {
                 "ok": task is not None,
-                "task": await self._decorate(
-                    task, details=show_details, reveal_agent_ids=reveal_agent_ids
-                )
-                if task
-                else None,
+                "task": (
+                    await self._snapshot(task, reveal_agent_ids=reveal_agent_ids)
+                    if task and snapshot
+                    else await self._decorate(
+                        task, details=show_details, reveal_agent_ids=reveal_agent_ids
+                    )
+                    if task
+                    else None
+                ),
                 "error": None if task else "task not found",
             }
 
