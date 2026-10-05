@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from terminal_mcp.api_models import (
     AgentFinishResponse,
@@ -62,11 +62,11 @@ from terminal_mcp.mcp.output_contracts import (
     task_result,
 )
 from terminal_mcp.mcp.task_contract import (
+    TaskToolArguments,
     install_task_input_contract,
     task_request_action,
     task_request_to_backend,
     task_validation_error,
-    validate_task_request,
 )
 from terminal_mcp.telemetry import observed
 
@@ -1313,12 +1313,10 @@ def build_mcp(
             "WIP is one live managed-task claim per slot."
         ),
     )
-    async def access_task_tool(request: dict[str, object]) -> dict:
-        try:
-            parsed_request = validate_task_request(request)
-        except ValidationError as exc:
-            return task_validation_error(exc, request)
-        code, namespace, task_id, backend_request = task_request_to_backend(parsed_request)
+    async def access_task_tool(boundary: TaskToolArguments) -> dict:
+        if boundary.validation_error is not None:
+            return task_validation_error(boundary.validation_error, boundary)
+        code, namespace, task_id, backend_request = task_request_to_backend(boundary.request)
         action = backend_request.pop("action")
         identity, failure = await access_identity(code)
         if failure is not None:
@@ -1545,7 +1543,7 @@ def build_mcp(
         ),
     )
     install_public_output_contract(
-        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, task_request_action(kw["request"]))
+        mcp, "task", TaskOutput, lambda raw, kw: task_result(raw, task_request_action(kw["boundary"]))
     )
     install_public_output_contract(
         mcp, "cmd", CmdOutput, lambda raw, kw: cmd_result(raw, kw["request"].action)

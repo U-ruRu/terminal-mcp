@@ -3,7 +3,11 @@ from jsonschema import Draft202012Validator
 from pydantic import TypeAdapter, ValidationError
 
 from terminal_mcp.mcp.server import build_mcp
-from terminal_mcp.mcp.task_contract import TaskRequest, task_request_to_backend
+from terminal_mcp.mcp.task_contract import (
+    TaskRequest,
+    TaskToolArguments,
+    task_request_to_backend,
+)
 
 ADAPTER = TypeAdapter(TaskRequest)
 ACTIONS = {
@@ -606,3 +610,86 @@ def test_generated_discovery_schema_rejects_regression_inputs():
     ]
     for payload in invalid:
         assert list(validator.iter_errors(payload)), payload
+
+
+def test_fastmcp_runtime_arg_model_is_the_discovery_schema_source():
+    backend = _RecordingBackend()
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
+    assert tool.fn_metadata.arg_model is TaskToolArguments
+    assert tool.parameters == TaskToolArguments.model_json_schema()
+    assert tool.parameters["required"] == ["request"]
+    assert tool.parameters["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "expected_paths"),
+    [
+        (
+            {
+                "request": {
+                    "action": "claim",
+                    "code": "1234",
+                    "namespace": "example",
+                    "task_id": "TASK-001",
+                    "claim_intent": "work",
+                },
+                "unexpected": 1,
+            },
+            ["unexpected"],
+        ),
+        ({"request": "bad"}, ["request"]),
+        ({"request": []}, ["request"]),
+        ({}, ["request"]),
+    ],
+)
+async def test_tool_run_returns_structured_errors_for_full_public_boundary(
+    arguments, expected_paths
+):
+    backend = _RecordingBackend()
+    mcp = build_mcp(_Service(backend))
+    tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
+    validator = Draft202012Validator(tool.parameters)
+    assert list(validator.iter_errors(arguments))
+
+    result = await tool.run(arguments, convert_result=True)
+    assert backend.identity_calls == 0
+    assert backend.task_calls == []
+    assert result.structuredContent["code"] == "validation_error"
+    errors = result.structuredContent["details"]["validation_errors"]
+    assert [item["path"] for item in errors] == expected_paths
+    assert all(item["error_class"] for item in errors)
+    assert all(item["description"] for item in errors)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {
+            "request": {
+                "action": "claim",
+                "code": "1234",
+                "namespace": "example",
+                "task_id": "TASK-001",
+                "claim_intent": "work",
+            },
+            "unexpected": 1,
+        },
+        {"request": "bad"},
+        {"request": []},
+        {},
+    ],
+)
+async def test_tool_manager_call_tool_uses_same_task_boundary(arguments):
+    backend = _RecordingBackend()
+    mcp = build_mcp(_Service(backend))
+    result = await mcp._tool_manager.call_tool("task", arguments, convert_result=True)
+    assert backend.identity_calls == 0
+    assert backend.task_calls == []
+    assert result.structuredContent["code"] == "validation_error"
+    errors = result.structuredContent["details"]["validation_errors"]
+    assert errors
+    assert all({"error_class", "path", "description"} <= set(item) for item in errors)

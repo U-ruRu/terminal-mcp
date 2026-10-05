@@ -1,11 +1,11 @@
-from copy import deepcopy
 from typing import Annotated, Literal
 
+from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    TypeAdapter,
+    PrivateAttr,
     ValidationError,
     WithJsonSchema,
     field_validator,
@@ -295,33 +295,55 @@ TASK_ACTIONS = {
     "archive",
     "review",
 }
-_TASK_REQUEST_ADAPTER = TypeAdapter(TaskRequest)
 
 
-def task_input_schema() -> dict[str, object]:
-    request_schema = deepcopy(_TASK_REQUEST_ADAPTER.json_schema())
-    definitions = request_schema.pop("$defs", None)
-    schema: dict[str, object] = {
-        "type": "object",
-        "properties": {"request": request_schema},
-        "required": ["request"],
-        "additionalProperties": False,
-    }
-    if definitions:
-        schema["$defs"] = definitions
-    return schema
+class TaskToolArguments(ArgModelBase):
+    """FastMCP boundary model and public discovery schema for task."""
+
+    request: TaskRequest
+    model_config = ConfigDict(extra="forbid", strict=True, arbitrary_types_allowed=True)
+    _validation_error: ValidationError | None = PrivateAttr(default=None)
+    _raw_arguments: dict[str, object] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def capture_validation_error(cls, value, handler):
+        raw_arguments = dict(value) if isinstance(value, dict) else {"$input": value}
+        try:
+            model = handler(value)
+        except ValidationError as exc:
+            model = cls.model_construct(request=None)
+            model._validation_error = exc
+        model._raw_arguments = raw_arguments
+        return model
+
+    def model_dump_one_level(self) -> dict[str, object]:
+        # FuncMetadata.call_fn_with_arg_validation() forwards this dict to the tool function.
+        return {"boundary": self}
+
+    @property
+    def validation_error(self) -> ValidationError | None:
+        return self._validation_error
+
+    @property
+    def raw_arguments(self) -> dict[str, object]:
+        return self._raw_arguments
 
 
 def install_task_input_contract(mcp) -> None:
+    """Make the same model authoritative for FastMCP execution and discovery."""
+
     tool = {item.name: item for item in mcp._tool_manager.list_tools()}["task"]
-    tool.parameters = task_input_schema()
-
-
-def validate_task_request(request: object) -> TaskRequest:
-    return _TASK_REQUEST_ADAPTER.validate_python(request)
+    tool.fn_metadata.arg_model = TaskToolArguments
+    tool.parameters = TaskToolArguments.model_json_schema()
 
 
 def task_request_action(request: object) -> str:
+    if isinstance(request, TaskToolArguments):
+        if request.validation_error is None:
+            request = request.request
+        else:
+            request = request.raw_arguments.get("request")
     if isinstance(request, dict):
         action = request.get("action")
     else:
@@ -332,17 +354,27 @@ def task_request_action(request: object) -> str:
 def _error_path(location: tuple[object, ...], request: object, message: str) -> str:
     parts = list(location)
     action = task_request_action(request)
-    if parts and parts[0] == action:
+    if len(parts) >= 2 and parts[0] == "request" and parts[1] == action:
+        parts.pop(1)
+    elif parts and parts[0] == action:
         parts.pop(0)
+
+    fallback_field = None
+    if "blocker_reason is required" in message:
+        fallback_field = "blocker_reason"
+    elif "result is required" in message:
+        fallback_field = "result"
+    elif "archive_note or note is required" in message:
+        fallback_field = "archive_note"
+    if fallback_field and (not parts or parts == ["request"]):
+        if not parts:
+            parts = ["request"]
+        parts.append(fallback_field)
+
     if not parts:
-        if "blocker_reason is required" in message:
-            parts = ["blocker_reason"]
-        elif "result is required" in message:
-            parts = ["result"]
-        elif "archive_note or note is required" in message:
-            parts = ["archive_note"]
-    path = "request"
-    for part in parts:
+        return "$"
+    path = str(parts[0])
+    for part in parts[1:]:
         if isinstance(part, int):
             path += f"[{part}]"
         else:
