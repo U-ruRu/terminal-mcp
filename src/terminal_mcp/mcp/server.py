@@ -31,6 +31,22 @@ from terminal_mcp.api_models import (
 )
 from terminal_mcp.core.orchestration import public_agent_name
 from terminal_mcp.core.service import DEFAULT_READ_LINES, MAX_READ_LINES
+from terminal_mcp.mcp.output_contracts import (
+    CmdOutput,
+    ContextOutput,
+    HealthOutput,
+    MessageOutput,
+    ObserveOutput,
+    SessionOutput,
+    TaskOutput,
+    cmd_result,
+    context_result,
+    health_result,
+    message_result,
+    observe_result,
+    session_result,
+    task_result,
+)
 from terminal_mcp.telemetry import observed
 
 _SAFE_READ_ONLY = ToolAnnotations(
@@ -915,7 +931,7 @@ def build_mcp(
 
     @mcp.tool(
         name="session",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
             "Start, end, or interrupt a unified Access session. start requires an explicit "
@@ -930,33 +946,35 @@ def build_mcp(
             str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")
         ] = None,
         display_name: Annotated[str | None, Field(max_length=80)] = None,
-    ) -> dict:
+    ) -> Annotated[CallToolResult, SessionOutput]:
         backend = access_backend()
         if backend is None:
-            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+            return session_result({"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}, action)
         if action == "start":
             if mode is None:
-                return {"ok": False, "code": "mode_required", "error": "mode_required"}
+                return session_result({"ok": False, "code": "mode_required", "error": "mode_required"}, action)
             if mode == "legacy" and code is not None:
-                return {
+                return session_result({
                     "ok": False,
                     "code": "legacy_code_not_allowed",
                     "error": "legacy_code_not_allowed",
-                }
-            return await backend.access_session_start(
+                }, action)
+            raw = await backend.access_session_start(
                 mode=mode, access_code=code, display_name=display_name
             )
+            return session_result(raw, action)
         if not code:
-            return {
+            return session_result({
                 "ok": False,
                 "code": "access_code_required",
                 "error": "access_code_required",
-            }
-        return await backend.access_session_stop(code, interrupt=action == "interrupt")
+            }, action)
+        raw = await backend.access_session_stop(code, interrupt=action == "interrupt")
+        return session_result(raw, action)
 
     @mcp.tool(
         name="observe",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_READ_ONLY,
         description=(
             "Read unified session or task state. Access codes are intentionally absent from "
@@ -976,16 +994,16 @@ def build_mcp(
         show_archived: bool = False,
         limit: Annotated[int, Field(ge=1, le=1000)] = 50,
         cursor: str | None = None,
-    ) -> dict:
+    ) -> Annotated[CallToolResult, ObserveOutput]:
         backend = access_backend()
         if subject == "sessions":
             if backend is None:
-                return {
+                return observe_result({
                     "ok": False,
                     "code": "policy_incompatible",
                     "error": "policy_incompatible",
-                }
-            return await backend.access_observe_slots()
+                }, subject)
+            return observe_result(await backend.access_observe_slots(), subject)
         result = await service.tasks(
             namespace=namespace,
             task_id=task_id,
@@ -1003,11 +1021,11 @@ def build_mcp(
         if store is not None:
             rows = await store.list_tasks(show_done=True, show_archived=True, limit=None, offset=0)
             result["namespaces"] = sorted({item["namespace"] for item in rows})
-        return result
+        return observe_result(result, subject)
 
     @mcp.tool(
         name="message",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
             "Full agent messaging inbox for an active unified session. Send with text+target "
@@ -1033,11 +1051,11 @@ def build_mcp(
         limit: Annotated[int, Field(ge=1, le=500)] = 50,
         namespace: str | None = None,
         task_id: str | None = None,
-    ) -> dict:
+    ) -> Annotated[CallToolResult, MessageOutput]:
         backend = access_backend()
         if backend is None:
-            return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
-        return await backend.access_message(
+            return message_result({"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}, sender=sender, text=text, target=target, message_hash=message_hash, mode=mode, require_reply=require_reply, alert=alert, show_all=show_all)
+        raw = await backend.access_message(
             sender,
             access_code=code,
             text=text,
@@ -1051,10 +1069,11 @@ def build_mcp(
             namespace=namespace,
             task_id=task_id,
         )
+        return message_result(raw, sender=sender, text=text, target=target, message_hash=message_hash, mode=mode, require_reply=require_reply, alert=alert, show_all=show_all)
 
     @mcp.tool(
         name="task",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
             "Mutate a managed task under an active unified Access session. Claim ownership is "
@@ -1067,11 +1086,11 @@ def build_mcp(
         namespace: str,
         task_id: str | None = None,
         payload: dict[str, object] | None = None,
-    ) -> dict:
+    ) -> Annotated[CallToolResult, TaskOutput]:
         identity, failure = await access_identity(code)
         if failure is not None:
-            return failure
-        return await access_backend().task(
+            return task_result(failure, action)
+        raw = await access_backend().task(
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
             session_epoch=identity["session_epoch"],
@@ -1081,10 +1100,11 @@ def build_mcp(
             task_id=task_id,
             **(payload or {}),
         )
+        return task_result(raw, action)
 
     @mcp.tool(
         name="cmd",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
             "Run, read, cancel, or execute recovery commands. run/cancel/recovery require "
@@ -1093,17 +1113,18 @@ def build_mcp(
             "work until reply."
         ),
     )
-    async def access_cmd_tool(request: CmdRequest) -> dict:
+    async def access_cmd_tool(request: CmdRequest) -> Annotated[CallToolResult, CmdOutput]:
         if request.action == "read" and request.code is None:
-            return await service.read(
+            raw = await service.read(
                 cmd_hash=request.cmd_hash,
                 lines_count=request.lines_count,
                 offset=request.offset,
                 agent_id=None,
             )
+            return cmd_result(raw, request.action)
         identity, failure = await access_identity(request.code)
         if failure is not None:
-            return failure
+            return cmd_result(failure, request.action)
         backend = access_backend()
         try:
             message_state = await backend.message_state(
@@ -1113,21 +1134,21 @@ def build_mcp(
                 surface=True,
             )
         except Exception as exc:
-            return {"ok": False, "code": "message_state_unavailable", "error": str(exc)}
+            return cmd_result({"ok": False, "code": "message_state_unavailable", "error": str(exc)}, request.action)
         if message_state.get("alert_pending") and request.action != "cancel":
-            return {
+            return cmd_result({
                 "ok": False,
                 "code": "coordination_alert",
                 "error": "coordination_alert: reply to the pending alert before continuing",
                 **message_state,
-            }
+            }, request.action)
         if message_state.get("ack_required_pending") and request.action == "run":
-            return {
+            return cmd_result({
                 "ok": False,
                 "code": "coordination_ack_required",
                 "error": "coordination_ack_required: acknowledge the pending message before run",
                 **message_state,
-            }
+            }, request.action)
         if request.action == "read":
             result = await service.read(
                 cmd_hash=request.cmd_hash,
@@ -1143,7 +1164,7 @@ def build_mcp(
                     "session_epoch": identity["session_epoch"],
                 }
             )
-            return result
+            return cmd_result(result, request.action)
         if request.action == "run":
             result = await backend.run(
                 request.command,
@@ -1155,7 +1176,7 @@ def build_mcp(
                 task_scope=request.task_scope,
             )
             result.update(message_state)
-            return result
+            return cmd_result(result, request.action)
         if request.action == "cancel":
             result = await backend.cancel(
                 request.cmd_hash,
@@ -1165,7 +1186,7 @@ def build_mcp(
                 access_code=request.code,
             )
             result.update(message_state)
-            return result
+            return cmd_result(result, request.action)
         result = await backend.recovery(
             request.command,
             logical_agent_id=identity["logical_agent_id"],
@@ -1176,32 +1197,34 @@ def build_mcp(
         result["public_name"] = identity["public_name"]
         result["session_ref"] = identity["session_ref"]
         result.update(message_state)
-        return result
+        return cmd_result(result, request.action)
 
     @mcp.tool(
         name="context",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_OPERATION,
         description=(
             "Read or mutate instance context using an action-discriminated request. list has "
             "no code field; create/update/delete require an active unified Access code."
         ),
     )
-    async def access_context_tool(request: ContextRequest) -> dict:
+    async def access_context_tool(request: ContextRequest) -> Annotated[CallToolResult, ContextOutput]:
         data = request.model_dump(exclude={"action", "code"}, exclude_none=True)
         if request.action != "list":
             _identity, failure = await access_identity(request.code)
             if failure is not None:
-                return failure
-        return await service.context(request.action, **data)
+                return context_result(failure, request.action)
+        raw = await service.context(request.action, **data)
+        return context_result(raw, request.action)
 
     @mcp.tool(
         name="health",
-        structured_output=False,
+        structured_output=True,
         annotations=_SAFE_READ_ONLY,
         description="Return terminal service health without requiring an Access code.",
     )
-    async def access_health_tool() -> dict:
-        return await service.health(auth_mode, agent_id=None)
+    async def access_health_tool() -> Annotated[CallToolResult, HealthOutput]:
+        raw = await service.health(auth_mode, agent_id=None)
+        return health_result(raw)
 
     return mcp

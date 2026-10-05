@@ -310,8 +310,9 @@ def test_mcp_tools_advertise_canonical_access_surface():
 
 
 def _text_json(result):
-    assert len(result) == 1
-    return json.loads(result[0].text)
+    content = result.content if hasattr(result, "content") else result
+    assert len(content) == 1
+    return json.loads(content[0].text)
 
 
 @pytest.mark.asyncio
