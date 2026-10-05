@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any, ClassVar, Literal
 
 from mcp.types import CallToolResult, TextContent
@@ -45,19 +45,19 @@ class Cursor(RootModel[str]):
     root: str
 
 
-class SessionMode(str, Enum):
+class SessionMode(StrEnum):
     persistent = "persistent"
     legacy = "legacy"
 
 
-class SessionState(str, Enum):
+class SessionState(StrEnum):
     inactive = "inactive"
     active = "active"
     stopping = "stopping"
     interrupted = "interrupted"
 
 
-class TaskState(str, Enum):
+class TaskState(StrEnum):
     ready = "ready"
     in_progress = "in_progress"
     blocked = "blocked"
@@ -65,7 +65,7 @@ class TaskState(str, Enum):
     done = "done"
 
 
-class TaskOperationalStatus(str, Enum):
+class TaskOperationalStatus(StrEnum):
     ready = "ready"
     in_progress = "in_progress"
     blocked = "blocked"
@@ -73,7 +73,7 @@ class TaskOperationalStatus(str, Enum):
     done = "done"
 
 
-class TaskLane(str, Enum):
+class TaskLane(StrEnum):
     implementation = "implementation"
     review = "review"
     release = "release"
@@ -81,14 +81,14 @@ class TaskLane(str, Enum):
     general = "general"
 
 
-class TaskPriority(str, Enum):
+class TaskPriority(StrEnum):
     P0 = "P0"
     P1 = "P1"
     P2 = "P2"
     P3 = "P3"
 
 
-class CommandStatus(str, Enum):
+class CommandStatus(StrEnum):
     queued = "queued"
     running = "running"
     completed = "completed"
@@ -97,13 +97,13 @@ class CommandStatus(str, Enum):
     not_found = "not_found"
 
 
-class MessageMode(str, Enum):
+class MessageMode(StrEnum):
     notify = "notify"
     ack = "ack"
     alert = "alert"
 
 
-class MessageState(str, Enum):
+class MessageState(StrEnum):
     delivered = "delivered"
     seen = "seen"
     read = "read"
@@ -441,8 +441,18 @@ class MessageOutput(RootModel[MessageSuccess | AccessError]):
 class TaskMutationResult(_Strict):
     ok: Literal[True]
     action: Literal[
-        "create", "claim", "release", "update", "checkpoint", "comment",
-        "relate", "unrelate", "state", "done", "archive", "review"
+        "create",
+        "claim",
+        "release",
+        "update",
+        "checkpoint",
+        "comment",
+        "relate",
+        "unrelate",
+        "state",
+        "done",
+        "archive",
+        "review",
     ]
     task: TaskRecord
     warnings: list[WorkflowWarning] = Field(default_factory=list)
@@ -731,11 +741,7 @@ def _task_output_state(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _task_event(raw: dict[str, Any]) -> dict[str, Any]:
-    item = {
-        name: raw[name]
-        for name in TaskEvent.model_fields
-        if name in raw and name != "payload"
-    }
+    item = {name: raw[name] for name in TaskEvent.model_fields if name in raw and name != "payload"}
     item["payload"] = _json_payload(raw.get("payload") or {})
     return TaskEvent.model_validate(item).model_dump(mode="json", exclude_unset=True)
 
@@ -878,9 +884,19 @@ def _message_record(raw: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     if "message_id" not in item and item.get("message_hash"):
         item["message_id"] = item["message_hash"]
     if item.get("mode") is None:
-        item["mode"] = "alert" if item.get("alert") else "ack" if item.get("require_reply") else "notify"
+        item["mode"] = (
+            "alert" if item.get("alert") else "ack" if item.get("require_reply") else "notify"
+        )
     if item.get("state") is None:
-        item["state"] = "replied" if item.get("replied_at") else "read" if item.get("read_at") else "seen" if item.get("first_seen_at") else "delivered"
+        item["state"] = (
+            "replied"
+            if item.get("replied_at")
+            else "read"
+            if item.get("read_at")
+            else "seen"
+            if item.get("first_seen_at")
+            else "delivered"
+        )
     item.update(overrides)
     return _known(MessageRecord, item).model_dump(mode="json", exclude_unset=True)
 
@@ -906,7 +922,9 @@ def _task_record(raw: dict[str, Any]) -> dict[str, Any]:
     }
     if "checkpoint" in raw:
         checkpoint = raw.get("checkpoint")
-        item["checkpoint"] = checkpoint if isinstance(checkpoint, str) else _json_payload(checkpoint)
+        item["checkpoint"] = (
+            checkpoint if isinstance(checkpoint, str) else _json_payload(checkpoint)
+        )
     if "result" in raw and raw.get("result") is not None:
         result = raw["result"]
         item["result"] = result if isinstance(result, str) else _json_payload(result)
@@ -939,9 +957,7 @@ def session_result(raw: dict[str, Any], action: str) -> CallToolResult:
         return _result("session", action, SessionOutput, raw, {})
     if action == "start":
         session = {
-            key: raw[key]
-            for key in SessionInfo.model_fields
-            if key in raw and raw[key] is not None
+            key: raw[key] for key in SessionInfo.model_fields if key in raw and raw[key] is not None
         }
         session["session_state"] = raw.get("session_state") or "active"
         structured = {"ok": True, "action": "start", "session": session}
@@ -985,7 +1001,9 @@ def observe_result(raw: dict[str, Any], subject: str) -> CallToolResult:
     else:
         summary = None
         if isinstance(raw.get("summary"), dict):
-            summary = _known(TaskListSummary, raw["summary"]).model_dump(mode="json", exclude_unset=True)
+            summary = _known(TaskListSummary, raw["summary"]).model_dump(
+                mode="json", exclude_unset=True
+            )
         recommended = None
         if isinstance(raw.get("recommended"), dict):
             recommended = _known(TaskRecommendation, raw["recommended"]).model_dump(
@@ -1022,7 +1040,17 @@ def message_result(
     show_all: bool,
 ) -> CallToolResult:
     if not raw.get("ok"):
-        variant = "reply" if message_hash is not None and text is not None else "acknowledge" if message_hash is not None else "send" if text is not None else "history" if show_all else "inbox"
+        variant = (
+            "reply"
+            if message_hash is not None and text is not None
+            else "acknowledge"
+            if message_hash is not None
+            else "send"
+            if text is not None
+            else "history"
+            if show_all
+            else "inbox"
+        )
         return _result("message", variant, MessageOutput, raw, {})
     if message_hash is not None and text is not None:
         action = "reply"
@@ -1120,14 +1148,26 @@ def _command(raw: dict[str, Any], *, action: str) -> dict[str, Any]:
             status = "cancelled"
         else:
             exit_code = raw.get("exit_code")
-            status = "running" if exit_code is None and action == "read" else "completed" if exit_code in (None, 0) else "failed"
+            status = (
+                "running"
+                if exit_code is None and action == "read"
+                else "completed"
+                if exit_code in (None, 0)
+                else "failed"
+            )
     payload = {
         "cmd_hash": raw.get("cmd_hash"),
         "status": status,
     }
     for key in (
-        "queue_id", "queue_position", "exit_code", "cancelled_from", "execution_started",
-        "claimed_at", "started_at", "finished_at",
+        "queue_id",
+        "queue_position",
+        "exit_code",
+        "cancelled_from",
+        "execution_started",
+        "claimed_at",
+        "started_at",
+        "finished_at",
     ):
         if key in raw:
             payload[key] = raw[key]
@@ -1155,19 +1195,32 @@ def cmd_result(raw: dict[str, Any], action: str) -> CallToolResult:
     elif action == "read":
         structured["lines"] = raw.get("lines") or []
         for key in (
-            "next_offset", "overall_lines_count", "displayed_lines_count", "has_more",
-            "output_truncated", "output_retained", "output_pruned_at", "output_bytes",
+            "next_offset",
+            "overall_lines_count",
+            "displayed_lines_count",
+            "has_more",
+            "output_truncated",
+            "output_retained",
+            "output_pruned_at",
+            "output_bytes",
             "line_truncated",
         ):
             if key in raw:
                 structured[key] = raw[key]
         if "next_cursor" in raw:
-            structured["next_cursor"] = None if raw["next_cursor"] is None else str(raw["next_cursor"])
+            structured["next_cursor"] = (
+                None if raw["next_cursor"] is None else str(raw["next_cursor"])
+            )
     elif action == "recovery":
         structured["lines"] = raw.get("lines") or []
         for key in (
-            "overall_lines_count", "displayed_lines_count", "duration_ms",
-            "output_truncated", "output_retained", "output_pruned_at", "output_bytes",
+            "overall_lines_count",
+            "displayed_lines_count",
+            "duration_ms",
+            "output_truncated",
+            "output_retained",
+            "output_pruned_at",
+            "output_bytes",
         ):
             if key in raw:
                 structured[key] = raw[key]
@@ -1191,14 +1244,16 @@ def context_result(raw: dict[str, Any], action: str) -> CallToolResult:
             ],
         }
         if "next_cursor" in raw:
-            structured["next_cursor"] = None if raw["next_cursor"] is None else str(raw["next_cursor"])
+            structured["next_cursor"] = (
+                None if raw["next_cursor"] is None else str(raw["next_cursor"])
+            )
     elif action in {"create", "update"}:
         structured = {
             "ok": True,
             "action": action,
-            "context": _known(ContextEntry, raw.get("entry") or raw.get("context") or {}).model_dump(
-                mode="json", exclude_unset=True
-            ),
+            "context": _known(
+                ContextEntry, raw.get("entry") or raw.get("context") or {}
+            ).model_dump(mode="json", exclude_unset=True),
         }
     else:
         structured = {
@@ -1237,7 +1292,9 @@ def health_result(raw: dict[str, Any]) -> CallToolResult:
     return _result("health", "health", HealthOutput, raw, structured)
 
 
-def install_public_output_contract(mcp, tool_name: str, output_model: type[RootModel], canonicalizer) -> None:
+def install_public_output_contract(
+    mcp, tool_name: str, output_model: type[RootModel], canonicalizer
+) -> None:
     tool = {item.name: item for item in mcp._tool_manager.list_tools()}[tool_name]
     raw_fn = tool.fn
 
