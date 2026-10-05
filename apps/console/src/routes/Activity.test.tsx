@@ -68,11 +68,37 @@ test('switches servers, filters messages and renders direct task navigation', as
   expect(screen.getByText('Ship it')).toBeInTheDocument()
   expect(screen.queryByText('task.updated')).not.toBeInTheDocument()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'beta')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: Number.MAX_SAFE_INTEGER, limit: 100 })))
   await userEvent.selectOptions(screen.getByLabelText('Category'), 'all')
   expect(await screen.findByText('Beta is online again')).toBeInTheDocument()
 })
 
+
+test('loads the latest Tokyo Activity even before realtime snapshot high-water is ready', async () => {
+  const load = vi.fn(async (_instanceId: string, options = {}) => {
+    const before = (options as { before?: number }).before
+    if (before === Number.MAX_SAFE_INTEGER) {
+      return {
+        ...page(0, [{
+          seq: 79725, eventType: 'message.created', entityType: 'message', entityId: 'tokyo-message',
+          actorId: 'TokyoAgent-1111', actorName: 'TokyoAgent', payload: {}, createdAt: '2026-10-05T19:29:11Z',
+          message: { messageHash: 'tokyo-message', senderAgentId: 'TokyoAgent-1111', senderName: 'TokyoAgent', target: 'operator', text: 'Tokyo activity visible', requireReply: false, alert: false, recipients: [] },
+        }], 79725),
+        oldestSeq: 29726,
+      }
+    }
+    return page(0, [], 79725)
+  })
+
+  render(
+    <I18nProvider><MemoryRouter initialEntries={['/activity?server=tokyo']}>
+      <Activity instances={[instance('tokyo', 'Tokyo', 0)]} loadActivity={load} />
+    </MemoryRouter></I18nProvider>,
+  )
+
+  await waitFor(() => expect(load).toHaveBeenCalledWith('tokyo', { before: Number.MAX_SAFE_INTEGER, limit: 100 }))
+  await screen.findByText('Tokyo activity visible')
+})
 
 test('reconnect preserves Activity pagination cursor, filters and exact viewport', async () => {
   const message = (seq: number, text: string): ActivityFeedReadModel['events'][number] => ({
@@ -81,7 +107,7 @@ test('reconnect preserves Activity pagination cursor, filters and exact viewport
   })
   const load = vi.fn(async (_instanceId: string, options = {}) => {
     const before = (options as { before?: number }).before
-    if (before === 103) return { ...page(0, [message(101, 'Newest 101'), message(102, 'Newest 102')], 102), oldestSeq: 1 }
+    if (before === Number.MAX_SAFE_INTEGER) return { ...page(0, [message(101, 'Newest 101'), message(102, 'Newest 102')], 102), oldestSeq: 1 }
     if (before === 101) return { ...page(0, [message(51, 'Older 51')], 102), oldestSeq: 1 }
     if (before === 51) return { ...page(0, [message(1, 'Oldest 1')], 102), oldestSeq: 1 }
     return page(0, [], 102)
@@ -150,7 +176,7 @@ test('does not silently choose a server when activity has no server context', as
   expect(screen.getByText('Choose a server to view activity.')).toBeInTheDocument()
   expect(load).not.toHaveBeenCalled()
   await userEvent.selectOptions(screen.getByLabelText('Server'), 'alpha')
-  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: 3, limit: 100 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('alpha', expect.objectContaining({ before: Number.MAX_SAFE_INTEGER, limit: 100 })))
 })
 
 
@@ -214,7 +240,7 @@ test('loads a concise latest window and keeps raw payload collapsed', async () =
     </MemoryRouter></I18nProvider>,
   )
 
-  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: 8, limit: 100 })))
+  await waitFor(() => expect(load).toHaveBeenCalledWith('beta', expect.objectContaining({ before: Number.MAX_SAFE_INTEGER, limit: 100 })))
   const toggle = screen.getByRole('button', { name: 'Technical details' })
   expect(toggle).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByText(/"ok": true/)).not.toBeInTheDocument()
