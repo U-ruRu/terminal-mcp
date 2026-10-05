@@ -103,6 +103,8 @@ class TaskCreateRequest(StrictTaskModel):
     result: ResultValue | None = None
     tags: Tags | None = None
     dependencies: TaskDependencies | None = None
+    force: bool = False
+    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
     @model_validator(mode="after")
     def require_result_for_done(self):
@@ -138,6 +140,11 @@ class TaskUpdateRequest(TaskRevisionRequest):
     output_refs: OutputRefs | None = None
     tags: Tags | None = None
     dependencies: TaskDependencies | None = None
+    checkpoint: CheckpointValue | None = None
+    result: ResultValue | None = None
+    blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
+    force: bool = False
+    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
 
 class TaskCheckpointRequest(TaskRevisionRequest):
@@ -195,6 +202,8 @@ class TaskStateRequest(TaskRevisionRequest):
     state: TaskState
     blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
     result: ResultValue | None = None
+    force: bool = False
+    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
     @model_validator(mode="after")
     def require_state_context(self):
@@ -217,6 +226,8 @@ class TaskDoneRequest(TaskRevisionRequest):
     )
     output_refs: OutputRefs | None = None
     candidate_ref: Annotated[str, Field(max_length=200)] | None = None
+    force: bool = False
+    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
 
 class TaskArchiveRequest(TaskRevisionRequest):

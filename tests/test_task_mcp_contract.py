@@ -72,6 +72,8 @@ FULL_VALID = {
         "result": {"status": "prepared"},
         "tags": ["mcp", "contract"],
         "dependencies": [{"task_id": "TASK-DEP"}, {"namespace": "other", "task_id": "TASK-X"}],
+        "force": True,
+        "force_reason": "External completion state is authoritative",
     },
     "claim": {
         **_base("claim"),
@@ -96,6 +98,11 @@ FULL_VALID = {
         "output_refs": ["o"],
         "tags": ["contract"],
         "dependencies": [{"task_id": "TASK-DEP"}],
+        "checkpoint": {"phase": "updated"},
+        "result": {"summary": "updated result"},
+        "blocker_reason": "Dependency temporarily unavailable",
+        "force": True,
+        "force_reason": "External dependency state is authoritative",
         "expected_revision": 5,
     },
     "checkpoint": {**_base("checkpoint"), "checkpoint": ["tested"], "expected_revision": 5},
@@ -118,6 +125,8 @@ FULL_VALID = {
         **_base("state"),
         "state": "blocked",
         "blocker_reason": "Waiting for dependency",
+        "force": True,
+        "force_reason": "External dependency state is authoritative",
         "expected_revision": 6,
     },
     "done": {
@@ -125,6 +134,8 @@ FULL_VALID = {
         "result": {"ok": True},
         "output_refs": ["sha:abc"],
         "candidate_ref": "sha:abc",
+        "force": True,
+        "force_reason": "External dependency state is authoritative",
         "expected_revision": 7,
     },
     "archive": {
@@ -177,7 +188,12 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
     assert {"action", "code", "namespace", "task_id", "release_reason"} <= set(
         defs["TaskReleaseRequest"]["required"]
     )
-    assert "isolation_hint" not in defs["TaskUpdateRequest"]["properties"]
+    update_props = defs["TaskUpdateRequest"]["properties"]
+    assert "isolation_hint" not in update_props
+    assert {"checkpoint", "result", "blocker_reason", "force", "force_reason"} <= set(update_props)
+    assert {"force", "force_reason"} <= set(defs["TaskCreateRequest"]["properties"])
+    assert {"force", "force_reason"} <= set(defs["TaskDoneRequest"]["properties"])
+    assert {"force", "force_reason"} <= set(defs["TaskStateRequest"]["properties"])
     assert "candidate_ref" not in defs["TaskReviewRequest"]["properties"]
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["maxItems"] == 3
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["uniqueItems"] is True
@@ -263,6 +279,7 @@ def test_review_dimensions_are_bounded_unique_and_typed():
 def test_boundary_lengths_and_collection_limits():
     ADAPTER.validate_python({**_base("claim"), "claim_intent": "x" * 160, "expected_revision": 1})
     ADAPTER.validate_python({**_base("release"), "release_reason": "x" * 4000})
+    ADAPTER.validate_python({**MINIMAL_VALID["done"], "force": True, "force_reason": "x" * 2000})
     ADAPTER.validate_python({**MINIMAL_VALID["create"], "input_refs": ["r"] * 64})
     ADAPTER.validate_python({**MINIMAL_VALID["create"], "tags": [f"t{i}" for i in range(50)]})
     ADAPTER.validate_python(
@@ -273,6 +290,7 @@ def test_boundary_lengths_and_collection_limits():
         {**_base("claim"), "claim_intent": "x" * 161},
         {**_base("claim"), "claim_intent": "work", "expected_revision": 0},
         {**_base("release"), "release_reason": "x" * 4001},
+        {**MINIMAL_VALID["done"], "force": True, "force_reason": "x" * 2001},
         {**MINIMAL_VALID["create"], "input_refs": ["r"] * 65},
         {**MINIMAL_VALID["create"], "input_refs": ["x" * 513]},
         {**MINIMAL_VALID["create"], "tags": [f"t{i}" for i in range(51)]},
@@ -458,6 +476,113 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
     assert call["task_id"] == "TASK-001"
     assert call["claim_intent"] == "Implement contract"
     assert "payload" not in call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_request", "expected"),
+    [
+        (
+            {
+                "action": "create",
+                "code": "1234",
+                "namespace": "terminal-mcp",
+                "task_id": "CREATE-DONE-FORCED",
+                "isolation_hint": "none",
+                "state": "done",
+                "result": {"summary": "forced creation"},
+                "dependencies": [{"task_id": "OPEN"}],
+                "force": True,
+                "force_reason": "External completion must be represented immediately",
+            },
+            {
+                "action": "create",
+                "state": "done",
+                "result": {"summary": "forced creation"},
+                "force": True,
+                "force_reason": "External completion must be represented immediately",
+            },
+        ),
+        (
+            {
+                **_base("done"),
+                "result": {"summary": "explicit emergency completion"},
+                "force": True,
+                "force_reason": "Dependency is externally satisfied",
+            },
+            {
+                "action": "done",
+                "result": {"summary": "explicit emergency completion"},
+                "force": True,
+                "force_reason": "Dependency is externally satisfied",
+            },
+        ),
+        (
+            {
+                **_base("update"),
+                "state": "done",
+                "result": {"summary": "update completion"},
+                "force": True,
+                "force_reason": "Dependency is externally satisfied",
+            },
+            {
+                "action": "update",
+                "state": "done",
+                "result": {"summary": "update completion"},
+                "force": True,
+                "force_reason": "Dependency is externally satisfied",
+            },
+        ),
+        (
+            {**_base("update"), "checkpoint": {"phase": "validated"}},
+            {"action": "update", "checkpoint": {"phase": "validated"}},
+        ),
+        (
+            {
+                **_base("update"),
+                "state": "blocked",
+                "blocker_reason": "Waiting for dependency",
+            },
+            {
+                "action": "update",
+                "state": "blocked",
+                "blocker_reason": "Waiting for dependency",
+            },
+        ),
+        (
+            {
+                **_base("state"),
+                "state": "done",
+                "result": {"summary": "state completion"},
+                "force": True,
+                "force_reason": "Dependency is externally satisfied",
+            },
+            {
+                "action": "state",
+                "state": "done",
+                "result": {"summary": "state completion"},
+                "force": True,
+                "force_reason": "Dependency is externally satisfied",
+            },
+        ),
+    ],
+)
+async def test_public_boundary_preserves_backend_supported_completion_fields(
+    task_request, expected
+):
+    backend = _RecordingBackend()
+    mcp = build_mcp(_Service(backend))
+    tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
+    validator = Draft202012Validator(tool.parameters)
+    arguments = {"request": task_request}
+    assert not list(validator.iter_errors(arguments))
+
+    await tool.run(arguments, convert_result=True)
+    assert backend.identity_calls == 1
+    assert len(backend.task_calls) == 1
+    call = backend.task_calls[0]
+    for key, value in expected.items():
+        assert call[key] == value
 
 
 def test_generated_discovery_schema_matches_runtime_conditionals():
