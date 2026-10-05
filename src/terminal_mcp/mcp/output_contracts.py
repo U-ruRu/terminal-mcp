@@ -195,7 +195,7 @@ class SessionSummary(_Strict):
     mode: SessionMode
     display_suffix: str | None = None
     authority_node_id: str
-    access_generation: int
+    access_generation: int | None = None
     session_ref: str | None = None
     session_epoch: int | None = None
     session_state: SessionState | None = None
@@ -240,7 +240,7 @@ class TaskRecord(_Strict):
     output_states: list[dict[str, Any]] | None = None
     review_requirements: list[str] = Field(default_factory=list)
     claims: list[TaskClaim] = Field(default_factory=list)
-    owner: TaskClaim | None = None
+    owner: TaskClaim | str | None = None
     participants: list[TaskClaim] = Field(default_factory=list)
     active: bool = False
     blocking_dependencies: list[dict[str, Any]] = Field(default_factory=list)
@@ -298,12 +298,23 @@ class ObserveTasksResult(_Strict):
     summary: TaskListSummary | None = None
     tag_counts: dict[str, int] = Field(default_factory=dict)
     recommended: TaskRecommendation | None = None
-    tasks: list[TaskRecord]
+    tasks: list[TaskRecord] = Field(default_factory=list)
+    task: TaskRecord | None = None
     next_cursor: Cursor | None
     namespaces: list[Namespace] = Field(default_factory=list)
 
 
-ObserveSuccess = Annotated[ObserveSessionsResult | ObserveTasksResult, Field(discriminator="subject")]
+class ObserveNamespacesResult(_Strict):
+    ok: Literal[True]
+    subject: Literal["namespaces"]
+    namespaces: list[Namespace]
+    next_cursor: Cursor | None
+
+
+ObserveSuccess = Annotated[
+    ObserveSessionsResult | ObserveTasksResult | ObserveNamespacesResult,
+    Field(discriminator="subject"),
+]
 
 
 class ObserveOutput(RootModel[ObserveSuccess | AccessError]):
@@ -451,6 +462,7 @@ class CmdReadResult(_Strict):
     output_retained: bool | None = None
     output_pruned_at: str | None = None
     output_bytes: int | None = None
+    line_truncated: bool | None = None
     coordination: CoordinationState | None = None
     identity: ExecutionIdentity | None = None
 
@@ -737,6 +749,14 @@ def observe_result(raw: dict[str, Any], subject: str) -> CallToolResult:
             "sessions": sessions,
             "next_cursor": None if next_cursor is None else str(next_cursor),
         }
+    elif subject == "namespaces":
+        next_cursor = raw.get("next_cursor")
+        structured = {
+            "ok": True,
+            "subject": "namespaces",
+            "namespaces": raw.get("namespaces") or [],
+            "next_cursor": None if next_cursor is None else str(next_cursor),
+        }
     else:
         summary = None
         if isinstance(raw.get("summary"), dict):
@@ -755,6 +775,8 @@ def observe_result(raw: dict[str, Any], subject: str) -> CallToolResult:
             "next_cursor": None if next_cursor is None else str(next_cursor),
             "namespaces": raw.get("namespaces") or [],
         }
+        if isinstance(raw.get("task"), dict):
+            structured["task"] = _task_record(raw["task"])
         if summary is not None:
             structured["summary"] = summary
         if recommended is not None:
@@ -913,6 +935,7 @@ def cmd_result(raw: dict[str, Any], action: str) -> CallToolResult:
         for key in (
             "next_offset", "overall_lines_count", "displayed_lines_count", "has_more",
             "output_truncated", "output_retained", "output_pruned_at", "output_bytes",
+            "line_truncated",
         ):
             if key in raw:
                 structured[key] = raw[key]
@@ -990,3 +1013,17 @@ def health_result(raw: dict[str, Any]) -> CallToolResult:
     if raw.get("agent_name") is not None:
         structured["agent_name"] = raw["agent_name"]
     return _result("health", "health", HealthOutput, raw, structured)
+
+
+def install_public_output_contract(mcp, tool_name: str, output_model: type[RootModel], canonicalizer) -> None:
+    tool = {item.name: item for item in mcp._tool_manager.list_tools()}[tool_name]
+    raw_fn = tool.fn
+
+    async def contracted(**kwargs):
+        raw = await raw_fn(**kwargs)
+        return canonicalizer(raw, kwargs)
+
+    tool.fn = contracted
+    tool.fn_metadata.output_model = output_model
+    tool.fn_metadata.output_schema = output_model.model_json_schema()
+    tool.fn_metadata.wrap_output = False
