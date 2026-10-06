@@ -42,6 +42,8 @@ class ManagedFleetControl:
         self.runtime_targets = tuple(target for target in runtime_targets if target is not None)
         self.client_factory = client_factory or self._default_client
         self._reconcile_task: asyncio.Task | None = None
+        self._deferred_reconcile_task: asyncio.Task | None = None
+        self._deferred_reconcile_requested = False
         self._stopped = asyncio.Event()
 
     async def start(self, interval_seconds: float | None = None) -> None:
@@ -63,11 +65,42 @@ class ManagedFleetControl:
 
     async def stop(self) -> None:
         self._stopped.set()
-        task = self._reconcile_task
+        tasks = [task for task in (self._reconcile_task, self._deferred_reconcile_task) if task]
         self._reconcile_task = None
-        if task is not None:
+        self._deferred_reconcile_task = None
+        self._deferred_reconcile_requested = False
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_deferred_reconcile(self) -> None:
+        try:
+            while True:
+                self._deferred_reconcile_requested = False
+                try:
+                    await self.reconcile_pending()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Durable desired/applied revisions remain pending for the periodic reconciler.
+                    pass
+                if not self._deferred_reconcile_requested:
+                    return
+        finally:
+            current = asyncio.current_task()
+            if self._deferred_reconcile_task is current:
+                self._deferred_reconcile_task = None
+
+    def _schedule_deferred_reconcile(self) -> None:
+        self._deferred_reconcile_requested = True
+        task = self._deferred_reconcile_task
+        if task is not None and not task.done():
+            return
+        self._deferred_reconcile_task = asyncio.create_task(
+            self._run_deferred_reconcile(),
+            name="managed-fleet-control-deferred-reconcile",
+        )
 
     async def reconcile_pending(self) -> dict:
         state = await self.snapshot()
@@ -146,6 +179,7 @@ class ManagedFleetControl:
         authorization: str,
         *,
         first_apply_control_node_id: str | None = None,
+        allow_detached_peer: bool = False,
     ) -> str | None:
         token = self._bearer_token(authorization)
         if token is None:
@@ -157,7 +191,9 @@ class ManagedFleetControl:
             if peer_instance_id == self.store.control_node_id:
                 return peer_instance_id
             node = await self.store.managed_node(peer_instance_id)
-            if node is not None and node.get("state") != "detached":
+            if node is not None and (
+                node.get("state") != "detached" or allow_detached_peer
+            ):
                 return peer_instance_id
             if first_apply_control_node_id and peer_instance_id == first_apply_control_node_id:
                 return peer_instance_id
@@ -185,9 +221,9 @@ class ManagedFleetControl:
             )
         return self.bootstrap_config.peers_by_id.get(node_id)
 
-    async def _forward_mutation_to(
+    async def _forward_mutation_response(
         self, node_id: str, operation: str, payload: dict | None = None
-    ) -> dict:
+    ) -> tuple[dict, dict | None]:
         peer = await self._management_peer(node_id)
         if peer is None:
             raise FleetControlError("control_authority_unavailable")
@@ -204,7 +240,15 @@ class ManagedFleetControl:
         state = body.get("control")
         if not isinstance(state, dict):
             raise FleetControlError("control_mutation_invalid")
-        return await self.apply_replica(state, source_node_id=node_id)
+        applied = await self.apply_replica(state, source_node_id=node_id)
+        mutation = body.get("mutation")
+        return applied, mutation if isinstance(mutation, dict) else None
+
+    async def _forward_mutation_to(
+        self, node_id: str, operation: str, payload: dict | None = None
+    ) -> dict:
+        control, _ = await self._forward_mutation_response(node_id, operation, payload)
+        return control
 
     async def _forward_mutation(self, operation: str, payload: dict | None = None) -> dict:
         return await self._forward_mutation_to(self.store.control_node_id, operation, payload)
@@ -262,10 +306,12 @@ class ManagedFleetControl:
                 expected_topology_revision=payload.get("expected_topology_revision"),
             )
         if operation == "detach-node":
-            return await self.detach_node(
+            control = await self._commit_detach_node(
                 str(payload.get("node_id") or ""),
                 expected_topology_revision=payload.get("expected_topology_revision"),
             )
+            self._schedule_deferred_reconcile()
+            return control
         if operation == "move-node":
             return await self.move_node(
                 str(payload.get("node_id") or ""),
@@ -296,7 +342,9 @@ class ManagedFleetControl:
             node_id = str(payload.get("node_id") or "")
             if authenticated_peer_id is not None and authenticated_peer_id != node_id:
                 raise FleetControlError("control_release_peer_mismatch")
-            return await self.release_node(node_id)
+            control = await self._commit_release_node(node_id)
+            self._schedule_deferred_reconcile()
+            return control
         if operation == "reconcile":
             return await self.replicate()
         raise FleetControlError("control_operation_invalid")
@@ -512,13 +560,67 @@ class ManagedFleetControl:
         await self.replicate()
         return await self.snapshot()
 
+    async def _commit_release_node(self, node_id: str) -> dict:
+        state = await self.store.release_managed_node(node_id)
+        await self._apply_local(state)
+        return await self.snapshot()
+
     async def release_node(self, node_id: str) -> dict:
         if not self.is_control_node:
             return await self._forward_mutation("release-node", {"node_id": node_id})
-        state = await self.store.release_managed_node(node_id)
-        await self._apply_local(state)
+        await self._commit_release_node(node_id)
         await self.replicate()
         return await self.snapshot()
+
+    async def _commit_detach_node(
+        self, node_id: str, *, expected_topology_revision: int | None = None
+    ) -> dict:
+        state = await self.store.detach_managed_node(
+            node_id,
+            expected_topology_revision=expected_topology_revision,
+        )
+        await self._apply_local(state)
+        return await self.snapshot()
+
+    async def detach_node_result(
+        self, node_id: str, *, expected_topology_revision: int | None = None
+    ) -> tuple[dict, dict]:
+        if not self.is_control_node:
+            control, mutation = await self._forward_mutation_response(
+                self.store.control_node_id,
+                "detach-node",
+                {
+                    "node_id": node_id,
+                    "expected_topology_revision": expected_topology_revision,
+                },
+            )
+            return control, mutation or self.mutation_completion(control)
+        control = await self.detach_node(
+            node_id, expected_topology_revision=expected_topology_revision
+        )
+        return control, self.mutation_completion(control)
+
+    @staticmethod
+    def mutation_completion(control: dict, *, force_pending: bool = False) -> dict:
+        revisions = control.get("revisions") or {}
+        pending = force_pending or any(
+            node.get("state") != "detached"
+            and (
+                node.get("last_error")
+                or int(node.get("desired_topology_revision") or 0)
+                != int(node.get("applied_topology_revision") or 0)
+                or int(node.get("desired_trust_revision") or 0)
+                != int(node.get("applied_trust_revision") or 0)
+                or int(node.get("desired_policy_revision") or 0)
+                != int(node.get("applied_policy_revision") or 0)
+            )
+            for node in control.get("nodes") or []
+        )
+        return {
+            "status": "committed",
+            "convergence": "pending" if pending else "converged",
+            "topology_revision": int(revisions.get("topology") or 0),
+        }
 
     async def detach_node(
         self, node_id: str, *, expected_topology_revision: int | None = None
@@ -531,11 +633,9 @@ class ManagedFleetControl:
                     "expected_topology_revision": expected_topology_revision,
                 },
             )
-        state = await self.store.detach_managed_node(
-            node_id,
-            expected_topology_revision=expected_topology_revision,
+        await self._commit_detach_node(
+            node_id, expected_topology_revision=expected_topology_revision
         )
-        await self._apply_local(state)
         await self.replicate()
         return await self.snapshot()
 
@@ -751,11 +851,18 @@ class ManagedFleetControl:
         if should_split_standalone:
             acknowledgement = state
             previous_control = self.store.control_node_id
-            await self._forward_mutation_to(
-                previous_control,
-                "release-node",
-                {"node_id": self.store.node_id},
-            )
+            try:
+                await self._forward_mutation_to(
+                    previous_control,
+                    "release-node",
+                    {"node_id": self.store.node_id},
+                )
+            except httpx.ReadTimeout:
+                # The detach is already authoritatively committed before this cleanup.
+                # A read timeout is ambiguous: the authority may have completed the
+                # idempotent release after our client stopped waiting. Do not turn
+                # that post-commit acknowledgement race into a false detach failure.
+                pass
             await self.store.claim_local_control_authority(
                 policy=self.policy_controller.snapshot()
             )
@@ -971,10 +1078,29 @@ class ManagedFleetControl:
                     )
                 except Exception as exc:
                     try:
-                        await self.store.mark_managed_applied(
-                            peer.instance_id,
-                            error=f"reconcile_failed:{exc.__class__.__name__}",
+                        current = await self.store.managed_node(peer.instance_id)
+                        attempted = (
+                            int(revisions.get("topology") or 0),
+                            int(revisions.get("trust") or 0),
+                            int(revisions.get("access_policy") or 0),
                         )
+                        desired = (
+                            int((current or {}).get("desired_topology_revision") or 0),
+                            int((current or {}).get("desired_trust_revision") or 0),
+                            int((current or {}).get("desired_policy_revision") or 0),
+                        )
+                        if (
+                            current is not None
+                            and current.get("state") != "detached"
+                            and all(
+                                wanted <= sent
+                                for wanted, sent in zip(desired, attempted, strict=True)
+                            )
+                        ):
+                            await self.store.mark_managed_applied(
+                                peer.instance_id,
+                                error=f"reconcile_failed:{exc.__class__.__name__}",
+                            )
                     except FleetControlError:
                         pass
         return await self.snapshot()

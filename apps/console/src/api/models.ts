@@ -380,9 +380,16 @@ export type ManagedFleetEnrollment = {
   authToken: string
 }
 
+export type ManagedFleetMutationCompletion = {
+  status: 'committed'
+  convergence: 'pending' | 'converged'
+  topologyRevision: number
+}
+
 export type ManagedFleetMutationResult = {
   ok: boolean
   code?: string
   error?: string
   control?: ManagedFleetControlReadModel
+  mutation?: ManagedFleetMutationCompletion
 }
