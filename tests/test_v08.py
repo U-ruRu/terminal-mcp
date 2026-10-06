@@ -444,9 +444,9 @@ async def test_cancel_after_claim_before_spawn_cannot_resurrect_command(tmp_path
     release_spawn = asyncio.Event()
     real_spawn = terminal._spawn
 
-    async def delayed_spawn():
+    async def delayed_spawn(**kwargs):
         await release_spawn.wait()
-        return await real_spawn()
+        return await real_spawn(**kwargs)
 
     monkeypatch.setattr(terminal, "_spawn", delayed_spawn)
     try:

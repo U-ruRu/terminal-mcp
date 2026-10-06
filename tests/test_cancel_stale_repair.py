@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-import terminal_mcp.terminal.linux as linux_module
+import terminal_mcp.terminal.in_process as linux_module
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
@@ -195,7 +195,10 @@ async def test_cancel_does_not_touch_existing_unowned_process(tmp_path, monkeypa
     command = await repo.create("sleep 30", status="running", queue_id=1)
     await repo.set_pid(command.cmd_hash, 12_345)
 
-    monkeypatch.setattr(terminal, "_pid_exists", lambda pid: pid == 12_345)
+    async def pid_exists(pid):
+        return pid == 12_345
+
+    monkeypatch.setattr(terminal, "_pid_exists", pid_exists)
 
     def forbidden_kill(*_args, **_kwargs):
         raise AssertionError("unowned process must not be signalled")

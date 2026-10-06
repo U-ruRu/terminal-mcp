@@ -241,13 +241,11 @@ async def test_stop_kills_process_that_ignores_sigterm(tmp_path):
     terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.05)
     process = await terminal._spawn()
     terminal.processes["stubborn"] = process
-    process.stdin.write(b"trap '' TERM\nsleep 60\n")
-    await process.stdin.drain()
-    process.stdin.close()
+    await terminal.execution.write_stdin(process, "trap '' TERM\nsleep 60\n")
     await asyncio.sleep(0.05)
 
     await asyncio.wait_for(terminal.stop(), 1.0)
-    assert process.returncode is not None
+    assert (await terminal.execution.status(process)).exit_code is not None
 
 
 async def register_queue_agent(service, label):

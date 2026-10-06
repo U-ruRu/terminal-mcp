@@ -76,10 +76,7 @@ async def test_persistent_finalization_is_pending_then_background_reconciles(tmp
     blocked.add(cmd_hash)
 
     async def pending_without_process():
-        return (
-            cmd_hash in terminal.finalization_pending
-            and cmd_hash not in terminal.processes
-        )
+        return cmd_hash in terminal.finalization_pending and cmd_hash not in terminal.processes
 
     await wait_for(pending_without_process)
     health = await terminal.health()
@@ -116,11 +113,7 @@ async def test_reconciler_repairs_multiple_dead_process_rows_across_queues(tmp_p
     async def both_failed():
         a = await repo.get(first.cmd_hash)
         b = await repo.get(second.cmd_hash)
-        return (
-            a
-            if a and b and a.status == "failed" and b.status == "failed"
-            else None
-        )
+        return a if a and b and a.status == "failed" and b.status == "failed" else None
 
     await wait_for(both_failed)
     first_now = await repo.get(first.cmd_hash)
@@ -159,6 +152,13 @@ async def test_health_shows_actual_live_process_when_older_durable_row_is_stale(
 
     terminal.processes[live.cmd_hash] = FakeProcess()
     terminal.process_queues[live.cmd_hash] = 1
+
+    async def live_status(_handle):
+        from terminal_mcp.core.execution import ExecutionStatus
+
+        return ExecutionStatus("running", None)
+
+    terminal.execution.status = live_status
 
     health = await terminal.health()
     assert health["queues"][0]["durable_running"] == stale.cmd_hash
