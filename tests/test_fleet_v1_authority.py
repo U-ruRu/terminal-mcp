@@ -1824,6 +1824,15 @@ async def test_forwarded_detach_returns_committed_before_slow_replication(tmp_pa
         node for node in authoritative["nodes"] if node["node_id"] == "remote"
     )
     assert authority_remote["state"] == "detached"
+    assert (
+        authority_remote["desired_topology_revision"]
+        == authority_remote["applied_topology_revision"]
+    )
+    assert (
+        authority_remote["desired_trust_revision"]
+        == authority_remote["applied_trust_revision"]
+    )
+    assert authority_remote["last_error"] is None
     await asyncio.wait_for(slow_apply_started.wait(), timeout=0.3)
 
     reconcile = home._deferred_reconcile_task

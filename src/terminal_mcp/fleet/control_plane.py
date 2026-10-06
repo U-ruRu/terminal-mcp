@@ -1068,10 +1068,29 @@ class ManagedFleetControl:
                     )
                 except Exception as exc:
                     try:
-                        await self.store.mark_managed_applied(
-                            peer.instance_id,
-                            error=f"reconcile_failed:{exc.__class__.__name__}",
+                        current = await self.store.managed_node(peer.instance_id)
+                        attempted = (
+                            int(revisions.get("topology") or 0),
+                            int(revisions.get("trust") or 0),
+                            int(revisions.get("access_policy") or 0),
                         )
+                        desired = (
+                            int((current or {}).get("desired_topology_revision") or 0),
+                            int((current or {}).get("desired_trust_revision") or 0),
+                            int((current or {}).get("desired_policy_revision") or 0),
+                        )
+                        if (
+                            current is not None
+                            and current.get("state") != "detached"
+                            and all(
+                                wanted <= sent
+                                for wanted, sent in zip(desired, attempted, strict=True)
+                            )
+                        ):
+                            await self.store.mark_managed_applied(
+                                peer.instance_id,
+                                error=f"reconcile_failed:{exc.__class__.__name__}",
+                            )
                     except FleetControlError:
                         pass
         return await self.snapshot()
