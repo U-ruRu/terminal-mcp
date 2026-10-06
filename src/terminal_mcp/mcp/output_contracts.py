@@ -8,6 +8,7 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError
 
 from terminal_mcp.core.public_errors import (
+    MAX_COORDINATION_MESSAGES,
     MAX_ERROR_MESSAGE,
     ErrorRepair,
     normalize_public_error,
@@ -15,6 +16,7 @@ from terminal_mcp.core.public_errors import (
 )
 from terminal_mcp.core.read_contract import (
     CALL_TOOL_RESULT_BUDGET_BYTES,
+    summary_message,
 )
 from terminal_mcp.core.task_projections import (
     Cursor as Cursor,
@@ -726,11 +728,18 @@ def _result(
         ) from exc
 
     data = validated.model_dump(mode="json", exclude_unset=True)
-    result = _call_tool_result(
-        data,
-        content_data=data if is_error else raw,
-        is_error=is_error,
-    )
+    if is_error:
+        content_data = data
+    else:
+        # Preserve the legacy success text shape while bounding only the coordination
+        # collections that can be repeated and arbitrarily large in application results.
+        content_data = dict(raw)
+        coordination = data.get("coordination")
+        if isinstance(coordination, dict):
+            for key in ("messages", "pending_messages"):
+                if key in content_data:
+                    content_data[key] = coordination.get(key, [])
+    result = _call_tool_result(data, content_data=content_data, is_error=is_error)
     serialized_bytes = serialized_call_tool_result_size(result)
     if serialized_bytes <= CALL_TOOL_RESULT_BUDGET_BYTES:
         return result
@@ -1044,13 +1053,35 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
     return _result("task", action, TaskOutput, raw, structured)
 
 
+def _compact_coordination_messages(
+    items: list[dict[str, Any]], *, seen: set[str] | None = None
+) -> tuple[list[dict[str, Any]], set[str]]:
+    seen_ids = set() if seen is None else set(seen)
+    compact: list[dict[str, Any]] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        normalized = _message_record(raw_item)
+        message_id = str(normalized.get("message_hash") or normalized.get("message_id") or "")
+        if message_id and message_id in seen_ids:
+            continue
+        if message_id:
+            seen_ids.add(message_id)
+        if len(compact) >= MAX_COORDINATION_MESSAGES:
+            continue
+        compact.append(_message_record(summary_message(normalized)))
+    return compact, seen_ids
+
+
 def _coordination(raw: dict[str, Any]) -> dict[str, Any] | None:
     keys = ("messages", "pending_messages", "ack_required_pending", "alert_pending")
     if not any(key in raw for key in keys):
         return None
+    messages, seen = _compact_coordination_messages(raw.get("messages", []))
+    pending, _ = _compact_coordination_messages(raw.get("pending_messages", []), seen=seen)
     return {
-        "messages": [_message_record(item) for item in raw.get("messages", [])],
-        "pending_messages": [_message_record(item) for item in raw.get("pending_messages", [])],
+        "messages": messages,
+        "pending_messages": pending,
         "ack_required_pending": bool(raw.get("ack_required_pending")),
         "alert_pending": bool(raw.get("alert_pending")),
     }

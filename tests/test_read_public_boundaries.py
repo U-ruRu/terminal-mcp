@@ -94,7 +94,7 @@ async def test_public_observe_final_mcp_result_stays_within_serialized_budget():
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
 
 
-def test_final_mcp_budget_covers_large_coordination_metadata():
+def test_final_mcp_budget_compacts_large_coordination_metadata():
     result = cmd_result(
         {
             "ok": True,
@@ -117,8 +117,12 @@ def test_final_mcp_budget_covers_large_coordination_metadata():
     )
 
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
-    assert result.structuredContent["ok"] is False
-    assert result.structuredContent["code"] == "output_item_too_large"
+    assert result.structuredContent["ok"] is True
+    pending = result.structuredContent["coordination"]["pending_messages"]
+    assert len(pending) == 1
+    assert pending[0]["message_hash"] == "message-1"
+    assert pending[0]["truncated"] is True
+    assert len(pending[0]["text"]) < READ_RESPONSE_BUDGET_BYTES
 
 
 class _LargeCmdService:
