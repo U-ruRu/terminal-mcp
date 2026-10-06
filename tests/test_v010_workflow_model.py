@@ -5,7 +5,7 @@ import pytest
 
 from terminal_mcp.core.orchestration import public_agent_name, utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
@@ -1639,7 +1639,7 @@ async def test_v8_archived_rows_migrate_to_separate_archive_lifecycle(tmp_path):
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {
             "archived_at",

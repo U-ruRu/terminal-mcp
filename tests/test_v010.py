@@ -8,7 +8,7 @@ from terminal_mcp.core.orchestration import public_agent_name, utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.storage.output import OutputStore
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
 
@@ -767,7 +767,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(

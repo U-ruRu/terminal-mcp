@@ -499,3 +499,50 @@ async def test_active_start_rejects_stale_session_authority(store, column, value
         )
     with pytest.raises(WorkWindowStoreError, match="session_binding_invalid"):
         await start(store)
+
+
+async def test_v19_upgrade_is_additive_and_does_not_implicitly_adopt_legacy_sessions(store):
+    import sqlite3
+
+    _, legacy = await store.start_session(
+        selector="ABCD",
+        work_session_id="existing-v19",
+        expected_revision=1,
+        principal_id="principal-a",
+        auth_generation=1,
+        authority_node_id="home",
+        origin_instance_id="original-node",
+        session_duration_seconds=1380,
+        now=utc_text(T0),
+    )
+    # Reproduce a true v19 database: none of the new managed tables exists.
+    with sqlite3.connect(store.path) as db:
+        before_slots = db.execute(
+            "SELECT * FROM logical_agents ORDER BY logical_agent_id"
+        ).fetchall()
+        before_sessions = db.execute("SELECT * FROM logical_agent_work_sessions").fetchall()
+        for table in (
+            "logical_agent_session_bindings",
+            "logical_agent_work_windows",
+            "logical_agent_session_policies",
+            "logical_agent_provider_bindings",
+        ):
+            db.execute(f"DROP TABLE {table}")
+        db.execute("PRAGMA user_version=19")
+    await SqliteRepository(store.path).initialize()
+    with sqlite3.connect(store.path) as db:
+        assert (
+            db.execute("SELECT * FROM logical_agents ORDER BY logical_agent_id").fetchall()
+            == before_slots
+        )
+        assert db.execute("SELECT * FROM logical_agent_work_sessions").fetchall() == before_sessions
+        assert db.execute("SELECT COUNT(*) FROM logical_agent_work_windows").fetchone()[0] == 0
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert not db.execute("PRAGMA foreign_key_check").fetchall()
+    # Legacy identity remains intact; switching to managed mode is a distinct
+    # explicit operation, not a side effect of starting the new binary.
+    assert await store.get_work_session("existing-v19") == legacy
+    adopted = await store.adopt_legacy_session(
+        "la_one", "existing-v19", 1, principal_id="operator", now=T0
+    )
+    assert adopted.session == legacy
