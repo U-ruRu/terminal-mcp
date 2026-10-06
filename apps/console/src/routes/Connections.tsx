@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, ManagedFleetMeshReadModel, ManagedFleetMutationResult, ManagedFleetNodeReadModel } from '../api/models'
 import { useConnectionRuntime } from '../connections/runtime'
+import { inspectCanonicalPairingLink } from '../connections/pairingLink'
+import { connectionLifecycle, pairingErrorMessageKey, type ConnectionLifecycle } from '../connections/lifecycle'
 import { isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
@@ -11,30 +13,39 @@ import { ConfirmationDialog, FeedbackState, IconButton, IconButtonRow } from '..
 import { returnToState } from '../navigation/context'
 import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
 
-function statusLabel(status: string | undefined, t: (key: MessageKey) => string): string {
-  switch (status) {
-    case 'connected':
+type ControlObservation = {
+  control?: ManagedFleetControlReadModel
+  error?: string
+  freshness: FleetControlFreshness
+  observedAt?: number
+}
+
+function lifecycleLabel(
+  lifecycle: ConnectionLifecycle,
+  t: (key: MessageKey) => string,
+): string {
+  switch (lifecycle) {
+    case 'connecting':
+      return t('connections.lifecycle.connecting')
+    case 'live':
       return t('connections.status.connected')
-    case 'restoring':
-      return t('connections.status.restoring')
+    case 'reconnecting':
+      return t('connections.lifecycle.reconnecting')
+    case 'stale':
+      return t('connections.lifecycle.stale')
+    case 'offline':
+      return t('connections.lifecycle.offline')
     case 'unpaired':
       return t('connections.status.unpaired')
     case 'revoked':
       return t('connections.status.revoked')
     case 'expired':
       return t('connections.status.expired')
-    case 'error':
-      return t('connections.status.reconnectNeeded')
+    case 'attention':
+      return t('connections.actionRequired')
     default:
       return t('connections.status.stored')
   }
-}
-
-type ControlObservation = {
-  control?: ManagedFleetControlReadModel
-  error?: string
-  freshness: FleetControlFreshness
-  observedAt?: number
 }
 
 type MutationPhase = 'pending' | 'confirmed' | 'failed'
@@ -114,12 +125,13 @@ function memberOperationalState(
 }
 
 export function Connections() {
-  const { profiles, states, error, pair, retry, disconnect, client } = useConnectionRuntime()
+  const { profiles, states, pair, retry, disconnect, client } = useConnectionRuntime()
   const { meshId: routeMeshId } = useParams()
   const { t, number } = useI18n()
   const [pairingLink, setPairingLink] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [pairingFeedback, setPairingFeedback] = useState<{ key: MessageKey; error: boolean } | null>(null)
   const [controls, setControls] = useState<Record<string, ControlObservation>>(() => (
     Object.fromEntries(profiles.map((profile) => {
       const cached = loadCachedFleetControl(profile.instanceId)
@@ -355,13 +367,28 @@ export function Connections() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const oneTimeLink = pairingLink
+    setPairingLink('')
+    setPairingFeedback(null)
     setSubmitting(true)
     try {
-      await pair(pairingLink, displayName || undefined)
-      setPairingLink('')
+      const target = inspectCanonicalPairingLink(oneTimeLink)
+      const existing = profiles.find(
+        (profile) => normalizedOrigin(profile.origin) === normalizedOrigin(target.origin),
+      )
+      if (existing) {
+        setDisplayName('')
+        setPairingFeedback({ key: 'connections.pairingDuplicate', error: false })
+        window.setTimeout(() => {
+          document.getElementById('connection-' + existing.instanceId)?.focus()
+        }, 0)
+        return
+      }
+      await pair(oneTimeLink, displayName || undefined)
       setDisplayName('')
-    } catch {
-      // Runtime exposes a safe user-visible error without credential material.
+      setPairingFeedback({ key: 'connections.pairingSuccess', error: false })
+    } catch (cause) {
+      setPairingFeedback({ key: pairingErrorMessageKey(cause), error: true })
     } finally {
       setSubmitting(false)
     }
@@ -767,7 +794,10 @@ export function Connections() {
             type="url"
             placeholder={t('connections.pairingPlaceholder')}
             value={pairingLink}
-            onChange={(event) => setPairingLink(event.target.value)}
+            onChange={(event) => {
+              setPairingLink(event.target.value)
+              setPairingFeedback(null)
+            }}
           />
         </label>
         <label className="ui-field">
@@ -781,7 +811,13 @@ export function Connections() {
           />
         </label>
         <IconButton type="submit" icon="connect" variant="primary" label={t('connections.addServerAction')} busy={submitting} />
-        <p className={'mutation-status-slot ' + (error ? 'connection-error' : 'muted')} role={error ? 'alert' : undefined} aria-live={error ? 'polite' : undefined}>{error || '\u00a0'}</p>
+        <p
+          className={'mutation-status-slot ' + (pairingFeedback?.error ? 'connection-error' : 'muted')}
+          role={pairingFeedback?.error ? 'alert' : pairingFeedback ? 'status' : undefined}
+          aria-live={pairingFeedback ? 'polite' : undefined}
+        >
+          {pairingFeedback ? t(pairingFeedback.key) : '\u00a0'}
+        </p>
       </form> : null}
 
       {routeMeshId && !selectedMesh && meshes.length > 0 ? (
@@ -947,6 +983,8 @@ export function Connections() {
                 {group.profiles.map((profile) => {
                   const state = states[profile.instanceId]
                   const observed = controls[profile.instanceId]
+                  const lifecycle = connectionLifecycle(state, observed)
+                  const connectionIsLive = lifecycle === 'live'
                   const membership = membershipFor(profile)
                   const member = membership.node
                   const memberMesh = membership.kind === 'mesh' && membership.meshId
@@ -965,14 +1003,19 @@ export function Connections() {
                   const authoritativeTarget = membership.kind === 'mesh' ? membership.meshId ?? '' : ''
                   const membershipTarget = membershipTargets[profile.instanceId] ?? authoritativeTarget
                   return (
-                    <article className="panel connection-card" key={profile.instanceId}>
+                    <article
+                      className="panel connection-card"
+                      id={'connection-' + profile.instanceId}
+                      key={profile.instanceId}
+                      tabIndex={-1}
+                    >
                       <div className="connection-card-heading">
                         <div>
                           <h3>{routeMeshId ? <Link className="text-link" to={serverRoute(profile.instanceId)} state={returnToState(meshRoute(routeMeshId))}>{profile.displayName}</Link> : profile.displayName}</h3>
                           <p className="muted">{profile.origin}</p>
                         </div>
-                        <span className={'status connection-status-' + (state?.status ?? 'stored')}>
-                          {statusLabel(state?.status, t)}
+                        <span className={'status connection-status-' + lifecycle}>
+                          {lifecycleLabel(lifecycle, t)}
                         </span>
                       </div>
                       <p className="muted">{t('connections.device')}: {profile.metadata.deviceLabel}</p>
@@ -982,7 +1025,7 @@ export function Connections() {
                             ? <a className="text-link" href={meshRoute(membership.meshId)}>{membershipLabel}</a>
                             : membershipLabel}{membership.freshness === 'stale' ? ' · ' + t('connections.stale') : ''}
                         </span>
-                        <span>{t('connections.reachability')}: {statusLabel(state?.status, t)}</span>
+                        <span>{t('connections.reachability')}: {lifecycleLabel(lifecycle, t)}</span>
                         {membership.kind === 'mesh' || membershipMutation ? (
                           <span>
                             {t('connections.syncState')}: {operationalLabel(memberState, t)}
@@ -998,7 +1041,7 @@ export function Connections() {
                               type="button"
                               className={membershipTarget === '' ? 'chip active' : 'chip'}
                               aria-pressed={membershipTarget === ''}
-                              disabled={controlBusy || membershipMutation?.phase === 'pending'}
+                              disabled={controlBusy || !connectionIsLive || membershipMutation?.phase === 'pending'}
                               onClick={() => setMembershipTargets((value) => ({ ...value, [profile.instanceId]: '' }))}
                             >
                               {t('connections.standalone')}
@@ -1009,14 +1052,14 @@ export function Connections() {
                                 type="button"
                                 className={membershipTarget === mesh.meshId ? 'chip active' : 'chip'}
                                 aria-pressed={membershipTarget === mesh.meshId}
-                                disabled={controlBusy || membershipMutation?.phase === 'pending'}
+                                disabled={controlBusy || !connectionIsLive || membershipMutation?.phase === 'pending'}
                                 onClick={() => setMembershipTargets((value) => ({ ...value, [profile.instanceId]: mesh.meshId }))}
                               >
                                 {mesh.displayName}
                               </button>
                             ))}
                           </div>
-                          <IconButton className="membership-commit" icon="apply" variant="primary" label={t('connections.applyMembership')} busy={membershipMutation?.phase === 'pending'} disabled={controlBusy} onClick={() => void changeMembership(profile.instanceId, membershipTarget)} />
+                          <IconButton className="membership-commit" icon="apply" variant="primary" label={t('connections.applyMembership')} busy={membershipMutation?.phase === 'pending'} disabled={controlBusy || !connectionIsLive} onClick={() => void changeMembership(profile.instanceId, membershipTarget)} />
                         </div>
                       ) : null}
                       <p className={'mutation-status-slot connection-card-status-slot ' + (membershipMutation?.phase === 'failed' || member?.lastError || observed?.error || state?.status === 'error' ? 'connection-error' : 'muted')} role={member?.lastError || observed?.error || state?.status === 'error' ? 'alert' : membershipMutation ? 'status' : undefined} aria-live={member?.lastError || observed?.error || state?.status === 'error' || membershipMutation ? 'polite' : undefined}>
@@ -1035,11 +1078,20 @@ export function Connections() {
                                     : '\u00a0'}
                       </p>
                       <IconButtonRow className="connection-actions">
-                        {!routeMeshId && state?.status === 'error' && state.retryable ? (
-                          <IconButton icon="retry" variant="primary" label={t('connections.retry')} onClick={() => void retry(profile.instanceId)} />
+                        {!routeMeshId && (
+                          (state?.status === 'error' && state.retryable)
+                          || lifecycle === 'stale'
+                          || lifecycle === 'offline'
+                        ) ? (
+                          <IconButton
+                            icon="retry"
+                            variant="primary"
+                            label={t('connections.retryNow')}
+                            onClick={() => void retry(profile.instanceId).then(refreshControls)}
+                          />
                         ) : null}
                         {routeMeshId && observed?.control?.managed ? (
-                          <IconButton icon="rotate" variant="secondary" label={t('connections.rotateTrust')} disabled={controlBusy || state?.status !== 'connected'} onClick={() => void rotateTrust(profile.instanceId)} />
+                          <IconButton icon="rotate" variant="secondary" label={t('connections.rotateTrust')} disabled={controlBusy || !connectionIsLive} onClick={() => void rotateTrust(profile.instanceId)} />
                         ) : null}
                         {!routeMeshId ? <IconButton icon="disconnect" variant="destructive" label={t('connections.remove')} onClick={() => setConfirmation({ kind: 'remove-connection', instanceId: profile.instanceId, label: profile.displayName })} /> : null}
                       </IconButtonRow>
