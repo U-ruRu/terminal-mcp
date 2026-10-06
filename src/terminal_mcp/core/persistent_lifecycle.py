@@ -654,6 +654,8 @@ class PersistentLifecycleCoordinator:
         for pending in await self.store.due_rearms(now=stamp):
             logical_agent_id = pending["logical_agent_id"]
             async with self.operation_guard(logical_agent_id):
+                if await self.store.has_managed_window(logical_agent_id):
+                    continue
                 scheduled = await self.store.pending_rearm(logical_agent_id)
                 if scheduled is None or scheduled["work_session_id"] != pending["work_session_id"]:
                     continue
@@ -702,6 +704,8 @@ class PersistentLifecycleCoordinator:
         reconciled = []
         for slot in await self.store.list_slots():
             if slot.authority_node_id != self.authority_node_id:
+                continue
+            if await self.store.has_managed_window(slot.logical_agent_id):
                 continue
             session = await self.store.active_session_for_slot(slot.logical_agent_id)
             if not session or session.state not in {"active", "stopping"}:

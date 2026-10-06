@@ -77,7 +77,7 @@ def test_actor_is_immutable_and_copies_mutable_scopes():
     with pytest.raises(FrozenInstanceError):
         value.principal_id = "other"
     with pytest.raises(ValueError, match="complete"):
-        ActorContext(logical_agent_id="agent")
+        ActorContext(logical_agent_id="agent", work_session_id="session")
     with pytest.raises(ValueError, match="positive"):
         ActorContext(contract_version=0)
 

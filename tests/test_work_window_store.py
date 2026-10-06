@@ -546,3 +546,99 @@ async def test_v19_upgrade_is_additive_and_does_not_implicitly_adopt_legacy_sess
         "la_one", "existing-v19", 1, principal_id="operator", now=T0
     )
     assert adopted.session == legacy
+
+
+async def test_legacy_start_cannot_reset_a_managed_window_after_end(store):
+    first = await start(store)
+    await end(store, first, now=T0 + timedelta(seconds=10))
+    slot = await store.get_slot("la_one")
+    with pytest.raises(PersistentStoreError, match="managed_session_required"):
+        await store.start_session(
+            selector="ABCD",
+            work_session_id="illegal-legacy-restart",
+            expected_revision=slot.slot_revision,
+            principal_id="principal-a",
+            auth_generation=1,
+            authority_node_id="home",
+            origin_instance_id=None,
+            session_duration_seconds=1380,
+            now=utc_text(T0 + timedelta(seconds=100)),
+        )
+    assert await store.current_window("la_one") == first.window
+    assert await store.get_work_session("illegal-legacy-restart") is None
+
+
+async def test_legacy_finalizers_cannot_overwrite_managed_rearm_semantics(store):
+    first = await start(store)
+    with pytest.raises(PersistentStoreError, match="managed_session_required"):
+        await store.begin_session_stop(
+            "la_one", first.session.work_session_id, 1, reason="session_end", now=utc_text(T0)
+        )
+    with pytest.raises(PersistentStoreError, match="managed_session_required"):
+        await store.finalize_session_stop(
+            "la_one",
+            first.session.work_session_id,
+            1,
+            reason="session_end",
+            rearm_delay_seconds=180,
+            now=utc_text(T0),
+        )
+    assert (await store.get_work_session(first.session.work_session_id)).state == "active"
+    assert await store.pending_rearm("la_one") is None
+
+
+async def test_legacy_reconciler_leaves_managed_expiry_to_managed_gate(store):
+    from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
+
+    first = await start(store)
+    coordinator = PersistentLifecycleCoordinator(
+        store, authority_node_id="home", enabled=True, session_duration_seconds=1380
+    )
+    assert await coordinator.reconcile_expired(now=T0 + timedelta(seconds=2000)) == []
+    assert (await store.get_work_session(first.session.work_session_id)).state == "active"
+    # Existing command authority still checks the exact hard deadline, so this
+    # is NOT authority to execute after expiry while reconciliation is pending.
+    with pytest.raises(PersistentStoreError, match="session_expired"):
+        await store.assert_session_authority(
+            "la_one", first.session.work_session_id, 1, now=utc_text(T0 + timedelta(seconds=2000))
+        )
+
+
+async def test_legacy_adoption_recovers_original_window_start_across_resumed_sessions(store):
+    _, first = await store.start_session(
+        selector="ABCD",
+        work_session_id="original",
+        expected_revision=1,
+        principal_id="principal-a",
+        auth_generation=1,
+        authority_node_id="home",
+        origin_instance_id=None,
+        session_duration_seconds=1380,
+        now=utc_text(T0),
+    )
+    stamp = utc_text(T0 + timedelta(seconds=60))
+    await store.begin_session_stop(
+        "la_one", first.work_session_id, 1, reason="session_end", now=stamp
+    )
+    slot, _ = await store.finalize_session_stop(
+        "la_one", first.work_session_id, 1, reason="session_end", rearm_delay_seconds=180, now=stamp
+    )
+    _, resumed = await store.start_session(
+        selector="ABCD",
+        work_session_id="resumed",
+        expected_revision=slot.slot_revision,
+        principal_id="principal-a",
+        auth_generation=1,
+        authority_node_id="home",
+        origin_instance_id=None,
+        session_duration_seconds=1380,
+        now=utc_text(T0 + timedelta(seconds=120)),
+    )
+    assert resumed.hard_expires_at == first.hard_expires_at
+    adopted = await store.adopt_legacy_session(
+        "la_one", resumed.work_session_id, 2, principal_id="operator", now=T0
+    )
+    assert adopted.window.opened_at == T0
+    assert adopted.window.initial_duration_seconds == 1380
+    assert adopted.session.started_at == utc_text(T0 + timedelta(seconds=120))
+    assert adopted.session.session_epoch == 2

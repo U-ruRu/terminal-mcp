@@ -13,11 +13,16 @@ import json
 import math
 import secrets
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 
 import aiosqlite
 
+from terminal_mcp.core.managed_sessions import (
+    ManagedSessionError,
+    ManagedSessionSnapshot,
+    SlotPolicyRecord,
+)
 from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
 from terminal_mcp.core.persistent_agents import WorkSessionRecord
 from terminal_mcp.core.provider_identity import ProviderIdentity
@@ -29,7 +34,7 @@ from terminal_mcp.core.work_windows import (
     WorkSessionBinding,
     WorkWindow,
 )
-from terminal_mcp.storage.persistent_agents import PersistentAgentStore, PersistentStoreError
+from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS logical_agent_provider_bindings(
@@ -75,10 +80,8 @@ async def install_work_window_schema(db: aiosqlite.Connection) -> None:
         await db.execute(sql)
 
 
-class WorkWindowStoreError(PersistentStoreError):
-    def __init__(self, code: str, *, current=None):
-        self.current = current
-        super().__init__(code)
+class WorkWindowStoreError(ManagedSessionError):
+    pass
 
 
 def _revision(value: int) -> int:
@@ -109,20 +112,6 @@ def _load(value: str) -> WorkWindow:
         data["expired_at"] = parse_utc(data["expired_at"])
     data["lifecycle"] = WindowLifecycle(data["lifecycle"])
     return WorkWindow(**data)
-
-
-@dataclass(frozen=True, slots=True)
-class SlotPolicyRecord:
-    policy: SlotSessionPolicy
-    revision: int
-
-
-@dataclass(frozen=True, slots=True)
-class ManagedSessionSnapshot:
-    window: WorkWindow
-    session: WorkSessionRecord
-    binding: WorkSessionBinding
-    created: bool = False
 
 
 class WorkWindowStore(PersistentAgentStore):
@@ -780,7 +769,17 @@ class WorkWindowStore(PersistentAgentStore):
                 raise WorkWindowStoreError("window_migration_conflict", current=current)
             effective = policy or self.defaults
             deadline = parse_utc(session.hard_expires_at)
-            duration = max(1, math.ceil((deadline - parse_utc(session.started_at)).total_seconds()))
+            original = await (
+                await db.execute(
+                    "SELECT MIN(started_at) FROM logical_agent_work_sessions "
+                    "WHERE logical_agent_id=? AND hard_expires_at=? AND session_epoch<=?",
+                    (logical_agent_id, session.hard_expires_at, session_epoch),
+                )
+            ).fetchone()
+            original_started_at = original[0] or session.started_at
+            duration = max(
+                1, math.ceil((deadline - parse_utc(original_started_at)).total_seconds())
+            )
             # A resumed legacy session may have fractional remaining duration.
             # Keep its exact deadline rather than rounding it into extra budget.
             window = WorkWindow.open(
@@ -794,6 +793,14 @@ class WorkWindowStore(PersistentAgentStore):
             )
             await self._insert_window(db, window)
             await self._insert_binding(db, binding)
+            # The managed window becomes the sole time authority. Preserve the
+            # old timer row as history, but do not let the legacy rearm loop
+            # later create an independent duration budget.
+            await db.execute(
+                "UPDATE logical_agent_rearms SET cancelled_at=COALESCE(cancelled_at,?) "
+                "WHERE logical_agent_id=? AND rearmed_at IS NULL",
+                (utc_text(now), logical_agent_id),
+            )
             await db.execute(
                 "INSERT OR IGNORE INTO logical_agent_session_policies VALUES(?,1,?,?)",
                 (logical_agent_id, json.dumps(asdict(effective)), utc_text(now)),
