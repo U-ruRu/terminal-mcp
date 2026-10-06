@@ -87,7 +87,7 @@ async def test_ack_gate_blocks_only_run_and_surfaces_messages_on_identity_read()
         )
     )
     assert blocked["code"] == "coordination_ack_required"
-    assert blocked["messages"][0]["message_hash"] == "ack-1"
+    assert blocked["details"]["pending_messages"][0]["message_hash"] == "ack-1"
 
     read = body(
         await cmd.run(
@@ -131,7 +131,7 @@ async def test_alert_gate_blocks_work_but_never_blocks_cancel():
     ):
         blocked = body(await cmd.run({"request": request}, convert_result=True))
         assert blocked["code"] == "coordination_alert"
-        assert blocked["messages"][0]["message_hash"] == "alert-1"
+        assert blocked["details"]["pending_messages"][0]["message_hash"] == "alert-1"
 
     cancelled = body(
         await cmd.run(

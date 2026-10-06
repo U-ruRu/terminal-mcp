@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 MAX_ERROR_MESSAGE = 240
 MAX_VALIDATION_ISSUES = 5
+MAX_COORDINATION_MESSAGES = 4
 MAX_ERROR_PATH = 160
 MAX_RETRY_AFTER_MS = 3_600_000
 MAX_REVISION = (1 << 63) - 1
@@ -233,7 +234,24 @@ class RetryRepair(_BoundedValue):
     retry_after_ms: int = Field(ge=1, le=MAX_RETRY_AFTER_MS)
 
 
-ErrorRepair = ValidationRepair | ConflictRepair | RetryRepair
+class CoordinationMessage(_BoundedValue):
+    message_hash: str = Field(min_length=1, max_length=128)
+    mode: Literal["notify", "ack", "alert"]
+    text: str | None = Field(default=None, max_length=500)
+    sender: str | None = Field(default=None, max_length=64)
+
+
+class CoordinationRepair(_BoundedValue):
+    pending_messages: tuple[CoordinationMessage, ...] = Field(
+        min_length=1,
+        max_length=MAX_COORDINATION_MESSAGES,
+        strict=False,
+    )
+    ack_required_pending: bool = False
+    alert_pending: bool = False
+
+
+ErrorRepair = ValidationRepair | ConflictRepair | RetryRepair | CoordinationRepair
 _REPAIR_TYPES = {
     "validation": ValidationRepair,
     "conflict": ConflictRepair,
@@ -252,9 +270,12 @@ class PublicError(_BoundedValue):
         spec = ERROR_SPECS.get(self.code)
         if spec is None or self.error != spec.message:
             raise ValueError("public error code/message must come from the registered catalog")
-        if self.details is not None and not isinstance(
-            self.details, _REPAIR_TYPES.get(spec.kind, type(None))
-        ):
+        expected_type = (
+            CoordinationRepair
+            if self.code in {"coordination_alert", "coordination_ack_required"}
+            else _REPAIR_TYPES.get(spec.kind, type(None))
+        )
+        if self.details is not None and not isinstance(self.details, expected_type):
             raise ValueError("repair data does not apply to this error class")
         return self
 
@@ -360,7 +381,40 @@ def validation_error(
     return public_error("validation_error", details=details)
 
 
-def _repair(kind: ErrorKind, raw: object) -> ErrorRepair | None:
+def _repair(code: str, kind: ErrorKind, raw: object) -> ErrorRepair | None:
+    if code in {"coordination_alert", "coordination_ack_required"}:
+        if isinstance(raw, CoordinationRepair):
+            return raw
+        if not isinstance(raw, Mapping):
+            return None
+        source = raw.get("pending_messages") or raw.get("messages")
+        if not isinstance(source, (list, tuple)):
+            return None
+        messages = []
+        for item in source[:MAX_COORDINATION_MESSAGES]:
+            if not isinstance(item, Mapping):
+                continue
+            message_hash = item.get("message_hash")
+            mode = item.get("mode")
+            if not isinstance(message_hash, str) or mode not in {"notify", "ack", "alert"}:
+                continue
+            text = item.get("text")
+            sender = item.get("sender")
+            messages.append(
+                CoordinationMessage(
+                    message_hash=message_hash,
+                    mode=mode,
+                    text=text if isinstance(text, str) else None,
+                    sender=sender if isinstance(sender, str) else None,
+                )
+            )
+        if not messages:
+            return None
+        return CoordinationRepair(
+            pending_messages=tuple(messages),
+            ack_required_pending=bool(raw.get("ack_required_pending")),
+            alert_pending=bool(raw.get("alert_pending")),
+        )
     expected_type = _REPAIR_TYPES.get(kind)
     if expected_type and isinstance(raw, expected_type):
         return raw
@@ -393,7 +447,11 @@ def _repair(kind: ErrorKind, raw: object) -> ErrorRepair | None:
 def public_error(code: str, *, details: object = None) -> PublicError:
     canonical_code = code if isinstance(code, str) and code in ERROR_SPECS else "internal_error"
     spec = ERROR_SPECS[canonical_code]
-    return PublicError(code=canonical_code, error=spec.message, details=_repair(spec.kind, details))
+    return PublicError(
+        code=canonical_code,
+        error=spec.message,
+        details=_repair(canonical_code, spec.kind, details),
+    )
 
 
 def normalize_public_error(raw: Mapping[str, object] | PublicError) -> PublicError:
