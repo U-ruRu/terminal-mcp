@@ -248,6 +248,14 @@ def test_cancellation_and_process_control_are_not_swallowed(exc):
     assert caught.value is exc
 
 
+def test_execution_request_timeout_requires_reconciliation_before_retry():
+    value = public_error("execution_request_timeout")
+    assert ERROR_SPECS["execution_request_timeout"].recovery == "reconcile"
+    decision = retry_decision(value, operation="cmd.run")
+    assert decision.action == "reconcile"
+    assert decision.retry_after_ms is None
+
+
 def test_ambiguous_mutation_is_never_blindly_retried():
     value = public_error("authority_unavailable", details={"retry_after_ms": 1500})
     for operation in (
