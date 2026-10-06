@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 
 from terminal_mcp.storage.context import ContextStore
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 
 
 async def store(tmp_path):
@@ -16,7 +16,7 @@ async def store(tmp_path):
 async def test_context_schema_and_crud_are_durable(tmp_path):
     repo, context = await store(tmp_path)
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {row[1] for row in db.execute("PRAGMA table_info(instance_context)")}
     assert {"id", "summary", "content", "is_primary"} <= columns
 
@@ -88,5 +88,5 @@ async def test_existing_v10_database_migrates_to_context_schema(tmp_path):
     created = await context.create("Migrated", "Context survives v10 migration.", True)
     assert created["id"] == 1
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []

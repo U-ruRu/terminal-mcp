@@ -464,6 +464,29 @@ class PersistentAgentStore:
                 raise
         return await self.get_slot(logical_agent_id), arm
 
+    @staticmethod
+    async def _require_legacy_window(db, logical_agent_id: str) -> None:
+        row = await (
+            await db.execute(
+                "SELECT 1 FROM logical_agent_work_windows WHERE logical_agent_id=? "
+                "AND superseded_at IS NULL LIMIT 1",
+                (logical_agent_id,),
+            )
+        ).fetchone()
+        if row:
+            raise PersistentStoreError("managed_session_required")
+
+    async def has_managed_window(self, logical_agent_id: str) -> bool:
+        async with self._connect("managed_window_exists") as db:
+            row = await (
+                await db.execute(
+                    "SELECT 1 FROM logical_agent_work_windows WHERE logical_agent_id=? "
+                    "AND superseded_at IS NULL LIMIT 1",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+        return row is not None
+
     async def start_session(
         self,
         *,
@@ -497,6 +520,7 @@ class PersistentAgentStore:
                 if row is None or row[1] == "deleted":
                     raise PersistentStoreError("slot_not_found")
                 logical_agent_id = row[0]
+                await self._require_legacy_window(db, logical_agent_id)
                 if int(row[4]) != int(expected_revision):
                     raise PersistentStoreError("revision_conflict")
                 if row[2] != authority_node_id:
@@ -721,6 +745,7 @@ class PersistentAgentStore:
         async with self._connect("persistent_session_stop_begin") as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._require_legacy_window(db, logical_agent_id)
                 row = await (
                     await db.execute(
                         "SELECT state FROM logical_agent_work_sessions WHERE logical_agent_id=? "
@@ -766,6 +791,7 @@ class PersistentAgentStore:
         async with self._connect("persistent_session_stop_finalize") as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._require_legacy_window(db, logical_agent_id)
                 cur = await db.execute(
                     "UPDATE logical_agent_work_sessions SET state=?,ended_at=COALESCE(ended_at,?),"
                     "end_reason=? WHERE logical_agent_id=? AND work_session_id=? "

@@ -248,6 +248,16 @@ def test_cancellation_and_process_control_are_not_swallowed(exc):
     assert caught.value is exc
 
 
+def test_managed_session_legacy_guard_has_explicit_repair_policy():
+    spec = ERROR_SPECS["managed_session_required"]
+    assert spec.kind == "policy"
+    assert spec.recovery == "repair"
+    assert (
+        public_error("managed_session_required").error
+        == "Use the managed session path for this slot."
+    )
+
+
 def test_ambiguous_mutation_is_never_blindly_retried():
     value = public_error("authority_unavailable", details={"retry_after_ms": 1500})
     for operation in (
@@ -440,8 +450,7 @@ def test_coordination_error_keeps_only_bounded_next_action_messages():
             for index in range(10)
         ],
         "pending_messages": [
-            {"message_hash": f"p-{index}", "mode": "alert", "text": "reply"}
-            for index in range(10)
+            {"message_hash": f"p-{index}", "mode": "alert", "text": "reply"} for index in range(10)
         ],
         "ack_required_pending": True,
         "alert_pending": True,

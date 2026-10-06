@@ -22,8 +22,9 @@ from terminal_mcp.storage.output import (
 )
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
+from terminal_mcp.storage.work_windows import install_work_window_schema
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -448,6 +449,7 @@ class SqliteRepository:
                 """
             )
             await self._migrate(db)
+            await install_work_window_schema(db)
             await install_event_journal(db)
             legacy_output_migrated = await self._migrate_legacy_output(db)
             recovered_at = utc_text()
