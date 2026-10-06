@@ -114,6 +114,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             control_mutation_invalid control_operation_invalid control_snapshot_invalid
             invalid_transfer_transition managed_snapshot_required
             managed_snapshot_revision_invalid mesh_id_required
+            policy_update_empty policy_invalid_rearm policy_invalid_duration
+            policy_invalid_warning policy_invalid_alert
         """,
         ),
         (
@@ -121,7 +123,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "reauthenticate",
             """
             access_identity_not_found permit_expired persistent_auth_required
-            selector_not_found session_not_found control_rejoin_credential_required invalid_pairing
+            persistent_scope_required selector_not_found session_not_found
+            control_rejoin_credential_required invalid_pairing
         """,
         ),
         (
@@ -163,7 +166,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         """,
         ),
         ("access", "stop", "cors_preflight_rejected origin_not_allowed"),
-        ("internal", "reconcile", "access_issue_failed"),
+        ("internal", "reconcile", "access_issue_failed policy_persist_failed"),
     )
     messages = {
         "internal_error": "The operation failed internally. Check current state before retrying.",
