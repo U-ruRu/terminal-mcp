@@ -41,7 +41,6 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/slots/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/tasks" element={<ServerChooser model={model} section="tasks" />} />
         <Route path="/context" element={<ServerChooser model={model} section="context" />} />
-        <Route path="/health" element={<ServerChooser model={model} section="health" />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
         <Route path="/meshes/:meshId" element={<Connections />} />
@@ -52,13 +51,12 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/meshes/:meshId/persistent/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/ui-kit" element={<UiKitShowcase />} />
         <Route path="/connect" element={<Connections />} />
-        <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} loadFleetControl={loadFleetControl} />} />
+        <Route path="/servers/:instanceId" element={<ServerWorkspace model={model} instances={instances} loadFleetControl={loadFleetControl} diagnostics={diagnostics} />} />
         <Route path="/servers/:instanceId/agents" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/agents/:agentId" element={<ServerAgents instances={instances} />} />
         <Route path="/servers/:instanceId/slots" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" diagnostics={diagnostics} loadContexts={loadContexts} />} />
-        <Route path="/servers/:instanceId/health" element={<ServerSection model={model} section="health" diagnostics={diagnostics} />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/activity" element={<Activity instances={instances} loadActivity={loadActivity} />} />

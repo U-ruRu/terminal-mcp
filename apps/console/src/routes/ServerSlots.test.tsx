@@ -801,7 +801,7 @@ test.each([
   renderSlots([value])
   const timer = screen.getByText(expected)
   expect(timer).toHaveClass('slot-timer')
-  expect(timer.closest('.slot-card-primary')).toBeInTheDocument()
+  expect(timer.closest('.slot-card-secondary')).toBeInTheDocument()
 })
 
 test('global All keeps healthy owner Slots visible when another context is unavailable', async () => {

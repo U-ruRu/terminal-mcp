@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 
+import { LocalDiagnostics } from '../components/LocalDiagnostics'
 import { ServerCard } from '../components/ServerCard'
 import { FeedbackState } from '../components/UiPrimitives'
 import type { ManagedFleetControlReadModel } from '../api/models'
+import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import { isFleetControlRevisionRegression, loadCachedFleetControlForProfile, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
@@ -17,10 +19,12 @@ export function ServerWorkspace({
   model,
   instances,
   loadFleetControl,
+  diagnostics,
 }: {
   model: FleetReadModel
   instances: FleetInstanceView[]
   loadFleetControl?: (instanceId: string) => Promise<ManagedFleetControlReadModel>
+  diagnostics?: BrowserDiagnosticJournal
 }) {
   const { t, number, dateTime, locale } = useI18n()
   const { instanceId } = useParams()
@@ -159,6 +163,7 @@ export function ServerWorkspace({
         ) : <FeedbackState variant="empty" title={t('server.noActiveSessions')} />}
       </article>
 
+      <LocalDiagnostics server={server} diagnostics={diagnostics} />
     </section>
   )
 }
