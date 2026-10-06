@@ -9,12 +9,13 @@
     "test": "vitest run",
     "lint": "eslint . --max-warnings=0",
     "preview": "vite preview",
-    "android:sync": "npm run build && cap sync android",
+    "android:sync": "npm run build && cap sync android && npm run android:verify:branding",
     "android:build:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
     "android:build:release": "bash scripts/android-build-release.sh",
     "android:manifest": "node scripts/android-release-manifest.mjs",
     "android:verify:version": "node scripts/verify-android-version.mjs",
-    "android:verify:release": "bash scripts/verify-android-release.sh"
+    "android:verify:release": "bash scripts/verify-android-release.sh",
+    "android:verify:branding": "node scripts/verify-branding-assets.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
