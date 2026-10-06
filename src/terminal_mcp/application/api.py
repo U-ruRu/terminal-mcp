@@ -76,7 +76,9 @@ class TerminalApplication:
         if self._operator is None:
             from terminal_mcp.application.operator import OperatorApplication
 
-            self._operator = OperatorApplication(self.service, self.policy_controller)
+            self._operator = OperatorApplication(
+                self.service, self.policy_controller, self.managed_sessions
+            )
         return self._operator
 
     @property

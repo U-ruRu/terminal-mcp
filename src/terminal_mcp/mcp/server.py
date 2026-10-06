@@ -1,9 +1,11 @@
 """Thin MCP adapter over the transport-independent Application API."""
 
+from collections.abc import Mapping
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.lowlevel.server import request_ctx
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -93,6 +95,43 @@ _SAFE_OPERATION = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=False
 )
 
+_OPENAI_PROVIDER_META_KEYS = (
+    "openai/subject",
+    "openai/session",
+    "openai/organization",
+)
+
+
+def _trusted_mcp_provider_evidence() -> tuple[str | None, dict[str, object]]:
+    """Read provider evidence only from MCP transport `_meta`, never tool arguments."""
+    try:
+        context = request_ctx.get()
+    except LookupError:
+        return None, {}
+    meta = context.meta
+    if meta is None:
+        return None, {}
+    if hasattr(meta, "model_dump"):
+        raw = meta.model_dump(exclude_none=True)
+    elif isinstance(meta, Mapping):
+        raw = dict(meta)
+    else:
+        return None, {}
+    evidence = {key: raw[key] for key in _OPENAI_PROVIDER_META_KEYS if key in raw}
+    if not evidence:
+        return None, {}
+    return "openai", evidence
+
+
+def _mcp_actor(service):
+    provider, provider_metadata = _trusted_mcp_provider_evidence()
+    return actor_for(
+        service,
+        transport="mcp",
+        provider=provider,
+        provider_metadata=provider_metadata,
+    )
+
 
 def _preflight_message_inbox_result(
     result: dict,
@@ -180,7 +219,7 @@ def build_mcp(
         display_name: Annotated[str | None, Field(max_length=80)] = None,
     ) -> dict:
         return await application.session(
-            actor_for(service, transport="mcp"),
+            _mcp_actor(service),
             action=action,
             mode=mode,
             code=code,
@@ -217,7 +256,7 @@ def build_mcp(
         cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None,
     ) -> dict:
         return await application.observe(
-            actor_for(service, transport="mcp"),
+            _mcp_actor(service),
             subject=subject,
             namespace=namespace,
             task_id=task_id,
@@ -265,7 +304,7 @@ def build_mcp(
         task_id: Annotated[str | None, Field(min_length=1, max_length=MAX_IDENTIFIER_CHARS)] = None,
     ) -> dict:
         return await application.message(
-            actor_for(service, transport="mcp"),
+            _mcp_actor(service),
             sender=sender,
             code=code,
             text=text,
@@ -303,7 +342,7 @@ def build_mcp(
     async def access_task_tool(boundary: TaskToolArguments) -> dict:
         if boundary.validation_error is not None:
             return task_validation_error(boundary.validation_error, boundary)
-        return await application.task(actor_for(service, transport="mcp"), request=boundary.request)
+        return await application.task(_mcp_actor(service), request=boundary.request)
 
     @mcp.tool(
         name="cmd",
@@ -317,7 +356,7 @@ def build_mcp(
         ),
     )
     async def access_cmd_tool(request: CmdRequest) -> dict:
-        return await application.cmd(actor_for(service, transport="mcp"), request=request)
+        return await application.cmd(_mcp_actor(service), request=request)
 
     @mcp.tool(
         name="context",
@@ -329,7 +368,7 @@ def build_mcp(
         ),
     )
     async def access_context_tool(request: ContextRequest) -> dict:
-        return await application.context(actor_for(service, transport="mcp"), request=request)
+        return await application.context(_mcp_actor(service), request=request)
 
     @mcp.tool(
         name="health",
@@ -338,7 +377,7 @@ def build_mcp(
         description="Return terminal service health without requiring an Access code.",
     )
     async def access_health_tool() -> dict:
-        return await application.health(actor_for(service, transport="mcp"))
+        return await application.health(_mcp_actor(service))
 
     install_task_input_contract(mcp)
 

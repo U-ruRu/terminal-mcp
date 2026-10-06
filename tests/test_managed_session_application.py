@@ -443,3 +443,50 @@ async def test_repeated_expired_gate_calls_keep_stable_error_after_revocation(en
         with pytest.raises(ManagedSessionError, match="session_expired") as error:
             await env.app.authorize_operation(first.actor, ManagedOperation.COMMAND_RUN)
         assert error.value.return_to_chat
+
+async def test_operator_surface_reports_policy_window_and_session_and_mutates_window(env):
+    started = await env.app.start(actor())
+    operator = actor(role="operator")
+
+    status = await env.app.operator_status(operator, "la_one")
+    assert status["public_name"] == "Stable-Agent"
+    assert status["policy"]["default_duration_seconds"] == 1380
+    assert status["window"]["remaining_seconds"] == 1380
+    assert status["session"]["work_session_id"] == started.snapshot.session.work_session_id
+    assert status["session"]["role"] == "executor"
+
+    policy = await env.app.change_policy(
+        operator,
+        "la_one",
+        SlotSessionPolicy(
+            default_duration_seconds=1800,
+            warning_before_expiry_seconds=240,
+            draining_before_expiry_seconds=120,
+            rearm_after_seconds=60,
+        ),
+        expected_revision=status["policy"]["revision"],
+    )
+    assert policy.policy.default_duration_seconds == 1800
+    unchanged = await env.store.current_window("la_one")
+    assert unchanged.effective_duration_seconds == 1380
+
+    mutation = await env.app.change_window(
+        operator,
+        "la_one",
+        expected_revision=unchanged.window_revision,
+        delta_seconds=600,
+    )
+    assert mutation.change.current.effective_duration_seconds == 1980
+    assert mutation.change.current.hard_expires_at == T0 + timedelta(seconds=1980)
+
+
+async def test_operator_can_end_current_managed_session_without_impersonating_principal(env):
+    started = await env.app.start(actor())
+    operator = actor(principal="operator-principal", role="operator")
+    result = await env.app.operator_end(operator, "la_one")
+    assert result["ok"] is True
+    assert result["session_state"] == "inactive"
+    assert result["work_session_id"] == started.snapshot.session.work_session_id
+    ended = await env.store.get_work_session(started.snapshot.session.work_session_id)
+    assert ended.state == "ended"
+    assert ended.end_reason == "operator_end"

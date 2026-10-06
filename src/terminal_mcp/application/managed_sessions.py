@@ -97,6 +97,7 @@ class ManagedSessionRepository(Protocol):
         require_live: bool = False,
     ) -> ManagedSessionSnapshot: ...
     async def current_window(self, logical_agent_id: str) -> WorkWindow | None: ...
+    async def policy(self, logical_agent_id: str) -> SlotPolicyRecord: ...
     async def start_managed_session(
         self,
         logical_agent_id: str,
@@ -427,6 +428,125 @@ class ManagedSessionApplication:
             return {
                 "ok": True,
                 "session_state": "inactive",
+                "public_name": grant.public_name,
+                "work_session_id": session.work_session_id,
+            }
+
+    async def operator_status(self, actor: ActorContext, logical_agent_id: str) -> dict:
+        grant = await self._authorize(actor, ManagedOperation.OPERATOR_READ, logical_agent_id)
+        with actor.bind():
+            now = self.clock()
+            policy = await self.repository.policy(logical_agent_id)
+            window = await self.repository.current_window(logical_agent_id)
+            session = await self.repository.active_session_for_slot(logical_agent_id)
+            window_payload = None
+            if window is not None:
+                phase = window.phase(now)
+                remaining = window.remaining_seconds(now)
+                window_payload = {
+                    "work_window_id": window.work_window_id,
+                    "state": phase.value,
+                    "lifecycle": window.lifecycle.value,
+                    "opened_at": window.opened_at.isoformat(),
+                    "elapsed_seconds": max(0, window.effective_duration_seconds - remaining),
+                    "remaining_seconds": remaining,
+                    "initial_duration_seconds": window.initial_duration_seconds,
+                    "effective_duration_seconds": window.effective_duration_seconds,
+                    "hard_expires_at": window.hard_expires_at.isoformat(),
+                    "warning_before_expiry_seconds": window.warning_before_expiry_seconds,
+                    "draining_before_expiry_seconds": window.draining_before_expiry_seconds,
+                    "rearm_after_seconds": window.rearm_after_seconds,
+                    "rearm_at": (
+                        window.rearm_at.isoformat() if window.rearm_at is not None else None
+                    ),
+                    "window_revision": window.window_revision,
+                }
+            session_payload = None
+            if session is not None:
+                snapshot = await self.repository.session_snapshot(
+                    logical_agent_id, session.work_session_id, session.session_epoch
+                )
+                if (
+                    snapshot.session.authority_node_id != grant.authority_node_id
+                    or snapshot.session.authority_epoch != grant.authority_epoch
+                ):
+                    raise ManagedSessionError("session_authority_stale", return_to_chat=True)
+                session_payload = {
+                    "work_session_id": snapshot.session.work_session_id,
+                    "session_epoch": snapshot.session.session_epoch,
+                    "role": snapshot.binding.role,
+                    "contract_version": snapshot.binding.contract_version,
+                    "state": snapshot.session.state,
+                    "started_at": snapshot.session.started_at,
+                    "ended_at": snapshot.session.ended_at,
+                    "end_reason": snapshot.session.end_reason,
+                }
+            return {
+                "ok": True,
+                "logical_agent_id": logical_agent_id,
+                "public_name": grant.public_name,
+                "authority_node_id": grant.authority_node_id,
+                "authority_epoch": grant.authority_epoch,
+                "policy": {
+                    "default_duration_seconds": policy.policy.default_duration_seconds,
+                    "warning_before_expiry_seconds": policy.policy.warning_before_expiry_seconds,
+                    "draining_before_expiry_seconds": policy.policy.draining_before_expiry_seconds,
+                    "rearm_after_seconds": policy.policy.rearm_after_seconds,
+                    "revision": policy.revision,
+                },
+                "window": window_payload,
+                "session": session_payload,
+            }
+
+    async def operator_end(self, actor: ActorContext, logical_agent_id: str) -> dict:
+        grant = await self._authorize(actor, ManagedOperation.OPERATOR_END, logical_agent_id)
+        with actor.bind():
+            session = await self.repository.active_session_for_slot(logical_agent_id)
+            if session is None:
+                return {
+                    "ok": True,
+                    "session_state": "inactive",
+                    "logical_agent_id": logical_agent_id,
+                    "public_name": grant.public_name,
+                }
+            snapshot = await self.repository.session_snapshot(
+                logical_agent_id, session.work_session_id, session.session_epoch
+            )
+            if (
+                snapshot.session.authority_node_id != grant.authority_node_id
+                or snapshot.session.authority_epoch != grant.authority_epoch
+            ):
+                raise ManagedSessionError("session_authority_stale", return_to_chat=True)
+            session = snapshot.session
+            if session.state in {"active", "stopping"}:
+                session = await self.repository.begin_managed_stop(
+                    logical_agent_id,
+                    session.work_session_id,
+                    session.session_epoch,
+                    principal_id=grant.principal_id,
+                    reason="operator_end",
+                    now=self.clock(),
+                )
+                if not await self._drain(session, "operator_end"):
+                    return {
+                        "ok": True,
+                        "session_state": "stopping",
+                        "cleanup_pending": True,
+                        "logical_agent_id": logical_agent_id,
+                        "public_name": grant.public_name,
+                        "work_session_id": session.work_session_id,
+                    }
+                session = await self.repository.finish_managed_stop(
+                    logical_agent_id,
+                    session.work_session_id,
+                    session.session_epoch,
+                    principal_id=grant.principal_id,
+                    now=self.clock(),
+                )
+            return {
+                "ok": True,
+                "session_state": "inactive",
+                "logical_agent_id": logical_agent_id,
                 "public_name": grant.public_name,
                 "work_session_id": session.work_session_id,
             }

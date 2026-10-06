@@ -54,6 +54,7 @@ from terminal_mcp.http.fleet_v1 import (
     build_fleet_v1_projection_router,
     build_fleet_v1_source_router,
 )
+from terminal_mcp.http.managed_sessions import build_managed_sessions_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.persistent import build_persistent_router
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
@@ -477,6 +478,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
     if settings.persistent_agents_enabled:
         app.include_router(build_persistent_router(service, persistent_policy_controller))
+        app.include_router(build_managed_sessions_router(service))
     app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))
