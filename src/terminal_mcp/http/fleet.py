@@ -2,17 +2,35 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from terminal_mcp.fleet.identity import SignedAgentIdentity
+from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.application.mesh import MeshApplicationError
+from terminal_mcp.application.replication import (
+    ReplicationApplication,
+)
+
+_ERROR_STATUS = {
+    "invalid_request": 400,
+    "unauthorized": 401,
+    "forbidden": 403,
+    "not_found": 404,
+    "conflict": 409,
+}
 
 
-def build_fleet_router(replication) -> APIRouter:
+def build_fleet_router(replication, *, application=None) -> APIRouter:
     router = APIRouter()
+    target = application if application is not None else ReplicationApplication(replication)
 
     def authenticate(peer_id: str, authorization: str):
         peer = replication.authenticate(peer_id, authorization)
         if peer is None:
             raise HTTPException(status_code=401, detail="invalid fleet peer")
-        return peer
+        return ActorContext(
+            transport="mesh",
+            endpoint_role="mesh",
+            node_id=str(getattr(getattr(replication, "config", None), "instance_id", "") or ""),
+            peer_node_id=peer.instance_id,
+        )
 
     @router.post("/internal/fleet/identities", include_in_schema=False)
     async def receive_identity(
@@ -20,16 +38,11 @@ def build_fleet_router(replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        peer = authenticate(x_terminal_mcp_peer, authorization)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            envelope = SignedAgentIdentity.from_dict(payload)
-            status = await replication.receive(
-                envelope,
-                authenticated_peer_id=peer.instance_id,
-            )
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "status": status}
+            return await target.receive_identity(actor, payload=payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/internal/fleet/session-update", include_in_schema=False)
     async def update_session(
@@ -37,39 +50,11 @@ def build_fleet_router(replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        peer = authenticate(x_terminal_mcp_peer, authorization)
-        agent_id = payload.get("agent_id")
-        source_instance_id = payload.get("source_instance_id")
-        activity_at = payload.get("activity_at")
-        intent = payload.get("intent")
-        step = payload.get("step")
-        intent_updated_at = payload.get("intent_updated_at")
-        if not all(
-            isinstance(value, str) and value
-            for value in (agent_id, source_instance_id, activity_at)
-        ):
-            raise HTTPException(status_code=400, detail="session update payload is incomplete")
-        if intent is not None and not isinstance(intent, str):
-            raise HTTPException(status_code=400, detail="session update intent must be a string")
-        if step is not None and not isinstance(step, int):
-            raise HTTPException(status_code=400, detail="session update step must be an integer")
-        if intent_updated_at is not None and not isinstance(intent_updated_at, str):
-            raise HTTPException(
-                status_code=400, detail="session update intent_updated_at must be a string"
-            )
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            changed = await replication.receive_session_update(
-                agent_id,
-                source_instance_id,
-                activity_at,
-                intent=intent,
-                step=step,
-                intent_updated_at=intent_updated_at,
-                authenticated_peer_id=peer.instance_id,
-            )
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "changed": changed}
+            return await target.update_session(actor, payload=payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/internal/fleet/session-finish", include_in_schema=False)
     async def finish_session(
@@ -77,22 +62,11 @@ def build_fleet_router(replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        peer = authenticate(x_terminal_mcp_peer, authorization)
-        agent_id = payload.get("agent_id")
-        ended_at = payload.get("ended_at")
-        reason = payload.get("reason")
-        if not all(isinstance(value, str) and value for value in (agent_id, ended_at, reason)):
-            raise HTTPException(status_code=400, detail="finish payload is incomplete")
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            changed = await replication.receive_finish(
-                agent_id,
-                ended_at,
-                reason,
-                authenticated_peer_id=peer.instance_id,
-            )
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "changed": changed}
+            return await target.finish_session(actor, payload=payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/identities", include_in_schema=False)
     async def read_identities(
@@ -101,8 +75,10 @@ def build_fleet_router(replication) -> APIRouter:
         agent_id: str | None = Query(default=None),
         limit: int = Query(default=500, ge=1, le=1000),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        identities = await replication.list_identities(agent_id=agent_id, limit=limit)
-        return {"ok": True, "identities": identities}
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.read_identities(actor, agent_id=agent_id, limit=limit)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     return router

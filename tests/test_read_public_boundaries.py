@@ -42,10 +42,7 @@ class _CursorOnlyService:
     ],
 )
 async def test_public_reads_reject_decimal_cursor_bypass(tool_name, arguments):
-    tools = {
-        tool.name: tool
-        for tool in build_mcp(_CursorOnlyService())._tool_manager.list_tools()
-    }
+    tools = {tool.name: tool for tool in build_mcp(_CursorOnlyService())._tool_manager.list_tools()}
     result = await tools[tool_name].run(arguments, convert_result=True)
 
     assert result.structuredContent["ok"] is False
@@ -80,8 +77,7 @@ class _LargeSessionService:
 @pytest.mark.asyncio
 async def test_public_observe_final_mcp_result_stays_within_serialized_budget():
     tools = {
-        tool.name: tool
-        for tool in build_mcp(_LargeSessionService())._tool_manager.list_tools()
+        tool.name: tool for tool in build_mcp(_LargeSessionService())._tool_manager.list_tools()
     }
     result = await tools["observe"].run(
         {
@@ -149,10 +145,7 @@ class _LargeCmdService:
 
 @pytest.mark.asyncio
 async def test_public_cmd_read_final_envelope_is_bounded_with_large_lines():
-    tools = {
-        tool.name: tool
-        for tool in build_mcp(_LargeCmdService())._tool_manager.list_tools()
-    }
+    tools = {tool.name: tool for tool in build_mcp(_LargeCmdService())._tool_manager.list_tools()}
     result = await tools["cmd"].run(
         {
             "request": {
@@ -174,22 +167,41 @@ async def test_public_cmd_read_final_envelope_is_bounded_with_large_lines():
 class _FinalEnvelopeMessageBackend:
     def __init__(self):
         self.surfaced = []
+        self.oversized = True
+        self.resolved = []
+
+    async def access_sender_identity(self, sender):
+        self.resolved.append(sender)
+        return {
+            "ok": True,
+            "logical_agent_id": "la-envelope",
+            "work_session_id": "ws-envelope",
+            "session_epoch": 1,
+        }
 
     async def access_message(self, sender, **kwargs):
         rows = [
             {
-                "message_hash": f"m-{index:02d}", "sender": "Sender", "target": sender,
-                "mode": "notify", "state": "delivered", "text": "\\" * 512,
-                "created_at": "2026-10-06T00:00:00.000Z", "seen_count": 0,
+                "message_hash": f"m-{index:02d}",
+                "sender": "Sender",
+                "target": sender,
+                "mode": "notify",
+                "state": "delivered",
+                "text": "\\" * 512,
+                "created_at": "2026-10-06T00:00:00.000Z",
+                "seen_count": 0,
             }
             for index in range(30)
         ]
         return {
-            "ok": True, "messages": rows[: kwargs.get("limit", 20)],
-            "oversized_meta": "x" * (READ_RESPONSE_BUDGET_BYTES * 2),
+            "ok": True,
+            "messages": rows[: kwargs.get("limit", 20)],
+            "oversized_meta": "x" * (READ_RESPONSE_BUDGET_BYTES * 2) if self.oversized else "",
         }
 
-    async def surface_message_page(self, sender, *, access_code=None, message_hashes):
+    async def surface_message_page(
+        self, sender, *, access_code=None, message_hashes, _resolved_identity=None
+    ):
         self.surfaced.extend(message_hashes)
         return {"ok": True, "seen_at": "2026-10-06T00:00:00.000Z"}
 
@@ -209,4 +221,23 @@ async def test_message_final_envelope_failure_does_not_surface_inbox():
     assert result.structuredContent["ok"] is False
     assert result.structuredContent["code"] == "output_item_too_large"
     assert service.persistent.surfaced == []
+    assert service.persistent.resolved == ["Recipient"]
+    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+
+
+@pytest.mark.asyncio
+async def test_message_success_surfaces_only_returned_page_once_after_preflight():
+    service = _FinalEnvelopeMessageService()
+    service.persistent.oversized = False
+    tools = {tool.name: tool for tool in build_mcp(service)._tool_manager.list_tools()}
+    result = await tools["message"].run(
+        {"sender": "Recipient", "limit": 100, "detail": "summary"}, convert_result=True
+    )
+    data = result.structuredContent
+    assert data["ok"] is True
+    assert service.persistent.resolved == ["Recipient"]
+    assert service.persistent.surfaced == [row["message_hash"] for row in data["messages"]]
+    assert data["messages"]
+    assert all(row["state"] == "read" for row in data["messages"])
+    assert len(service.persistent.surfaced) == len(set(service.persistent.surfaced))
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES

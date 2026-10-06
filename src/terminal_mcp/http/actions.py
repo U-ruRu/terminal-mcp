@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from terminal_mcp.adapters.actor import actor_for
 from terminal_mcp.api_models import (
     AgentFinishResponse,
     AgentOverviewResponse,
@@ -26,6 +27,7 @@ from terminal_mcp.api_models import (
     TasksResponse,
     TaskState,
 )
+from terminal_mcp.application import get_application
 from terminal_mcp.core.orchestration import public_agent_name, validate_message_routing
 from terminal_mcp.core.service import (
     DEFAULT_READ_LINES,
@@ -278,7 +280,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "agent_start",
-            service.agent_start(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "agent_start",
                 task_summary=body.task_summary,
                 intent=body.intent,
                 details=body.details,
@@ -298,7 +302,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "coordinate",
-            service.coordinate(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "coordinate",
                 body.agent_id,
                 step=body.step,
                 intent=body.intent,
@@ -317,7 +323,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "message",
-            service.message(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "message",
                 body.agent_id,
                 text=body.text,
                 target=body.target,
@@ -340,7 +348,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "agents",
-            service.agents(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "agents",
                 body.agent_id,
                 target=body.target,
                 show_details=body.show_details,
@@ -358,7 +368,16 @@ def build_actions_router(service, auth_mode="none"):
         response_model_exclude_none=True,
     )
     async def agent_finish(body: AgentRequest):
-        return await observed(service, "rest", "agent_finish", service.agent_finish(body.agent_id))
+        return await observed(
+            service,
+            "rest",
+            "agent_finish",
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "agent_finish",
+                body.agent_id,
+            ),
+        )
 
     @router.post(
         "/context",
@@ -371,7 +390,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "context",
-            service.context(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "context",
                 body.action,
                 context_id=body.id,
                 summary=body.summary,
@@ -392,7 +413,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "tasks",
-            service.tasks(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "tasks",
                 namespace=body.namespace,
                 task_id=body.task_id,
                 lane=body.lane,
@@ -419,7 +442,14 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "task",
-            service.task(body.agent_id, action=body.action, namespace=body.namespace, **payload),
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "task",
+                body.agent_id,
+                action=body.action,
+                namespace=body.namespace,
+                **payload,
+            ),
         )
 
     @router.post("/run", operation_id="runCommand", response_model=RunResponse)
@@ -428,7 +458,9 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "run",
-            service.run(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "run",
                 body.cmd,
                 agent_id=body.agent_id,
                 queue_id=body.queue_id,
@@ -439,7 +471,15 @@ def build_actions_router(service, auth_mode="none"):
     @router.post("/recovery", operation_id="recoveryCommand", response_model=RecoveryResponse)
     async def recovery_command(body: RecoveryRequest):
         result = await observed(
-            service, "rest", "recovery", service.recovery(body.cmd, agent_id=body.agent_id)
+            service,
+            "rest",
+            "recovery",
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "recovery",
+                body.cmd,
+                agent_id=body.agent_id,
+            ),
         )
         result.pop("agent_id", None)
         result["agent_name"] = public_agent_name(body.agent_id)
@@ -451,7 +491,14 @@ def build_actions_router(service, auth_mode="none"):
             service,
             "rest",
             "read",
-            service.read(body.cmd_hash, body.lines_count, body.offset, agent_id=body.agent_id),
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "read",
+                body.cmd_hash,
+                body.lines_count,
+                body.offset,
+                agent_id=body.agent_id,
+            ),
         )
         result.pop("agent_id", None)
         result["agent_name"] = public_agent_name(body.agent_id)
@@ -460,7 +507,15 @@ def build_actions_router(service, auth_mode="none"):
     @router.post("/cancel", operation_id="cancelCommand", response_model=CancelResponse)
     async def cancel_command(body: CancelRequest):
         result = await observed(
-            service, "rest", "cancel", service.cancel(body.cmd_hash, agent_id=body.agent_id)
+            service,
+            "rest",
+            "cancel",
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "cancel",
+                body.cmd_hash,
+                agent_id=body.agent_id,
+            ),
         )
         result.pop("agent_id", None)
         result["agent_name"] = public_agent_name(body.agent_id)
@@ -474,7 +529,15 @@ def build_actions_router(service, auth_mode="none"):
     )
     async def terminal_health(agent_id: str | None = None):
         result = await observed(
-            service, "rest", "health", service.health(auth_mode, agent_id=agent_id)
+            service,
+            "rest",
+            "health",
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "health",
+                auth_mode,
+                agent_id=agent_id,
+            ),
         )
         result.pop("agent_id", None)
         result["agent_name"] = public_agent_name(agent_id)

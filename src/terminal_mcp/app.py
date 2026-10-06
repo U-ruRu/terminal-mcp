@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from starlette.routing import Mount
 
+from terminal_mcp.application import TerminalApplication
 from terminal_mcp.auth.credentials import CredentialManager
 from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.auth.middleware import AuthMiddleware
@@ -55,6 +56,7 @@ from terminal_mcp.metrics import Metrics
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
 from terminal_mcp.storage.agents import AgentStore
+from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
@@ -265,9 +267,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if fleet_control and fleet_config and fleet_replication
         else None
     )
+    application = TerminalApplication(
+        service,
+        auth_mode=settings.mode_for("mcp"),
+        policy_controller=persistent_policy_controller,
+        unit_of_work=SqliteApplicationUnitOfWork(settings.database_path),
+        replication=fleet_replication,
+        fleet_source=fleet_source,
+        fleet_projection=fleet_projection,
+        projection_service=fleet_projection_service,
+        fleet_control=managed_fleet_control,
+    )
+    service.application = application
     auth = AuthService(settings, oauth_store, credentials)
     mcp = build_mcp(
-        service,
+        application,
         settings.public_base_url,
         settings.mode_for("mcp"),
         persistent_enabled=settings.persistent_agents_enabled,
@@ -341,6 +355,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="terminal-mcp", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
+    app.state.application = application
     app.state.oauth_store = oauth_store
     app.state.auth_foundation = auth_foundation
     app.state.pairing_store = pairing_store
@@ -366,23 +381,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_public_router())
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:
-            app.include_router(build_fleet_router(fleet_replication))
+            app.include_router(
+                build_fleet_router(fleet_replication, application=application.replication)
+            )
         if fleet_source:
-            app.include_router(build_fleet_v1_source_router(fleet_source, fleet_replication))
+            app.include_router(
+                build_fleet_v1_source_router(
+                    fleet_source, fleet_replication, application=application.fleet_source
+                )
+            )
         if fleet_projection:
             app.include_router(
                 build_fleet_v1_projection_router(
-                    fleet_projection, fleet_replication, fleet_projection_service
+                    fleet_projection,
+                    fleet_replication,
+                    fleet_projection_service,
+                    application=application.fleet_projection,
                 )
             )
         if persistent_fleet:
             app.include_router(
                 build_persistent_fleet_router(
-                    fleet_replication, persistent_fleet, service.persistent
+                    fleet_replication,
+                    persistent_fleet,
+                    service.persistent,
+                    application=application.mesh,
                 )
             )
         if managed_fleet_control:
-            app.include_router(build_fleet_control_router(managed_fleet_control, fleet_replication))
+            app.include_router(
+                build_fleet_control_router(
+                    managed_fleet_control, fleet_replication, application=application.fleet_control
+                )
+            )
     app.include_router(build_pairing_router(settings, auth, pairing_store))
     app.include_router(
         build_console_events_router(
