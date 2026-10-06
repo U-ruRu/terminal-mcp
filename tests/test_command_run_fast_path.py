@@ -265,3 +265,63 @@ async def test_command_application_adds_canonical_first_page_to_fast_run():
     assert wire.structuredContent['command']['status'] == 'completed'
     assert wire.structuredContent['lines'] == ['first', 'second']
     assert wire.structuredContent['displayed_lines_count'] == 2
+
+
+@pytest.mark.asyncio
+async def test_same_agent_second_run_enqueues_during_first_inline_poll(monkeypatch):
+    monkeypatch.setattr(persistent_backend_module, 'COMMAND_RUN_INLINE_BUDGET_SECONDS', 0.4)
+    monkeypatch.setattr(persistent_backend_module, 'COMMAND_RUN_INLINE_POLL_SECONDS', 0.01)
+
+    class SerialLifecycle:
+        def __init__(self):
+            self.lock = asyncio.Lock()
+
+        @asynccontextmanager
+        async def operation_guard(self, logical_agent_id):
+            async with self.lock:
+                yield
+
+    class ConcurrentRepo(_FakeRepo):
+        def __init__(self):
+            super().__init__('running')
+            self.first_created = asyncio.Event()
+            self.second_created = asyncio.Event()
+
+        async def create(self, *args, **kwargs):
+            command = await super().create(*args, **kwargs)
+            if len(self.commands) == 1:
+                self.first_created.set()
+            elif len(self.commands) == 2:
+                self.second_created.set()
+            return command
+
+    class ConcurrentTerminal(_FakeTerminal):
+        def __init__(self, repo):
+            super().__init__(repo, 'running')
+            self.selection_count = 0
+
+        async def least_loaded_queue(self):
+            self.selection_count += 1
+            return self.selection_count
+
+    repo = ConcurrentRepo()
+    terminal = ConcurrentTerminal(repo)
+    service = SimpleNamespace(
+        repo=repo,
+        terminal=terminal,
+        task_coordinator=None,
+        task_store=None,
+        agent_policy=SimpleNamespace(command_preview_chars=160),
+    )
+    backend = _FastPathBackend(service, SerialLifecycle())
+
+    first = asyncio.create_task(backend.run('sleep 2', **_run_kwargs(queue_id=None)))
+    await asyncio.wait_for(repo.first_created.wait(), timeout=0.1)
+    second = asyncio.create_task(backend.run('sleep 2', **_run_kwargs(queue_id=None)))
+
+    await asyncio.wait_for(repo.second_created.wait(), timeout=0.15)
+    assert sorted(command.queue_id for command in repo.commands.values()) == [1, 2]
+
+    first_result, second_result = await asyncio.gather(first, second)
+    assert first_result['status'] == 'running'
+    assert second_result['status'] == 'running'
