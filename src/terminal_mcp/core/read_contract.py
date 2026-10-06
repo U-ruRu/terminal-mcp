@@ -124,12 +124,23 @@ def summary_message(item: dict[str, Any]) -> dict[str, Any]:
             "acknowledged": item.get("read_at") is not None or item.get("acknowledged") is True,
             "replied": item.get("replied_at") is not None or item.get("replied") is True,
             "text": preview,
-            "truncated": len(text) > len(preview),
+            "truncated": len(text) > MESSAGE_PREVIEW_CHARS,
             "namespace": item.get("namespace"),
             "task_id": item.get("task_id"),
         }.items()
         if value is not None
     }
+
+
+def _rendered_line_size(line: str) -> int:
+    """Budget for the larger, text-mirrored JSON representation of a line.
+
+    Legacy MCP results carry both structured data and a JSON string in text
+    content. Counting raw UTF-8 (or only the first JSON encoding) undercounts
+    quotes, backslashes, and control characters at the final wire boundary.
+    The larger representation bounds each copy within the existing page budget.
+    """
+    return json_size(_canonical(line).decode("utf-8"))
 
 
 def bound_rendered_lines(
@@ -138,19 +149,40 @@ def bound_rendered_lines(
     budget_bytes: int = ITEMS_BUDGET_BYTES,
 ) -> tuple[list[str], bool]:
     bounded: list[str] = []
-    used = 2
-    oversized = False
+    used = 2  # JSON array brackets.
+    marker = " …[truncated]"
     for line in lines:
-        encoded = line.encode("utf-8")
-        if len(encoded) + 3 > budget_bytes:
-            room = max(0, budget_bytes - used - 64)
-            clipped = encoded[:room].decode("utf-8", errors="ignore")
-            bounded.append(clipped + " …[truncated]")
-            oversized = True
+        # Every character costs at least one wire byte. Avoid materializing
+        # multiple JSON copies of a potentially multi-megabyte terminal line.
+        cost = (
+            budget_bytes + 1
+            if len(line) >= budget_bytes
+            else _rendered_line_size(line) + 1  # Conservative comma allowance.
+        )
+        if used + cost <= budget_bytes:
+            bounded.append(line)
+            used += cost
+            continue
+
+        # Do not consume/truncate a line just because the current page is full.
+        # The caller advances its cursor by len(bounded), so this line must be
+        # offered again on a fresh page, with the entire budget available.
+        if bounded:
             break
-        cost = len(encoded) + 3
-        if bounded and used + cost > budget_bytes:
-            break
-        bounded.append(line)
-        used += cost
-    return bounded, oversized
+
+        if used + _rendered_line_size(marker) + 1 > budget_bytes:
+            raise OutputItemTooLarge("line truncation marker exceeds the response-size budget")
+
+        # Only an inherently oversized first line is irreversibly clipped.
+        # Search Unicode character boundaries using the final JSON wire cost;
+        # this preserves valid UTF-8 and handles escaping of control characters.
+        low, high = 0, min(len(line), budget_bytes)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if used + _rendered_line_size(line[:middle] + marker) + 1 <= budget_bytes:
+                low = middle
+            else:
+                high = middle - 1
+        bounded.append(line[:low] + marker)
+        return bounded, True
+    return bounded, False
