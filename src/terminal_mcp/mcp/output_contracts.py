@@ -1075,11 +1075,11 @@ def _compact_coordination_messages(
         message_id = str(normalized.get("message_hash") or normalized.get("message_id") or "")
         if message_id and message_id in seen_ids:
             continue
-        if message_id:
-            seen_ids.add(message_id)
         if len(compact) >= MAX_COORDINATION_MESSAGES:
             continue
         compact.append(_message_record(summary_message(normalized)))
+        if message_id:
+            seen_ids.add(message_id)
     return compact, seen_ids
 
 
