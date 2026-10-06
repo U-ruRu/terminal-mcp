@@ -17,11 +17,41 @@ class OAuthStore:
             await db.executescript(
                 """CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY,client_secret_hash TEXT,redirect_uris TEXT NOT NULL,client_name TEXT NOT NULL,auth_method TEXT NOT NULL,created_at INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS oauth_codes(code_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,redirect_uri TEXT NOT NULL,scope TEXT NOT NULL,code_challenge TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS oauth_refresh_tokens(token_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,scope TEXT NOT NULL,expires_at INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);"""  # noqa: E501
             )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_oauth_codes_retention "
+                "ON oauth_codes(used,expires_at)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_oauth_refresh_retention "
+                "ON oauth_refresh_tokens(revoked,expires_at)"
+            )
+            await self._cleanup_rows(db, int(time.time()))
             await db.commit()
 
     @staticmethod
     def digest(value):
         return hashlib.sha256(value.encode()).hexdigest()
+
+    @staticmethod
+    async def _cleanup_rows(db, now):
+        codes = await db.execute(
+            "DELETE FROM oauth_codes WHERE used=1 OR expires_at<?", (int(now),)
+        )
+        refresh = await db.execute(
+            "DELETE FROM oauth_refresh_tokens WHERE revoked=1 OR expires_at<?", (int(now),)
+        )
+        return {
+            "authorization_codes": max(0, int(codes.rowcount or 0)),
+            "refresh_tokens": max(0, int(refresh.rowcount or 0)),
+        }
+
+    async def cleanup(self, *, now=None):
+        """Purge disposable OAuth credentials without touching clients or live tokens."""
+        cutoff = int(time.time()) if now is None else int(now)
+        async with aiosqlite.connect(self.path) as db:
+            result = await self._cleanup_rows(db, cutoff)
+            await db.commit()
+        return result
 
     async def register_client(self, uris, name, method):
         cid = secrets.token_urlsafe(24)
@@ -70,6 +100,7 @@ class OAuthStore:
     async def create_code(self, cid, redirect_uri, scope, challenge, ttl):
         code = secrets.token_urlsafe(32)
         async with aiosqlite.connect(self.path) as db:
+            await self._cleanup_rows(db, int(time.time()))
             await db.execute(
                 "INSERT INTO oauth_codes VALUES(?,?,?,?,?,?,0)",
                 (self.digest(code), cid, redirect_uri, scope, challenge, int(time.time()) + ttl),
@@ -95,16 +126,21 @@ class OAuthStore:
     async def consume_code(self, code):
         h = self.digest(code)
         async with aiosqlite.connect(self.path) as db:
+            now = int(time.time())
+            await self._cleanup_rows(db, now)
             cursor = await db.execute(
-                "UPDATE oauth_codes SET used=1 WHERE code_hash=? AND used=0",
-                (h,),
+                "UPDATE oauth_codes SET used=1 WHERE code_hash=? AND used=0 AND expires_at>=?",
+                (h, now),
             )
+            if cursor.rowcount == 1:
+                await db.execute("DELETE FROM oauth_codes WHERE code_hash=?", (h,))
             await db.commit()
         return cursor.rowcount == 1
 
     async def create_refresh(self, cid, scope, ttl):
         token = secrets.token_urlsafe(48)
         async with aiosqlite.connect(self.path) as db:
+            await self._cleanup_rows(db, int(time.time()))
             await db.execute(
                 "INSERT INTO oauth_refresh_tokens VALUES(?,?,?,?,0)",
                 (self.digest(token), cid, scope, int(time.time()) + ttl),
@@ -118,6 +154,7 @@ class OAuthStore:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("PRAGMA busy_timeout=5000")
             await db.execute("BEGIN IMMEDIATE")
+            await self._cleanup_rows(db, now)
             row = await (
                 await db.execute(
                     "SELECT client_id,scope FROM oauth_refresh_tokens "
@@ -126,7 +163,7 @@ class OAuthStore:
                 )
             ).fetchone()
             if not row:
-                await db.rollback()
+                await db.commit()
                 return None
             cursor = await db.execute(
                 "UPDATE oauth_refresh_tokens SET revoked=1 "
@@ -136,5 +173,6 @@ class OAuthStore:
             if cursor.rowcount != 1:
                 await db.rollback()
                 return None
+            await self._cleanup_rows(db, now)
             await db.commit()
         return row[0], row[1]
