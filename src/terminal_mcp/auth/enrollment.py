@@ -28,13 +28,18 @@ def _values(values, label: str) -> list[str]:
 
 
 class AccessStore:
-    def __init__(self, foundation: AuthFoundationStore, pairing_store):
+    def __init__(self, foundation: AuthFoundationStore, pairing_store, oauth_store=None):
         self.foundation = foundation
         self.pairing_store = pairing_store
+        self.oauth_store = oauth_store
         self.manager_continuity = ManagerContinuityLock(foundation.path)
         self.pairing_store.configure_manager_continuity(
-            self.manager_continuity, self._pairing_revoke_allowed
+            self.manager_continuity, self._manager_removal_allowed
         )
+        if self.oauth_store is not None:
+            self.oauth_store.configure_manager_continuity(
+                self.manager_continuity, self._manager_removal_allowed
+            )
 
     async def realm_status(self) -> dict | None:
         db = await self.foundation._connect()
@@ -613,14 +618,14 @@ class AccessStore:
             if client_id == exclude_client_id:
                 continue
             try:
-                device = await self.pairing_store.active_device_for_client(client_id)
+                usable = await self.pairing_store.manager_transport_usable(client_id)
             except Exception:
                 return False
-            if device is not None:
+            if usable:
                 return True
         return False
 
-    async def _pairing_revoke_allowed(self, client_id: str) -> bool:
+    async def _manager_removal_allowed(self, client_id: str) -> bool:
         db = await self.foundation._connect()
         try:
             managers = await self._active_manager_client_ids(db)

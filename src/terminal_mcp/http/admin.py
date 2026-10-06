@@ -8,6 +8,8 @@ from html import escape
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from terminal_mcp.auth.foundation import AuthConflictError
+
 
 def _sig(secret, value):
     return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()
@@ -38,9 +40,10 @@ def _csrf(s, session):
     return _sig(s.admin_session_secret, "csrf:" + session)
 
 
-def _page(body):
+def _page(body, status_code=200):
     return HTMLResponse(
-        f'<!doctype html><html><meta charset="utf-8"><title>terminal-mcp</title><body><h1>terminal-mcp</h1>{body}</body></html>'
+        f'<!doctype html><html><meta charset="utf-8"><title>terminal-mcp</title><body><h1>terminal-mcp</h1>{body}</body></html>',
+        status_code=status_code,
     )
 
 
@@ -148,7 +151,12 @@ def build_admin_router(settings, credentials, oauth_store, terminal, service):
     @r.post("/admin/oauth-client/{client_id}/delete")
     async def delete_client(client_id: str, request: Request):
         if await csrf_guard(request):
-            await oauth_store.delete_client(client_id)
+            try:
+                await oauth_store.delete_client(client_id)
+            except AuthConflictError as exc:
+                if str(exc) != "last_auth_manager_required":
+                    raise
+                return _page("<p>Cannot revoke the last usable auth manager client.</p>", 409)
         return RedirectResponse("/admin", 303)
 
     return r

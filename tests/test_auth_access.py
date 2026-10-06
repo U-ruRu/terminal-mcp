@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -377,7 +378,7 @@ def test_pairing_revoke_is_serialized_with_auth_manager_handoff(tmp_path, monkey
             "principal_id"
         ]
 
-        original_lookup = app.state.pairing_store.active_device_for_client
+        original_lookup = app.state.pairing_store.manager_transport_usable
         lookup_seen = threading.Event()
         release_lookup = threading.Event()
         paused = False
@@ -385,14 +386,14 @@ def test_pairing_revoke_is_serialized_with_auth_manager_handoff(tmp_path, monkey
         async def pause_after_positive_backup_lookup(client_id):
             nonlocal paused
             result = await original_lookup(client_id)
-            if client_id == backup_device["client_id"] and result is not None and not paused:
+            if client_id == backup_device["client_id"] and result and not paused:
                 paused = True
                 lookup_seen.set()
                 assert await asyncio.to_thread(release_lookup.wait, 5)
             return result
 
         monkeypatch.setattr(
-            app.state.pairing_store, "active_device_for_client", pause_after_positive_backup_lookup
+            app.state.pairing_store, "manager_transport_usable", pause_after_positive_backup_lookup
         )
 
         def revoke_owner():
@@ -427,3 +428,224 @@ def test_pairing_revoke_is_serialized_with_auth_manager_handoff(tmp_path, monkey
             app.state.pairing_store.active_device_for_client(backup_device["client_id"])
         ) is not None
         assert client.get("/access/principals", headers=bearer(backup_device)).status_code == 200
+
+
+def test_oauth_client_deletion_cannot_remove_last_usable_manager(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app) as client:
+        owner_device = pair(app, client, "Owner phone")
+        client.post(
+            "/access/bootstrap/owner",
+            headers=bearer(owner_device),
+            json={"username": "owner", "password": "owner-password"},
+        )
+
+        try:
+            asyncio.run(app.state.oauth_store.delete_client(owner_device["client_id"]))
+        except AuthConflictError as exc:
+            assert str(exc) == "last_auth_manager_required"
+        else:
+            raise AssertionError("expected last_auth_manager_required")
+
+        assert asyncio.run(app.state.oauth_store.get_client(owner_device["client_id"])) is not None
+        assert client.get("/access/principals", headers=bearer(owner_device)).status_code == 200
+
+
+def test_deleted_backup_oauth_client_does_not_satisfy_manager_continuity(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app) as client:
+        owner_device = pair(app, client, "Owner phone")
+        client.post(
+            "/access/bootstrap/owner",
+            headers=bearer(owner_device),
+            json={"username": "owner", "password": "owner-password"},
+        )
+        owner_headers = bearer(owner_device)
+        invite = client.post(
+            "/access/enrollments",
+            headers=owner_headers,
+            json={"purpose": "human_invite", "display_name": "Backup manager"},
+        ).json()
+        backup_principal = client.post(
+            "/access/enrollments/exchange",
+            json={
+                "secret": invite["secret"],
+                "username": "backup-manager",
+                "password": "backup-manager-password",
+            },
+        ).json()["principal"]
+        backup_device = pair(app, client, "Backup phone")
+        assigned = client.post(
+            f"/access/clients/{backup_device['client_id']}/assign",
+            headers=owner_headers,
+            json={
+                "principal_id": backup_principal["principal_id"],
+                "role": "owner",
+                "scopes": ["auth:manage", "terminal:read"],
+            },
+        )
+        assert assigned.status_code == 200
+
+        asyncio.run(app.state.oauth_store.delete_client(backup_device["client_id"]))
+        assert asyncio.run(app.state.oauth_store.get_client(backup_device["client_id"])) is None
+        assert asyncio.run(
+            app.state.pairing_store.active_device_for_client(backup_device["client_id"])
+        ) is not None
+        assert asyncio.run(
+            app.state.pairing_store.manager_transport_usable(backup_device["client_id"])
+        ) is False
+
+        preview = client.post(
+            "/access/revocations/preview",
+            headers=owner_headers,
+            json={"client_id": owner_device["client_id"]},
+        ).json()
+        blocked = client.post(
+            "/access/revocations/commit",
+            headers=owner_headers,
+            json={
+                "client_id": owner_device["client_id"],
+                "expected_generation": preview["security_generation"],
+            },
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["error"] == "last_auth_manager_required"
+        assert client.get("/access/principals", headers=owner_headers).status_code == 200
+
+
+def test_oauth_delete_is_serialized_with_auth_manager_handoff(tmp_path, monkeypatch):
+    app = create_app(settings(tmp_path))
+    with TestClient(app) as client:
+        owner_device = pair(app, client, "Owner phone")
+        client.post(
+            "/access/bootstrap/owner",
+            headers=bearer(owner_device),
+            json={"username": "owner", "password": "owner-password"},
+        )
+        owner_headers = bearer(owner_device)
+        invite = client.post(
+            "/access/enrollments",
+            headers=owner_headers,
+            json={"purpose": "human_invite", "display_name": "Backup manager"},
+        ).json()
+        backup_principal = client.post(
+            "/access/enrollments/exchange",
+            json={
+                "secret": invite["secret"],
+                "username": "backup-manager",
+                "password": "backup-manager-password",
+            },
+        ).json()["principal"]
+        backup_device = pair(app, client, "Backup phone")
+        assigned = client.post(
+            f"/access/clients/{backup_device['client_id']}/assign",
+            headers=owner_headers,
+            json={
+                "principal_id": backup_principal["principal_id"],
+                "role": "owner",
+                "scopes": ["auth:manage", "terminal:read"],
+            },
+        )
+        assert assigned.status_code == 200
+        preview = client.post(
+            "/access/revocations/preview",
+            headers=owner_headers,
+            json={"client_id": owner_device["client_id"]},
+        ).json()
+        actor_principal_id = client.get("/access/me", headers=owner_headers).json()[
+            "principal_id"
+        ]
+
+        original_lookup = app.state.pairing_store.manager_transport_usable
+        lookup_seen = threading.Event()
+        release_lookup = threading.Event()
+        paused = False
+
+        async def pause_after_positive_backup_lookup(client_id):
+            nonlocal paused
+            result = await original_lookup(client_id)
+            if client_id == backup_device["client_id"] and result and not paused:
+                paused = True
+                lookup_seen.set()
+                assert await asyncio.to_thread(release_lookup.wait, 5)
+            return result
+
+        monkeypatch.setattr(
+            app.state.pairing_store, "manager_transport_usable", pause_after_positive_backup_lookup
+        )
+
+        def revoke_owner():
+            return asyncio.run(
+                app.state.access_store.revoke_commit(
+                    expected_generation=preview["security_generation"],
+                    actor_principal_id=actor_principal_id,
+                    actor_client_id=owner_device["client_id"],
+                    client_id=owner_device["client_id"],
+                )
+            )
+
+        def delete_backup_oauth_client():
+            try:
+                asyncio.run(app.state.oauth_store.delete_client(backup_device["client_id"]))
+                return "deleted"
+            except AuthConflictError as exc:
+                return str(exc)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            owner_future = pool.submit(revoke_owner)
+            assert lookup_seen.wait(5)
+            oauth_future = pool.submit(delete_backup_oauth_client)
+            release_lookup.set()
+            owner_result = owner_future.result(timeout=5)
+            oauth_result = oauth_future.result(timeout=5)
+
+        assert owner_result["revoked"] is True
+        assert oauth_result == "last_auth_manager_required"
+        assert asyncio.run(app.state.oauth_store.get_client(backup_device["client_id"])) is not None
+        assert asyncio.run(
+            app.state.pairing_store.manager_transport_usable(backup_device["client_id"])
+        ) is True
+        assert client.get("/access/principals", headers=bearer(backup_device)).status_code == 200
+
+
+def test_admin_oauth_delete_refuses_last_usable_manager(tmp_path):
+    configured = settings(tmp_path).model_copy(
+        update={
+            "admin_username": "admin",
+            "admin_password": "change-me",
+            "admin_session_secret": "s" * 32,
+        }
+    )
+    app = create_app(configured)
+    with TestClient(app, base_url="https://testserver") as client:
+        owner_device = pair(app, client, "Owner phone")
+        client.post(
+            "/access/bootstrap/owner",
+            headers=bearer(owner_device),
+            json={"username": "owner", "password": "owner-password"},
+        )
+
+        login_page = client.get("/admin/login").text
+        login_csrf = re.search(
+            r'name="csrf_token" value="([A-Za-z0-9_-]+)"', login_page
+        ).group(1)
+        login_response = client.post(
+            "/admin/login",
+            data={
+                "username": "admin",
+                "password": "change-me",
+                "csrf_token": login_csrf,
+            },
+        )
+        assert login_response.status_code == 200
+        admin_page = client.get("/admin").text
+        csrf = re.search(r'name="csrf_token" value="([a-f0-9]+)"', admin_page).group(1)
+
+        blocked = client.post(
+            f"/admin/oauth-client/{owner_device['client_id']}/delete",
+            data={"csrf_token": csrf},
+        )
+        assert blocked.status_code == 409
+        assert "last usable auth manager" in blocked.text
+        assert asyncio.run(app.state.oauth_store.get_client(owner_device["client_id"])) is not None
+        assert client.get("/access/principals", headers=bearer(owner_device)).status_code == 200

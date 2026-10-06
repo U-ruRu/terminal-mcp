@@ -293,6 +293,18 @@ class PairingStore:
             ).fetchone()
         return row is not None
 
+    async def manager_transport_usable(self, client_id: str) -> bool:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT 1 FROM console_devices d "
+                    "JOIN oauth_clients o ON o.client_id=d.client_id "
+                    "WHERE d.client_id=? AND d.revoked_at IS NULL",
+                    (client_id,),
+                )
+            ).fetchone()
+        return row is not None
+
     async def _active_client_id_for_device(self, device_id: str) -> str | None:
         async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             row = await (

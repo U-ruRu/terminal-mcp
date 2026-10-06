@@ -1,9 +1,12 @@
 import hashlib
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 
 import aiosqlite
 
+from terminal_mcp.auth.continuity import ManagerContinuityLock
+from terminal_mcp.auth.foundation import AuthConflictError
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
@@ -11,6 +14,16 @@ from terminal_mcp.storage.sqlite_observability import cancellation_safe_connecti
 class OAuthStore:
     def __init__(self, path):
         self.path = path
+        self._manager_continuity: ManagerContinuityLock | None = None
+        self._manager_delete_guard: Callable[[str], Awaitable[bool]] | None = None
+
+    def configure_manager_continuity(
+        self,
+        continuity: ManagerContinuityLock,
+        delete_guard: Callable[[str], Awaitable[bool]],
+    ) -> None:
+        self._manager_continuity = continuity
+        self._manager_delete_guard = delete_guard
 
     async def initialize(self):
         secure_database_path(self.path)
@@ -91,12 +104,24 @@ class OAuthStore:
                 )
             ).fetchall()
 
-    async def delete_client(self, client_id):
+    async def _delete_client_unchecked(self, client_id):
         async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("DELETE FROM oauth_refresh_tokens WHERE client_id=?", (client_id,))
             await db.execute("DELETE FROM oauth_codes WHERE client_id=?", (client_id,))
             await db.execute("DELETE FROM oauth_clients WHERE client_id=?", (client_id,))
             await db.commit()
+
+    async def delete_client(self, client_id):
+        if self._manager_continuity is None:
+            await self._delete_client_unchecked(client_id)
+            return
+        async with self._manager_continuity.hold():
+            if (
+                self._manager_delete_guard is not None
+                and not await self._manager_delete_guard(client_id)
+            ):
+                raise AuthConflictError("last_auth_manager_required")
+            await self._delete_client_unchecked(client_id)
 
     async def create_code(self, cid, redirect_uri, scope, challenge, ttl):
         code = secrets.token_urlsafe(32)
