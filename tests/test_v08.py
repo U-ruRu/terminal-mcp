@@ -8,7 +8,7 @@ from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.orchestration import public_agent_name, utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.agents import AgentStore
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
 
@@ -348,7 +348,7 @@ def test_v07_database_migrates_to_v08_without_reset(tmp_path):
         assert {"delivered_at", "first_seen_at", "seen_count", "replied_at"} <= recipient_columns
         old_command = db.execute("SELECT cmd FROM commands WHERE hash='deadbeef'").fetchone()[0]
         assert old_command == "printf old"
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 @pytest.mark.asyncio
