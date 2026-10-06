@@ -288,8 +288,8 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 /* Persistent Slot lifecycle */
 .slot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .slot-card { border-inline-start: 4px solid var(--color-border); }
-.slot-card.slot-cue-warning { border-inline-start-style: double; border-inline-start-width: 7px; }
-.slot-card.slot-cue-alert { border-inline-start-style: solid; border-inline-start-width: 8px; }
+.slot-card.slot-cue-warning { border-inline-start: 4px solid var(--color-warning); }
+.slot-card.slot-cue-alert { border-inline-start: 4px solid var(--color-danger); }
 .slot-selector { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .slot-selector code { font-size: 1.25rem; font-weight: 800; letter-spacing: 0.16em; }
 .slot-time { display: flex; gap: var(--space-2); align-items: baseline; }
@@ -2695,16 +2695,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .slot-card-agent { font-weight: var(--font-weight-bold); }
 .slot-card-label { font-weight: var(--font-weight-regular, 400); }
 .slot-session-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
   max-width: 11rem;
-  padding: 3px 9px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  font-size: var(--font-caption-size, 11px);
-  line-height: var(--font-caption-line, 16px);
-  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2717,7 +2708,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .slot-card-actions .slot-timer {
   width: auto;
   min-width: 7ch;
-  margin-inline-end: var(--space-1);
+  margin-inline-end: var(--space-2);
 }
 @media (max-width: 700px) {
   .slot-card-primary { grid-template-columns: minmax(0, 1fr) auto; }
@@ -2736,27 +2727,17 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .slots-surface .slot-card-primary { min-height: 28px; }
 .slots-surface .slot-card-secondary { min-height: var(--touch-target); }
 .slots-surface .slot-card-actions { gap: var(--space-1); }
-.slots-surface .slot-card-actions .slot-timer { margin-inline-end: 0; }
+.slots-surface .slot-card-actions .slot-timer { margin-inline-end: var(--space-2); }
 
 .server-card-large .server-state-strip {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-  width: min(100%, 22rem);
-  gap: var(--space-2);
-}
-.server-card-large .server-state-strip > .status {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  min-width: 0;
-  min-height: 34px;
-  padding: 5px 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-wrap: wrap;
+  width: auto;
+  max-width: 100%;
+  gap: var(--space-2);
 }
+.server-card-large .server-state-strip > .status { flex: 0 0 auto; }
 
 .server-overview-diagnostics {
   display: block;
@@ -2772,3 +2753,9 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 .server-overview-diagnostics[open] > summary { margin-bottom: var(--space-2); }
 .server-overview-diagnostics > .muted { margin-bottom: var(--space-2); }
 .server-overview-diagnostics .diagnostics-actions { margin-block: var(--space-1) var(--space-2); }
+
+
+/* Shared compact status badges */
+.status-badge-row { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.slot-settings-heading { align-items: center; }
+.slot-settings-heading .status-badge-row:empty { display: none; }

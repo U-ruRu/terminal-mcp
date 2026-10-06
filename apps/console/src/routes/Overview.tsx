@@ -34,6 +34,12 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
   const [confirmDeleteEntry, setConfirmDeleteEntry] = useState<ActiveSlotEntry | null>(null)
 
   useEffect(() => {
+    if (!slotMessage) return
+    const clear = window.setTimeout(() => setSlotMessage(''), 3000)
+    return () => window.clearTimeout(clear)
+  }, [slotMessage])
+
+  useEffect(() => {
     if (!loadFleetControl || model.servers.length === 0) return
     let cancelled = false
     void Promise.all(model.servers.map(async (server): Promise<MeshObservation> => {
@@ -193,7 +199,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
 
       <section className="fleet-agent-sessions" aria-labelledby="fleet-agent-sessions-title">
         <h2 id="fleet-agent-sessions-title" className="fleet-section-title">{t('fleet.agentSessions')}</h2>
-        {slotMessage ? <div className="attention-strip" role="status">{slotMessage}</div> : null}
+        {slotMessage ? <div className="transient-toast" role="status" aria-live="polite">{slotMessage}</div> : null}
         {activeSlotGroups.length === 0 ? <FeedbackState variant="empty" title={t('fleet.noActiveSharedSessions')} /> : activeSlotGroups.map((group) => (
           <section className="fleet-session-group" key={group.key} aria-label={group.label}>
             <h3 className="fleet-group-title">{group.label}</h3>
@@ -203,7 +209,7 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
                 <div className="slot-card-primary">
                   <Link className="text-link slot-card-identity" to={slotHref(entry)}><strong>{slotName(entry.slot)}</strong></Link>
                   <span className="slot-timer">{timer(entry.slot)}</span>
-                  <span className="chip">{entry.slot.state === 'stopping' ? t('slots.state.stopping') : t('slots.state.active')}</span>
+                  <span className={'status server-status slot-session-badge slot-session-' + entry.slot.state}>{entry.slot.state === 'stopping' ? t('slots.state.stopping') : t('slots.state.active')}</span>
                 </div>
                 <div className="slot-card-secondary">
                   <span className="slot-code-cell">{saved ? <span className="access-code-copy"><code>{saved.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)} /></span> : <span className="slot-code-unavailable">—</span>}</span>
