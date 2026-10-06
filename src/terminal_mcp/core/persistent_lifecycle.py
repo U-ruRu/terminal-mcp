@@ -208,7 +208,15 @@ class PersistentLifecycleCoordinator:
             async with limit:
                 return await self._slot_result(slot.logical_agent_id)
 
-        rows = list(await asyncio.gather(*(project(slot) for slot in slots)))
+        tasks = [asyncio.create_task(project(slot)) for slot in slots]
+        try:
+            rows = list(await asyncio.gather(*tasks))
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         return {"ok": True, "slots": rows, "server_now": utc_text()}
 
     async def get_slot(self, logical_agent_id: str) -> dict:

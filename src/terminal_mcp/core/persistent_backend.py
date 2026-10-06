@@ -1370,7 +1370,14 @@ class PersistentBackend:
                     return item
 
             if slots:
-                await asyncio.gather(*(enrich_access(item) for item in slots))
+                tasks = [asyncio.create_task(enrich_access(item)) for item in slots]
+                try:
+                    await asyncio.gather(*tasks)
+                except BaseException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
             return result
         except PersistentLifecycleError as exc:
             return self._error(exc)
