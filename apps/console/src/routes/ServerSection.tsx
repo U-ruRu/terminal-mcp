@@ -114,9 +114,8 @@ export function ServerSection({
       <div className="server-context-status">
         <p className="muted">{server.origin}</p>
         <div className="server-state-strip" aria-label={server.displayName + ' state'}>
-          <span className={'status status-' + server.connectionState}>{server.connectionState === 'live' ? t('status.live') : server.connectionState === 'offline' ? t('status.offline') : t('status.loading')}</span>
-          <span className={'status fleet-status-' + server.freshness}>{server.freshness === 'fresh' ? t('status.fresh') : server.freshness === 'stale' ? t('status.stale') : t('status.loading')}</span>
-          {server.healthState === 'attention' ? <span className="status status-attention">{t('status.attention')}</span> : null}
+          <span className={'status server-status ' + (server.connectionState === 'live' ? 'server-status-healthy' : server.connectionState === 'offline' ? 'server-status-offline' : 'server-status-loading')}>{server.connectionState === 'live' ? t('status.live') : server.connectionState === 'offline' ? t('status.offline') : t('status.loading')}</span>
+          <span className={'status server-status ' + (server.freshness === 'fresh' ? 'server-status-healthy' : server.freshness === 'stale' ? 'server-status-stale' : 'server-status-loading')}>{server.freshness === 'fresh' ? t('status.fresh') : server.freshness === 'stale' ? t('status.stale') : t('status.loading')}</span>
         </div>
       </div>
 

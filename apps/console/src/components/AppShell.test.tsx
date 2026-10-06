@@ -43,7 +43,7 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
-  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.33 · code 35')
+  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.34 · code 36')
 })
 
 
@@ -75,6 +75,15 @@ test('bottom navigation follows Mesh context and omits server-only destinations'
   expect(within(bottom).queryByRole('link', { name: /Context/ })).not.toBeInTheDocument()
   expect(within(bottom).queryByRole('link', { name: /Diagnostics/ })).not.toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Activity/ })).toHaveAttribute('aria-current', 'page')
+})
+
+test('global aggregate app-bar state uses the shared compact status badge', () => {
+  renderShell('/slots', fixtureFleetModel.servers)
+  const appBar = document.querySelector('.app-bar') as HTMLElement
+  const badge = appBar.querySelector('.app-bar-trailing .server-status') as HTMLElement
+  expect(badge).toBeInTheDocument()
+  expect(badge).toHaveClass('status')
+  expect(appBar.querySelector('.app-bar-trailing .environment-badge')).not.toBeInTheDocument()
 })
 
 test('root Fleet app bar leaves aggregate status to the Fleet decision surface', () => {
