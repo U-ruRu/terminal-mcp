@@ -90,3 +90,24 @@ async def test_existing_v10_database_migrates_to_context_schema(tmp_path):
     with sqlite3.connect(database) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == 19
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.asyncio
+async def test_namespace_context_is_isolated_and_seen_per_work_session(tmp_path):
+    _, context = await store(tmp_path)
+    global_entry = await context.create("Global", "global", True)
+    alpha = await context.create("Alpha", "alpha", True, namespace="alpha")
+    beta = await context.create("Beta", "beta", False, namespace="beta")
+
+    assert [item["id"] for item in await context.list()] == [global_entry["id"]]
+    assert await context.list(namespace="alpha") == [alpha]
+    assert await context.list(namespace="beta") == [beta]
+    assert await context.get(alpha["id"], namespace="beta") is None
+    assert await context.update(alpha["id"], namespace="beta", content="wrong") is None
+    assert await context.delete(alpha["id"], namespace="beta") is False
+    assert (await context.get(alpha["id"], namespace="alpha"))["content"] == "alpha"
+
+    assert await context.namespace_seen("ws-1", "alpha") is False
+    await context.mark_namespace_seen("ws-1", "alpha", seen_at="2026-10-06T00:00:00.000Z")
+    assert await context.namespace_seen("ws-1", "alpha") is True
+    assert await context.namespace_seen("ws-1", "beta") is False

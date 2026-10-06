@@ -351,6 +351,7 @@ async def test_schema_v18_preserves_pre_cutover_claimed_ready_as_in_progress(tmp
     assert rows["DEFERRED"] == ("deferred", "2026-01-04T00:00:00Z", None)
     assert rows["DONE"] == ("done", "2026-01-05T00:00:00Z", None)
 
+
 @pytest.mark.asyncio
 async def test_initialize_backfills_implicit_namespace_metadata(tmp_path):
     repo, tasks = await store(tmp_path)
@@ -366,3 +367,40 @@ async def test_initialize_backfills_implicit_namespace_metadata(tmp_path):
     assert namespace is not None
     assert namespace["priority"] == 1
     assert namespace["archived_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_namespace_metadata_priority_revision_and_archive_filtering(tmp_path):
+    _, tasks = await store(tmp_path)
+    await tasks.create_task("low", "T-1", "Low task")
+    await tasks.create_task("high", "T-2", "High task")
+
+    low = await tasks.get_namespace("low")
+    high = await tasks.get_namespace("high")
+    assert low is not None and high is not None
+    high = await tasks.update_namespace("high", expected_revision=high["revision"], priority=3)
+    assert high["revision"] == 2
+    assert [item["namespace"] for item in await tasks.list_namespace_records()] == ["high", "low"]
+
+    with pytest.raises(TaskRevisionConflict):
+        await tasks.update_namespace("high", expected_revision=1, priority=0)
+
+    low = await tasks.update_namespace(
+        "low",
+        expected_revision=low["revision"],
+        archived_at="2026-10-06T00:00:00.000Z",
+        archive_note="finished project",
+    )
+    assert low["archived_at"] == "2026-10-06T00:00:00.000Z"
+    assert await tasks.list_tasks(namespace="low", show_done=True) == []
+    assert [
+        item["task_id"]
+        for item in await tasks.list_tasks(namespace="low", show_done=True, show_archived=True)
+    ] == ["T-1"]
+    assert [item["namespace"] for item in await tasks.list_namespace_records()] == ["high"]
+    assert {
+        item["namespace"] for item in await tasks.list_namespace_records(show_archived=True)
+    } == {
+        "high",
+        "low",
+    }

@@ -181,14 +181,23 @@ class SqliteRepository:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     summary TEXT NOT NULL CHECK(length(summary) <= 100),
                     content TEXT NOT NULL,
-                    is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1))
+                    is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
+                    namespace TEXT
                 );
+                CREATE INDEX IF NOT EXISTS ix_instance_context_namespace
+                    ON instance_context(namespace,is_primary DESC,id);
                 CREATE TABLE IF NOT EXISTS work_namespaces(
                     namespace TEXT PRIMARY KEY,
                     priority INTEGER NOT NULL DEFAULT 1 CHECK(priority BETWEEN 0 AND 3),
                     archived_at TEXT, archive_note TEXT,
                     revision INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS work_session_namespace_context_seen(
+                    work_session_id TEXT NOT NULL,
+                    namespace TEXT NOT NULL,
+                    seen_at TEXT NOT NULL,
+                    PRIMARY KEY(work_session_id,namespace)
                 );
                 CREATE TABLE IF NOT EXISTS work_items(
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
@@ -484,6 +493,15 @@ class SqliteRepository:
                 if name not in columns:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
             return columns
+
+        await add_columns(
+            "instance_context",
+            [("namespace", "TEXT")],
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_instance_context_namespace "
+            "ON instance_context(namespace,is_primary DESC,id)"
+        )
 
         command_columns = await add_columns(
             "commands",

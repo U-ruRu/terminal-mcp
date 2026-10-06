@@ -36,6 +36,10 @@ ACTIONS = (
     "relate",
     "unrelate",
     "review",
+    "namespace_create",
+    "namespace_update",
+    "namespace_archive",
+    "namespace_restore",
 )
 REVIEW_DIMENSIONS = ("A", "C", "R")  # legacy read-only review history
 PRIORITY_VALUE = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
@@ -385,9 +389,7 @@ class TaskCoordinator:
             "lane": external["lane"],
             "priority": external["priority"],
             "state": external["state"],
-            "operational_status": self._operational_status(
-                external, claims, blocking_dependencies
-            ),
+            "operational_status": self._operational_status(external, claims, blocking_dependencies),
             "revision": external["revision"],
             "claim": claim,
             "next_action": external.get("next_action") or "",
@@ -641,6 +643,14 @@ class TaskCoordinator:
             if not namespace:
                 return {"ok": False, "error": "tasks.namespace: required with task_id"}
             task = await self.store.get_task(namespace, task_id)
+            namespace_record = await self.store.get_namespace(namespace)
+            if (
+                task is not None
+                and not show_archived
+                and namespace_record is not None
+                and namespace_record.get("archived_at") is not None
+            ):
+                task = None
             return {
                 "ok": task is not None,
                 "task": (
@@ -716,9 +726,7 @@ class TaskCoordinator:
                 state_counts[item["state"]] += 1
                 operational_status_counts[item["operational_status"]] += 1
                 blocking = item["blocking_dependencies"]
-                missing_dependency_count += sum(
-                    dep["state"] == "missing" for dep in blocking
-                )
+                missing_dependency_count += sum(dep["state"] == "missing" for dep in blocking)
                 eligible, _, _ = await self._claimability(
                     item, claims=item["claims"], dependencies=blocking
                 )
@@ -822,7 +830,208 @@ class TaskCoordinator:
                 "error": "task.isolation_hint: set only when creating the task",
                 "warnings": [],
             }
+        if not action.startswith("namespace_"):
+            namespace_record = await self.store.get_namespace(namespace)
+            if namespace_record is not None and namespace_record.get("archived_at") is not None:
+                return {
+                    "ok": False,
+                    "code": "namespace_archived",
+                    "error": "task.namespace: namespace is archived; restore it before mutation",
+                    "warnings": [],
+                }
         return await handler(agent_id, namespace, task_id, **kwargs)
+
+    @staticmethod
+    def _namespace_record(item):
+        if item is None:
+            return None
+        result = dict(item)
+        result["priority"] = VALUE_PRIORITY.get(int(result.get("priority", 1)), "P2")
+        return result
+
+    async def _namespace_result(self, namespace, warnings=None, *, ok=True, error=None):
+        result = {
+            "ok": bool(ok),
+            "namespace": self._namespace_record(await self.store.get_namespace(namespace)),
+            "warnings": list(warnings or []),
+        }
+        if error is not None:
+            result["error"] = error
+        return result
+
+    async def _action_namespace_create(self, agent_id, namespace, task_id, **kwargs):
+        if task_id is not None:
+            return {
+                "ok": False,
+                "error": "task.namespace_create: task_id is not allowed",
+                "warnings": [],
+            }
+        priority = kwargs.get("priority", "P2")
+        if priority not in PRIORITIES:
+            return {
+                "ok": False,
+                "error": f"task.priority: expected one of {', '.join(PRIORITIES)}",
+                "warnings": [],
+            }
+        current = await self.store.get_namespace(namespace)
+        if current is not None:
+            return await self._namespace_result(
+                namespace,
+                [_warning("namespace_exists", "Namespace already exists.", severity="info")],
+            )
+        await self.store.create_namespace(namespace, priority=PRIORITY_VALUE[priority])
+        return await self._namespace_result(namespace)
+
+    async def _action_namespace_update(self, agent_id, namespace, task_id, **kwargs):
+        if task_id is not None:
+            return {
+                "ok": False,
+                "error": "task.namespace_update: task_id is not allowed",
+                "warnings": [],
+            }
+        current = await self.store.get_namespace(namespace)
+        if current is None:
+            return {"ok": False, "error": "namespace not found", "warnings": []}
+        priority = kwargs.get("priority")
+        if priority is None:
+            return {
+                "ok": False,
+                "error": "task.namespace_update: priority required",
+                "warnings": [],
+            }
+        if priority not in PRIORITIES:
+            return {
+                "ok": False,
+                "error": f"task.priority: expected one of {', '.join(PRIORITIES)}",
+                "warnings": [],
+            }
+        try:
+            await self.store.update_namespace(
+                namespace,
+                expected_revision=kwargs.get("expected_revision"),
+                priority=PRIORITY_VALUE[priority],
+            )
+        except TaskRevisionConflict as exc:
+            return await self._namespace_result(
+                namespace,
+                [
+                    _warning(
+                        "concurrent_update",
+                        "Namespace revision changed before update was applied.",
+                        expected=exc.expected,
+                        actual=exc.actual,
+                    )
+                ],
+                ok=False,
+                error="revision conflict",
+            )
+        return await self._namespace_result(namespace)
+
+    async def _action_namespace_archive(self, agent_id, namespace, task_id, **kwargs):
+        if task_id is not None:
+            return {
+                "ok": False,
+                "error": "task.namespace_archive: task_id is not allowed",
+                "warnings": [],
+            }
+        current = await self.store.get_namespace(namespace)
+        if current is None:
+            return {"ok": False, "error": "namespace not found", "warnings": []}
+        if current.get("archived_at") is not None:
+            return await self._namespace_result(
+                namespace,
+                [_warning("already_archived", "Namespace is already archived.", severity="info")],
+            )
+        note, error = self._clean_reason(
+            kwargs.get("archive_note") or kwargs.get("note"), "archive_note"
+        )
+        if error:
+            return {"ok": False, "error": error, "warnings": []}
+        live = []
+        tasks = await self.store.list_tasks(
+            namespace=namespace, show_done=True, show_archived=True, limit=None
+        )
+        for task in tasks:
+            claims = await self._live_claims(namespace, task["task_id"])
+            if claims:
+                live.append(task["task_id"])
+        if live:
+            return {
+                "ok": False,
+                "code": "namespace_live_claims",
+                "error": "task.namespace_archive: namespace has live task claims",
+                "warnings": [
+                    _warning(
+                        "namespace_live_claims",
+                        "Release live task claims before archiving the namespace.",
+                        live_task_ids=live,
+                    )
+                ],
+            }
+        try:
+            await self.store.update_namespace(
+                namespace,
+                expected_revision=kwargs.get("expected_revision"),
+                archived_at=utc_text(),
+                archive_note=note,
+            )
+        except TaskRevisionConflict as exc:
+            return await self._namespace_result(
+                namespace,
+                [
+                    _warning(
+                        "concurrent_update",
+                        "Namespace revision changed before archive was applied.",
+                        expected=exc.expected,
+                        actual=exc.actual,
+                    )
+                ],
+                ok=False,
+                error="revision conflict",
+            )
+        return await self._namespace_result(namespace)
+
+    async def _action_namespace_restore(self, agent_id, namespace, task_id, **kwargs):
+        if task_id is not None:
+            return {
+                "ok": False,
+                "error": "task.namespace_restore: task_id is not allowed",
+                "warnings": [],
+            }
+        current = await self.store.get_namespace(namespace)
+        if current is None:
+            return {"ok": False, "error": "namespace not found", "warnings": []}
+        if current.get("archived_at") is None:
+            return await self._namespace_result(
+                namespace,
+                [
+                    _warning(
+                        "namespace_not_archived", "Namespace is already active.", severity="info"
+                    )
+                ],
+            )
+        try:
+            await self.store.update_namespace(
+                namespace,
+                expected_revision=kwargs.get("expected_revision"),
+                archived_at=None,
+                archive_note=None,
+            )
+        except TaskRevisionConflict as exc:
+            return await self._namespace_result(
+                namespace,
+                [
+                    _warning(
+                        "concurrent_update",
+                        "Namespace revision changed before restore was applied.",
+                        expected=exc.expected,
+                        actual=exc.actual,
+                    )
+                ],
+                ok=False,
+                error="revision conflict",
+            )
+        return await self._namespace_result(namespace)
 
     async def _action_create(self, agent_id, namespace, task_id, **kwargs):
         dependency_error = self._validate_dependencies(kwargs.get("dependencies"))

@@ -309,6 +309,40 @@ class TaskReviewRequest(TaskRevisionRequest):
         return value
 
 
+class NamespaceCreateRequest(StrictTaskModel):
+    action: Literal["namespace_create"]
+    code: AccessCode
+    namespace: Namespace
+    priority: TaskPriority = "P2"
+
+
+class NamespaceRevisionRequest(StrictTaskModel):
+    code: AccessCode
+    namespace: Namespace
+    expected_revision: ExpectedRevision | None = None
+
+
+class NamespaceUpdateRequest(NamespaceRevisionRequest):
+    action: Literal["namespace_update"]
+    priority: TaskPriority
+
+
+class NamespaceArchiveRequest(NamespaceRevisionRequest):
+    action: Literal["namespace_archive"]
+    archive_note: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
+    note: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+
+    @model_validator(mode="after")
+    def require_archive_note(self):
+        if self.archive_note is None and self.note is None:
+            raise ValueError("archive_note or note is required")
+        return self
+
+
+class NamespaceRestoreRequest(NamespaceRevisionRequest):
+    action: Literal["namespace_restore"]
+
+
 TaskRequest = Annotated[
     TaskCreateRequest
     | TaskClaimRequest
@@ -321,7 +355,11 @@ TaskRequest = Annotated[
     | TaskStateRequest
     | TaskDoneRequest
     | TaskArchiveRequest
-    | TaskReviewRequest,
+    | TaskReviewRequest
+    | NamespaceCreateRequest
+    | NamespaceUpdateRequest
+    | NamespaceArchiveRequest
+    | NamespaceRestoreRequest,
     Field(discriminator="action"),
 ]
 
@@ -338,6 +376,10 @@ TASK_ACTIONS = {
     "done",
     "archive",
     "review",
+    "namespace_create",
+    "namespace_update",
+    "namespace_archive",
+    "namespace_restore",
 }
 
 

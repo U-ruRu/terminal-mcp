@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias, TypedDict, Unpack, runtime_checkable
+from typing import NotRequired, Protocol, TypeAlias, TypedDict, Unpack, runtime_checkable
 
 from terminal_mcp.core.persistent_agents import WorkSessionRecord
 
@@ -21,6 +21,7 @@ class ContextEntry(TypedDict):
     summary: str
     content: str
     primary: bool
+    namespace: NotRequired[str]
 
 
 class ContextPatch(TypedDict, total=False):
@@ -50,13 +51,15 @@ class CommandSnapshot:
 class ContextRepositoryPort(Protocol):
     async def get(self, context_id: int) -> ContextEntry | None: ...
 
-    async def create(self, summary: str, content: str, primary: bool) -> ContextEntry: ...
+    async def create(
+        self, summary: str, content: str, primary: bool, *, namespace: str | None = None
+    ) -> ContextEntry: ...
 
     async def update(
-        self, context_id: int, **patch: Unpack[ContextPatch]
+        self, context_id: int, *, namespace: str | None = None, **patch: Unpack[ContextPatch]
     ) -> ContextEntry | None: ...
 
-    async def delete(self, context_id: int) -> bool: ...
+    async def delete(self, context_id: int, *, namespace: str | None = None) -> bool: ...
 
 
 @runtime_checkable

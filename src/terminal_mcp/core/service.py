@@ -33,6 +33,7 @@ def validate_context_request(
     summary=None,
     content=None,
     primary=None,
+    namespace=None,
     show_details=False,
     limit=None,
     offset=0,
@@ -1089,6 +1090,7 @@ class TerminalService:
         summary=None,
         content=None,
         primary=None,
+        namespace=None,
         show_details=False,
         limit=None,
         offset=0,
@@ -1101,6 +1103,7 @@ class TerminalService:
             summary=summary,
             content=content,
             primary=primary,
+            namespace=namespace,
             show_details=show_details,
             limit=limit,
             offset=offset,
@@ -1110,6 +1113,7 @@ class TerminalService:
         try:
             if action == "list":
                 entries = await self.context_store.list(
+                    namespace=namespace,
                     limit=limit,
                     offset=offset,
                     primary_first=limit is not None,
@@ -1117,6 +1121,8 @@ class TerminalService:
 
                 def compact(entry):
                     item = {"id": entry["id"], "summary": entry["summary"]}
+                    if entry.get("namespace") is not None:
+                        item["namespace"] = entry["namespace"]
                     if show_details:
                         item["content"] = entry["content"]
                     return item
@@ -1127,7 +1133,9 @@ class TerminalService:
                     "additional": [compact(item) for item in entries if not item["primary"]],
                 }
             if action == "create":
-                entry = await self.context_store.create(summary, content, primary)
+                entry = await self.context_store.create(
+                    summary, content, primary, namespace=namespace
+                )
                 return {"ok": True, "entry": entry}
             if action == "update":
                 fields = {}
@@ -1137,11 +1145,11 @@ class TerminalService:
                     fields["content"] = content
                 if primary is not None:
                     fields["primary"] = primary
-                entry = await self.context_store.update(context_id, **fields)
+                entry = await self.context_store.update(context_id, namespace=namespace, **fields)
                 if entry is None:
                     return {"ok": False, "error": f"context id {context_id} not found"}
                 return {"ok": True, "entry": entry}
-            deleted = await self.context_store.delete(context_id)
+            deleted = await self.context_store.delete(context_id, namespace=namespace)
             if not deleted:
                 return {"ok": False, "error": f"context id {context_id} not found"}
             return {"ok": True, "deleted_id": int(context_id)}

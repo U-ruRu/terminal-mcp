@@ -109,30 +109,58 @@ class _ContextRepository:
     def __init__(self, scope: _Scope):
         self._scope = scope
 
-    async def get(self, context_id: int) -> ContextEntry | None:
-        row = await self._scope.fetchone(
-            "SELECT id,summary,content,is_primary FROM instance_context WHERE id=?",
-            (int(context_id),),
-        )
+    @staticmethod
+    def _entry(row) -> ContextEntry | None:
         if row is None:
             return None
-        return ContextEntry(id=int(row[0]), summary=row[1], content=row[2], primary=bool(row[3]))
+        entry = ContextEntry(id=int(row[0]), summary=row[1], content=row[2], primary=bool(row[3]))
+        if row[4] is not None:
+            entry["namespace"] = row[4]
+        return entry
 
-    async def create(self, summary: str, content: str, primary: bool) -> ContextEntry:
+    async def get(self, context_id: int, *, namespace: str | None = None) -> ContextEntry | None:
+        if namespace is None:
+            row = await self._scope.fetchone(
+                "SELECT id,summary,content,is_primary,namespace FROM instance_context "
+                "WHERE id=? AND namespace IS NULL",
+                (int(context_id),),
+            )
+        else:
+            row = await self._scope.fetchone(
+                "SELECT id,summary,content,is_primary,namespace FROM instance_context "
+                "WHERE id=? AND namespace=?",
+                (int(context_id), namespace),
+            )
+        return self._entry(row)
+
+    async def create(
+        self, summary: str, content: str, primary: bool, *, namespace: str | None = None
+    ) -> ContextEntry:
         self._scope.check()
         values = (
             ContextStore._summary(summary),
             ContextStore._content(content),
             int(ContextStore._primary(primary)),
+            namespace,
         )
         context_id = await self._scope.insert(
-            "INSERT INTO instance_context(summary,content,is_primary) VALUES(?,?,?)", values
+            "INSERT INTO instance_context(summary,content,is_primary,namespace) VALUES(?,?,?,?)",
+            values,
         )
-        return ContextEntry(
+        entry = ContextEntry(
             id=context_id, summary=values[0], content=values[1], primary=bool(values[2])
         )
+        if namespace is not None:
+            entry["namespace"] = namespace
+        return entry
 
-    async def update(self, context_id: int, **patch: Unpack[ContextPatch]) -> ContextEntry | None:
+    async def update(
+        self,
+        context_id: int,
+        *,
+        namespace: str | None = None,
+        **patch: Unpack[ContextPatch],
+    ) -> ContextEntry | None:
         self._scope.check()
         if not patch:
             raise ValueError("at least one context field is required")
@@ -149,17 +177,25 @@ class _ContextRepository:
         if "primary" in patch:
             fields.append("is_primary=?")
             values.append(int(ContextStore._primary(patch["primary"])))
+        if namespace is None:
+            where = "id=? AND namespace IS NULL"
+            parameters = (*values, int(context_id))
+        else:
+            where = "id=? AND namespace=?"
+            parameters = (*values, int(context_id), namespace)
         changed = await self._scope.change(
-            f"UPDATE instance_context SET {','.join(fields)} WHERE id=?",
-            (*values, int(context_id)),
+            f"UPDATE instance_context SET {','.join(fields)} WHERE {where}", parameters
         )
-        return await self.get(context_id) if changed == 1 else None
+        return await self.get(context_id, namespace=namespace) if changed == 1 else None
 
-    async def delete(self, context_id: int) -> bool:
-        return (
-            await self._scope.change("DELETE FROM instance_context WHERE id=?", (int(context_id),))
-            == 1
-        )
+    async def delete(self, context_id: int, *, namespace: str | None = None) -> bool:
+        if namespace is None:
+            sql = "DELETE FROM instance_context WHERE id=? AND namespace IS NULL"
+            parameters = (int(context_id),)
+        else:
+            sql = "DELETE FROM instance_context WHERE id=? AND namespace=?"
+            parameters = (int(context_id), namespace)
+        return await self._scope.change(sql, parameters) == 1
 
 
 class _SessionRepository:

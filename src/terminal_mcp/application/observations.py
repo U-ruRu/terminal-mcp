@@ -92,9 +92,17 @@ class ObservationApplication(ApplicationCapability):
             store = getattr(self.service, "task_store", None)
             if store is None:
                 return {"ok": False, "code": "resource_not_found", "error": "resource_not_found"}
+            records = await store.list_namespace_records(
+                show_archived=show_archived, limit=limit + 1, offset=offset
+            )
+            priorities = {3: "P0", 2: "P1", 1: "P2", 0: "P3"}
             namespaces = [
-                {"namespace": value}
-                for value in await store.list_namespaces(limit=limit + 1, offset=offset)
+                (
+                    {"namespace": item["namespace"]}
+                    if detail == "summary"
+                    else {**item, "priority": priorities.get(int(item["priority"]), "P3")}
+                )
+                for item in records
             ]
             try:
                 page, _unused_cursor = bounded_page(
@@ -106,7 +114,9 @@ class ObservationApplication(ApplicationCapability):
             next_cursor = encode_cursor(offset + len(page), scope) if has_more else None
             return {
                 "ok": True,
-                "namespaces": [item["namespace"] for item in page],
+                "namespaces": (
+                    [item["namespace"] for item in page] if detail == "summary" else page
+                ),
                 "next_cursor": next_cursor,
             }
 

@@ -7,7 +7,7 @@ belongs in these models.
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from terminal_mcp.application.input_limits import (
     MAX_COMMAND_CHARS,
@@ -67,13 +67,22 @@ CmdRequest = Annotated[
 
 class ContextListRequest(_StrictRequest):
     action: Literal["list"]
+    code: Annotated[str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")] = None
+    namespace: Annotated[str | None, Field(min_length=1, max_length=120)] = None
     detail: Literal["summary", "full"] = "summary"
     limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT
     cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None
 
+    @model_validator(mode="after")
+    def namespace_requires_session(self):
+        if self.namespace is not None and self.code is None:
+            raise ValueError("code is required when namespace is provided")
+        return self
+
 
 class ContextCreateRequest(_StrictRequest):
     action: Literal["create"]
+    namespace: Annotated[str | None, Field(min_length=1, max_length=120)] = None
     code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     summary: Annotated[str, Field(min_length=1, max_length=MAX_CONTEXT_SUMMARY_CHARS)]
     content: Annotated[str, Field(min_length=1, max_length=MAX_CONTEXT_CONTENT_CHARS)]
@@ -82,6 +91,7 @@ class ContextCreateRequest(_StrictRequest):
 
 class ContextUpdateRequest(_StrictRequest):
     action: Literal["update"]
+    namespace: Annotated[str | None, Field(min_length=1, max_length=120)] = None
     code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     context_id: Annotated[int, Field(ge=1, le=MAX_SQLITE_INTEGER)]
     summary: Annotated[str | None, Field(min_length=1, max_length=MAX_CONTEXT_SUMMARY_CHARS)] = None
@@ -91,6 +101,7 @@ class ContextUpdateRequest(_StrictRequest):
 
 class ContextDeleteRequest(_StrictRequest):
     action: Literal["delete"]
+    namespace: Annotated[str | None, Field(min_length=1, max_length=120)] = None
     code: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
     context_id: Annotated[int, Field(ge=1, le=MAX_SQLITE_INTEGER)]
 

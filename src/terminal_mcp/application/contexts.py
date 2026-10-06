@@ -19,10 +19,21 @@ class ContextApplication(ApplicationCapability):
     @application_operation("contexts")
     async def context(self, actor: ActorContext, request: ContextRequest) -> dict:
         if request.action == "list":
-            scope = {"kind": "context.list", "detail": request.detail}
+            resolved_actor = actor
+            if request.namespace is not None:
+                resolution = await self.gate.resolve(actor, request.code)
+                if resolution.failure is not None:
+                    return resolution.failure
+                resolved_actor = resolution.actor
+            scope = {
+                "kind": "context.list",
+                "detail": request.detail,
+                "namespace": request.namespace,
+            }
             try:
                 raw = await self.service.context(
                     "list",
+                    namespace=request.namespace,
                     show_details=request.detail == "full",
                     limit=request.limit + 1,
                     offset=decode_cursor(request.cursor, scope),
@@ -55,6 +66,16 @@ class ContextApplication(ApplicationCapability):
             for item in page:
                 is_primary = item.pop("_primary")
                 (primary if is_primary else additional).append(item)
+            if (
+                request.namespace is not None
+                and resolved_actor.work_session_id is not None
+                and getattr(self.service, "context_store", None) is not None
+            ):
+                await self.service.context_store.mark_namespace_seen(
+                    resolved_actor.work_session_id,
+                    request.namespace,
+                    seen_at=utc_text(utc_now()),
+                )
             return {
                 "ok": True,
                 "primary": primary,
@@ -77,6 +98,7 @@ class ContextApplication(ApplicationCapability):
         summary=None,
         content=None,
         primary=None,
+        namespace=None,
         show_details=False,
         limit=None,
         offset=0,
@@ -93,6 +115,7 @@ class ContextApplication(ApplicationCapability):
             "summary": summary,
             "content": content,
             "primary": primary,
+            "namespace": namespace,
             "show_details": show_details,
             "limit": limit,
             "offset": offset,
@@ -109,7 +132,9 @@ class ContextApplication(ApplicationCapability):
         try:
             async with self.unit_of_work.transaction() as repositories:
                 if action == "create":
-                    entry = await repositories.context.create(summary, content, primary)
+                    entry = await repositories.context.create(
+                        summary, content, primary, namespace=namespace
+                    )
                     result = {"ok": True, "entry": entry}
                 elif action == "update":
                     patch = {
@@ -117,14 +142,16 @@ class ContextApplication(ApplicationCapability):
                         for key, value in data.items()
                         if key in {"summary", "content", "primary"} and value is not None
                     }
-                    entry = await repositories.context.update(context_id, **patch)
+                    entry = await repositories.context.update(
+                        context_id, namespace=namespace, **patch
+                    )
                     result = (
                         {"ok": True, "entry": entry}
                         if entry is not None
                         else {"ok": False, "code": "resource_not_found"}
                     )
                 else:
-                    deleted = await repositories.context.delete(context_id)
+                    deleted = await repositories.context.delete(context_id, namespace=namespace)
                     result = (
                         {"ok": True, "deleted_id": int(context_id)}
                         if deleted
@@ -136,6 +163,15 @@ class ContextApplication(ApplicationCapability):
                         f"context.{action}",
                         utc_text(utc_now()),
                     )
+            if (
+                result.get("ok")
+                and namespace is not None
+                and actor.work_session_id is not None
+                and getattr(self.service, "context_store", None) is not None
+            ):
+                await self.service.context_store.mark_namespace_seen(
+                    actor.work_session_id, namespace, seen_at=utc_text(utc_now())
+                )
             return result
         except (TypeError, ValueError):
             return {"ok": False, "code": "invalid_request"}

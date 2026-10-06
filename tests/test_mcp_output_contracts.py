@@ -174,6 +174,24 @@ def test_session_variants(action, raw):
             },
         ),
         ("namespaces", {"ok": True, "namespaces": ["project"], "next_cursor": None}),
+        (
+            "namespaces",
+            {
+                "ok": True,
+                "namespaces": [
+                    {
+                        "namespace": "project",
+                        "priority": "P1",
+                        "archived_at": None,
+                        "archive_note": None,
+                        "revision": 2,
+                        "created_at": "2026-10-06T10:00:00.000Z",
+                        "updated_at": "2026-10-06T10:01:00.000Z",
+                    }
+                ],
+                "next_cursor": None,
+            },
+        ),
     ],
 )
 def test_observe_variants(subject, raw):
@@ -246,6 +264,26 @@ def test_message_variants(kwargs, raw):
 def test_task_variants(action):
     task = TASK_SNAPSHOT if action == "claim" else TASK
     validate(TaskOutput, task_result({"ok": True, "task": task, "warnings": []}, action))
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["namespace_create", "namespace_update", "namespace_archive", "namespace_restore"],
+)
+def test_namespace_task_variants(action):
+    namespace = {
+        "namespace": "project",
+        "priority": "P1",
+        "archived_at": None,
+        "archive_note": None,
+        "revision": 2,
+        "created_at": "2026-10-06T10:00:00.000Z",
+        "updated_at": "2026-10-06T10:01:00.000Z",
+    }
+    validate(
+        TaskOutput,
+        task_result({"ok": True, "namespace": namespace, "warnings": []}, action),
+    )
 
 
 @pytest.mark.parametrize(

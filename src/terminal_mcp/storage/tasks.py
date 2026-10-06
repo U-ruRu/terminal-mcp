@@ -422,6 +422,9 @@ class TaskStore:
             params.append(state)
         if not show_archived:
             where.append("archived_at IS NULL")
+            where.append(
+                "namespace NOT IN (SELECT namespace FROM work_namespaces WHERE archived_at IS NOT NULL)"
+            )
         if not show_done:
             if show_archived:
                 where.append("(state<>'done' OR archived_at IS NOT NULL)")
@@ -498,6 +501,84 @@ class TaskStore:
                 "updated_at": row[6],
             }
             for row in rows
+        ]
+
+    async def create_namespace(
+        self, namespace: str, *, priority: int = 1, now: str | None = None
+    ):
+        if not namespace:
+            raise ValueError("namespace is required")
+        value = int(priority)
+        if value < 0 or value > 3:
+            raise ValueError("namespace priority must be between 0 and 3")
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO work_namespaces(namespace,priority,created_at,updated_at) "
+                "VALUES(?,?,?,?)",
+                (namespace, value, now, now),
+            )
+            await db.commit()
+        return await self.get_namespace(namespace)
+
+    async def update_namespace(
+        self,
+        namespace: str,
+        *,
+        expected_revision: int | None = None,
+        priority: int | None = None,
+        archived_at: str | None | object = ...,
+        archive_note: str | None | object = ...,
+        now: str | None = None,
+    ):
+        now = now or utc_text()
+        assignments = []
+        params: list[Any] = []
+        if priority is not None:
+            value = int(priority)
+            if value < 0 or value > 3:
+                raise ValueError("namespace priority must be between 0 and 3")
+            assignments.append("priority=?")
+            params.append(value)
+        if archived_at is not ...:
+            assignments.append("archived_at=?")
+            params.append(archived_at)
+        if archive_note is not ...:
+            assignments.append("archive_note=?")
+            params.append(archive_note)
+        if not assignments:
+            return await self.get_namespace(namespace)
+        assignments.extend(("revision=revision+1", "updated_at=?"))
+        params.append(now)
+        where = "namespace=?"
+        params.append(namespace)
+        if expected_revision is not None:
+            where += " AND revision=?"
+            params.append(int(expected_revision))
+        async with self._connect() as db:
+            cursor = await db.execute(
+                f"UPDATE work_namespaces SET {','.join(assignments)} WHERE {where}", params
+            )
+            if cursor.rowcount != 1:
+                row = await (
+                    await db.execute(
+                        "SELECT revision FROM work_namespaces WHERE namespace=?", (namespace,)
+                    )
+                ).fetchone()
+                await db.rollback()
+                if row is None:
+                    return None
+                if expected_revision is not None:
+                    raise TaskRevisionConflict(
+                        namespace, "@namespace", int(expected_revision), int(row[0])
+                    )
+                return None
+            await db.commit()
+        return await self.get_namespace(namespace)
+
+    async def namespace_active_claims(self, namespace: str):
+        return [
+            item for item in await self.all_active_claims() if item.get("namespace") == namespace
         ]
 
     async def list_namespaces(self, *, limit: int = 20, offset: int = 0) -> list[str]:

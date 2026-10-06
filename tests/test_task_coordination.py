@@ -982,14 +982,22 @@ async def test_compact_task_snapshot_is_bounded_and_preserves_full_history(tmp_p
             checkpoint="second checkpoint",
         )
 
-        compact = await service.tasks(
-            namespace="project", task_id="SNAPSHOT-1", snapshot=True
-        )
+        compact = await service.tasks(namespace="project", task_id="SNAPSHOT-1", snapshot=True)
         snapshot = compact["task"]
         assert set(snapshot) == {
-            "namespace", "task_id", "title", "lane", "priority", "state",
-            "operational_status", "revision", "claim", "next_action",
-            "description_preview", "description_truncated", "latest_checkpoint",
+            "namespace",
+            "task_id",
+            "title",
+            "lane",
+            "priority",
+            "state",
+            "operational_status",
+            "revision",
+            "claim",
+            "next_action",
+            "description_preview",
+            "description_truncated",
+            "latest_checkpoint",
             "blocking_dependencies",
         }
         assert snapshot["description_preview"] == description[:1500]
@@ -999,25 +1007,29 @@ async def test_compact_task_snapshot_is_bounded_and_preserves_full_history(tmp_p
         assert snapshot["latest_checkpoint"]["text"] == "second checkpoint"
         assert snapshot["latest_checkpoint"]["author"] == public_agent_name(owner)
         assert snapshot["latest_checkpoint"]["revision"] == snapshot["revision"]
-        assert [dep["task_id"] for dep in snapshot["blocking_dependencies"]] == [
-            "DEP-SNAPSHOT"
-        ]
+        assert [dep["task_id"] for dep in snapshot["blocking_dependencies"]] == ["DEP-SNAPSHOT"]
 
         listed = await service.tasks(namespace="project", show_done=True)
         raw_item = next(item for item in listed["tasks"] if item["task_id"] == "SNAPSHOT-1")
         item = _task_summary(raw_item)
         assert set(item) == {
-            "namespace", "task_id", "title", "lane", "priority", "state",
-            "operational_status", "revision", "claimed_by", "blocking_count",
+            "namespace",
+            "task_id",
+            "title",
+            "lane",
+            "priority",
+            "state",
+            "operational_status",
+            "revision",
+            "claimed_by",
+            "blocking_count",
             "has_checkpoint",
         }
         assert item["claimed_by"] == public_agent_name(owner)
         assert item["blocking_count"] == 1
         assert item["has_checkpoint"] is True
 
-        full = await service.tasks(
-            namespace="project", task_id="SNAPSHOT-1", show_details=True
-        )
+        full = await service.tasks(namespace="project", task_id="SNAPSHOT-1", show_details=True)
         assert full["task"]["description"] == description
         checkpoint_history = [
             event["payload"]["checkpoint"]
@@ -1029,5 +1041,88 @@ async def test_compact_task_snapshot_is_bounded_and_preserves_full_history(tmp_p
         assert "reviews" not in snapshot
         assert "relations" not in snapshot
         assert "output_states" not in snapshot
+    finally:
+        await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_namespace_archive_requires_drain_and_restore_preserves_tasks(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    try:
+        agent = (await register(service, "namespace lifecycle"))["self"]["agent_id"]
+        created = await service.task(
+            agent,
+            action="create",
+            namespace="project-ns",
+            task_id="NS-1",
+            title="Namespace task",
+            isolation_hint="none",
+        )
+        assert created["ok"] is True
+        namespace = await service.task_store.get_namespace("project-ns")
+        assert namespace is not None
+
+        claimed = await service.task(
+            agent,
+            action="claim",
+            namespace="project-ns",
+            task_id="NS-1",
+            claim_intent="hold namespace live",
+        )
+        assert claimed["ok"] is True
+        blocked = await service.task(
+            agent,
+            action="namespace_archive",
+            namespace="project-ns",
+            archive_note="archive project",
+            expected_revision=namespace["revision"],
+        )
+        assert blocked["ok"] is False
+        assert blocked["code"] == "namespace_live_claims"
+
+        released = await service.task(
+            agent,
+            action="release",
+            namespace="project-ns",
+            task_id="NS-1",
+            release_reason="drain namespace",
+        )
+        assert released["ok"] is True
+        archived = await service.task(
+            agent,
+            action="namespace_archive",
+            namespace="project-ns",
+            archive_note="archive project",
+            expected_revision=namespace["revision"],
+        )
+        assert archived["ok"] is True
+        assert archived["namespace"]["archived_at"] is not None
+        assert (await service.tasks(namespace="project-ns", show_done=True))["tasks"] == []
+        visible = await service.tasks(namespace="project-ns", show_done=True, show_archived=True)
+        assert [item["task_id"] for item in visible["tasks"]] == ["NS-1"]
+
+        rejected = await service.task(
+            agent,
+            action="create",
+            namespace="project-ns",
+            task_id="NS-2",
+            title="Must wait for restore",
+            isolation_hint="none",
+        )
+        assert rejected["ok"] is False
+        assert rejected["code"] == "namespace_archived"
+
+        restored = await service.task(
+            agent,
+            action="namespace_restore",
+            namespace="project-ns",
+            expected_revision=archived["namespace"]["revision"],
+        )
+        assert restored["ok"] is True
+        assert restored["namespace"]["archived_at"] is None
+        assert [
+            item["task_id"]
+            for item in (await service.tasks(namespace="project-ns", show_done=True))["tasks"]
+        ] == ["NS-1"]
     finally:
         await terminal.stop()

@@ -28,6 +28,9 @@ from terminal_mcp.core.task_projections import (
     Namespace as Namespace,
 )
 from terminal_mcp.core.task_projections import (
+    NamespaceRecord as NamespaceRecord,
+)
+from terminal_mcp.core.task_projections import (
     TaskCheckpointSnapshot as TaskCheckpointSnapshot,
 )
 from terminal_mcp.core.task_projections import (
@@ -241,7 +244,7 @@ class ObserveTasksResult(_Strict):
 class ObserveNamespacesResult(_Strict):
     ok: Literal[True]
     subject: Literal["namespaces"]
-    namespaces: list[Namespace]
+    namespaces: list[Namespace | NamespaceRecord]
     next_cursor: Cursor | None
 
 
@@ -346,6 +349,18 @@ class TaskMutationResult(_Strict):
     warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
+class NamespaceMutationResult(_Strict):
+    ok: Literal[True]
+    action: Literal[
+        "namespace_create",
+        "namespace_update",
+        "namespace_archive",
+        "namespace_restore",
+    ]
+    namespace: NamespaceRecord
+    warnings: list[WorkflowWarning] = Field(default_factory=list)
+
+
 class TaskClaimMutationResult(_Strict):
     ok: Literal[True]
     action: Literal["claim"]
@@ -353,7 +368,10 @@ class TaskClaimMutationResult(_Strict):
     warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
-TaskSuccess = Annotated[TaskMutationResult | TaskClaimMutationResult, Field(discriminator="action")]
+TaskSuccess = Annotated[
+    TaskMutationResult | TaskClaimMutationResult | NamespaceMutationResult,
+    Field(discriminator="action"),
+]
 
 
 class TaskOutput(RootModel[TaskSuccess | AccessError]):
@@ -477,6 +495,7 @@ class ContextListEntry(_Strict):
     id: ContextId
     summary: str
     content: str | None = None
+    namespace: Namespace | None = None
 
 
 class ContextEntry(_Strict):
@@ -484,6 +503,7 @@ class ContextEntry(_Strict):
     summary: str
     content: str
     primary: bool
+    namespace: Namespace | None = None
 
 
 class ContextListResult(_Strict):
@@ -929,7 +949,14 @@ def observe_result(
         structured = {
             "ok": True,
             "subject": "namespaces",
-            "namespaces": raw.get("namespaces") or [],
+            "namespaces": [
+                (
+                    _known(NamespaceRecord, item).model_dump(mode="json", exclude_unset=True)
+                    if isinstance(item, dict)
+                    else item
+                )
+                for item in raw.get("namespaces") or []
+            ],
             "next_cursor": None if next_cursor is None else str(next_cursor),
         }
     else:
@@ -1050,16 +1077,26 @@ def message_result(
 def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
     if not raw.get("ok"):
         return _result("task", action, TaskOutput, raw, {})
-    structured = {
-        "ok": True,
-        "action": action,
-        "task": (
-            _task_snapshot(raw.get("task") or {})
-            if action == "claim"
-            else _task_record(raw.get("task") or {})
-        ),
-        "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
-    }
+    if action.startswith("namespace_"):
+        structured = {
+            "ok": True,
+            "action": action,
+            "namespace": _known(NamespaceRecord, raw.get("namespace") or {}).model_dump(
+                mode="json", exclude_unset=True
+            ),
+            "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
+        }
+    else:
+        structured = {
+            "ok": True,
+            "action": action,
+            "task": (
+                _task_snapshot(raw.get("task") or {})
+                if action == "claim"
+                else _task_record(raw.get("task") or {})
+            ),
+            "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
+        }
     return _result("task", action, TaskOutput, raw, structured)
 
 

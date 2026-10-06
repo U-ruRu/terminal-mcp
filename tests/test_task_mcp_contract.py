@@ -23,11 +23,19 @@ ACTIONS = {
     "done",
     "archive",
     "review",
+    "namespace_create",
+    "namespace_update",
+    "namespace_archive",
+    "namespace_restore",
 }
 
 
 def _base(action):
     return {"action": action, "code": "1234", "namespace": "terminal-mcp", "task_id": "TASK-001"}
+
+
+def _namespace_base(action):
+    return {"action": action, "code": "1234", "namespace": "terminal-mcp"}
 
 
 MINIMAL_VALID = {
@@ -48,6 +56,13 @@ MINIMAL_VALID = {
     "done": {**_base("done"), "result": {}},
     "archive": {**_base("archive"), "archive_note": "Superseded"},
     "review": {**_base("review"), "dimensions": ["A"], "verdict": "NON_BLOCKING"},
+    "namespace_create": _namespace_base("namespace_create"),
+    "namespace_update": {**_namespace_base("namespace_update"), "priority": "P1"},
+    "namespace_archive": {
+        **_namespace_base("namespace_archive"),
+        "archive_note": "Project complete",
+    },
+    "namespace_restore": _namespace_base("namespace_restore"),
 }
 
 FULL_VALID = {
@@ -151,6 +166,22 @@ FULL_VALID = {
         "evidence": {"tests": "failed"},
         "expected_revision": 8,
     },
+    "namespace_create": {**_namespace_base("namespace_create"), "priority": "P0"},
+    "namespace_update": {
+        **_namespace_base("namespace_update"),
+        "priority": "P3",
+        "expected_revision": 2,
+    },
+    "namespace_archive": {
+        **_namespace_base("namespace_archive"),
+        "archive_note": "Project complete",
+        "note": "legacy-compatible",
+        "expected_revision": 3,
+    },
+    "namespace_restore": {
+        **_namespace_base("namespace_restore"),
+        "expected_revision": 4,
+    },
 }
 
 
@@ -166,7 +197,7 @@ def test_task_schema_is_action_discriminated_and_strict():
     schema = ADAPTER.json_schema()
     assert schema["discriminator"]["propertyName"] == "action"
     assert set(schema["discriminator"]["mapping"]) == ACTIONS
-    assert len(schema["oneOf"]) == 12
+    assert len(schema["oneOf"]) == 16
     for action, ref in schema["discriminator"]["mapping"].items():
         name = ref.rsplit("/", 1)[-1]
         variant = schema["$defs"][name]
@@ -199,6 +230,15 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["maxItems"] == 3
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["uniqueItems"] is True
     assert defs["TaskClaimRequest"]["properties"]["expected_revision"]["anyOf"][0]["minimum"] == 1
+    assert set(defs["NamespaceCreateRequest"]["required"]) == {"action", "code", "namespace"}
+    assert "task_id" not in defs["NamespaceCreateRequest"]["properties"]
+    assert set(defs["NamespaceUpdateRequest"]["required"]) >= {
+        "action",
+        "code",
+        "namespace",
+        "priority",
+    }
+    assert "task_id" not in defs["NamespaceUpdateRequest"]["properties"]
 
 
 def test_refs_tags_dependencies_and_relation_bounds_are_formalized():
@@ -333,6 +373,8 @@ def test_required_fields_are_rejected_per_variant():
         "unrelate": "relation_kind",
         "state": "state",
         "review": "verdict",
+        "namespace_update": "priority",
+        "namespace_archive": "archive_note",
     }
     for action, field in required.items():
         request = dict(MINIMAL_VALID[action])
@@ -417,8 +459,14 @@ class _RecordingBackend:
                 **{
                     key: task[key]
                     for key in (
-                        "namespace", "task_id", "title", "lane", "priority", "state",
-                        "operational_status", "revision",
+                        "namespace",
+                        "task_id",
+                        "title",
+                        "lane",
+                        "priority",
+                        "state",
+                        "operational_status",
+                        "revision",
                     )
                 },
                 "claim": None,

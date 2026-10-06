@@ -76,6 +76,16 @@ class TaskPriority(StrEnum):
     P3 = "P3"
 
 
+class NamespaceRecord(_Strict):
+    namespace: Namespace
+    priority: TaskPriority
+    archived_at: str | None = None
+    archive_note: str | None = None
+    revision: int = Field(ge=1)
+    created_at: str
+    updated_at: str
+
+
 class JsonPayload(_Strict):
     """Explicit extension boundary for backend/domain JSON payloads."""
 
