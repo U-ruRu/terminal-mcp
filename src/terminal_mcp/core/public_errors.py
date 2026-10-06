@@ -88,7 +88,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "missing",
             "repair",
             """
-            resource_not_found task_not_found command_not_found message_not_found
+            not_found resource_not_found task_not_found command_not_found message_not_found
             slot_not_found recipient_not_active no_active_recipients unknown_source
         """,
         ),
@@ -102,6 +102,68 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             access_rotation_failed access_update_failed
         """,
         ),
+    )
+    # Preserve deployed Access/workflow/Fleet codes, including typed failures whose
+    # code is copied into public payloads by adapters. OAuth remains protocol-specific.
+    groups += (
+        (
+            "validation",
+            "repair",
+            """
+            invalid_message invalid_task_context review_task_required
+            control_mutation_invalid control_operation_invalid control_snapshot_invalid
+            invalid_transfer_transition managed_snapshot_required
+            managed_snapshot_revision_invalid mesh_id_required
+        """,
+        ),
+        (
+            "access",
+            "reauthenticate",
+            """
+            access_identity_not_found permit_expired persistent_auth_required
+            selector_not_found session_not_found control_rejoin_credential_required invalid_pairing
+        """,
+        ),
+        (
+            "policy",
+            "repair",
+            """
+            access_mode_mismatch attachment_not_active slot_not_armed wrong_authority
+            control_authority_rehome_requires_standalone control_authority_required
+            managed_access_policy_missing managed_control_not_adopted
+            managed_node_mesh_missing projection_topology_missing
+        """,
+        ),
+        (
+            "conflict",
+            "reconcile",
+            """
+            access_policy_revision_conflict ambiguous_review_parent candidate_conflict
+            delete_blocked idempotency_conflict missing_parent_candidate reassign_blocked
+            recovery_required session_stopping control_node_mismatch control_release_peer_mismatch
+            fleet_id_mismatch managed_snapshot_stale mesh_already_exists node_already_in_other_mesh
+            projection_epoch_conflict projection_topology_mismatch stale_authority_epoch
+            topology_revision_conflict transfer_source_mismatch trust_revision_conflict
+            trust_rotation_peer_mismatch
+        """,
+        ),
+        (
+            "transient",
+            "retry",
+            """
+            idempotency_in_progress route_unavailable control_authority_unavailable
+        """,
+        ),
+        (
+            "missing",
+            "repair",
+            """
+            claim_not_found recipient_not_found managed_mesh_not_found
+            managed_node_not_found transfer_not_found
+        """,
+        ),
+        ("access", "stop", "cors_preflight_rejected origin_not_allowed"),
+        ("internal", "reconcile", "access_issue_failed"),
     )
     messages = {
         "internal_error": "The operation failed internally. Check current state before retrying.",
@@ -370,8 +432,17 @@ def error_from_exception(exc: BaseException) -> PublicError:
 
 
 # Conservative: do not label side-effecting reads (message inbox marks seen) pure.
+# An authenticated command read surfaces inbox state and is not automatically
+# pure. Adapters may prove an anonymous read retry-safe per call using the
+# existing idempotency_guaranteed flag; a read-shaped operation name is not proof.
 _READ_ONLY_OPERATIONS = frozenset(
-    {"health", "observe", "task_list", "tasks", "context.list", "cmd.read", "command_read"}
+    {
+        "health",
+        "observe",
+        "task_list",
+        "tasks",
+        "context.list",
+    }
 )
 
 
@@ -393,6 +464,8 @@ def retry_decision(
     For transport loss, timeouts or failed forwarding the default `unknown` is
     mandatory. A future adapter may set idempotency_guaranteed only when the
     operation implements that guarantee, not because a caller sent a key.
+    This includes proven anonymous command reads, never authenticated inbox
+    surfacing merely because the operation is named cmd.read/command_read.
     """
     if outcome not in {"rejected", "unknown"} or type(idempotency_guaranteed) is not bool:
         raise ValueError("retry outcome and idempotency guarantee must be explicit")

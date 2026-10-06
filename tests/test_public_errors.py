@@ -260,7 +260,7 @@ def test_ambiguous_mutation_is_never_blindly_retried():
         decision = retry_decision(value, operation=operation)
         assert decision.action == "reconcile"
         assert decision.retry_after_ms is None
-    assert retry_decision(value, operation="cmd.read").action == "retry"
+    assert retry_decision(value, operation="cmd.read").action == "reconcile"
     assert retry_decision(value, operation="observe").retry_after_ms == 1500
     assert retry_decision(value, operation="cmd.run", outcome="rejected").action == "retry"
     assert (
@@ -309,3 +309,100 @@ def test_schema_is_closed_and_has_visible_bounds():
     issue = ValidationIssue(error_class="missing", path="title", description="Provide the title.")
     with pytest.raises(ValidationError):
         ValidationRepair(validation_errors=(issue,) * (MAX_VALIDATION_ISSUES + 1))
+
+
+@pytest.mark.parametrize("operation", ["cmd.read", "command_read"])
+def test_read_named_operation_requires_actual_retry_safety(operation):
+    failure = public_error("authority_unavailable", details={"retry_after_ms": 25})
+    unknown = retry_decision(failure, operation=operation)
+    assert unknown.action == "reconcile"
+    assert unknown.retry_after_ms is None
+    # Proof comes from server-side adapter semantics, never an agent input flag.
+    proven = retry_decision(failure, operation=operation, idempotency_guaranteed=True)
+    assert proven.action == "retry"
+    assert proven.retry_after_ms == 25
+    rejected = retry_decision(failure, operation=operation, outcome="rejected")
+    assert rejected.action == "retry"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "not_found",
+        "session_not_found",
+        "wrong_authority",
+        "recipient_not_found",
+        "idempotency_conflict",
+        "missing_parent_candidate",
+        "candidate_conflict",
+        "persistent_auth_required",
+        "access_policy_revision_conflict",
+        "topology_revision_conflict",
+        "control_authority_unavailable",
+    ],
+)
+def test_deployed_public_code_survives_legacy_normalization(code):
+    error = normalize_public_error(
+        {
+            "ok": False,
+            "code": code,
+            "error": "PRIVATE DATABASE OR REQUEST VALUE",
+            "traceback": "PRIVATE TRACE",
+            "details": {"secret": "PRIVATE"},
+        }
+    )
+    assert error.code == code
+    assert "PRIVATE" not in json.dumps(error.as_dict())
+    assert normalize_public_error({"ok": False, "error": code}).code == code
+
+
+def test_public_source_error_codes_have_explicit_catalog_policy():
+    """Guard direct public literals AND domain exception codes copied by adapters.
+
+    This is not an inference of arbitrary runtime strings. New code expressions
+    need explicit review; fixed protocol OAuth errors remain outside this DTO.
+    """
+    import ast
+    import re
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "src" / "terminal_mcp"
+    constructors = {
+        "PersistentStoreError",
+        "PersistentLifecycleError",
+        "TaskRelationConflict",
+        "FleetControlError",
+        "MeshApplicationError",
+        "PublicFailure",
+        "failure",
+        "_read_error",
+    }
+    found = {}
+    for path in source.rglob("*.py"):
+        if path.name == "public_errors.py" or "auth" in path.relative_to(source).parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            values = []
+            if isinstance(node, ast.Dict):
+                values = [
+                    value
+                    for key, value in zip(node.keys, node.values, strict=True)
+                    if isinstance(key, ast.Constant) and key.value in {"code", "error"}
+                ]
+            elif isinstance(node, ast.Call):
+                name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+                if name in constructors:
+                    values.extend(node.args[:1])
+                values.extend(item.value for item in node.keywords if item.arg == "code")
+            for value in values:
+                if (
+                    isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value.value)
+                ):
+                    found.setdefault(value.value, []).append(
+                        f"{path.relative_to(source)}:{node.lineno}"
+                    )
+    assert {"session_not_found", "wrong_authority", "idempotency_conflict"} <= found.keys()
+    missing = {code: origins for code, origins in found.items() if code not in ERROR_SPECS}
+    assert not missing, f"New public codes need explicit bounded message/retry policy: {missing}"
