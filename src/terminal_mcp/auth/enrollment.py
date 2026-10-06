@@ -27,8 +27,9 @@ def _values(values, label: str) -> list[str]:
 
 
 class AccessStore:
-    def __init__(self, foundation: AuthFoundationStore):
+    def __init__(self, foundation: AuthFoundationStore, pairing_store):
         self.foundation = foundation
+        self.pairing_store = pairing_store
 
     async def realm_status(self) -> dict | None:
         db = await self.foundation._connect()
@@ -587,20 +588,25 @@ class AccessStore:
             "grants": affected_grants,
         }
 
-    @staticmethod
-    async def _has_active_manager(db) -> bool:
+    async def _has_active_manager(self, db) -> bool:
         rows = await (
             await db.execute(
-                "SELECT g.scopes_json FROM auth_grants g "
+                "SELECT g.client_id,g.scopes_json FROM auth_grants g "
                 "JOIN auth_clients c ON c.client_id=g.client_id "
                 "JOIN auth_principals p ON p.principal_id=g.principal_id "
                 "WHERE g.revoked_at IS NULL AND c.status='active' AND p.status='active'"
             )
         ).fetchall()
-        return any(
-            "auth:manage" in json.loads(row[0])
-            for row in rows
-        )
+        for client_id, scopes_json in rows:
+            if "auth:manage" not in json.loads(scopes_json):
+                continue
+            try:
+                device = await self.pairing_store.active_device_for_client(client_id)
+            except Exception:
+                return False
+            if device is not None:
+                return True
+        return False
 
     async def revoke_commit(
         self,
