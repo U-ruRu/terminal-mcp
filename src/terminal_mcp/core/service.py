@@ -708,6 +708,9 @@ class TerminalService:
             async with asyncio.timeout(_budget(timeout)):
                 terminal = await self.terminal.health()
                 storage_ok = await self.repo.ping()
+                fleet_control = getattr(self, "fleet_control", None)
+                if fleet_control is not None:
+                    storage_ok = bool(storage_ok and await fleet_control.healthy())
                 internal_ok = bool(
                     storage_ok
                     and (self.runtime is None or self.runtime.alive)
