@@ -51,17 +51,19 @@ class Authorizer:
         self.calls = []
         self.deny = False
         self.operator = True
+        self.authority_epoch = 1
 
     async def authorize(self, context, agent, operation):
         self.calls.append((context, agent, operation))
         if self.deny:
             raise ManagedSessionError("access_denied")
         return ManagedSlotGrant(
-            agent,
-            "home",
-            "Stable-Agent",
-            context.principal_id,
-            context.auth_generation,
+            logical_agent_id=agent,
+            authority_node_id="home",
+            authority_epoch=self.authority_epoch,
+            public_name="Stable-Agent",
+            principal_id=context.principal_id,
+            auth_generation=context.auth_generation,
             operator=self.operator and context.endpoint_role == "operator",
         )
 
@@ -392,6 +394,35 @@ async def test_gate_rechecks_current_slot_authority_in_same_snapshot(
         await env.app.authorize_operation(
             first.actor if resolved else actor(), ManagedOperation.TASK_CHECKPOINT
         )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        ManagedOperation.COMMAND_RUN,
+        ManagedOperation.TASK_CREATE,
+        ManagedOperation.MESSAGE_SEND,
+        ManagedOperation.CONTEXT_WRITE,
+    ],
+)
+@pytest.mark.parametrize("resolved", [False, True])
+async def test_gate_fences_stale_authority_epoch_for_new_work_surfaces(env, operation, resolved):
+    first = await env.app.start(actor())
+    async with env.store._transaction("test_authority_epoch_changed") as db:
+        await db.execute(
+            "UPDATE logical_agents SET authority_epoch=2 WHERE logical_agent_id=?", ("la_one",)
+        )
+    with pytest.raises(ManagedSessionError, match="session_authority_stale") as error:
+        await env.app.authorize_operation(first.actor if resolved else actor(), operation)
+    assert error.value.return_to_chat
+
+
+async def test_gate_fences_authorizer_epoch_that_does_not_match_bound_session(env):
+    first = await env.app.start(actor())
+    env.auth.authority_epoch = 2
+    with pytest.raises(ManagedSessionError, match="session_authority_stale") as error:
+        await env.app.authorize_operation(first.actor, ManagedOperation.TASK_CHECKPOINT)
+    assert error.value.return_to_chat
 
 
 async def test_gate_rejects_current_session_deadline_inconsistent_with_window(env):

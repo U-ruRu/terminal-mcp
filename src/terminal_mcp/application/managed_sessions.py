@@ -50,6 +50,7 @@ class ManagedExecutionFence(Protocol):
 class ManagedSlotGrant:
     logical_agent_id: str
     authority_node_id: str
+    authority_epoch: int
     public_name: str
     principal_id: str
     auth_generation: int
@@ -69,6 +70,8 @@ class ManagedSlotGrant:
                 or any(ord(c) < 32 for c in value)
             ):
                 raise ManagedSessionError("authorization_grant_invalid")
+        if type(self.authority_epoch) is not int or self.authority_epoch < 1:
+            raise ManagedSessionError("authorization_grant_invalid")
         if type(self.auth_generation) is not int or self.auth_generation < 1:
             raise ManagedSessionError("authorization_grant_invalid")
         if type(self.operator) is not bool:
@@ -272,6 +275,11 @@ class ManagedSessionApplication:
 
     @staticmethod
     def _owns(actor, grant, snapshot):
+        if (
+            snapshot.session.authority_node_id != grant.authority_node_id
+            or snapshot.session.authority_epoch != grant.authority_epoch
+        ):
+            raise ManagedSessionError("session_authority_stale", return_to_chat=True)
         if (
             snapshot.session.auth_principal_id != grant.principal_id
             or snapshot.session.auth_generation != grant.auth_generation
