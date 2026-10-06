@@ -1667,3 +1667,34 @@ async def test_authoritative_inbox_prunes_resolved_attachment_cache(tmp_path):
 
     assert inbox == []
     assert bridge.cached_obligations(logical_agent_id) == []
+
+
+@pytest.mark.asyncio
+async def test_fleet_control_rejects_wal_sidecar_bytes_at_main_path(tmp_path):
+    path = tmp_path / "fleet-control.sqlite3"
+    original = bytes.fromhex("377f0682") + b"\x00" * 4092
+    path.write_bytes(original)
+    store = FleetControlStore(
+        path,
+        fleet_id="fleet-a",
+        node_id="node-a",
+        control_node_id="node-a",
+    )
+
+    assert await store.healthy() is False
+    with pytest.raises(FleetControlError, match="fleet_control_main_is_wal"):
+        await store.initialize()
+    assert path.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_fleet_control_health_uses_read_only_quick_check(tmp_path):
+    path = tmp_path / "fleet-control.sqlite3"
+    store = FleetControlStore(
+        path,
+        fleet_id="fleet-a",
+        node_id="node-a",
+        control_node_id="node-a",
+    )
+    await store.initialize()
+    assert await store.healthy() is True
