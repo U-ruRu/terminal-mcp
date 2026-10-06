@@ -12,13 +12,18 @@ import { IconButton } from './UiPrimitives'
 import { StatusBadge } from './StatusBadge'
 import { needsAttention, serverVisualState, type ServerVisualState } from './serverPresentation'
 
+type NavigationKey = 'fleet' | 'overview' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
+
 type NavigationItem = {
-  key: 'fleet' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
+  key: NavigationKey
   labelKey: MessageKey
   globalPath: string
   icon: IconName
   serverPath?: (instanceId: string) => string
+  meshPath?: (meshId: string) => string
 }
+
+type ResolvedNavigationItem = Pick<NavigationItem, 'key' | 'labelKey' | 'icon'> & { to: string; active: boolean }
 
 const globalNavigation: NavigationItem[] = [
   { key: 'fleet', labelKey: 'nav.fleet', globalPath: '/', icon: 'fleet' },
@@ -36,7 +41,12 @@ const serverNavigation: NavigationItem[] = [
   { key: 'health', icon: 'health', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
 ]
 
-const bottomNavigationKeys = new Set<NavigationItem['key']>(['fleet', 'slots', 'connections', 'settings'])
+const meshNavigation: NavigationItem[] = [
+  { key: 'agents', icon: 'agents', labelKey: 'nav.agents', globalPath: '/agents', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/agents' },
+  { key: 'slots', icon: 'slots', labelKey: 'nav.slots', globalPath: '/slots', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/persistent' },
+  { key: 'tasks', icon: 'tasks', labelKey: 'nav.tasks', globalPath: '/tasks', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/tasks' },
+  { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', meshPath: (meshId) => '/meshes/' + encodeURIComponent(meshId) + '/activity' },
+]
 
 function serverStatusLabel(state: ServerVisualState, t: (key: MessageKey) => string): string {
   if (state === 'healthy') return t('status.live')
@@ -56,9 +66,9 @@ function pathServer(pathname: string): string | undefined {
   }
 }
 
-function activeKey(pathname: string): NavigationItem['key'] {
+function activeKey(pathname: string): NavigationKey {
   if (pathname === '/') return 'fleet'
-  if (pathname === '/activity') return 'activity'
+  if (pathname === '/activity' || pathname.endsWith('/activity')) return 'activity'
   if (pathname === '/settings') return 'settings'
   if (pathname === '/connections' || pathname === '/connect') return 'connections'
   if (pathname.startsWith('/meshes/') && pathname.includes('/persistent')) return 'slots'
@@ -96,6 +106,9 @@ function contextNavigation(pathname: string, search: string, returnTo?: string):
     const meshPath = '/meshes/' + parts[1]
     if (parts[2] === 'persistent' && parts.length >= 4) return { to: returnTo ?? meshPath + '/persistent', ariaKey: 'slots.backToSlots', titleKey: 'title.slotDetail' }
     if (parts[2] === 'persistent') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.serverSlots' }
+    if (parts[2] === 'agents') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'nav.agents' }
+    if (parts[2] === 'tasks') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'nav.tasks' }
+    if (parts[2] === 'activity') return { to: returnTo ?? meshPath, ariaKey: 'nav.goBackToMesh', titleKey: 'title.activity' }
     return { to: returnTo ?? '/connections', ariaKey: 'nav.goBackToConnections', titleKey: 'title.mesh' }
   }
   if (pathname === '/activity') {
@@ -119,8 +132,9 @@ export function AppShell({
   const closeRef = useRef<HTMLButtonElement>(null)
 
   const selectedServer = useMemo(() => {
+    const pathCandidate = pathServer(location.pathname)
     const params = new URLSearchParams(location.search)
-    const candidate = pathServer(location.pathname) ?? params.get('server') ?? undefined
+    const candidate = pathCandidate ?? (location.pathname.startsWith('/meshes/') ? undefined : params.get('server') ?? undefined)
     return candidate ? servers.find((server) => server.instanceId === candidate) : undefined
   }, [location.pathname, location.search, servers])
 
@@ -173,8 +187,7 @@ export function AppShell({
       ? t(contextual.titleKey)
       : globalScreenTitle
   const appBarEyebrow = selectedServer?.displayName ?? (selectedMeshId ? t('title.mesh') + ' · ' + selectedMeshId : 'Terminal MCP')
-  const bottomNavigation = globalNavigation.filter((item) => bottomNavigationKeys.has(item.key))
-  const isGlobalActive = (key: NavigationItem['key']) => {
+  const isGlobalActive = (key: NavigationKey) => {
     if (key === 'fleet') return location.pathname === '/'
     if (key === 'slots') return location.pathname === '/slots' || location.pathname.startsWith('/slots/')
     if (key === 'connections') return location.pathname === '/connections' || location.pathname === '/connect'
@@ -184,6 +197,18 @@ export function AppShell({
 
   const destination = (item: NavigationItem) => item.globalPath
   const serverDestination = (item: NavigationItem) => selectedId && item.serverPath ? item.serverPath(selectedId) : item.globalPath
+  const meshDestination = (item: NavigationItem) => selectedMeshId && item.meshPath ? item.meshPath(selectedMeshId) : item.globalPath
+  const bottomNavigation: ResolvedNavigationItem[] = selectedId
+    ? [
+        { key: 'overview', labelKey: 'nav.overview', icon: 'server', to: '/servers/' + encodeURIComponent(selectedId), active: isServerOverview },
+        ...serverNavigation.map((item) => ({ ...item, to: serverDestination(item), active: current === item.key })),
+      ]
+    : selectedMeshId
+      ? [
+          { key: 'overview', labelKey: 'nav.overview', icon: 'mesh', to: '/meshes/' + encodeURIComponent(selectedMeshId), active: isMeshOverview },
+          ...meshNavigation.map((item) => ({ ...item, to: meshDestination(item), active: current === item.key })),
+        ]
+      : globalNavigation.map((item) => ({ ...item, to: destination(item), active: isGlobalActive(item.key) }))
 
   return (
     <div className={'app-shell' + (current === 'activity' ? ' app-shell-activity' : '')}>
@@ -235,7 +260,7 @@ export function AppShell({
           <div className="navigation-heading">
             <div>
               <p className="eyebrow">{t('nav.navigation')}</p>
-              <strong>{selectedServer ? selectedServer.displayName : t('nav.noServerSelected')}</strong>
+              <strong>{selectedServer ? selectedServer.displayName : selectedMeshId ? t('title.mesh') + ' · ' + selectedMeshId : t('nav.noServerSelected')}</strong>
             </div>
             <IconButton
               ref={closeRef}
@@ -293,10 +318,18 @@ export function AppShell({
                 <Icon name="mesh" className="nav-drawer-icon" />
                 <span>{t('nav.overview')}</span>
               </Link>
-              <Link className={location.pathname.includes('/persistent') ? 'nav-link active' : 'nav-link'} to={'/meshes/' + encodeURIComponent(selectedMeshId) + '/persistent'} onClick={() => setMenuOpen(false)}>
-                <Icon name="slots" className="nav-drawer-icon" />
-                <span>{t('nav.slots')}</span>
-              </Link>
+              {meshNavigation.map((item) => (
+                <Link
+                  key={item.key}
+                  className={current === item.key ? 'nav-link active' : 'nav-link'}
+                  to={meshDestination(item)}
+                  aria-current={current === item.key ? 'page' : undefined}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <Icon name={item.icon} className="nav-drawer-icon" />
+                  <span>{t(item.labelKey)}</span>
+                </Link>
+              ))}
             </div>
           ) : null}
 
@@ -326,10 +359,10 @@ export function AppShell({
         {bottomNavigation.map((item) => (
           <Link
             key={item.key}
-            to={destination(item)}
-            aria-current={isGlobalActive(item.key) ? 'page' : undefined}
+            to={item.to}
+            aria-current={item.active ? 'page' : undefined}
             aria-label={t(item.labelKey) + ' · ' + t('aria.bottomNavigation')}
-            className={isGlobalActive(item.key) ? 'nav-link active' : 'nav-link'}
+            className={item.active ? 'nav-link active' : 'nav-link'}
           >
             <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span>
             <span className="nav-label">{t(item.labelKey)}</span>

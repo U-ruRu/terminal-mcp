@@ -1321,8 +1321,8 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   color: var(--color-muted);
   font-size: var(--font-caption-size);
 }
-.resource-metric-attention .resource-metric-value,
-.resource-metric-attention .resource-progress > span { color: var(--color-warning); background: var(--color-warning); }
+.resource-metric-attention .resource-metric-value { color: var(--color-warning); }
+.resource-metric-attention .resource-progress > span { background: var(--color-warning); }
 .resource-metric-unavailable-value { color: var(--color-disabled); font-size: var(--font-metric-size); }
 .resource-progress {
   position: relative;
