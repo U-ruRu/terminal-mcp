@@ -1179,9 +1179,10 @@ class FleetControlStore:
                 trust = await self._bump_revision(db, "trust", stamp)
                 await db.execute(
                     "UPDATE managed_nodes SET mesh_id=NULL,state='detached',"
-                    "desired_topology_revision=?,desired_trust_revision=?,"
+                    "desired_topology_revision=?,applied_topology_revision=?,"
+                    "desired_trust_revision=?,applied_trust_revision=?,"
                     "last_error=NULL,updated_at=? WHERE node_id=?",
-                    (topology, trust, stamp, node_id),
+                    (topology, topology, trust, trust, stamp, node_id),
                 )
                 await db.execute(
                     "UPDATE managed_nodes SET desired_topology_revision=?,"
@@ -1398,7 +1399,7 @@ class FleetControlStore:
             ("applied_policy_revision", policy_revision),
         ):
             if value is not None:
-                assignments.append(f"{column}=?")
+                assignments.append(f"{column}=MAX({column}, ?)")
                 values.append(int(value))
         values.append(node_id)
         async with self._connect("fleet_control_mark_applied") as db:
