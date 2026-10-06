@@ -22,6 +22,12 @@ function connectionStateLabel(value: FleetServerReadModel['connectionState'], t:
   return t('status.catchingUp')
 }
 
+function connectionStateClass(value: FleetServerReadModel['connectionState']): string {
+  if (value === 'live') return 'server-status-healthy'
+  if (value === 'offline') return 'server-status-offline'
+  return 'server-status-loading'
+}
+
 function freshnessLabel(value: FleetServerReadModel['freshness'], t: ReturnType<typeof useI18n>['t']): string {
   if (value === 'fresh') return t('status.fresh')
   if (value === 'stale') return t('status.stale')
@@ -98,7 +104,7 @@ export function ServerCard({
       ) : (
         <div className="server-runtime-summary">
           <div className="server-state-strip" aria-label={server.displayName + ' runtime state'}>
-            <span className={'status server-status status-' + server.connectionState}>{connectionStateLabel(server.connectionState, t)}</span>
+            <span className={'status server-status ' + connectionStateClass(server.connectionState)}>{connectionStateLabel(server.connectionState, t)}</span>
             {freshnessLabel(server.freshness, t) !== connectionStateLabel(server.connectionState, t) ? (
               <span className={'status server-status fleet-status-' + server.freshness}>{freshnessLabel(server.freshness, t)}</span>
             ) : null}
