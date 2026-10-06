@@ -109,11 +109,18 @@ class FleetControlApplication:
     ):
         OperatorApplication._require_operator(actor)
         with actor.bind():
-            return await self._mutation(
-                self._controller.detach_node(
+            try:
+                control, mutation = await self._controller.detach_node_result(
                     node_id, expected_topology_revision=expected_topology_revision
                 )
-            )
+                return {"ok": True, "control": control, "mutation": mutation}
+            except PersistentPolicyError as exc:
+                result = {"ok": False, "code": exc.code, "error": exc.code}
+                if exc.blockers:
+                    result["blockers"] = exc.blockers
+                return result
+            except (FleetControlError, ValueError) as exc:
+                return {"ok": False, "code": str(exc), "error": str(exc)}
 
     async def move_node(
         self,
@@ -192,7 +199,12 @@ class FleetControlApplication:
                 )
             except (FleetControlError, ValueError, KeyError) as exc:
                 raise MeshApplicationError("conflict", str(exc)) from exc
-            return {"ok": True, "control": control}
+            result = {"ok": True, "control": control}
+            if operation == "detach-node":
+                result["mutation"] = self._controller.mutation_completion(
+                    control, force_pending=True
+                )
+            return result
 
     async def internal_apply(self, actor: ActorContext, *, control_state: dict):
         MeshApplication._require_peer(actor)

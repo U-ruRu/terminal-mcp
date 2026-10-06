@@ -189,11 +189,33 @@ export class ConsoleClient {
     }
     const payload = raw as Record<string, unknown>
     if (typeof payload.ok !== 'boolean') throw new ConsoleContractError('$.ok', 'expected boolean')
+    let mutation: ManagedFleetMutationResult['mutation']
+    if (payload.mutation !== undefined) {
+      if (!payload.mutation || typeof payload.mutation !== 'object' || Array.isArray(payload.mutation)) {
+        throw new ConsoleContractError('$.mutation', 'expected object')
+      }
+      const item = payload.mutation as Record<string, unknown>
+      if (item.status !== 'committed') {
+        throw new ConsoleContractError('$.mutation.status', 'expected committed')
+      }
+      if (item.convergence !== 'pending' && item.convergence !== 'converged') {
+        throw new ConsoleContractError('$.mutation.convergence', 'expected pending or converged')
+      }
+      if (!Number.isInteger(item.topology_revision) || (item.topology_revision as number) < 0) {
+        throw new ConsoleContractError('$.mutation.topology_revision', 'expected non-negative integer')
+      }
+      mutation = {
+        status: item.status,
+        convergence: item.convergence,
+        topologyRevision: item.topology_revision as number,
+      }
+    }
     return {
       ok: payload.ok,
       code: typeof payload.code === 'string' ? payload.code : undefined,
       error: typeof payload.error === 'string' ? payload.error : undefined,
       control: payload.control ? decodeManagedFleetControl({ control: payload.control }) : undefined,
+      mutation,
     }
   }
 

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from dataclasses import replace
 from datetime import timedelta
@@ -6,6 +7,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.application.fleet_control import FleetControlApplication
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_admission import VerifiedAdmissionContext
 from terminal_mcp.core.persistent_fleet import (
@@ -1698,3 +1701,136 @@ async def test_fleet_control_health_uses_read_only_quick_check(tmp_path):
     )
     await store.initialize()
     assert await store.healthy() is True
+
+
+
+@pytest.mark.asyncio
+async def test_forwarded_detach_returns_committed_before_slow_replication(tmp_path):
+    from terminal_mcp.fleet.control_plane import ManagedFleetControl
+
+    home_private, home_public = keypair()
+    remote_private, remote_public = keypair()
+    _, slow_public = keypair()
+    home_config = FleetConfig("home", home_private, (), 1.0, 0.3)
+    remote_config = FleetConfig(
+        "remote",
+        remote_private,
+        (FleetPeer("home", "https://home.example", home_public, "home-token"),),
+        1.0,
+        0.3,
+    )
+    home_store = FleetControlStore(
+        tmp_path / "forwarded-timeout-home.sqlite3",
+        fleet_id="fleet-a",
+        node_id="home",
+        control_node_id="home",
+    )
+    remote_store = FleetControlStore(
+        tmp_path / "forwarded-timeout-remote.sqlite3",
+        fleet_id="fleet-a",
+        node_id="remote",
+        control_node_id="home",
+    )
+    await home_store.initialize()
+    await remote_store.initialize()
+
+    delayed = False
+    slow_apply_started = asyncio.Event()
+    remote_replica = None
+
+    async def home_http(url, headers, body):
+        nonlocal remote_replica
+        assert url.endswith("/internal/fleet/control/apply")
+        if "remote.example" in url:
+            remote_replica = body["state"]
+        if delayed and "slow.example" in url:
+            slow_apply_started.set()
+            await asyncio.sleep(0.8)
+        return _FakeResponse({"ok": True, "control": body["state"]})
+
+    home = ManagedFleetControl(
+        home_store,
+        home_config,
+        _PolicyStub(),
+        public_base_url="https://home.example",
+        client_factory=lambda: _FakeClient(home_http),
+    )
+    adopted = await home.adopt(mesh_id="mesh-a", display_name="Fleet")
+    await home.upsert_node(
+        node_id="remote",
+        mesh_id="mesh-a",
+        origin="https://remote.example",
+        public_key=remote_public,
+        auth_token="remote-token",
+        expected_topology_revision=adopted["revisions"]["topology"],
+    )
+    after_remote = await home.snapshot()
+    await home.upsert_node(
+        node_id="slow",
+        mesh_id="mesh-a",
+        origin="https://slow.example",
+        public_key=slow_public,
+        auth_token="slow-token",
+        expected_topology_revision=after_remote["revisions"]["topology"],
+    )
+    assert remote_replica is not None
+
+    home_app = FleetControlApplication(home)
+    peer_actor = ActorContext(
+        transport="mesh",
+        endpoint_role="mesh",
+        node_id="home",
+        peer_node_id="remote",
+    )
+
+    async def remote_http(url, headers, body):
+        operation = url.rsplit("/", 1)[-1]
+        assert operation in {"detach-node", "release-node"}
+        response = await asyncio.wait_for(
+            home_app.internal_mutate(
+                peer_actor,
+                operation=operation,
+                payload=body["payload"],
+            ),
+            timeout=home_config.request_timeout_seconds,
+        )
+        return _FakeResponse(response)
+
+    remote = ManagedFleetControl(
+        remote_store,
+        remote_config,
+        _PolicyStub(),
+        public_base_url="https://remote.example",
+        client_factory=lambda: _FakeClient(remote_http),
+    )
+    await remote.apply_replica(remote_replica, source_node_id="home")
+    before = await remote.snapshot()
+
+    delayed = True
+    detached, mutation = await remote.detach_node_result(
+        "remote",
+        expected_topology_revision=before["revisions"]["topology"],
+    )
+    assert mutation == {
+        "status": "committed",
+        "convergence": "pending",
+        "topology_revision": before["revisions"]["topology"] + 1,
+    }
+    remote_node = next(node for node in detached["nodes"] if node["node_id"] == "remote")
+    assert remote_node["state"] == "draining"
+    assert remote_node["mesh_id"] is None
+    authoritative = await home.snapshot()
+    authority_remote = next(
+        node for node in authoritative["nodes"] if node["node_id"] == "remote"
+    )
+    assert authority_remote["state"] == "detached"
+    await asyncio.wait_for(slow_apply_started.wait(), timeout=0.3)
+
+    reconcile = home._deferred_reconcile_task
+    assert reconcile is not None
+    await asyncio.wait_for(asyncio.shield(reconcile), timeout=2.5)
+    converged = await home.snapshot()
+    slow_node = next(node for node in converged["nodes"] if node["node_id"] == "slow")
+    assert slow_node["desired_topology_revision"] == slow_node["applied_topology_revision"]
+    assert slow_node["last_error"] is None
+    await home.stop()
