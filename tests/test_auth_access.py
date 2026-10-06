@@ -448,6 +448,15 @@ def test_oauth_client_deletion_cannot_remove_last_usable_manager(tmp_path):
             raise AssertionError("expected last_auth_manager_required")
 
         assert asyncio.run(app.state.oauth_store.get_client(owner_device["client_id"])) is not None
+        refreshed = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "client_id": owner_device["client_id"],
+                "refresh_token": owner_device["refresh_token"],
+            },
+        )
+        assert refreshed.status_code == 200
         assert client.get("/access/principals", headers=bearer(owner_device)).status_code == 200
 
 
