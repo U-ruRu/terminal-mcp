@@ -5,6 +5,7 @@ import time
 import aiosqlite
 
 from terminal_mcp.storage.permissions import secure_database_path
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 
 class OAuthStore:
@@ -13,7 +14,7 @@ class OAuthStore:
 
     async def initialize(self):
         secure_database_path(self.path)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.executescript(
                 """CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY,client_secret_hash TEXT,redirect_uris TEXT NOT NULL,client_name TEXT NOT NULL,auth_method TEXT NOT NULL,created_at INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS oauth_codes(code_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,redirect_uri TEXT NOT NULL,scope TEXT NOT NULL,code_challenge TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS oauth_refresh_tokens(token_hash TEXT PRIMARY KEY,client_id TEXT NOT NULL,scope TEXT NOT NULL,expires_at INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);"""  # noqa: E501
             )
@@ -48,7 +49,7 @@ class OAuthStore:
     async def cleanup(self, *, now=None):
         """Purge disposable OAuth credentials without touching clients or live tokens."""
         cutoff = int(time.time()) if now is None else int(now)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             result = await self._cleanup_rows(db, cutoff)
             await db.commit()
         return result
@@ -56,7 +57,7 @@ class OAuthStore:
     async def register_client(self, uris, name, method):
         cid = secrets.token_urlsafe(24)
         secret = secrets.token_urlsafe(32) if method != "none" else None
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute(
                 "INSERT INTO oauth_clients VALUES(?,?,?,?,?,?)",
                 (
@@ -72,7 +73,7 @@ class OAuthStore:
         return cid, secret
 
     async def get_client(self, cid):
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             return await (
                 await db.execute(
                     "SELECT client_id,client_secret_hash,redirect_uris,client_name,auth_method FROM oauth_clients WHERE client_id=?",  # noqa: E501
@@ -81,7 +82,7 @@ class OAuthStore:
             ).fetchone()
 
     async def list_clients(self):
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             return await (
                 await db.execute(
                     "SELECT client_id, client_secret_hash, redirect_uris, client_name, "
@@ -91,7 +92,7 @@ class OAuthStore:
             ).fetchall()
 
     async def delete_client(self, client_id):
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("DELETE FROM oauth_refresh_tokens WHERE client_id=?", (client_id,))
             await db.execute("DELETE FROM oauth_codes WHERE client_id=?", (client_id,))
             await db.execute("DELETE FROM oauth_clients WHERE client_id=?", (client_id,))
@@ -99,7 +100,7 @@ class OAuthStore:
 
     async def create_code(self, cid, redirect_uri, scope, challenge, ttl):
         code = secrets.token_urlsafe(32)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await self._cleanup_rows(db, int(time.time()))
             await db.execute(
                 "INSERT INTO oauth_codes VALUES(?,?,?,?,?,?,0)",
@@ -111,7 +112,7 @@ class OAuthStore:
     async def get_code(self, code):
         h = self.digest(code)
         now = int(time.time())
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             row = await (
                 await db.execute(
                     "SELECT client_id,redirect_uri,scope,code_challenge,expires_at,used "
@@ -125,7 +126,7 @@ class OAuthStore:
 
     async def consume_code(self, code):
         h = self.digest(code)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             now = int(time.time())
             await self._cleanup_rows(db, now)
             cursor = await db.execute(
@@ -139,7 +140,7 @@ class OAuthStore:
 
     async def create_refresh(self, cid, scope, ttl):
         token = secrets.token_urlsafe(48)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await self._cleanup_rows(db, int(time.time()))
             await db.execute(
                 "INSERT INTO oauth_refresh_tokens VALUES(?,?,?,?,0)",
@@ -151,7 +152,7 @@ class OAuthStore:
     async def rotate_refresh(self, token):
         h = self.digest(token)
         now = int(time.time())
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("PRAGMA busy_timeout=5000")
             await db.execute("BEGIN IMMEDIATE")
             await self._cleanup_rows(db, now)
