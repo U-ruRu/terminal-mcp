@@ -62,10 +62,20 @@ test('server overview owns the collapsed local diagnostics panel', () => {
   renderApp('/servers/server-c', diagnostics)
   const panel = document.querySelector('.server-overview-diagnostics') as HTMLDetailsElement
   expect(panel).toBeInTheDocument()
+  expect(panel).not.toHaveClass('panel')
   expect(panel.open).toBe(false)
   expect(within(panel).getByText(/Local diagnostics · 1/)).toBeInTheDocument()
   const nav = screen.getByRole('navigation', { name: 'Application navigation' })
   expect(within(nav).queryByRole('link', { name: 'Diagnostics' })).not.toBeInTheDocument()
+})
+
+test('server overview uses a compact non-duplicated runtime badge strip', () => {
+  renderApp('/servers/server-c')
+  const serverCard = screen.getByRole('article', { name: 'Server C server' })
+  const strip = serverCard.querySelector('.server-state-strip') as HTMLElement
+  expect(within(strip).getAllByText('Live')).toHaveLength(1)
+  expect(within(strip).getByText('Fresh')).toBeInTheDocument()
+  expect(strip.querySelectorAll('.status')).toHaveLength(2)
 })
 
 test('server overview exposes the same runtime version and resource observation used by Fleet', () => {

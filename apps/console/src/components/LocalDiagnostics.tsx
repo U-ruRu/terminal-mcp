@@ -48,7 +48,7 @@ export function LocalDiagnostics({ server, diagnostics }: { server: FleetServerR
   }
 
   return (
-    <details className="panel diagnostics-panel server-overview-diagnostics">
+    <details className="diagnostics-panel server-overview-diagnostics">
       <summary>{t('diagnostics.title')} · {number(entries.length)}</summary>
       <p className="muted">{t('diagnostics.description')}</p>
       {server.lastError ? <p className="connection-error" role="status">{diagnosticError(server.lastError, t)}</p> : null}
