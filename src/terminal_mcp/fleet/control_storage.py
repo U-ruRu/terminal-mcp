@@ -4,6 +4,7 @@ import base64
 import json
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import aiosqlite
 from cryptography.hazmat.primitives import serialization
@@ -12,11 +13,19 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.fleet.protocol import validate_capabilities, validate_protocol_id
 from terminal_mcp.storage.permissions import secure_database_path
-from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
+from terminal_mcp.storage.sqlite_observability import (
+    SqliteDiagnostics,
+    cancellation_safe_connection,
+    observed_connection,
+)
 
 
 class FleetControlError(RuntimeError):
     pass
+
+
+SQLITE_MAIN_HEADER = b"SQLite format 3\x00"
+SQLITE_WAL_MAGICS = {bytes.fromhex("377f0682"), bytes.fromhex("377f0683")}
 
 
 class FleetControlStore:
@@ -41,8 +50,37 @@ class FleetControlStore:
     def configure_observability(self, events, metrics) -> None:
         self.sqlite_diagnostics.configure(events, metrics)
 
+    def _main_file_ready(self) -> bool:
+        path = Path(self.path)
+        return path.exists() and path.stat().st_size > 0
+
+    def _validate_main_file_header(self) -> None:
+        path = Path(self.path)
+        if not self._main_file_ready():
+            return
+        with path.open("rb") as handle:
+            header = handle.read(len(SQLITE_MAIN_HEADER))
+        if header == SQLITE_MAIN_HEADER:
+            return
+        if header[:4] in SQLITE_WAL_MAGICS:
+            raise FleetControlError("fleet_control_main_is_wal")
+        raise FleetControlError("fleet_control_invalid_header")
+
+    async def healthy(self) -> bool:
+        try:
+            self._validate_main_file_header()
+            if not self._main_file_ready():
+                return False
+            uri = f"file:{Path(self.path)}?mode=ro"
+            async with cancellation_safe_connection(aiosqlite.connect, uri, uri=True) as db:
+                row = await (await db.execute("PRAGMA quick_check(1)")).fetchone()
+            return row is not None and row[0] == "ok"
+        except (OSError, aiosqlite.Error, FleetControlError):
+            return False
+
     @asynccontextmanager
     async def _connect(self, operation: str):
+        self._validate_main_file_header()
         secure_database_path(self.path)
         async with observed_connection(
             aiosqlite.connect,

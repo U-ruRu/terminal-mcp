@@ -101,6 +101,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             internal_error operation_failed run_failed recovery_failed execution_failed
             access_registration_failed access_retire_failed
             access_rotation_failed access_update_failed
+            fleet_control_invalid_header fleet_control_main_is_wal
         """,
         ),
     )
@@ -175,6 +176,12 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "validation_error": "Correct the indicated request fields.",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
+        "fleet_control_invalid_header": (
+            "Fleet control storage has an invalid header. Restore validated control state."
+        ),
+        "fleet_control_main_is_wal": (
+            "Fleet control storage contains a WAL header. Restore validated control state."
+        ),
         "authority_unavailable": (
             "The authoritative node is unavailable. Check state before retrying changes."
         ),

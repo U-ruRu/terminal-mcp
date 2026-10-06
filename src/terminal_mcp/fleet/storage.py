@@ -6,6 +6,7 @@ import aiosqlite
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.fleet.identity import AgentIdentityRecord, SignedAgentIdentity
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 
 class FleetIdentityStore:
@@ -27,7 +28,7 @@ class FleetIdentityStore:
         record = envelope.record
         record_json = self._record_json(record)
         stamp = received_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute("BEGIN IMMEDIATE")
             row = await (
                 await db.execute(
@@ -100,7 +101,7 @@ class FleetIdentityStore:
         return "applied"
 
     async def get(self, source_instance_id: str, agent_id: str) -> SignedAgentIdentity | None:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT record_json,signature FROM fleet_agent_identities "
@@ -120,7 +121,7 @@ class FleetIdentityStore:
             condition = "WHERE agent_id=?"
             params.append(agent_id)
         params.append(limit)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT record_json,signature FROM fleet_agent_identities "
@@ -141,7 +142,7 @@ class FleetIdentityStore:
         record = envelope.record
         record_json = self._record_json(record)
         stamp = queued_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.executemany(
                 "INSERT INTO fleet_peer_outbox("
                 "peer_instance_id,source_instance_id,agent_id,revision,record_json,signature,"
@@ -168,7 +169,7 @@ class FleetIdentityStore:
             await db.commit()
 
     async def pending(self, peer_instance_id: str, limit: int = 100) -> list[SignedAgentIdentity]:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT record_json,signature FROM fleet_peer_outbox "
@@ -189,7 +190,7 @@ class FleetIdentityStore:
     ) -> None:
         record = envelope.record
         stamp = attempted_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             if error is None:
                 await db.execute(
                     "DELETE FROM fleet_peer_outbox WHERE peer_instance_id=? "
@@ -226,7 +227,7 @@ class FleetIdentityStore:
         queued_at: str | None = None,
     ) -> None:
         stamp = queued_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO fleet_finish_outbox("
                 "origin_instance_id,agent_id,ended_at,reason,queued_at,"
@@ -240,7 +241,7 @@ class FleetIdentityStore:
             await db.commit()
 
     async def pending_finishes(self, limit: int = 100) -> list[dict]:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT origin_instance_id,agent_id,ended_at,reason,queued_at,"
@@ -272,7 +273,7 @@ class FleetIdentityStore:
         attempted_at: str | None = None,
     ) -> None:
         stamp = attempted_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             if error is None:
                 await db.execute(
                     "DELETE FROM fleet_finish_outbox WHERE origin_instance_id=? AND agent_id=?",
@@ -331,7 +332,7 @@ class FleetIdentityStore:
             intent_updated_at,
             stamp,
         )
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute(sql, params)
             await db.commit()
 
@@ -342,7 +343,7 @@ class FleetIdentityStore:
             "FROM fleet_session_update_outbox "
             "ORDER BY queued_at,origin_instance_id,agent_id LIMIT ?"
         )
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (await db.execute(sql, (max(1, min(int(limit), 500)),))).fetchall()
         keys = (
             "origin_instance_id",
@@ -369,7 +370,7 @@ class FleetIdentityStore:
         attempted_at=None,
     ):
         stamp = attempted_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             if error is None:
                 await db.execute(
                     "DELETE FROM fleet_session_update_outbox "
@@ -392,14 +393,14 @@ class FleetIdentityStore:
             await db.commit()
 
     async def session_update_outbox_count(self) -> int:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute("SELECT COUNT(*) FROM fleet_session_update_outbox")
             ).fetchone()
         return int(row[0])
 
     async def finish_outbox_count(self) -> int:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (await db.execute("SELECT COUNT(*) FROM fleet_finish_outbox")).fetchone()
         return int(row[0])
 
@@ -409,7 +410,7 @@ class FleetIdentityStore:
         if peer_instance_id:
             condition = " WHERE peer_instance_id=?"
             params = (peer_instance_id,)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(f"SELECT COUNT(*) FROM fleet_peer_outbox{condition}", params)
             ).fetchone()

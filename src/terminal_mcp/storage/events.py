@@ -7,6 +7,7 @@ import aiosqlite
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.storage.permissions import secure_database_path
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 DEFAULT_EVENT_MAX_ROWS = 50_000
 DEFAULT_EVENT_LIMIT = 100
@@ -593,7 +594,7 @@ class EventJournalStore:
 
     async def initialize(self) -> None:
         secure_database_path(self.path)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS instance_events(
@@ -627,7 +628,7 @@ class EventJournalStore:
         if not event_type or not entity_type or not entity_id:
             raise ValueError("event_type, entity_type and entity_id are required")
         created_at = created_at or utc_text()
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute("BEGIN IMMEDIATE")
             cur = await db.execute(
                 "INSERT INTO instance_events("
@@ -652,7 +653,7 @@ class EventJournalStore:
             return int(cur.lastrowid)
 
     async def high_water_seq(self) -> int:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute("SELECT COALESCE(MAX(seq),0) FROM instance_events")
             ).fetchone()
@@ -663,7 +664,7 @@ class EventJournalStore:
         if before < 1:
             raise ValueError("before must be positive")
         limit = max(1, min(int(limit), MAX_EVENT_LIMIT))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             bounds = await (
                 await db.execute(
                     "SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events"
@@ -708,7 +709,7 @@ class EventJournalStore:
         if since < 0:
             raise ValueError("since must be non-negative")
         limit = max(1, min(int(limit), MAX_EVENT_LIMIT))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             bounds = await (
                 await db.execute(
                     "SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events"

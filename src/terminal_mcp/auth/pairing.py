@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import aiosqlite
 
 from terminal_mcp.storage.permissions import secure_database_path
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 PAIRING_SECRET_BYTES = 32
 PAIRING_DEFAULT_TTL_SEC = 300
@@ -31,7 +32,7 @@ class PairingStore:
 
     async def initialize(self) -> None:
         secure_database_path(self.path)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS console_pairings(
@@ -99,7 +100,7 @@ class PairingStore:
         now: int | None = None,
     ) -> None:
         recorded_at = int(time.time()) if now is None else int(now)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await self._audit(
                 db,
                 event_type,
@@ -117,7 +118,7 @@ class PairingStore:
             raise ValueError("ttl_seconds must be positive")
         issued_at = int(time.time()) if now is None else int(now)
         secret = secrets.token_urlsafe(PAIRING_SECRET_BYTES)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute(
                 "INSERT INTO console_pairings(secret_hash,created_at,expires_at,consumed_at) "
                 "VALUES(?,?,?,NULL)",
@@ -131,7 +132,7 @@ class PairingStore:
         """Atomically consume one unexpired secret."""
 
         consumed_at = int(time.time()) if now is None else int(now)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("PRAGMA busy_timeout=5000")
             cursor = await db.execute(
                 "UPDATE console_pairings SET consumed_at=? "
@@ -159,7 +160,7 @@ class PairingStore:
         client_id = "device_" + secrets.token_urlsafe(24)
         refresh_token = secrets.token_urlsafe(48)
 
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("PRAGMA busy_timeout=5000")
             await db.execute("BEGIN IMMEDIATE")
             row = await (
@@ -238,7 +239,7 @@ class PairingStore:
         )
 
     async def list_devices(self) -> list[dict]:
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             rows = await (
                 await db.execute(
                     "SELECT device_id,label,created_at,last_used_at,revoked_at "
@@ -256,7 +257,7 @@ class PairingStore:
             for row in rows
         ]
     async def active_device_for_client(self, client_id: str) -> dict | None:
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             row = await (
                 await db.execute(
                     "SELECT device_id,client_id,label FROM console_devices "
@@ -269,7 +270,7 @@ class PairingStore:
         return {"device_id": row[0], "client_id": row[1], "label": row[2]}
 
     async def device_active(self, device_id: str, client_id: str) -> bool:
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             row = await (
                 await db.execute(
                     "SELECT 1 FROM console_devices "
@@ -281,7 +282,7 @@ class PairingStore:
 
     async def revoke_device(self, device_id: str, *, now: int | None = None) -> bool:
         revoked_at = int(time.time()) if now is None else int(now)
-        async with aiosqlite.connect(self.path) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("PRAGMA busy_timeout=5000")
             await db.execute("BEGIN IMMEDIATE")
             row = await (

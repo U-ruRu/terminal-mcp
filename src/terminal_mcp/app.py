@@ -67,7 +67,7 @@ from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.work_windows import WorkWindowStore
-from terminal_mcp.terminal.in_process import InProcessExecutionAdapter
+from terminal_mcp.terminal.composition import build_execution
 from terminal_mcp.trace import TraceMiddleware
 from terminal_mcp.version import __version__
 
@@ -75,6 +75,7 @@ from terminal_mcp.version import __version__
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.browser_allowed_origins()
+    execution = build_execution(settings)
     repo = SqliteRepository(
         settings.database_path,
         settings.output_cache_path,
@@ -101,9 +102,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     runtime.reload_callback = lambda config: events.emit(
         "runtime_config_reloaded", outcome="success"
-    )
-    execution = InProcessExecutionAdapter(
-        settings.shell, settings.cwd, settings.cancel_grace_sec, settings.terminal_user
     )
     terminal = CommandScheduler(
         repo,
@@ -214,6 +212,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             control_node_id=settings.fleet_control_node_id,
         )
         fleet_control.configure_observability(events, metrics)
+    service.fleet_control = fleet_control
 
     managed_authority_node_id = (
         fleet_config.instance_id

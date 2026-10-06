@@ -11,6 +11,7 @@ import aiosqlite
 
 from terminal_mcp.fleet.protocol import MAX_RECENT_TERMINAL_COMMANDS
 from terminal_mcp.host_resources import collect_host_resources
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 CURRENT_SCOPE_VERSION = 1
 MAX_PAGE_LIMIT = 100
@@ -350,7 +351,9 @@ class FleetSourceQueryPlane:
         if self.auth_db_path is None:
             return {}
         try:
-            async with aiosqlite.connect(self.auth_db_path, timeout=1.0) as db:
+            async with cancellation_safe_connection(
+                aiosqlite.connect, self.auth_db_path, timeout=1.0
+            ) as db:
                 rows = await (
                     await db.execute(
                         "SELECT logical_agent_id,public_name,access_generation,status "
@@ -444,7 +447,9 @@ class FleetSourceQueryPlane:
         sql += f" ORDER BY {','.join(spec.keys)} LIMIT ?"
         params.append(limit + 1)
         try:
-            async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
+            async with cancellation_safe_connection(
+                aiosqlite.connect, self.runtime_db_path, timeout=1.0
+            ) as db:
                 db.row_factory = aiosqlite.Row
                 rows = await (await db.execute(sql, params)).fetchall()
         except aiosqlite.Error:
@@ -506,7 +511,9 @@ class FleetSourceQueryPlane:
         marks = ",".join("?" for _ in spec.keys)
         sql = f"SELECT * FROM ({spec.sql}) scoped WHERE ({','.join(spec.keys)})=({marks}) LIMIT 1"
         try:
-            async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
+            async with cancellation_safe_connection(
+                aiosqlite.connect, self.runtime_db_path, timeout=1.0
+            ) as db:
                 db.row_factory = aiosqlite.Row
                 row = await (await db.execute(sql, list(values))).fetchone()
                 if row is None and scope == "commands":
@@ -676,7 +683,7 @@ class FleetSourceQueryPlane:
         if db_path is None:
             raise ValueError("output metadata is unavailable")
         try:
-            async with aiosqlite.connect(db_path, timeout=1.0) as db:
+            async with cancellation_safe_connection(aiosqlite.connect, db_path, timeout=1.0) as db:
                 db.row_factory = aiosqlite.Row
                 rows = await (await db.execute(sql, [*params, limit + 1])).fetchall()
                 count = None
@@ -746,7 +753,7 @@ class FleetSourceQueryPlane:
         db_path = self.output_db_path if spec.output_db else self.runtime_db_path
         if db_path is None:
             raise ValueError("output metadata is unavailable")
-        async with aiosqlite.connect(db_path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, db_path, timeout=1.0) as db:
             db.row_factory = aiosqlite.Row
             row = await (await db.execute(sql, list(keys))).fetchone()
         return self._normalize_query_row(resource, dict(row)) if row else None
@@ -765,7 +772,9 @@ class FleetSourceQueryPlane:
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY namespace LIMIT ?"
-        async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
+        async with cancellation_safe_connection(
+            aiosqlite.connect, self.runtime_db_path, timeout=1.0
+        ) as db:
             rows = await (await db.execute(sql, [*params, limit + 1])).fetchall()
         has_more = len(rows) > limit
         values = [str(row[0]) for row in rows[:limit]]
@@ -794,7 +803,9 @@ class FleetSourceQueryPlane:
           ON w.namespace=g.namespace AND w.task_id=g.task_id
         ORDER BY g.depth,g.namespace,g.task_id
         """
-        async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
+        async with cancellation_safe_connection(
+            aiosqlite.connect, self.runtime_db_path, timeout=1.0
+        ) as db:
             db.row_factory = aiosqlite.Row
             nodes = [
                 dict(row)

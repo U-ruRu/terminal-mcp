@@ -1,4 +1,5 @@
 import type { StoredConnection } from '../auth/types'
+import type { SafePairingProfile } from './pairingLink'
 
 export type ConnectionProfileMetadata = Pick<
   StoredConnection,
@@ -11,6 +12,7 @@ export type ConnectionProfile = {
   displayName: string
   credentialRef: string
   metadata: ConnectionProfileMetadata
+  pairingProfile?: SafePairingProfile | null
   createdAt: number
   updatedAt: number
 }

@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -265,3 +267,69 @@ def test_snapshot_failure_removes_partial_directory(tmp_path, monkeypatch):
 
     assert not destination.exists()
     assert not list(tmp_path.glob(".snapshot.tmp-*"))
+
+
+def test_snapshot_restores_complete_authoritative_state_in_isolated_target(tmp_path):
+    from terminal_mcp.backup import (
+        authoritative_backup_members,
+        create_authoritative_snapshot,
+    )
+
+    source = _settings(tmp_path / "source")
+    _complete_source(source, fleet=True)
+    markers = {
+        source.database_path: "runtime",
+        source.auth_database_path: "auth",
+        source.effective_fleet_node_meta_path(): "fleet-node-meta",
+        source.effective_fleet_control_path(): "fleet-control",
+    }
+    for path, value in markers.items():
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE backup_restore_marker(value TEXT NOT NULL)")
+            db.execute("INSERT INTO backup_restore_marker(value) VALUES (?)", (value,))
+            db.commit()
+
+    source_key = access_verifier_key_path(source.auth_database_path).read_bytes()
+    snapshot = tmp_path / "snapshot"
+    create_authoritative_snapshot(source, snapshot, quiesced=True)
+
+    target = _settings(tmp_path / "restored")
+    target.env_file_path.unlink()
+    target_paths = {
+        member.member_id: member.path for member in authoritative_backup_members(target)
+    }
+    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    restore_members = sorted(manifest["members"], key=lambda item: item["restore_order"])
+    assert [item["restore_order"] for item in restore_members] == sorted(
+        item["restore_order"] for item in restore_members
+    )
+
+    for item in restore_members:
+        destination = target_paths[item["member_id"]]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(snapshot / item["snapshot_file"], destination)
+        destination.chmod(int(item["mode"], 8))
+
+    validated = validate_authoritative_backup_source(target)
+    validated_ids = {item["member_id"] for item in validated["validated"]}
+    assert {
+        "node_environment",
+        "runtime_database",
+        "auth_database",
+        "access_verifier_key",
+        "fleet_node_meta",
+        "fleet_control",
+    } <= validated_ids
+
+    restored_markers = {
+        target.database_path: "runtime",
+        target.auth_database_path: "auth",
+        target.effective_fleet_node_meta_path(): "fleet-node-meta",
+        target.effective_fleet_control_path(): "fleet-control",
+    }
+    for path, expected in restored_markers.items():
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT value FROM backup_restore_marker").fetchone() == (expected,)
+
+    assert access_verifier_key_path(target.auth_database_path).read_bytes() == source_key
+    assert target.env_file_path.read_text() == source.env_file_path.read_text()

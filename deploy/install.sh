@@ -22,6 +22,12 @@ CACHE=${TERMINAL_MCP_CACHE_DIR:-/var/cache/terminal-mcp}
 BACKUPS=${TERMINAL_MCP_BACKUP_DIR:-/var/backups/terminal-mcp}
 UNIT_FILE=${TERMINAL_MCP_UNIT_FILE:-/etc/systemd/system/terminal-mcp.service}
 CLI_LINK=${TERMINAL_MCP_CLI_LINK:-/usr/local/bin/terminal-mcp}
+# The legacy updater cannot safely chown API stores or roll back one half of a
+# split topology. Refuse before any filesystem/service mutation.
+if [ -f "${UNIT_FILE}.d/50-local-executor.conf" ] && [ "$CMD" != doctor ]; then
+  echo 'Split executor topology is active; use the coordinated topology transition, not the legacy installer' >&2
+  exit 46
+fi
 SYSTEMCTL=${TERMINAL_MCP_SYSTEMCTL:-systemctl}
 HEALTH_URL=${TERMINAL_MCP_HEALTH_URL:-http://127.0.0.1:8080/health/live}
 HEALTH_TIMEOUT_SEC=${TERMINAL_MCP_ACTIVATION_HEALTH_TIMEOUT_SEC:-600}
@@ -718,11 +724,13 @@ activate(){
   fi
   return 1
 }
-mkdir -p "$ROOT/releases"
-install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
-find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0600 {} +
-[ ! -e "$DATA/terminal-mcp.sqlite3" ] || chmod 0600 "$DATA/terminal-mcp.sqlite3"
-[ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
+if [ "$CMD" = install ] || [ "$CMD" = update ]; then
+  mkdir -p "$ROOT/releases"
+  install -d -o root -g root -m 0700 "$DATA" "$CACHE" "$BACKUPS"
+  find "$BACKUPS" -maxdepth 1 -type f -name 'terminal-mcp-*.sqlite3' -exec chmod 0600 {} +
+  [ ! -e "$DATA/terminal-mcp.sqlite3" ] || chmod 0600 "$DATA/terminal-mcp.sqlite3"
+  [ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
+fi
 case "$CMD" in
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; configure_console_caddy; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
  update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;

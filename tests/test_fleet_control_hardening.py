@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import sqlite3
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -761,3 +762,83 @@ async def test_detached_standalone_policy_is_independent_from_old_mesh_policy(tm
     assert member_after["policy"]["duration_seconds"] == 901
     assert member_after["policy"]["rearm_after_seconds"] == 61
     assert member_after["policy"]["legacy_admission_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_recovered_stale_control_backup_preserves_identity_and_reconverges(tmp_path):
+    live_path = tmp_path / "live.sqlite3"
+    stale_backup = tmp_path / "stale-backup.sqlite3"
+    recovered_path = tmp_path / "recovered.sqlite3"
+
+    private_key, public_key = keypair()
+    store = FleetControlStore(
+        live_path,
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="control",
+    )
+    await store.initialize()
+    identity_before = await store.ensure_managed_identity(private_key)
+
+    stale = _managed_replica_snapshot(include_member_mesh_id=True, member_mesh_id="mesh-a")
+    stale["nodes"][1]["public_key"] = public_key
+    await store.apply_managed_replica(
+        stale,
+        bootstrap_tokens={"member": "member-token", "control": "control-token"},
+    )
+
+    with sqlite3.connect(live_path) as source, sqlite3.connect(stale_backup) as target:
+        source.backup(target)
+    recovered_path.write_bytes(stale_backup.read_bytes())
+
+    recovered = FleetControlStore(
+        recovered_path,
+        fleet_id="fleet-a",
+        node_id="member",
+        control_node_id="control",
+    )
+    assert await recovered.healthy() is True
+    identity_recovered = await recovered.managed_identity()
+    assert identity_recovered is not None
+    assert identity_recovered["private_key"] == identity_before["private_key"]
+    assert identity_recovered["public_key"] == public_key
+    assert identity_recovered["generation"] == identity_before["generation"]
+
+    fresh = _managed_replica_snapshot(include_member_mesh_id=True, member_mesh_id="mesh-a")
+    fresh["revisions"] = {"topology": 7, "trust": 8, "access_policy": 9}
+    fresh["policy"]["duration_seconds"] = 1500
+    fresh["policy"]["warning_after_seconds"] = 1260
+    fresh["policy"]["alert_after_seconds"] = 1380
+    for node in fresh["nodes"]:
+        node["applied_topology_revision"] = 7
+        node["applied_trust_revision"] = 8
+        node["applied_policy_revision"] = 9
+    fresh["nodes"][1]["public_key"] = public_key
+    fresh["nodes"][1]["origin"] = "https://member-recovered.example"
+
+    state = await recovered.apply_managed_replica(
+        fresh,
+        bootstrap_tokens={"member": "member-token", "control": "control-token"},
+    )
+    identity_after = await recovered.managed_identity()
+    assert identity_after is not None
+    assert identity_after["private_key"] == identity_before["private_key"]
+    assert identity_after["public_key"] == public_key
+    assert identity_after["generation"] == identity_before["generation"]
+    assert state["revisions"]["topology"] == 7
+    assert state["revisions"]["trust"] == 8
+    assert state["revisions"]["access_policy"] == 9
+
+    member = await recovered.managed_node("member")
+    assert member is not None
+    assert member["public_key"] == public_key
+    assert member["origin"] == "https://member-recovered.example"
+
+    with sqlite3.connect(recovered_path) as db:
+        revisions = db.execute(
+            "SELECT desired_topology_revision,applied_topology_revision,"
+            "desired_trust_revision,applied_trust_revision,"
+            "desired_policy_revision,applied_policy_revision,last_error "
+            "FROM managed_nodes WHERE node_id='member'"
+        ).fetchone()
+    assert revisions == (7, 7, 8, 8, 9, 9, None)

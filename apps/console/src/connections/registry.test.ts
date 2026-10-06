@@ -15,8 +15,13 @@ import {
   REGISTRY_STORAGE_KEY,
 } from './registry'
 
-function pairingLink(server: string, name: string, secret: string): string {
-  const payload = JSON.stringify({ v: 1, server, name, secret })
+function pairingLink(
+  server: string,
+  name: string,
+  secret: string,
+  extra: Record<string, unknown> = {},
+): string {
+  const payload = JSON.stringify({ v: 1, server, name, secret, ...extra })
   const bytes = new TextEncoder().encode(payload)
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
@@ -347,4 +352,127 @@ test('reuses one valid access session across sequential consumers and refreshes 
   expect(refreshed.status).toBe('connected')
   expect(fetcher).toHaveBeenCalledTimes(2)
   expect(registry.credential(profile.instanceId)?.refreshToken).toBe('refresh-c')
+})
+
+test('round-trips safe pairing extensions across reload and rename without persisting secrets', async () => {
+  const storage = new MemoryStorage()
+  const fetcher = vi.fn(async () => jsonResponse({
+    device_id: 'dev-ext',
+    client_id: 'client-ext',
+    access_token: 'access-ext',
+    token_type: 'Bearer',
+    expires_in: 90,
+    refresh_token: 'refresh-ext',
+    scope: 'terminal:read',
+  }))
+  const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('ext-a'))
+
+  const paired = await registry.pairAndAdd(
+    pairingLink(
+      'https://extensions.example',
+      'Extensions',
+      'extension-secret-123456789',
+      {
+        ignoredTopLevel: { access_token: 'top-level-not-persisted' },
+        profile: {
+          hint: 'edge',
+          cleared: null,
+          extensions: {
+            'vendor.example': { capability: 'mesh-v2', flags: ['a', 'b'] },
+          },
+        },
+      },
+    ),
+    'Browser',
+    undefined,
+    new PairingTransport(fetcher),
+    async () => 'public-key-material-that-is-long-enough',
+  )
+
+  expect(paired.profile.pairingProfile).toEqual({
+    hint: 'edge',
+    cleared: null,
+    extensions: {
+      'vendor.example': { capability: 'mesh-v2', flags: ['a', 'b'] },
+    },
+  })
+
+  const stored = JSON.stringify([...storage.data.entries()])
+  expect(stored).not.toContain('extension-secret-123456789')
+  expect(stored).not.toContain('access-ext')
+  expect(stored).not.toContain('top-level-not-persisted')
+
+  const reloaded = new BrowserConnectionRegistry(storage, () => 6000, ids('unused'))
+  expect(reloaded.rename(paired.profile.instanceId, 'Renamed').pairingProfile)
+    .toEqual(paired.profile.pairingProfile)
+  expect(new BrowserConnectionRegistry(storage).get(paired.profile.instanceId)?.pairingProfile)
+    .toEqual(paired.profile.pairingProfile)
+})
+
+test('does not persist sensitive or prototype-control pairing extensions', async () => {
+  const storage = new MemoryStorage()
+  const fetcher = vi.fn()
+  const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('unsafe'))
+
+  for (const extension of [
+    { api_key: 'must-not-persist' },
+    { access_key: 'must-not-persist' },
+    { credential: 'must-not-persist' },
+    { bearer: 'must-not-persist' },
+    { ['__proto__']: { polluted: true } },
+    { constructor: { polluted: true } },
+    { prototype: { polluted: true } },
+  ]) {
+    await expect(registry.pairAndAdd(
+      pairingLink(
+        'https://unsafe.example',
+        'Unsafe',
+        'unsafe-secret-value-123456789',
+        { profile: { extensions: { vendor: extension } } },
+      ),
+      'Browser',
+      undefined,
+      new PairingTransport(fetcher),
+      async () => 'public-key-material-that-is-long-enough',
+    )).rejects.toThrowError(new ConnectionRegistryError('invalid_pairing_link'))
+  }
+
+  expect(fetcher).not.toHaveBeenCalled()
+  expect(registry.list()).toEqual([])
+  expect(JSON.stringify([...storage.data.entries()])).not.toContain('must-not-persist')
+})
+
+test('rejects unsafe pairing extensions and unsupported major before exchange', async () => {
+  const storage = new MemoryStorage()
+  const fetcher = vi.fn()
+  const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('unsafe'))
+
+  await expect(registry.pairAndAdd(
+    pairingLink(
+      'https://unsafe.example',
+      'Unsafe',
+      'unsafe-secret-value-123456789',
+      { profile: { extensions: { vendor: { private_key: 'nope' } } } },
+    ),
+    'Browser',
+    undefined,
+    new PairingTransport(fetcher),
+    async () => 'public-key-material-that-is-long-enough',
+  )).rejects.toThrowError(new ConnectionRegistryError('invalid_pairing_link'))
+
+  const unsupported = pairingLink(
+    'https://unsafe.example',
+    'Unsafe',
+    'unsafe-secret-value-123456789',
+    { v: 2 },
+  )
+
+  await expect(registry.pairAndAdd(
+    unsupported,
+    'Browser',
+    undefined,
+    new PairingTransport(fetcher),
+    async () => 'public-key-material-that-is-long-enough',
+  )).rejects.toThrowError(new ConnectionRegistryError('unsupported_pairing_version'))
+  expect(fetcher).not.toHaveBeenCalled()
 })
