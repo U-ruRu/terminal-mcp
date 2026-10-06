@@ -832,3 +832,19 @@ def test_allow_downgrade_flag_is_update_only():
 
     assert result.returncode == 2
     assert "--allow-downgrade is valid only with update" in result.stderr
+
+
+def test_installer_uses_single_generated_systemd_model():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "deploy" / "install.sh").read_text()
+
+    assert not (root / "deploy" / "terminal-mcp.service").exists()
+    assert "ExecStart=$ROOT/current/bin/terminal-mcp" in script
+
+
+def test_installer_rotates_releases_and_database_backups():
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
+
+    assert 'terminal_mcp.deployment.retention backups "$BACKUPS" --keep 2' in script
+    assert 'terminal_mcp.deployment.retention releases "$ROOT/releases" "$new" "$old"' in script
+    assert 'rm -rf -- "$new"' in script

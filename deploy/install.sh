@@ -588,6 +588,7 @@ import sqlite3,sys
 src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); src.backup(dst); dst.close(); src.close()
 PYBACKUP
   chmod 600 "$BACKUPS/terminal-mcp-$stamp.sqlite3"
+  runtime_python "$release" -m terminal_mcp.deployment.retention backups "$BACKUPS" --keep 2
 }
 schema_rollback_safe(){
   local release=$1
@@ -707,6 +708,11 @@ activate(){
     if curl -fsS "$HEALTH_URL" >/dev/null; then
       if check_public_fleet_ingress && check_public_console_ingress; then
         install_cli_link
+        if [ -n "$old" ]; then
+          runtime_python "$new" -m terminal_mcp.deployment.retention releases "$ROOT/releases" "$new" "$old"
+        else
+          runtime_python "$new" -m terminal_mcp.deployment.retention releases "$ROOT/releases" "$new"
+        fi
         return 0
       fi
       break
@@ -717,6 +723,7 @@ activate(){
     if schema_rollback_safe "$old"; then
       ln -sfn "$old" "$ROOT/current"
       $SYSTEMCTL restart terminal-mcp
+      rm -rf -- "$new"
       echo 'Health check failed; previous release restored' >&2
     else
       echo 'Health check failed; automatic rollback blocked by durable schema state' >&2
