@@ -81,6 +81,14 @@ class TaskStore:
         return json.loads(value)
 
     @staticmethod
+    async def _ensure_namespace(db, namespace: str, now: str):
+        await db.execute(
+            "INSERT OR IGNORE INTO work_namespaces(namespace,priority,created_at,updated_at) "
+            "VALUES(?,1,?,?)",
+            (namespace, now, now),
+        )
+
+    @staticmethod
     def _validate_lane(lane: str):
         if lane not in LANES:
             raise ValueError(f"unsupported lane: {lane}")
@@ -192,6 +200,7 @@ class TaskStore:
         self._validate_state(state)
         now = now or utc_text()
         async with self._connect() as db:
+            await self._ensure_namespace(db, namespace, now)
             await db.execute(
                 "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,"
                 "resource_json,reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,revision,created_at,updated_at) "
@@ -279,6 +288,7 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._ensure_namespace(db, namespace, now)
                 await self._validate_dependency_graph_tx(db, namespace, task_id, normalized)
                 await db.execute(
                     "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,"
@@ -443,6 +453,52 @@ class TaskStore:
         if limit is None:
             return tasks[offset:]
         return tasks[offset : offset + max(1, min(int(limit), 1000))]
+
+    async def get_namespace(self, namespace: str):
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    "SELECT namespace,priority,archived_at,archive_note,revision,created_at,updated_at "
+                    "FROM work_namespaces WHERE namespace=?",
+                    (namespace,),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "namespace": str(row[0]),
+            "priority": int(row[1]),
+            "archived_at": row[2],
+            "archive_note": row[3],
+            "revision": int(row[4]),
+            "created_at": row[5],
+            "updated_at": row[6],
+        }
+
+    async def list_namespace_records(
+        self, *, show_archived: bool = False, limit: int = 20, offset: int = 0
+    ):
+        where = "" if show_archived else " WHERE archived_at IS NULL"
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT namespace,priority,archived_at,archive_note,revision,created_at,updated_at "
+                    f"FROM work_namespaces{where} ORDER BY priority DESC,namespace LIMIT ? OFFSET ?",
+                    (max(1, min(int(limit), 1000)), max(0, int(offset))),
+                )
+            ).fetchall()
+        return [
+            {
+                "namespace": str(row[0]),
+                "priority": int(row[1]),
+                "archived_at": row[2],
+                "archive_note": row[3],
+                "revision": int(row[4]),
+                "created_at": row[5],
+                "updated_at": row[6],
+            }
+            for row in rows
+        ]
 
     async def list_namespaces(self, *, limit: int = 20, offset: int = 0) -> list[str]:
         async with self._connect() as db:

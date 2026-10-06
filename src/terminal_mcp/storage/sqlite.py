@@ -183,6 +183,13 @@ class SqliteRepository:
                     content TEXT NOT NULL,
                     is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1))
                 );
+                CREATE TABLE IF NOT EXISTS work_namespaces(
+                    namespace TEXT PRIMARY KEY,
+                    priority INTEGER NOT NULL DEFAULT 1 CHECK(priority BETWEEN 0 AND 3),
+                    archived_at TEXT, archive_note TEXT,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS work_items(
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
                     lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
@@ -448,6 +455,12 @@ class SqliteRepository:
                 """
             )
             await self._migrate(db)
+            namespace_stamp = utc_text()
+            await db.execute(
+                "INSERT OR IGNORE INTO work_namespaces(namespace,priority,created_at,updated_at) "
+                "SELECT DISTINCT namespace,1,?,? FROM work_items",
+                (namespace_stamp, namespace_stamp),
+            )
             await install_event_journal(db)
             legacy_output_migrated = await self._migrate_legacy_output(db)
             recovered_at = utc_text()

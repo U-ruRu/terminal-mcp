@@ -20,6 +20,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert version == 19
     assert {
+        "work_namespaces",
         "work_items",
         "work_claims",
         "work_dependencies",
@@ -52,6 +53,11 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     assert created["checkpoint"] == {"done": ["schema"]}
     assert created["candidate_ref"] == "abc123"
     assert created["isolation_hint"] == "separate worktree"
+    namespace = await tasks.get_namespace("project")
+    assert namespace is not None
+    assert namespace["priority"] == 1
+    assert namespace["archived_at"] is None
+    assert [item["namespace"] for item in await tasks.list_namespace_records()] == ["project"]
 
     await tasks.create_task("project", "DONE-1", "Old", state="done")
     await tasks.create_task("project", "ARCH-1", "Archived")
@@ -344,3 +350,19 @@ async def test_schema_v18_preserves_pre_cutover_claimed_ready_as_in_progress(tmp
     assert rows["BLOCKED"] == ("blocked", "2026-01-03T00:00:00Z", None)
     assert rows["DEFERRED"] == ("deferred", "2026-01-04T00:00:00Z", None)
     assert rows["DONE"] == ("done", "2026-01-05T00:00:00Z", None)
+
+@pytest.mark.asyncio
+async def test_initialize_backfills_implicit_namespace_metadata(tmp_path):
+    repo, tasks = await store(tmp_path)
+    await tasks.create_task("legacy-project", "T-1", "Legacy task")
+    with sqlite3.connect(repo.path) as db:
+        db.execute("DELETE FROM work_namespaces WHERE namespace=?", ("legacy-project",))
+        db.commit()
+    assert await tasks.get_namespace("legacy-project") is None
+
+    await repo.initialize()
+
+    namespace = await tasks.get_namespace("legacy-project")
+    assert namespace is not None
+    assert namespace["priority"] == 1
+    assert namespace["archived_at"] is None
