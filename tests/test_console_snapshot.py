@@ -1,5 +1,3 @@
-import asyncio
-
 from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
@@ -172,22 +170,27 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
 
 def test_console_snapshot_cursor_first_contract_replays_concurrent_changes(tmp_path):
     app = create_app(settings(tmp_path))
-    with TestClient(app):
-        before = asyncio.run(app.state.service.event_store.high_water_seq())
+    with TestClient(app) as client:
+        assert client.portal is not None
+        before = client.portal.call(app.state.service.event_store.high_water_seq)
         assert before == 0
 
-        snapshot = asyncio.run(
-            app.state.service.console_snapshot(
+        async def capture_snapshot():
+            return await app.state.service.console_snapshot(
                 "bearer",
                 public_base_url="https://terminal.example",
             )
-        )
+
+        snapshot = client.portal.call(capture_snapshot)
         assert snapshot["ok"] is True
         assert snapshot["high_water_seq"] == before
 
-        replay = asyncio.run(
-            app.state.service.event_store.read(since=snapshot["high_water_seq"], limit=100)
-        )
+        async def read_replay():
+            return await app.state.service.event_store.read(
+                since=snapshot["high_water_seq"], limit=100
+            )
+
+        replay = client.portal.call(read_replay)
         assert replay["gap"] is False
         assert any(event["event_type"] == "health.changed" for event in replay["events"])
         assert replay["high_water_seq"] > snapshot["high_water_seq"]

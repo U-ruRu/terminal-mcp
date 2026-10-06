@@ -14,6 +14,7 @@ from terminal_mcp.fleet.protocol import (
 )
 from terminal_mcp.fleet.source_query import CURRENT_SCOPE_VERSION, FleetSourceQueryPlane
 from terminal_mcp.storage.events import EventJournalStore
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 from terminal_mcp.version import __version__
 
 _CANONICAL_ENTITY_TYPES = {
@@ -347,7 +348,9 @@ class FleetSourceService:
         }
 
     async def _snapshot_entities(self, barrier: int) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
+        async with cancellation_safe_connection(
+            aiosqlite.connect, self.runtime_db_path, timeout=1.0
+        ) as db:
             logical_agents = await (
                 await db.execute(
                     "SELECT logical_agent_id,display_name,state,authority_node_id,authority_epoch,"
