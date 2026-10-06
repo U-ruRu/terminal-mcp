@@ -139,6 +139,51 @@ class MeshApplication:
             )
             return {"ok": True, "access": access}
 
+    async def provider_resolve(self, actor: ActorContext, payload: dict):
+        self._require_peer(actor)
+        with actor.bind():
+            if payload.get("requesting_instance_id") != actor.peer_node_id:
+                raise MeshApplicationError("invalid_request", "requesting instance mismatch")
+            try:
+                logical_agent_id = await self._bridge.resolve_provider_binding(
+                    str(payload.get("provider") or ""),
+                    str(payload.get("binding_key") or ""),
+                )
+            except (PersistentStoreError, ValueError) as exc:
+                code = (
+                    exc.code
+                    if isinstance(exc, PersistentStoreError)
+                    else "identity_metadata_invalid"
+                )
+                return {"ok": False, "code": code}
+            return {"ok": True, "logical_agent_id": logical_agent_id}
+
+    async def provider_bind(self, actor: ActorContext, payload: dict):
+        self._require_peer(actor)
+        with actor.bind():
+            if payload.get("requesting_instance_id") != actor.peer_node_id:
+                raise MeshApplicationError("invalid_request", "requesting instance mismatch")
+            try:
+                logical_agent_id = await self._bridge.bind_provider_binding(
+                    str(payload.get("provider") or ""),
+                    str(payload.get("binding_key") or ""),
+                    str(payload.get("logical_agent_id") or ""),
+                    access_code=str(payload.get("access_code") or ""),
+                    principal_id=(
+                        str(payload.get("principal_id"))
+                        if payload.get("principal_id") is not None
+                        else None
+                    ),
+                )
+            except (PersistentStoreError, ValueError) as exc:
+                code = (
+                    exc.code
+                    if isinstance(exc, PersistentStoreError)
+                    else "identity_metadata_invalid"
+                )
+                return {"ok": False, "code": code}
+            return {"ok": True, "logical_agent_id": logical_agent_id}
+
     async def access_display(self, actor: ActorContext, payload: dict):
         self._require_peer(actor)
         with actor.bind():

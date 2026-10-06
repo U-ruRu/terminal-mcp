@@ -77,6 +77,7 @@ class SessionGate:
             actor.provider,
             actor.provider_metadata,
             str(access["logical_agent_id"]),
+            access_code=code,
         )
 
     async def _managed_resolution(

@@ -43,6 +43,20 @@ class ManagedAccessAuthority(Protocol):
 class ManagedFleetRoutes(Protocol):
     async def route_info(self, logical_agent_id: str) -> dict | None: ...
 
+    async def resolve_provider_binding(
+        self, provider: str, binding_key: str
+    ) -> str | None: ...
+
+    async def bind_provider_binding(
+        self,
+        provider: str,
+        binding_key: str,
+        logical_agent_id: str,
+        *,
+        access_code: str,
+        principal_id: str | None = None,
+    ) -> str: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ManagedAuthorityRoute:
@@ -117,7 +131,19 @@ class ManagedProviderResolver:
         if actor.provider is not None and actor.provider != provider:
             raise ManagedSessionError("identity_mismatch")
         identity = self.registry.resolve(provider, metadata)
-        logical_agent_id = await self.repository.resolve_provider(identity)
+        route_resolver = (
+            getattr(self.router.routes, "resolve_provider_binding", None)
+            if self.router.routes is not None
+            else None
+         )
+        if callable(route_resolver):
+            try:
+                logical_agent_id = await route_resolver(identity.provider, identity.binding_key)
+            except Exception as exc:
+                code = getattr(exc, "code", "authority_unavailable")
+                raise ManagedSessionError(str(code)) from exc
+        else:
+            logical_agent_id = await self.repository.resolve_provider(identity)
         if logical_agent_id is None:
             raise ManagedSessionError("identity_not_bound")
         if actor.logical_agent_id is not None and actor.logical_agent_id != logical_agent_id:
@@ -136,6 +162,8 @@ class ManagedProviderResolver:
         provider: str,
         metadata: Mapping[str, object],
         logical_agent_id: str,
+        *,
+        access_code: str | None = None,
     ) -> ActorContext:
         """Bind provider evidence after a separate compatibility proof of slot access.
 
@@ -154,11 +182,37 @@ class ManagedProviderResolver:
             raise ManagedSessionError("identity_mismatch")
         _slot, route = await self.router.resolve(logical_agent_id)
         repository_node = getattr(self.repository, "authority_node_id", None)
-        if repository_node is not None and route.authority_node_id != repository_node:
-            raise ManagedSessionError("authority_unavailable")
-        await self.repository.bind_provider(
-            identity, logical_agent_id, principal_id=actor.principal_id
+        route_binder = (
+            getattr(self.router.routes, "bind_provider_binding", None)
+            if self.router.routes is not None
+            else None
         )
+        if callable(route_binder):
+            if not access_code:
+                raise ManagedSessionError("access_code_required")
+            try:
+                bound = await route_binder(
+                    identity.provider,
+                    identity.binding_key,
+                    logical_agent_id,
+                    access_code=access_code,
+                    principal_id=actor.principal_id,
+                )
+            except Exception as exc:
+                code = getattr(exc, "code", "authority_unavailable")
+                raise ManagedSessionError(str(code)) from exc
+            if bound != logical_agent_id:
+                raise ManagedSessionError("identity_binding_conflict")
+            if repository_node == route.authority_node_id:
+                await self.repository.bind_provider(
+                    identity, logical_agent_id, principal_id=actor.principal_id
+                )
+        else:
+            if repository_node is not None and route.authority_node_id != repository_node:
+                raise ManagedSessionError("authority_unavailable")
+            await self.repository.bind_provider(
+                identity, logical_agent_id, principal_id=actor.principal_id
+            )
         return actor.with_agent(logical_agent_id, route.authority_node_id)
 
 

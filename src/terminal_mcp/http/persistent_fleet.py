@@ -85,6 +85,30 @@ def build_persistent_fleet_router(
         except MeshApplicationError as exc:
             raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
+    @router.post("/internal/fleet/persistent/access/provider-resolve", include_in_schema=False)
+    async def provider_resolve(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+     ):
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.provider_resolve(actor, payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
+
+    @router.post("/internal/fleet/persistent/access/provider-bind", include_in_schema=False)
+    async def provider_bind(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.provider_bind(actor, payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
+
     @router.post("/internal/fleet/persistent/access/display", include_in_schema=False)
     async def access_display(
         payload: dict,

@@ -270,3 +270,60 @@ async def test_provider_and_standalone_authority_must_match_trusted_context():
     repository.slot = replace(repository.slot, authority_node_id="other-node")
     with pytest.raises(ManagedSessionError, match="authority_unavailable"):
         await ManagedProviderResolver(repository).resolve(actor(), "openai", metadata())
+
+
+
+class FleetIdentityRoutes(Routes):
+    def __init__(self):
+        super().__init__()
+        self.provider_bound = "la_one"
+        self.provider_bind_calls = []
+
+    async def resolve_provider_binding(self, provider, binding_key):
+        self.provider_resolve = (provider, binding_key)
+        return self.provider_bound
+
+    async def bind_provider_binding(
+        self,
+        provider,
+        binding_key,
+        logical_agent_id,
+        *,
+        access_code,
+        principal_id=None,
+    ):
+        self.provider_bind_calls.append(
+            (provider, binding_key, logical_agent_id, access_code, principal_id)
+        )
+        self.provider_bound = logical_agent_id
+        return logical_agent_id
+
+
+@pytest.mark.asyncio
+async def test_fleet_provider_registry_resolves_identity_before_local_replica():
+    repository = Repository()
+    repository.bound = None
+    routes = FleetIdentityRoutes()
+    resolved = await ManagedProviderResolver(repository, routes=routes).resolve(
+        actor(), "openai", metadata()
+    )
+    assert resolved.logical_agent_id == "la_one"
+    assert hasattr(routes, "provider_resolve")
+    assert repository.bound is None
+
+
+@pytest.mark.asyncio
+async def test_fleet_provider_bind_requires_access_code_proof():
+    repository = Repository()
+    repository.bound = None
+    routes = FleetIdentityRoutes()
+    resolver = ManagedProviderResolver(repository, routes=routes)
+
+    with pytest.raises(ManagedSessionError, match="access_code_required"):
+        await resolver.bind_existing(actor(), "openai", metadata(), "la_one")
+
+    resolved = await resolver.bind_existing(
+        actor(), "openai", metadata(), "la_one", access_code="1234"
+    )
+    assert resolved.logical_agent_id == "la_one"
+    assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one")
