@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
@@ -26,6 +26,25 @@ const model: FleetReadModel = {
   summary: { totalServers: 1, liveServers: 1, staleServers: 0, offlineServers: 0, activeAgents: 0, blockedTasks: 0, replyRequired: 0, alerts: 0 },
   activeAgents: [], sessions: [], blockers: [], recentActivity: [],
 }
+
+test('context header uses compact orthogonal connectivity/freshness badges without legacy health contradiction', () => {
+  const attentionModel: FleetReadModel = {
+    ...model,
+    servers: [{ ...model.servers[0], healthState: 'attention' }],
+  }
+  render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/servers/secondary/context']}>
+        <Routes><Route path="/servers/:instanceId/context" element={<ServerSection model={attentionModel} section="context" />} /></Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+  const strip = screen.getByLabelText('Secondary state')
+  expect(within(strip).getByText('Live')).toHaveClass('status', 'server-status')
+  expect(within(strip).getByText('Fresh')).toHaveClass('status', 'server-status')
+  expect(within(strip).queryByText('Needs attention')).not.toBeInTheDocument()
+  expect(strip.querySelectorAll('.status')).toHaveLength(2)
+})
 
 test('renders actual snapshot context entries for the selected server', () => {
   render(

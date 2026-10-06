@@ -2756,6 +2756,7 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 
 
 /* Shared compact status badges */
-.status-badge-row { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
-.slot-settings-heading { align-items: center; }
+.status-badge-row { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: var(--space-2); flex: 0 0 auto; }
+.slot-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-wrap: nowrap; }
+.slot-settings-heading > h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slot-settings-heading .status-badge-row:empty { display: none; }

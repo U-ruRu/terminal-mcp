@@ -229,9 +229,10 @@ export function AppShell({
           {selectedServer && serverState ? (
             <StatusBadge state={serverState} label={serverStatusLabel(serverState, t)} />
           ) : location.pathname !== '/' ? (
-            <span className={'environment-badge' + (problemCount > 0 ? ' environment-badge-attention' : '')}>
-              {problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(liveCount)}
-            </span>
+            <StatusBadge
+              state={problemCount > 0 ? 'attention' : 'healthy'}
+              label={problemCount > 0 ? t('fleet.needsAttention') + ' ' + number(problemCount) : t('fleet.live') + ' ' + number(liveCount)}
+            />
           ) : null}
         </div>
       </header>

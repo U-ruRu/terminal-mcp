@@ -24,3 +24,9 @@ test('status badges keep neutral borders and Slot warning cue is never double', 
   expect(appCss).toContain('.slot-card.slot-cue-warning { border-inline-start: 4px solid var(--color-warning); }')
   expect(appCss).toContain('margin-inline-end: var(--space-2);')
 })
+
+
+test('Slot settings heading keeps status on the same row', () => {
+  expect(appCss).toContain('.slot-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-wrap: nowrap; }')
+  expect(appCss).toContain('.status-badge-row { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: var(--space-2); flex: 0 0 auto; }')
+})
