@@ -46,6 +46,37 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.29 · code 31')
 })
 
+
+test('bottom navigation follows the selected server context', () => {
+  renderShell('/servers/server-a/tasks', fixtureFleetModel.servers)
+  const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
+  const links = within(bottom).getAllByRole('link')
+  expect(links).toHaveLength(7)
+  expect(within(bottom).getByRole('link', { name: /Overview/ })).toHaveAttribute('href', '/servers/server-a')
+  expect(within(bottom).getByRole('link', { name: /Agents/ })).toHaveAttribute('href', '/servers/server-a/agents')
+  expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/servers/server-a/slots')
+  expect(within(bottom).getByRole('link', { name: /Tasks/ })).toHaveAttribute('href', '/servers/server-a/tasks')
+  expect(within(bottom).getByRole('link', { name: /Activity/ })).toHaveAttribute('href', '/activity?server=server-a')
+  expect(within(bottom).getByRole('link', { name: /Context/ })).toHaveAttribute('href', '/servers/server-a/context')
+  expect(within(bottom).getByRole('link', { name: /Diagnostics/ })).toHaveAttribute('href', '/servers/server-a/health')
+  expect(within(bottom).getByRole('link', { name: /Tasks/ })).toHaveAttribute('aria-current', 'page')
+})
+
+test('bottom navigation follows Mesh context and omits server-only destinations', () => {
+  renderShell('/meshes/mesh-1/activity', fixtureFleetModel.servers)
+  const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
+  const links = within(bottom).getAllByRole('link')
+  expect(links).toHaveLength(5)
+  expect(within(bottom).getByRole('link', { name: /Overview/ })).toHaveAttribute('href', '/meshes/mesh-1')
+  expect(within(bottom).getByRole('link', { name: /Agents/ })).toHaveAttribute('href', '/meshes/mesh-1/agents')
+  expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/meshes/mesh-1/persistent')
+  expect(within(bottom).getByRole('link', { name: /Tasks/ })).toHaveAttribute('href', '/meshes/mesh-1/tasks')
+  expect(within(bottom).getByRole('link', { name: /Activity/ })).toHaveAttribute('href', '/meshes/mesh-1/activity')
+  expect(within(bottom).queryByRole('link', { name: /Context/ })).not.toBeInTheDocument()
+  expect(within(bottom).queryByRole('link', { name: /Diagnostics/ })).not.toBeInTheDocument()
+  expect(within(bottom).getByRole('link', { name: /Activity/ })).toHaveAttribute('aria-current', 'page')
+})
+
 test('root Fleet app bar leaves aggregate status to the Fleet decision surface', () => {
   renderShell('/')
   const appBar = document.querySelector('.app-bar') as HTMLElement
