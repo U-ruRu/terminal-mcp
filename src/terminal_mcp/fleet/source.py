@@ -13,8 +13,8 @@ from terminal_mcp.fleet.protocol import (
     canonical_event_id,
 )
 from terminal_mcp.fleet.source_query import CURRENT_SCOPE_VERSION, FleetSourceQueryPlane
-from terminal_mcp.version import __version__
 from terminal_mcp.storage.events import EventJournalStore
+from terminal_mcp.version import __version__
 
 _CANONICAL_ENTITY_TYPES = {
     "logical_agent",
@@ -170,7 +170,11 @@ class FleetSourceService:
             event = self._canonical_event(raw, meta)
             if event is not None:
                 item = event.to_dict()
-                identity = identities.get(event.entity_id) if event.entity_type == "logical_agent" else None
+                identity = (
+                    identities.get(event.entity_id)
+                    if event.entity_type == "logical_agent"
+                    else None
+                )
                 if identity:
                     item["payload"] = {**item["payload"], **identity}
                 events.append(item)

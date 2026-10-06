@@ -13,19 +13,27 @@ from terminal_mcp.fleet.control_storage import FleetControlError, FleetControlSt
 
 def keypair():
     key = Ed25519PrivateKey.generate()
-    private = base64.urlsafe_b64encode(
-        key.private_bytes(
-            serialization.Encoding.Raw,
-            serialization.PrivateFormat.Raw,
-            serialization.NoEncryption(),
+    private = (
+        base64.urlsafe_b64encode(
+            key.private_bytes(
+                serialization.Encoding.Raw,
+                serialization.PrivateFormat.Raw,
+                serialization.NoEncryption(),
+            )
         )
-    ).rstrip(b"=").decode()
-    public = base64.urlsafe_b64encode(
-        key.public_key().public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
+        .rstrip(b"=")
+        .decode()
+    )
+    public = (
+        base64.urlsafe_b64encode(
+            key.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
         )
-    ).rstrip(b"=").decode()
+        .rstrip(b"=")
+        .decode()
+    )
     return private, public
 
 
@@ -207,8 +215,26 @@ async def test_detached_local_member_restores_standalone_policy(tmp_path):
         "mesh": {"mesh_id": "mesh-a", "display_name": "Alpha", "active": True},
         "meshes": [{"mesh_id": "mesh-a", "display_name": "Alpha", "active": True}],
         "nodes": [
-            {"node_id": "control", "origin": "https://control.example", "public_key": "pub-control", "mesh_id": "mesh-a", "state": "active", "applied_topology_revision": 2, "applied_trust_revision": 2, "applied_policy_revision": 2},
-            {"node_id": "member", "origin": "https://member.example", "public_key": "pub-member", "mesh_id": "mesh-a", "state": "active", "applied_topology_revision": 2, "applied_trust_revision": 2, "applied_policy_revision": 2},
+            {
+                "node_id": "control",
+                "origin": "https://control.example",
+                "public_key": "pub-control",
+                "mesh_id": "mesh-a",
+                "state": "active",
+                "applied_topology_revision": 2,
+                "applied_trust_revision": 2,
+                "applied_policy_revision": 2,
+            },
+            {
+                "node_id": "member",
+                "origin": "https://member.example",
+                "public_key": "pub-member",
+                "mesh_id": "mesh-a",
+                "state": "active",
+                "applied_topology_revision": 2,
+                "applied_trust_revision": 2,
+                "applied_policy_revision": 2,
+            },
         ],
         "policy": managed_policy,
         "revisions": {"topology": 2, "trust": 2, "access_policy": 2},
@@ -234,7 +260,9 @@ async def test_detached_local_member_restores_standalone_policy(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_deleted_mesh_replica_restores_standalone_policy_without_losing_pairing_state(tmp_path):
+async def test_deleted_mesh_replica_restores_standalone_policy_without_losing_pairing_state(
+    tmp_path,
+):
     store = FleetControlStore(
         tmp_path / "delete.sqlite3",
         fleet_id="fleet-a",
@@ -258,8 +286,26 @@ async def test_deleted_mesh_replica_restores_standalone_policy_without_losing_pa
         "legacy_admission_enabled": True,
     }
     base_nodes = [
-        {"node_id": "control", "origin": "https://control.example", "public_key": "pub-control", "mesh_id": "mesh-a", "state": "active", "applied_topology_revision": 2, "applied_trust_revision": 2, "applied_policy_revision": 2},
-        {"node_id": "member", "origin": "https://member.example", "public_key": "pub-member", "mesh_id": "mesh-a", "state": "active", "applied_topology_revision": 2, "applied_trust_revision": 2, "applied_policy_revision": 2},
+        {
+            "node_id": "control",
+            "origin": "https://control.example",
+            "public_key": "pub-control",
+            "mesh_id": "mesh-a",
+            "state": "active",
+            "applied_topology_revision": 2,
+            "applied_trust_revision": 2,
+            "applied_policy_revision": 2,
+        },
+        {
+            "node_id": "member",
+            "origin": "https://member.example",
+            "public_key": "pub-member",
+            "mesh_id": "mesh-a",
+            "state": "active",
+            "applied_topology_revision": 2,
+            "applied_trust_revision": 2,
+            "applied_policy_revision": 2,
+        },
     ]
     managed = {
         "managed": True,
@@ -293,6 +339,7 @@ async def test_deleted_mesh_replica_restores_standalone_policy_without_losing_pa
     local = next(node for node in state["nodes"] if node["node_id"] == "member")
     assert local["mesh_id"] is None
     assert local["state"] == "active"
+
 
 class ControlResponse:
     def __init__(self, body):
@@ -404,7 +451,10 @@ async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_
     )
     authority_member = next(node for node in detached["nodes"] if node["node_id"] == "member")
     assert authority_member["mesh_id"] is None
-    assert authority_member["desired_topology_revision"] > authority_member["applied_topology_revision"]
+    assert (
+        authority_member["desired_topology_revision"]
+        > authority_member["applied_topology_revision"]
+    )
     assert authority_member["last_error"] == "reconcile_failed:RuntimeError"
     assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
 
@@ -456,7 +506,10 @@ async def test_replica_pull_recovers_missed_detach_and_old_topology_cannot_roll_
     assert (await member.snapshot())["mesh"]["mesh_id"] == "mesh-a"
     authority_member = next(node for node in rejoined["nodes"] if node["node_id"] == "member")
     assert authority_member["mesh_id"] == "mesh-a"
-    assert authority_member["desired_topology_revision"] == authority_member["applied_topology_revision"]
+    assert (
+        authority_member["desired_topology_revision"]
+        == authority_member["applied_topology_revision"]
+    )
 
 
 @pytest.mark.asyncio
@@ -573,10 +626,7 @@ async def test_standalone_self_adopt_releases_old_authority_and_owns_new_mesh(tm
     assert old_view is not None
     assert old_view["state"] == "detached"
     assert old_view["mesh_id"] is None
-    assert all(
-        item["node_id"] != "member"
-        for item in await home_store.managed_peer_material()
-    )
+    assert all(item["node_id"] != "member" for item in await home_store.managed_peer_material())
 
     with pytest.raises(FleetControlError, match="control_rejoin_credential_required"):
         await member.apply_replica(initial, source_node_id="home")
