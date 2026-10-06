@@ -13,6 +13,7 @@ import pytest
 from terminal_mcp.application.command_scheduler import CommandScheduler
 from terminal_mcp.core.execution import ExecutionPort, ExecutionPortError, ExecutionRequest
 from terminal_mcp.core.service import TerminalService
+from terminal_mcp.mcp.output_contracts import cmd_result
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.terminal.executor_service import ExecutorService
 from terminal_mcp.terminal.ipc import UnixExecutionAdapter, encode_frame, read_frame
@@ -270,6 +271,13 @@ async def test_executor_loss_marks_failed_without_replaying_side_effect(tmp_path
         assert (await repo.get(key)).status == "failed"
         assert "executor_lost" in (await repo.get(key)).error
         assert (await repo.output_status(key))["output_truncated"]
+        read = await service.read(key, 1000, 0)
+        assert read["ok"] is True
+        assert read["status"] == "failed"
+        assert "executor_lost" in read["error"]
+        public = cmd_result(read, "read").structuredContent
+        assert public["ok"] is True
+        assert public["command"]["status"] == "failed"
         assert marker.read_text() == "once\n"
         assert not server.spools
     finally:

@@ -461,7 +461,9 @@ class TerminalService:
                     result["status"] = command.status
                     result["exit_code"] = command.exit_code
                     result["error"] = command.error
-                    result["ok"] = command.error is None
+                    # A successful read is independent from the command outcome.
+                    # Failed/cancelled commands remain readable terminal records;
+                    # their execution result is carried by status/exit_code/error.
                     result["queue_id"] = command.queue_id
                     result["execution_started"] = bool(
                         command.claimed_at is not None or command.started_at is not None
