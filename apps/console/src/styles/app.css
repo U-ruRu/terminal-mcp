@@ -2663,10 +2663,10 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 
 /* Fleet/Slots UX normalization */
 .server-card-compact .server-card-link {
-  min-height: 154px;
   grid-template-rows: auto auto var(--font-caption-line, 16px);
   align-content: start;
   gap: var(--space-2);
+  padding-block: var(--space-3);
 }
 .server-card-compact .resource-metric { padding-top: var(--space-2); }
 .server-card-compact .resource-metric dt { display: none; }
@@ -2721,5 +2721,54 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
 }
 @media (max-width: 700px) {
   .slot-card-primary { grid-template-columns: minmax(0, 1fr) auto; }
-  .server-card-compact .server-card-link { min-height: 154px; }
 }
+
+
+/* Compactness regression follow-up */
+.server-card-compact .server-card-problem {
+  margin-bottom: 0;
+}
+.slots-surface .slot-grid { gap: var(--space-2); }
+.slots-surface .slot-card {
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-1);
+}
+.slots-surface .slot-card-primary { min-height: 28px; }
+.slots-surface .slot-card-secondary { min-height: var(--touch-target); }
+.slots-surface .slot-card-actions { gap: var(--space-1); }
+.slots-surface .slot-card-actions .slot-timer { margin-inline-end: 0; }
+
+.server-card-large .server-state-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  width: min(100%, 22rem);
+  gap: var(--space-2);
+}
+.server-card-large .server-state-strip > .status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.server-overview-diagnostics {
+  display: block;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+}
+.server-overview-diagnostics > summary {
+  padding: var(--space-2) 0;
+}
+.server-overview-diagnostics[open] > summary { margin-bottom: var(--space-2); }
+.server-overview-diagnostics > .muted { margin-bottom: var(--space-2); }
+.server-overview-diagnostics .diagnostics-actions { margin-block: var(--space-1) var(--space-2); }

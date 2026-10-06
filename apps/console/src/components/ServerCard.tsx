@@ -101,8 +101,10 @@ export function ServerCard({
         <div className="server-runtime-summary">
           <div className="server-state-strip" aria-label={server.displayName + ' runtime state'}>
             <span className={'status status-' + server.connectionState}>{connectivityLabel(server.connectivity, t)}</span>
-            <span className={'status fleet-status-' + server.freshness}>{freshnessLabel(server.freshness, t)}</span>
-            <StatusBadge state={state} label={statusLabel(state, t)} />
+            {freshnessLabel(server.freshness, t) !== connectivityLabel(server.connectivity, t) ? (
+              <span className={'status fleet-status-' + server.freshness}>{freshnessLabel(server.freshness, t)}</span>
+            ) : null}
+            {state === 'attention' || state === 'critical' ? <StatusBadge state={state} label={statusLabel(state, t)} /> : null}
           </div>
           <p className="muted">{t('server.version')}: <strong>{server.version ?? t('fleet.versionUnavailable')}</strong></p>
         </div>
