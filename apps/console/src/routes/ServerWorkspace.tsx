@@ -11,7 +11,7 @@ import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { formatDuration } from '../i18n/duration'
 import { useI18n } from '../i18n/useI18n'
-import { agentRoute, meshRoute, slotsRoute, taskRoute } from '../navigation/routes'
+import { agentRoute, meshRoute, taskRoute } from '../navigation/routes'
 
 
 
@@ -109,14 +109,7 @@ export function ServerWorkspace({
           ) : localNode || control?.managed === false ? t('connections.standalone') : t('connections.unknown')}
           {controlState.freshness === 'stale' ? ' · ' + t('connections.stale') : ''}
         </span>
-        <Link className="server-slots-link chip" to={slotsRoute(server.instanceId)}>{t('nav.slots')}</Link>
       </div>
-
-      {server.connectivity !== 'live' || server.freshness !== 'fresh' ? (
-        <div className="attention-strip" role="status">
-          {t('server.cached')} {server.connectivity === 'offline' ? t('status.offline') : server.freshness === 'stale' ? t('status.stale') : t('status.catchingUp')}.
-        </div>
-      ) : null}
 
       <ServerCard server={server} variant="large" interactive={false} />
 

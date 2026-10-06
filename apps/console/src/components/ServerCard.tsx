@@ -16,12 +16,10 @@ function statusLabel(state: ServerVisualState, t: ReturnType<typeof useI18n>['t'
   return t('fleet.needsAttention')
 }
 
-function connectivityLabel(value: FleetServerReadModel['connectivity'], t: ReturnType<typeof useI18n>['t']): string {
+function connectionStateLabel(value: FleetServerReadModel['connectionState'], t: ReturnType<typeof useI18n>['t']): string {
   if (value === 'live') return t('status.live')
   if (value === 'offline') return t('status.offline')
-  if (value === 'stale') return t('status.stale')
-  if (value === 'reconnecting') return t('status.reconnecting')
-  return t('status.connecting')
+  return t('status.catchingUp')
 }
 
 function freshnessLabel(value: FleetServerReadModel['freshness'], t: ReturnType<typeof useI18n>['t']): string {
@@ -100,8 +98,8 @@ export function ServerCard({
       ) : (
         <div className="server-runtime-summary">
           <div className="server-state-strip" aria-label={server.displayName + ' runtime state'}>
-            <span className={'status server-status status-' + server.connectionState}>{connectivityLabel(server.connectivity, t)}</span>
-            {freshnessLabel(server.freshness, t) !== connectivityLabel(server.connectivity, t) ? (
+            <span className={'status server-status status-' + server.connectionState}>{connectionStateLabel(server.connectionState, t)}</span>
+            {freshnessLabel(server.freshness, t) !== connectionStateLabel(server.connectionState, t) ? (
               <span className={'status server-status fleet-status-' + server.freshness}>{freshnessLabel(server.freshness, t)}</span>
             ) : null}
             {state === 'attention' || state === 'critical' ? <StatusBadge state={state} label={statusLabel(state, t)} /> : null}
