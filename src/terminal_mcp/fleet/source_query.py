@@ -331,7 +331,9 @@ QUERY_RESOURCES = {
 
 
 class FleetSourceQueryPlane:
-    def __init__(self, runtime_db_path, *, output_db_path=None, auth_db_path=None, metrics=None, events=None):
+    def __init__(
+        self, runtime_db_path, *, output_db_path=None, auth_db_path=None, metrics=None, events=None
+    ):
         self.runtime_db_path = Path(runtime_db_path)
         self.auth_db_path = Path(auth_db_path) if auth_db_path else None
         self.output_db_path = Path(output_db_path) if output_db_path else None
@@ -349,9 +351,12 @@ class FleetSourceQueryPlane:
             return {}
         try:
             async with aiosqlite.connect(self.auth_db_path, timeout=1.0) as db:
-                rows = await (await db.execute(
-                    "SELECT logical_agent_id,public_name,access_generation,status FROM auth_access_slots WHERE status='active'"
-                )).fetchall()
+                rows = await (
+                    await db.execute(
+                        "SELECT logical_agent_id,public_name,access_generation,status "
+                        "FROM auth_access_slots WHERE status='active'"
+                    )
+                ).fetchall()
         except aiosqlite.Error:
             return {}
         return {
@@ -364,7 +369,9 @@ class FleetSourceQueryPlane:
         }
 
     @staticmethod
-    def _enrich_access_identity(entity: dict[str, Any], identities: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    def _enrich_access_identity(
+        entity: dict[str, Any], identities: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
         payload = entity.get("payload") or {}
         logical_agent_id = str(payload.get("logical_agent_id") or entity.get("entity_id") or "")
         identity = identities.get(logical_agent_id)
@@ -445,7 +452,7 @@ class FleetSourceQueryPlane:
             raise
         has_more = len(rows) > limit
         rows = rows[:limit]
-        identities = await self.access_identities() if scope == 'logical_agents' else {}
+        identities = await self.access_identities() if scope == "logical_agents" else {}
         entities, oversize, page_bytes = [], [], 0
         consumed = decoded
         for row in rows:
@@ -497,10 +504,7 @@ class FleetSourceQueryPlane:
         if len(values) != len(spec.keys):
             raise ValueError("current entity key shape changed")
         marks = ",".join("?" for _ in spec.keys)
-        sql = (
-            f"SELECT * FROM ({spec.sql}) scoped "
-            f"WHERE ({','.join(spec.keys)})=({marks}) LIMIT 1"
-        )
+        sql = f"SELECT * FROM ({spec.sql}) scoped WHERE ({','.join(spec.keys)})=({marks}) LIMIT 1"
         try:
             async with aiosqlite.connect(self.runtime_db_path, timeout=1.0) as db:
                 db.row_factory = aiosqlite.Row
@@ -526,7 +530,7 @@ class FleetSourceQueryPlane:
             self._sqlite_error(f"current:{scope}")
             raise
         entity = self._current_entity(scope, spec, row, barrier) if row else None
-        if entity is not None and scope == 'logical_agents':
+        if entity is not None and scope == "logical_agents":
             entity = self._enrich_access_identity(entity, await self.access_identities())
         size = (
             len(json.dumps(entity, ensure_ascii=False, separators=(",", ":")).encode())

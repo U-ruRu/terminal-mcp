@@ -104,7 +104,6 @@ async def test_query_keyset_reaches_beyond_first_page(tmp_path):
     assert second["complete"] is True
 
 
-
 @pytest.mark.asyncio
 async def test_command_current_recovery_keeps_active_plus_bounded_recent_terminal(tmp_path):
     runtime = tmp_path / "runtime.sqlite3"
@@ -181,7 +180,9 @@ async def test_logical_agent_recovery_projects_authoritative_access_public_name(
     assert registered["public_name"] == "Alpha"
 
     journal = EventJournalStore(runtime)
-    meta = FleetNodeMetaStore(tmp_path / "fleet-node-meta.sqlite3", fleet_id="fleet-a", node_id="node-a")
+    meta = FleetNodeMetaStore(
+        tmp_path / "fleet-node-meta.sqlite3", fleet_id="fleet-a", node_id="node-a"
+    )
     await meta.initialize()
     source = FleetSourceService(runtime, journal, meta, output_db_path=output, auth_db_path=auth_db)
 
@@ -192,7 +193,9 @@ async def test_logical_agent_recovery_projects_authoritative_access_public_name(
     assert "access_code" not in recovered["payload"]
 
     snapshot = await source.snapshot()
-    projected = next(item for item in snapshot["entities"] if item["entity_type"] == "logical_agent")
+    projected = next(
+        item for item in snapshot["entities"] if item["entity_type"] == "logical_agent"
+    )
     assert projected["payload"]["public_name"] == "Alpha"
     assert projected["payload"]["display_name"] == "Build agent"
     assert "access_code" not in projected["payload"]

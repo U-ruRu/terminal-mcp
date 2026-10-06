@@ -1,9 +1,8 @@
 import pytest
-
-from terminal_mcp.auth.foundation import AuthFoundationStore
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.fleet.protocol import (
     FLEET_PROTOCOL_MAJOR,
     FleetProtocolError,
@@ -77,8 +76,7 @@ async def test_node_meta_concurrent_stable_observations_do_not_contend(tmp_path)
     assert all(not item[1] for item in results)
     assert all(item[0].served_high_water == 23 for item in results)
     assert all(
-        item[0].source_stream_generation == advanced.source_stream_generation
-        for item in results
+        item[0].source_stream_generation == advanced.source_stream_generation for item in results
     )
 
 
@@ -276,12 +274,8 @@ async def test_source_projects_persistent_attachment_presence_and_obligation(tmp
     repo = SqliteRepository(runtime_path, tmp_path / "output.sqlite3")
     await repo.initialize()
     store = PersistentAgentStore(runtime_path)
-    await store.create_slot(
-        "logical-1", "Agent One", "A1B2", authority_node_id="node-a"
-    )
-    armed, _ = await store.arm_slot(
-        "logical-1", 120, expected_revision=1
-    )
+    await store.create_slot("logical-1", "Agent One", "A1B2", authority_node_id="node-a")
+    armed, _ = await store.arm_slot("logical-1", 120, expected_revision=1)
     slot, session = await store.start_session(
         selector="A1B2",
         work_session_id="ws-1",
@@ -358,7 +352,11 @@ async def test_source_event_replay_enriches_logical_agent_with_authoritative_pub
     await repo.initialize()
     persistent = PersistentAgentStore(runtime_path)
     await persistent.create_slot(
-        "logical-identity", "Builder", "A1B2", authority_node_id="node-a", now="2026-10-03T00:00:00Z"
+        "logical-identity",
+        "Builder",
+        "A1B2",
+        authority_node_id="node-a",
+        now="2026-10-03T00:00:00Z",
     )
     auth = AuthFoundationStore(auth_path)
     await auth.initialize()
@@ -366,7 +364,9 @@ async def test_source_event_replay_enriches_logical_agent_with_authoritative_pub
     assert registered["public_name"] == "Alpha"
 
     journal = EventJournalStore(runtime_path)
-    meta = FleetNodeMetaStore(tmp_path / "fleet-node-meta-identity.sqlite3", fleet_id="fleet-a", node_id="node-a")
+    meta = FleetNodeMetaStore(
+        tmp_path / "fleet-node-meta-identity.sqlite3", fleet_id="fleet-a", node_id="node-a"
+    )
     await meta.initialize()
     source = FleetSourceService(runtime_path, journal, meta, auth_db_path=auth_path)
 
