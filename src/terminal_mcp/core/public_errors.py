@@ -213,6 +213,13 @@ def _catalog() -> Mapping[str, ErrorSpec]:
 
 ERROR_SPECS = _catalog()
 
+LEGACY_PUBLIC_ERROR_ALIASES = MappingProxyType(
+    {
+        "already_claimed": "task_claim_conflict",
+        "agent_busy": "wip_limit_exceeded",
+    }
+)
+
 
 class _BoundedValue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -480,8 +487,12 @@ def normalize_public_error(raw: Mapping[str, object] | PublicError) -> PublicErr
     except ValidationError:
         pass
     code = raw.get("code")
+    if isinstance(code, str):
+        code = LEGACY_PUBLIC_ERROR_ALIASES.get(code, code)
     if not isinstance(code, str) or code not in ERROR_SPECS:
         old_error = raw.get("error")
+        if isinstance(old_error, str):
+            old_error = LEGACY_PUBLIC_ERROR_ALIASES.get(old_error, old_error)
         code = (
             old_error
             if isinstance(old_error, str) and old_error in ERROR_SPECS
