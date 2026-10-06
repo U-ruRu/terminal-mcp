@@ -1,9 +1,12 @@
 import asyncio
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
+from terminal_mcp.auth.foundation import AuthConflictError
 from terminal_mcp.config import Settings
 
 
@@ -329,3 +332,98 @@ def test_revoked_backup_pairing_does_not_satisfy_last_manager_continuity(tmp_pat
         assert blocked.status_code == 409
         assert blocked.json()["error"] == "last_auth_manager_required"
         assert client.get("/access/principals", headers=owner_headers).status_code == 200
+
+
+def test_pairing_revoke_is_serialized_with_auth_manager_handoff(tmp_path, monkeypatch):
+    app = create_app(settings(tmp_path))
+    with TestClient(app) as client:
+        owner_device = pair(app, client, "Owner phone")
+        client.post(
+            "/access/bootstrap/owner",
+            headers=bearer(owner_device),
+            json={"username": "owner", "password": "owner-password"},
+        )
+        owner_headers = bearer(owner_device)
+        invite = client.post(
+            "/access/enrollments",
+            headers=owner_headers,
+            json={"purpose": "human_invite", "display_name": "Backup manager"},
+        ).json()
+        backup_principal = client.post(
+            "/access/enrollments/exchange",
+            json={
+                "secret": invite["secret"],
+                "username": "backup-manager",
+                "password": "backup-manager-password",
+            },
+        ).json()["principal"]
+        backup_device = pair(app, client, "Backup phone")
+        assigned = client.post(
+            f"/access/clients/{backup_device['client_id']}/assign",
+            headers=owner_headers,
+            json={
+                "principal_id": backup_principal["principal_id"],
+                "role": "owner",
+                "scopes": ["auth:manage", "terminal:read"],
+            },
+        )
+        assert assigned.status_code == 200
+        preview = client.post(
+            "/access/revocations/preview",
+            headers=owner_headers,
+            json={"client_id": owner_device["client_id"]},
+        ).json()
+        actor_principal_id = client.get("/access/me", headers=owner_headers).json()[
+            "principal_id"
+        ]
+
+        original_lookup = app.state.pairing_store.active_device_for_client
+        lookup_seen = threading.Event()
+        release_lookup = threading.Event()
+        paused = False
+
+        async def pause_after_positive_backup_lookup(client_id):
+            nonlocal paused
+            result = await original_lookup(client_id)
+            if client_id == backup_device["client_id"] and result is not None and not paused:
+                paused = True
+                lookup_seen.set()
+                assert await asyncio.to_thread(release_lookup.wait, 5)
+            return result
+
+        monkeypatch.setattr(
+            app.state.pairing_store, "active_device_for_client", pause_after_positive_backup_lookup
+        )
+
+        def revoke_owner():
+            return asyncio.run(
+                app.state.access_store.revoke_commit(
+                    expected_generation=preview["security_generation"],
+                    actor_principal_id=actor_principal_id,
+                    actor_client_id=owner_device["client_id"],
+                    client_id=owner_device["client_id"],
+                )
+            )
+
+        def revoke_backup_pairing():
+            try:
+                return asyncio.run(
+                    app.state.pairing_store.revoke_device(backup_device["device_id"])
+                )
+            except AuthConflictError as exc:
+                return str(exc)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            owner_future = pool.submit(revoke_owner)
+            assert lookup_seen.wait(5)
+            pairing_future = pool.submit(revoke_backup_pairing)
+            release_lookup.set()
+            owner_result = owner_future.result(timeout=5)
+            pairing_result = pairing_future.result(timeout=5)
+
+        assert owner_result["revoked"] is True
+        assert pairing_result == "last_auth_manager_required"
+        assert asyncio.run(
+            app.state.pairing_store.active_device_for_client(backup_device["client_id"])
+        ) is not None
+        assert client.get("/access/principals", headers=bearer(backup_device)).status_code == 200

@@ -5,6 +5,7 @@ import json
 import secrets
 from datetime import UTC, datetime, timedelta
 
+from terminal_mcp.auth.continuity import ManagerContinuityLock
 from terminal_mcp.auth.foundation import AuthConflictError, AuthFoundationStore, AuthNotFoundError
 
 
@@ -30,6 +31,10 @@ class AccessStore:
     def __init__(self, foundation: AuthFoundationStore, pairing_store):
         self.foundation = foundation
         self.pairing_store = pairing_store
+        self.manager_continuity = ManagerContinuityLock(foundation.path)
+        self.pairing_store.configure_manager_continuity(
+            self.manager_continuity, self._pairing_revoke_allowed
+        )
 
     async def realm_status(self) -> dict | None:
         db = await self.foundation._connect()
@@ -588,7 +593,7 @@ class AccessStore:
             "grants": affected_grants,
         }
 
-    async def _has_active_manager(self, db) -> bool:
+    async def _active_manager_client_ids(self, db) -> list[str]:
         rows = await (
             await db.execute(
                 "SELECT g.client_id,g.scopes_json FROM auth_grants g "
@@ -597,8 +602,15 @@ class AccessStore:
                 "WHERE g.revoked_at IS NULL AND c.status='active' AND p.status='active'"
             )
         ).fetchall()
+        clients: list[str] = []
         for client_id, scopes_json in rows:
-            if "auth:manage" not in json.loads(scopes_json):
+            if "auth:manage" in json.loads(scopes_json) and client_id not in clients:
+                clients.append(client_id)
+        return clients
+
+    async def _has_active_manager(self, db, *, exclude_client_id: str | None = None) -> bool:
+        for client_id in await self._active_manager_client_ids(db):
+            if client_id == exclude_client_id:
                 continue
             try:
                 device = await self.pairing_store.active_device_for_client(client_id)
@@ -608,7 +620,37 @@ class AccessStore:
                 return True
         return False
 
+    async def _pairing_revoke_allowed(self, client_id: str) -> bool:
+        db = await self.foundation._connect()
+        try:
+            managers = await self._active_manager_client_ids(db)
+            if client_id not in managers:
+                return True
+            return await self._has_active_manager(db, exclude_client_id=client_id)
+        finally:
+            await db.close()
+
     async def revoke_commit(
+        self,
+        *,
+        expected_generation: int,
+        actor_principal_id: str,
+        actor_client_id: str,
+        principal_id: str | None = None,
+        client_id: str | None = None,
+        grant_id: str | None = None,
+    ) -> dict:
+        async with self.manager_continuity.hold():
+            return await self._revoke_commit_locked(
+                expected_generation=expected_generation,
+                actor_principal_id=actor_principal_id,
+                actor_client_id=actor_client_id,
+                principal_id=principal_id,
+                client_id=client_id,
+                grant_id=grant_id,
+            )
+
+    async def _revoke_commit_locked(
         self,
         *,
         expected_generation: int,

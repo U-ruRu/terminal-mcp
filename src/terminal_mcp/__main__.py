@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 import uvicorn
 
+from terminal_mcp.auth.enrollment import AccessStore
+from terminal_mcp.auth.foundation import AuthConflictError, AuthFoundationStore
 from terminal_mcp.auth.pairing import PAIRING_DEFAULT_TTL_SEC, PairingStore
 from terminal_mcp.config import Settings
 
@@ -62,7 +64,12 @@ async def _list_devices() -> list[dict]:
 
 
 async def _revoke_device(device_id: str) -> bool:
-    return await (await _pairing_store()).revoke_device(device_id)
+    settings = _local_settings()
+    pairing = await _pairing_store()
+    foundation = AuthFoundationStore(settings.auth_database_path)
+    await foundation.initialize()
+    AccessStore(foundation, pairing)
+    return await pairing.revoke_device(device_id)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -114,7 +121,13 @@ def main(argv: list[str] | None = None):
             print(json.dumps(devices, separators=(",", ":"), ensure_ascii=False))
             return 0
         if parsed.device_command == "revoke":
-            revoked = asyncio.run(_revoke_device(parsed.device_id))
+            try:
+                revoked = asyncio.run(_revoke_device(parsed.device_id))
+            except AuthConflictError as exc:
+                if str(exc) != "last_auth_manager_required":
+                    raise
+                print("cannot revoke the last usable auth manager device", file=sys.stderr)
+                return 2
             if revoked:
                 print(f"revoked {parsed.device_id}")
                 return 0

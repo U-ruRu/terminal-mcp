@@ -1,10 +1,13 @@
 import hashlib
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import aiosqlite
 
+from terminal_mcp.auth.continuity import ManagerContinuityLock
+from terminal_mcp.auth.foundation import AuthConflictError
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
@@ -29,6 +32,16 @@ class PairingStore:
 
     def __init__(self, path):
         self.path = path
+        self._manager_continuity: ManagerContinuityLock | None = None
+        self._manager_revoke_guard: Callable[[str], Awaitable[bool]] | None = None
+
+    def configure_manager_continuity(
+        self,
+        continuity: ManagerContinuityLock,
+        revoke_guard: Callable[[str], Awaitable[bool]],
+    ) -> None:
+        self._manager_continuity = continuity
+        self._manager_revoke_guard = revoke_guard
 
     async def initialize(self) -> None:
         secure_database_path(self.path)
@@ -280,8 +293,18 @@ class PairingStore:
             ).fetchone()
         return row is not None
 
-    async def revoke_device(self, device_id: str, *, now: int | None = None) -> bool:
-        revoked_at = int(time.time()) if now is None else int(now)
+    async def _active_client_id_for_device(self, device_id: str) -> str | None:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT client_id FROM console_devices "
+                    "WHERE device_id=? AND revoked_at IS NULL",
+                    (device_id,),
+                )
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    async def _revoke_device_unchecked(self, device_id: str, *, revoked_at: int) -> bool:
         async with cancellation_safe_connection(aiosqlite.connect, self.path) as db:
             await db.execute("PRAGMA busy_timeout=5000")
             await db.execute("BEGIN IMMEDIATE")
@@ -321,3 +344,18 @@ class PairingStore:
             )
             await db.commit()
             return True
+
+    async def revoke_device(self, device_id: str, *, now: int | None = None) -> bool:
+        revoked_at = int(time.time()) if now is None else int(now)
+        if self._manager_continuity is None:
+            return await self._revoke_device_unchecked(device_id, revoked_at=revoked_at)
+
+        async with self._manager_continuity.hold():
+            client_id = await self._active_client_id_for_device(device_id)
+            if (
+                client_id is not None
+                and self._manager_revoke_guard is not None
+                and not await self._manager_revoke_guard(client_id)
+            ):
+                raise AuthConflictError("last_auth_manager_required")
+            return await self._revoke_device_unchecked(device_id, revoked_at=revoked_at)
