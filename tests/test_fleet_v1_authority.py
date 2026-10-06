@@ -1833,6 +1833,15 @@ async def test_forwarded_detach_returns_committed_before_slow_replication(tmp_pa
         == authority_remote["applied_trust_revision"]
     )
     assert authority_remote["last_error"] is None
+    authority_token = (await home.enrollment_descriptor())["auth_token"]
+    authorization = f"Bearer {authority_token}"
+    assert await home.authenticate_management_peer("remote", authorization) is None
+    assert (
+        await home.authenticate_management_peer(
+            "remote", authorization, allow_detached_peer=True
+        )
+        == "remote"
+    )
     await asyncio.wait_for(slow_apply_started.wait(), timeout=0.3)
 
     reconcile = home._deferred_reconcile_task

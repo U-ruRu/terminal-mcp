@@ -101,11 +101,18 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
             node_id=str(getattr(getattr(controller, "config", None), "instance_id", "") or ""),
         )
 
-    async def authenticate(peer_id: str, authorization: str, *, first_apply_control_node_id=None):
+    async def authenticate(
+        peer_id: str,
+        authorization: str,
+        *,
+        first_apply_control_node_id=None,
+        allow_detached_peer: bool = False,
+    ):
         verified_peer_id = await controller.authenticate_management_peer(
             peer_id,
             authorization,
             first_apply_control_node_id=first_apply_control_node_id,
+            allow_detached_peer=allow_detached_peer,
         )
         if verified_peer_id is None:
             raise HTTPException(status_code=401, detail="invalid fleet peer")
@@ -270,7 +277,11 @@ def build_fleet_control_router(controller, replication, *, application=None) -> 
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        actor = await authenticate(x_terminal_mcp_peer, authorization)
+        actor = await authenticate(
+            x_terminal_mcp_peer,
+            authorization,
+            allow_detached_peer=operation == "release-node",
+        )
         try:
             return await target.internal_mutate(actor, operation=operation, payload=body.payload)
         except MeshApplicationError as exc:

@@ -179,6 +179,7 @@ class ManagedFleetControl:
         authorization: str,
         *,
         first_apply_control_node_id: str | None = None,
+        allow_detached_peer: bool = False,
     ) -> str | None:
         token = self._bearer_token(authorization)
         if token is None:
@@ -190,7 +191,9 @@ class ManagedFleetControl:
             if peer_instance_id == self.store.control_node_id:
                 return peer_instance_id
             node = await self.store.managed_node(peer_instance_id)
-            if node is not None and node.get("state") != "detached":
+            if node is not None and (
+                node.get("state") != "detached" or allow_detached_peer
+            ):
                 return peer_instance_id
             if first_apply_control_node_id and peer_instance_id == first_apply_control_node_id:
                 return peer_instance_id
