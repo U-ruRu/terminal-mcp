@@ -225,7 +225,10 @@ test('cached/offline read state does not disable a healthy authenticated write r
   expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Start' })).toHaveClass('ui-icon-button', 'ui-button-primary')
   expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
-  expect(screen.getByRole('status')).toHaveTextContent('cached')
+  const statusBadge = screen.getByRole('status')
+  expect(statusBadge).toHaveTextContent('Offline')
+  expect(statusBadge).toHaveClass('status', 'server-status')
+  expect(statusBadge).toHaveAttribute('title', expect.stringContaining('cached'))
   await user.click(screen.getByRole('button', { name: 'Start' }))
   expect(mutate).toHaveBeenCalledWith(
     'alpha',
