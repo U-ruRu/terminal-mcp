@@ -116,13 +116,17 @@ class OutputStore:
             )
             await db.commit()
 
-    async def append_lines(self, cmd_hash: str, texts: list[str]):
+    async def append_lines(self, cmd_hash: str, texts: list[str], *, replay_offset=None):
         if not texts:
             return {"accepting": True, "truncated": False, "stored_bytes": 0, "stored_lines": 0}
         appeared_at = datetime.now(UTC).strftime("%H:%M:%S")
-        return await self.append_records(cmd_hash, [(None, appeared_at, text) for text in texts])
+        return await self.append_records(
+            cmd_hash, [(None, appeared_at, text) for text in texts], replay_offset=replay_offset
+        )
 
-    async def append_records(self, cmd_hash: str, records: list[tuple[int | None, str, str]]):
+    async def append_records(
+        self, cmd_hash: str, records: list[tuple[int | None, str, str]], *, replay_offset=None
+    ):
         if not records:
             return {"accepting": True, "truncated": False, "stored_bytes": 0, "stored_lines": 0}
         async with self._connect("output_append", command_hash=cmd_hash) as db:
@@ -138,8 +142,17 @@ class OutputStore:
                 (int(row[0]), int(row[1]), bool(row[2]), int(row[3])) if row else (0, 0, False, 0)
             )
             accepting = stored_bytes < self.command_max_bytes
+            # Replay starts at logical line zero after API restart. Deduplication and
+            # append share this transaction: an acknowledged or unacknowledged commit
+            # is never appended twice. Output retention remains application-owned.
+            if replay_offset is not None:
+                if type(replay_offset) is not int or replay_offset < 0:
+                    raise ValueError("output replay offset must be a nonnegative integer")
+                if replay_offset > stored_lines and accepting:
+                    raise ValueError("output replay gap")
+                records = records[max(0, stored_lines - replay_offset):]
             inserts: list[tuple] = []
-            explicit = records[0][0] is not None
+            explicit = bool(records and records[0][0] is not None)
             for explicit_seq, appeared_at, text in records:
                 if not accepting:
                     truncated = True

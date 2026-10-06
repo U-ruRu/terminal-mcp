@@ -1811,6 +1811,12 @@ class SqliteRepository:
             await self.mark_output_truncated(cmd_hash)
         return result
 
+    async def append_replayed_lines(self, cmd_hash, texts, replay_offset):
+        result = await self.output.append_lines(cmd_hash, list(texts), replay_offset=replay_offset)
+        if result["truncated"]:
+            await self.mark_output_truncated(cmd_hash)
+        return result
+
     async def append_line(self, cmd_hash, text):
         return await self.append_lines(cmd_hash, [text])
 

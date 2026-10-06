@@ -43,6 +43,7 @@ class CommandScheduler:
         self.pidless_first_seen = {}
         self.initial_pidless_reconciled = False
         self.stopping = False
+        self.resume_tasks = {}
         self.queue = ()  # Compatibility only: the repository owns durable FIFO.
 
     async def _spawn(self, *, execution_id=None):
@@ -94,6 +95,7 @@ class CommandScheduler:
     async def start(self):
         await self.execution.start()
         self.stopping = False
+        await self._recover_remote_running()
         if not self.initial_pidless_reconciled:
             await self._reconcile_processless_running(force_pidless=True)
             self.initial_pidless_reconciled = True
@@ -115,18 +117,19 @@ class CommandScheduler:
             await asyncio.gather(self.reconciler_task, return_exceptions=True)
             self.reconciler_task = None
         processes = list(self.processes.values())
-        if processes:
+        if processes and not getattr(self.execution, "reconnectable", False):
             await asyncio.gather(
                 *(self._terminate(process, grace_seconds=self.grace) for process in processes),
                 return_exceptions=True,
             )
             await asyncio.sleep(0)
-        workers = list(self.workers.values())
+        workers = list(self.workers.values()) + list(self.resume_tasks.values())
         for worker in workers:
             worker.cancel()
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
         self.workers.clear()
+        self.resume_tasks.clear()
         with self.claimed_commands_lock:
             self.claimed_commands.clear()
         self.pidless_first_seen.clear()
@@ -248,11 +251,41 @@ class CommandScheduler:
         with self.claimed_commands_lock:
             return command.cmd_hash in self.claimed_commands
 
+    async def _recover_remote_running(self):
+        if not getattr(self.execution, "reconnectable", False) or self.stopping:
+            return
+        for command in await self.repo.list_running():
+            key = command.cmd_hash
+            if key in self.processes or key in self.execution_done or key in self.resume_tasks:
+                continue
+            if key in self.finalization_pending or self._owns_pidless_running(command):
+                continue
+            handle = await self.execution.recover(key)
+            if handle is None:
+                # Never turn a durable running record back into spawn after service loss.
+                # A still-live unowned PID keeps the queue fenced until disappearance.
+                if command.pid is not None and await self._pid_exists(command.pid):
+                    continue
+                await self.repo.mark_output_truncated(key)
+                await self._finish_with_retry(
+                    command, "failed", command.exit_code, "runtime.executor_lost: no replay"
+                )
+                continue
+            if command.pid is not None and command.pid != handle.pid:
+                raise ExecutionPortError("execution_recovery_fence_mismatch")
+            task = asyncio.create_task(
+                self._execute(command, method="resume", resume_handle=handle)
+            )
+            self.resume_tasks[key] = task
+            task.add_done_callback(lambda done, key=key: self.resume_tasks.pop(key, None))
+
     async def _reconcile_processless_running(self, *, force_pidless=False):
         running = await self.repo.list_running()
         running_hashes = {command.cmd_hash for command in running}
         for command in running:
             cmd_hash = command.cmd_hash
+            if cmd_hash in self.resume_tasks:
+                continue
             process = self.processes.get(cmd_hash)
             if process is not None and (await self.execution.status(process)).exit_code is None:
                 continue
@@ -307,6 +340,7 @@ class CommandScheduler:
     async def _reconciler(self):
         while not self.stopping:
             try:
+                await self._recover_remote_running()
                 await self._reconcile_processless_running()
             except asyncio.CancelledError:
                 raise
@@ -356,18 +390,25 @@ class CommandScheduler:
         pending = b""
         batch = []
         batch_bytes = 0
+        replay_offset = 0
         discarding_long_line = False
         accepting = True
         overflow_marked = False
         line_limit = max(1, int(getattr(self.repo, "output_line_max_bytes", 4 * 1024 * 1024)))
 
         async def flush():
-            nonlocal batch, batch_bytes, accepting
+            nonlocal batch, batch_bytes, accepting, replay_offset
             if not batch or not accepting:
                 batch = []
                 batch_bytes = 0
                 return
-            result = await self.repo.append_lines(command.cmd_hash, batch)
+            if getattr(self.execution, "reconnectable", False):
+                result = await self.repo.append_replayed_lines(
+                    command.cmd_hash, batch, replay_offset
+                )
+            else:
+                result = await self.repo.append_lines(command.cmd_hash, batch)
+            replay_offset += len(batch)
             accepting = bool(result.get("accepting", True))
             batch = []
             batch_bytes = 0
@@ -427,6 +468,9 @@ class CommandScheduler:
         if accepting and pending and not discarding_long_line:
             await add_raw(pending)
         await flush()
+        if getattr(self.execution, "reconnectable", False):
+            if await self.execution.output_truncated(handle):
+                await self.repo.mark_output_truncated(command.cmd_hash)
 
     async def _drain_output(self, command, pipe_task):
         if pipe_task is None:
@@ -464,10 +508,12 @@ class CommandScheduler:
             except Exception:
                 return False, None
 
-    async def _execute(self, command, *, method, timeout_seconds=None):
+    async def _execute(self, command, *, method, timeout_seconds=None, resume_handle=None):
         started = time.monotonic()
         current = await self.repo.get(command.cmd_hash)
         if current is None or current.status != "running":
+            if resume_handle is not None:
+                await self.execution.release(resume_handle)
             return round((time.monotonic() - started) * 1000)
         command = current
         if command.cmd_hash in self.cancel_requested:
@@ -479,17 +525,23 @@ class CommandScheduler:
         pipe_task = None
         error = None
         final_status = None
+        detached = False
+        reconnectable = getattr(self.execution, "reconnectable", False)
         execution_done = asyncio.Event()
         self.execution_done[command.cmd_hash] = execution_done
         try:
-            process = await self._spawn(execution_id=command.cmd_hash)
+            process = resume_handle or await self._spawn(execution_id=command.cmd_hash)
             self.processes[command.cmd_hash] = process
             self.process_queues[command.cmd_hash] = command.queue_id
             command.pid = process.pid
-            if not await self.repo.set_pid(command.cmd_hash, process.pid):
-                await self._terminate(process, grace_seconds=0.1)
-                return round((time.monotonic() - started) * 1000)
-            await self.execution.write_stdin(process, command.cmd)
+            admitted = resume_handle is not None and await self.execution.input_written(process)
+            if not admitted:
+                if not await self.repo.set_pid(command.cmd_hash, process.pid):
+                    await self._terminate(process, grace_seconds=0.1)
+                    if reconnectable:
+                        await self._release_output_stream(process)
+                    return round((time.monotonic() - started) * 1000)
+                await self.execution.write_stdin(process, command.cmd)
             pipe_task = asyncio.create_task(self._pipe_output(command, process))
             try:
                 await self._wait_root_exit(process, timeout_seconds)
@@ -509,6 +561,9 @@ class CommandScheduler:
                     else "failed"
                 )
         except asyncio.CancelledError:
+            if self.stopping and reconnectable:
+                detached = True
+                raise
             self.cancel_requested.add(command.cmd_hash)
             quiesced, exit_code = await self._quiesce_after_failure(process)
             command.exit_code = exit_code
@@ -516,6 +571,11 @@ class CommandScheduler:
             error = f"{method}.cancelled: upstream disconnected"
             raise
         except Exception as exc:
+            if reconnectable:
+                try:
+                    await self.repo.mark_output_truncated(command.cmd_hash)
+                except Exception:
+                    self._emit_runtime_event("runtime_output_loss_marker_pending")
             quiesced, exit_code = await self._quiesce_after_failure(process)
             command.exit_code = exit_code
             final_status = "failed" if quiesced else None
@@ -536,7 +596,8 @@ class CommandScheduler:
                 self.processes.pop(command.cmd_hash, None)
                 self.process_queues.pop(command.cmd_hash, None)
                 try:
-                    await self._release_output_stream(process)
+                    if not reconnectable:
+                        await self._release_output_stream(process)
                 except Exception as cleanup_error:
                     self._emit_runtime_event(
                         "runtime_execution_cleanup_failed",
@@ -549,6 +610,14 @@ class CommandScheduler:
                         command, final_status, command.exit_code, error
                     )
                     if finalized:
+                        if reconnectable and not detached:
+                            try:
+                                await self._release_output_stream(process)
+                            except Exception as cleanup_error:
+                                self._emit_runtime_event(
+                                    "runtime_execution_cleanup_failed",
+                                    error=str(cleanup_error)[:512],
+                                )
                         await self.repo.prune_output_cache()
             finally:
                 self.cancel_requested.discard(command.cmd_hash)
