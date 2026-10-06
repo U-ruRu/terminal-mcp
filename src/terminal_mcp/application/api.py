@@ -37,6 +37,8 @@ class TerminalApplication:
         fleet_projection=None,
         projection_service=None,
         fleet_control=None,
+        managed_identity=None,
+        managed_sessions=None,
     ):
         self.service = service
         self.auth_mode = auth_mode
@@ -62,6 +64,10 @@ class TerminalApplication:
             else None
         )
         self.fleet_control = FleetControlApplication(fleet_control) if fleet_control else None
+        # Managed identity/session capabilities are composed by the host but stay
+        # transport-inactive until the explicit endpoint cutover.
+        self.managed_identity = managed_identity
+        self.managed_sessions = managed_sessions
         self._operator = None
         self._mesh = None
 

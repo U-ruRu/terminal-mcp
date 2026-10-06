@@ -130,6 +130,8 @@ active AuthFoundation grants. The grant must match the concrete client credentia
 required read/execute scope, and either the slot resource or its current authority-node
 resource. Operator operations additionally require the `operator` role. The public name
 comes from the active Access Authority slot and its authority must match the same route.
-These adapters are production-capable boundaries but are not yet connected to public MCP
-transport; transport metadata capture, runtime composition and cutover remain explicit
-follow-up work.
+The production composition root now constructs these adapters, `ManagedSessionApplication`
+and one host-owned bounded `ManagedWindowRecovery` loop over the same authoritative store
+and execution fence used by legacy Persistent Slots. Public MCP transport still uses the
+legacy SessionGate: trusted provider metadata capture, endpoint selection and cutover remain
+explicit follow-up work rather than an implicit compatibility switch.
