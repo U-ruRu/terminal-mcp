@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
-from types import MappingProxyType
+from dataclasses import dataclass, replace
 
 from terminal_mcp.core.persistent_admission import (
     VerifiedAdmissionContext,
@@ -28,7 +27,6 @@ class ActorContext:
     auth_generation: int = 0
     auth_mode: str = "none"
     provider: str | None = None
-    provider_metadata: Mapping[str, object] = field(default_factory=dict, repr=False, compare=False)
     transport: str = "internal"
     request_id: str | None = None
     node_id: str = ""
@@ -44,14 +42,6 @@ class ActorContext:
         # Copy any caller-owned mutable scope collection; frozen must be deep
         # enough for the security-relevant attributes, not merely cosmetic.
         object.__setattr__(self, "scopes", frozenset(self.scopes))
-        if not isinstance(self.provider_metadata, Mapping):
-            raise ValueError("provider_metadata must be a mapping")
-        provider_metadata = dict(self.provider_metadata)
-        if provider_metadata and self.provider is None:
-            raise ValueError("provider required for provider_metadata")
-        if any(not isinstance(key, str) or not key for key in provider_metadata):
-            raise ValueError("provider_metadata keys must be nonempty strings")
-        object.__setattr__(self, "provider_metadata", MappingProxyType(provider_metadata))
         if type(self.contract_version) is not int or self.contract_version < 1:
             raise ValueError("contract_version must be positive")
         if self.auth_mode != "none":
