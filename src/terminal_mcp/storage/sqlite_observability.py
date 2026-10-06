@@ -169,6 +169,32 @@ class ObservedConnection:
         return getattr(self._db, name)
 
 
+async def _open_cancellation_safe_connection(connect, path, **kwargs):
+    connect_task = asyncio.ensure_future(connect(path, **kwargs))
+    try:
+        return await asyncio.shield(connect_task)
+    except asyncio.CancelledError:
+        # aiosqlite starts the worker thread before its initial connection future
+        # resolves. Finish that handshake and close on the live loop before
+        # propagating cancellation, otherwise the worker can outlive the loop.
+        try:
+            db = await connect_task
+        except BaseException:
+            pass
+        else:
+            await db.close()
+        raise
+
+
+@asynccontextmanager
+async def cancellation_safe_connection(connect, path, **kwargs):
+    db = await _open_cancellation_safe_connection(connect, path, **kwargs)
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
 async def open_observed_connection(
     connect,
     path,
@@ -181,21 +207,8 @@ async def open_observed_connection(
     execution_outcome: str | None = None,
     durable_finalization_outcome: str | None = None,
 ):
-    connect_task = asyncio.ensure_future(connect(path, timeout=busy_timeout))
     try:
-        raw = await asyncio.shield(connect_task)
-    except asyncio.CancelledError:
-        # aiosqlite starts its worker thread before awaiting the initial connection.
-        # If the caller is cancelled in that window, let the connect finish and close
-        # it on the still-live loop before propagating cancellation; otherwise the
-        # worker may report back after event-loop teardown.
-        try:
-            raw = await connect_task
-        except BaseException:
-            pass
-        else:
-            await raw.close()
-        raise
+        raw = await _open_cancellation_safe_connection(connect, path, timeout=busy_timeout)
     except sqlite3.Error as exc:
         diagnostics.record(
             exc,
