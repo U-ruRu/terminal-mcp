@@ -3,6 +3,7 @@ import base64
 from dataclasses import replace
 from datetime import timedelta
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -1794,6 +1795,8 @@ async def test_forwarded_detach_returns_committed_before_slow_replication(tmp_pa
             ),
             timeout=home_config.request_timeout_seconds,
         )
+        if operation == "release-node":
+            raise httpx.ReadTimeout("release response arrived after authoritative commit")
         return _FakeResponse(response)
 
     remote = ManagedFleetControl(

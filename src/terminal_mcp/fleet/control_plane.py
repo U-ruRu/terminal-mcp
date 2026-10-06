@@ -851,11 +851,18 @@ class ManagedFleetControl:
         if should_split_standalone:
             acknowledgement = state
             previous_control = self.store.control_node_id
-            await self._forward_mutation_to(
-                previous_control,
-                "release-node",
-                {"node_id": self.store.node_id},
-            )
+            try:
+                await self._forward_mutation_to(
+                    previous_control,
+                    "release-node",
+                    {"node_id": self.store.node_id},
+                )
+            except httpx.ReadTimeout:
+                # The detach is already authoritatively committed before this cleanup.
+                # A read timeout is ambiguous: the authority may have completed the
+                # idempotent release after our client stopped waiting. Do not turn
+                # that post-commit acknowledgement race into a false detach failure.
+                pass
             await self.store.claim_local_control_authority(
                 policy=self.policy_controller.snapshot()
             )
