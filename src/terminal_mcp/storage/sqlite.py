@@ -24,6 +24,13 @@ from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
 SCHEMA_VERSION = 19
+SQLITE_MAIN_HEADER = b"SQLite format 3\x00"
+SQLITE_WAL_MAGICS = {bytes.fromhex("377f0682"), bytes.fromhex("377f0683")}
+
+
+class DurableDatabaseError(RuntimeError):
+    pass
+
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -66,6 +73,22 @@ class SqliteRepository:
         self.sqlite_diagnostics.configure(events, metrics)
         self.output.configure_observability(events, metrics)
 
+    def _main_file_ready(self) -> bool:
+        path = Path(self.path)
+        return path.exists() and path.stat().st_size > 0
+
+    def _validate_main_file_header(self) -> None:
+        path = Path(self.path)
+        if not self._main_file_ready():
+            return
+        with path.open("rb") as handle:
+            header = handle.read(len(SQLITE_MAIN_HEADER))
+        if header == SQLITE_MAIN_HEADER:
+            return
+        if header[:4] in SQLITE_WAL_MAGICS:
+            raise DurableDatabaseError("durable_database_main_is_wal")
+        raise DurableDatabaseError("durable_database_invalid_header")
+
     @asynccontextmanager
     async def _connect(
         self,
@@ -76,6 +99,7 @@ class SqliteRepository:
         durable_finalization_outcome=None,
         ensure_wal=False,
     ):
+        self._validate_main_file_header()
         started = time.monotonic()
         async with observed_connection(
             aiosqlite.connect,
@@ -110,9 +134,12 @@ class SqliteRepository:
                     )
 
     async def ping(self):
-        async with self._connect("health") as db:
-            await (await db.execute("SELECT 1")).fetchone()
-        return True
+        try:
+            async with self._connect("health") as db:
+                await (await db.execute("SELECT 1")).fetchone()
+            return True
+        except (OSError, aiosqlite.Error, DurableDatabaseError):
+            return False
 
     async def initialize(self):
         secure_database_path(self.path)
