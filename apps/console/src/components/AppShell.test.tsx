@@ -43,7 +43,7 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
-  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.30 · code 32')
+  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.31 · code 33')
 })
 
 
@@ -51,14 +51,14 @@ test('bottom navigation follows the selected server context', () => {
   renderShell('/servers/server-a/tasks', fixtureFleetModel.servers)
   const bottom = document.querySelector('.mobile-bottom-navigation') as HTMLElement
   const links = within(bottom).getAllByRole('link')
-  expect(links).toHaveLength(7)
+  expect(links).toHaveLength(6)
   expect(within(bottom).getByRole('link', { name: /Overview/ })).toHaveAttribute('href', '/servers/server-a')
   expect(within(bottom).getByRole('link', { name: /Agents/ })).toHaveAttribute('href', '/servers/server-a/agents')
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/servers/server-a/slots')
   expect(within(bottom).getByRole('link', { name: /Tasks/ })).toHaveAttribute('href', '/servers/server-a/tasks')
   expect(within(bottom).getByRole('link', { name: /Activity/ })).toHaveAttribute('href', '/activity?server=server-a')
   expect(within(bottom).getByRole('link', { name: /Context/ })).toHaveAttribute('href', '/servers/server-a/context')
-  expect(within(bottom).getByRole('link', { name: /Diagnostics/ })).toHaveAttribute('href', '/servers/server-a/health')
+  expect(within(bottom).queryByRole('link', { name: /Diagnostics/ })).not.toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Tasks/ })).toHaveAttribute('aria-current', 'page')
 })
 

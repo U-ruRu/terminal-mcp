@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
 
 import { App } from './App'
+import { BrowserDiagnosticJournal } from './diagnostics/journal'
 import { fixtureFleetModel } from './fixtures/fleet'
 import { I18nProvider } from './i18n/I18nProvider'
 import { LOCALE_STORAGE_KEY } from './i18n/runtime'
@@ -11,12 +12,12 @@ import { ThemeProvider } from './theme/ThemeProvider'
 
 afterEach(() => { cleanup(); localStorage.clear() })
 
-function renderApp(path = '/') {
+function renderApp(path = '/', diagnostics?: BrowserDiagnosticJournal) {
   return render(
     <I18nProvider>
       <ThemeProvider>
         <MemoryRouter initialEntries={[path]}>
-          <App model={fixtureFleetModel} instances={[]} />
+          <App model={fixtureFleetModel} instances={[]} diagnostics={diagnostics} />
         </MemoryRouter>
       </ThemeProvider>
     </I18nProvider>,
@@ -51,8 +52,20 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   expect(within(applicationNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
   expect(within(applicationNavigation).getAllByRole('link', { name: 'Slots' }).some((link) => link.getAttribute('href') === '/servers/server-c/slots')).toBe(true)
   expect(within(applicationNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
-  expect(within(applicationNavigation).getByRole('link', { name: 'Diagnostics' })).toHaveAttribute('href', '/servers/server-c/health')
+  expect(within(applicationNavigation).queryByRole('link', { name: 'Diagnostics' })).not.toBeInTheDocument()
   expect(document.querySelector('.server-local-navigation')).not.toBeInTheDocument()
+})
+
+test('server overview owns the collapsed local diagnostics panel', () => {
+  const diagnostics = new BrowserDiagnosticJournal(localStorage)
+  diagnostics.append({ type: 'connection_status', instanceId: 'server-c', server: 'Server C', status: 'live' })
+  renderApp('/servers/server-c', diagnostics)
+  const panel = document.querySelector('.server-overview-diagnostics') as HTMLDetailsElement
+  expect(panel).toBeInTheDocument()
+  expect(panel.open).toBe(false)
+  expect(within(panel).getByText(/Local diagnostics · 1/)).toBeInTheDocument()
+  const nav = screen.getByRole('navigation', { name: 'Application navigation' })
+  expect(within(nav).queryByRole('link', { name: 'Diagnostics' })).not.toBeInTheDocument()
 })
 
 test('server overview exposes the same runtime version and resource observation used by Fleet', () => {
@@ -110,12 +123,6 @@ test('drawer closes predictably on Escape and browser Back', async () => {
   expect(toggle).toHaveAttribute('aria-expanded', 'false')
 })
 
-test('invalid server-scoped direct link keeps destination intent and asks for a server', () => {
-  renderApp('/servers/missing/health')
-  expect(screen.getByRole('heading', { name: 'Choose a server for Diagnostics' })).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: /Server A/ })).toHaveAttribute('href', '/servers/server-a/health')
-})
-
 
 test('changes and persists the Console language from Settings', async () => {
   renderApp('/settings')
@@ -126,14 +133,6 @@ test('changes and persists the Console language from Settings', async () => {
   expect(document.documentElement.lang).toBe('ru')
 })
 
-
-test('Health compatibility route is presented as Diagnostics in Russian', () => {
-  localStorage.setItem(LOCALE_STORAGE_KEY, 'ru')
-  renderApp('/servers/server-c/health')
-  expect(document.querySelector('.app-bar-title')).toHaveTextContent('Диагностика')
-  expect(screen.getByRole('heading', { name: 'Диагностика' })).toBeInTheDocument()
-  expect(screen.getByRole('navigation', { name: 'Навигация приложения' }).textContent).toContain('Диагностика')
-})
 
 test('applies persisted Russian locale to fleet UI without translating server data', () => {
   localStorage.setItem(LOCALE_STORAGE_KEY, 'ru')

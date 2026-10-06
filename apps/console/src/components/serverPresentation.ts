@@ -15,10 +15,13 @@ export function resourcePercent(server: FleetServerReadModel, kind: ResourceKind
   if (!resources) return undefined
   if (kind === 'cpu') {
     if (resources.cpu.status !== 'available') return undefined
-    if (resources.cpu.usagePercent !== undefined) return resources.cpu.usagePercent
     const cores = resources.cpu.logicalCores
+    if (resources.cpu.usagePercent !== undefined) {
+      const direct = resources.cpu.usagePercent
+      return direct > 100 && cores ? direct / cores : direct
+    }
     const load = resources.cpu.load1m
-    return cores && load !== undefined ? (load / cores) * 100 : undefined
+    return cores && load !== undefined ? Math.min(100, (load / cores) * 100) : undefined
   }
   const resource = kind === 'memory' ? resources.memory : resources.filesystem
   return resource.status === 'available' ? resource.usedPercent : undefined

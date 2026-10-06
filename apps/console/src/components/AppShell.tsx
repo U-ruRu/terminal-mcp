@@ -12,7 +12,7 @@ import { IconButton } from './UiPrimitives'
 import { StatusBadge } from './StatusBadge'
 import { needsAttention, serverVisualState, type ServerVisualState } from './serverPresentation'
 
-type NavigationKey = 'fleet' | 'overview' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'health' | 'settings'
+type NavigationKey = 'fleet' | 'overview' | 'connections' | 'agents' | 'slots' | 'tasks' | 'activity' | 'context' | 'settings'
 
 type NavigationItem = {
   key: NavigationKey
@@ -38,7 +38,6 @@ const serverNavigation: NavigationItem[] = [
   { key: 'tasks', icon: 'tasks', labelKey: 'nav.tasks', globalPath: '/tasks', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/tasks' },
   { key: 'activity', icon: 'activity', labelKey: 'nav.activity', globalPath: '/activity', serverPath: (instanceId) => '/activity?server=' + encodeURIComponent(instanceId) },
   { key: 'context', icon: 'context', labelKey: 'nav.context', globalPath: '/context', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/context' },
-  { key: 'health', icon: 'health', labelKey: 'nav.health', globalPath: '/health', serverPath: (instanceId) => '/servers/' + encodeURIComponent(instanceId) + '/health' },
 ]
 
 const meshNavigation: NavigationItem[] = [
@@ -76,7 +75,6 @@ function activeKey(pathname: string): NavigationKey {
   if (pathname === '/slots' || pathname.includes('/slots')) return 'slots'
   if (pathname === '/tasks' || pathname.includes('/tasks')) return 'tasks'
   if (pathname === '/context' || pathname.endsWith('/context')) return 'context'
-  if (pathname === '/health' || pathname.endsWith('/health')) return 'health'
   if (/^\/servers\/[^/]+\/?$/.test(pathname)) return 'fleet'
   return 'fleet'
 }
@@ -99,7 +97,6 @@ function contextNavigation(pathname: string, search: string, returnTo?: string):
     if (parts[2] === 'agents' && parts.length >= 4) return { to: returnTo ?? serverPath + '/agents', ariaKey: 'agents.backToAgents', titleKey: 'nav.agents' }
     if (parts[2] === 'agents') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.agents' }
     if (parts[2] === 'context') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.context' }
-    if (parts[2] === 'health') return { to: returnTo ?? serverPath, ariaKey: 'nav.goBackToServer', titleKey: 'nav.health' }
     return { to: returnTo ?? '/', ariaKey: 'nav.goBackToFleet', titleKey: 'title.server' }
   }
   if (parts[0] === 'meshes' && parts[1]) {
@@ -287,6 +284,21 @@ export function AppShell({
             </Link>
           ))}
 
+          {menuOpen ? (
+            <div className="navigation-server-list" aria-label={t('nav.servers')}>
+              {servers.map((server) => (
+                <Link
+                  key={server.instanceId}
+                  className={'navigation-server-link' + (server.instanceId === selectedId ? ' active' : '')}
+                  to={serverSwitchDestination(location.pathname, location.search, server.instanceId)}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  {server.displayName}
+                </Link>
+              ))}
+            </div>
+          ) : null}
+
           {selectedServer ? (
             <div className="navigation-context-group" aria-label={t('server.navigation')}>
               <Link
@@ -333,20 +345,6 @@ export function AppShell({
             </div>
           ) : null}
 
-          {menuOpen ? (
-            <div className="navigation-server-list" aria-label={t('nav.servers')}>
-              {servers.map((server) => (
-                <Link
-                  key={server.instanceId}
-                  className={'navigation-server-link' + (server.instanceId === selectedId ? ' active' : '')}
-                  to={serverSwitchDestination(location.pathname, location.search, server.instanceId)}
-                  onClick={() => setMenuOpen(false)}
-                >
-                  {server.displayName}
-                </Link>
-              ))}
-            </div>
-          ) : null}
           {menuOpen && servers.length === 0 ? <p className="navigation-hint">{t('nav.chooseServerHint')}</p> : null}
           <small className="navigation-version">{APK_VERSION_LABEL}</small>
         </nav>
