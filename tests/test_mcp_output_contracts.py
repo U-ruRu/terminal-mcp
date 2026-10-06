@@ -286,6 +286,28 @@ def test_namespace_task_variants(action):
     )
 
 
+def test_task_result_surfaces_namespace_context_once_payload():
+    bundle = {
+        "namespace": "project",
+        "primary": [
+            {
+                "id": 11,
+                "summary": "Rules",
+                "content": "Use the project worktree.",
+                "primary": True,
+                "namespace": "project",
+            }
+        ],
+        "additional": [],
+    }
+    result = task_result(
+        {"ok": True, "task": TASK, "warnings": [], "namespace_context": bundle},
+        "update",
+    )
+    validate(TaskOutput, result)
+    assert result.structuredContent["namespace_context"] == bundle
+
+
 @pytest.mark.parametrize(
     "action,raw",
     [

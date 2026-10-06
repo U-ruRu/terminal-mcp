@@ -330,6 +330,12 @@ class MessageOutput(RootModel[MessageSuccess | AccessError]):
         return _success_schema(cls.__success_type__)
 
 
+class NamespaceContextBundle(_Strict):
+    namespace: Namespace
+    primary: list[ContextEntry] = Field(default_factory=list)
+    additional: list[ContextEntry] = Field(default_factory=list)
+
+
 class TaskMutationResult(_Strict):
     ok: Literal[True]
     action: Literal[
@@ -347,6 +353,7 @@ class TaskMutationResult(_Strict):
     ]
     task: TaskRecord
     warnings: list[WorkflowWarning] = Field(default_factory=list)
+    namespace_context: NamespaceContextBundle | None = None
 
 
 class NamespaceMutationResult(_Strict):
@@ -366,6 +373,7 @@ class TaskClaimMutationResult(_Strict):
     action: Literal["claim"]
     task: TaskSnapshot
     warnings: list[WorkflowWarning] = Field(default_factory=list)
+    namespace_context: NamespaceContextBundle | None = None
 
 
 TaskSuccess = Annotated[
@@ -1097,6 +1105,19 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
             ),
             "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
         }
+        if isinstance(raw.get("namespace_context"), dict):
+            bundle = raw["namespace_context"]
+            structured["namespace_context"] = {
+                "namespace": bundle.get("namespace"),
+                "primary": [
+                    _known(ContextEntry, item).model_dump(mode="json", exclude_unset=True)
+                    for item in bundle.get("primary", [])
+                ],
+                "additional": [
+                    _known(ContextEntry, item).model_dump(mode="json", exclude_unset=True)
+                    for item in bundle.get("additional", [])
+                ],
+            }
     return _result("task", action, TaskOutput, raw, structured)
 
 

@@ -134,6 +134,15 @@ class ObservationApplication(ApplicationCapability):
             limit=limit,
             cursor=str(offset),
         )
+        if namespace is None and task_id is None and result.get("ok"):
+            store = getattr(self.service, "task_store", None)
+            if store is not None:
+                result["namespaces"] = [
+                    item["namespace"]
+                    for item in await store.list_namespace_records(
+                        show_archived=show_archived, limit=limit, offset=0
+                    )
+                ]
         if not result.get("ok"):
             if result.get("error") == "task not found":
                 result["code"] = "resource_not_found"

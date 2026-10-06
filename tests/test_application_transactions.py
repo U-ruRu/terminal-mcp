@@ -7,7 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from terminal_mcp.application import ActorContext, TerminalApplication
-from terminal_mcp.application.requests import ContextCreateRequest, ContextDeleteRequest
+from terminal_mcp.application.requests import (
+    ContextCreateRequest,
+    ContextDeleteRequest,
+    ContextListRequest,
+)
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
 from terminal_mcp.storage.context import ContextStore
@@ -45,8 +49,43 @@ async def application(tmp_path, *, failing=False):
         selected = FailingUow()
     else:
         selected = uow
+    context_store = ContextStore(repository.path)
+
+    async def read_context(
+        action,
+        *,
+        namespace=None,
+        show_details=False,
+        limit=None,
+        offset=0,
+        **_kwargs,
+    ):
+        assert action == "list"
+        entries = await context_store.list(
+            namespace=namespace,
+            limit=limit,
+            offset=offset,
+            primary_first=limit is not None,
+        )
+
+        def compact(entry):
+            item = {"id": entry["id"], "summary": entry["summary"]}
+            if entry.get("namespace") is not None:
+                item["namespace"] = entry["namespace"]
+            if show_details:
+                item["content"] = entry["content"]
+            return item
+
+        return {
+            "ok": True,
+            "primary": [compact(item) for item in entries if item["primary"]],
+            "additional": [compact(item) for item in entries if not item["primary"]],
+        }
+
     service = SimpleNamespace(
-        context_store=ContextStore(repository.path), persistent=IdentityBackend()
+        context_store=context_store,
+        persistent=IdentityBackend(),
+        context=read_context,
     )
     app = TerminalApplication(service, unit_of_work=selected)
     service.application = app
@@ -160,3 +199,44 @@ async def test_mutation_entry_cannot_accidentally_delete_on_list_action(tmp_path
     )
     assert not (await app.contexts.mutate(ActorContext(), "list", context_id=1))["ok"]
     assert await app.service.context_store.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_namespaced_context_uses_resolved_session_and_marks_seen(tmp_path):
+    app, repository = await application(tmp_path)
+    actor = ActorContext(node_id="node")
+    created = await app.context(
+        actor,
+        ContextCreateRequest(
+            action="create",
+            code="0042",
+            namespace="project-a",
+            summary="Project rules",
+            content="Use the project worktree.",
+            primary=True,
+        ),
+    )
+    assert created["ok"] is True
+    assert created["entry"]["namespace"] == "project-a"
+    assert await app.service.context_store.get(created["entry"]["id"]) is None
+    assert (
+        await app.service.context_store.get(created["entry"]["id"], namespace="project-a")
+    ) == created["entry"]
+    assert await app.service.context_store.namespace_seen("work", "project-a") is True
+
+    await app.service.context_store.create(
+        "Other project", "Do not leak this.", False, namespace="project-b"
+    )
+    listed = await app.context(
+        actor,
+        ContextListRequest(
+            action="list",
+            code="0042",
+            namespace="project-a",
+            detail="full",
+        ),
+    )
+    assert listed["ok"] is True
+    assert [item["summary"] for item in listed["primary"]] == ["Project rules"]
+    assert listed["additional"] == []
+    assert await app.service.context_store.namespace_seen("work", "project-b") is False

@@ -83,15 +83,14 @@ class ContextStore:
             rows = await (await db.execute(query, params)).fetchall()
         return [self._entry(row) for row in rows]
 
-    async def get(self, context_id: int, *, namespace: Any = _UNSET):
+    async def get(self, context_id: int, *, namespace: str | None = None):
         query = "SELECT id,summary,content,is_primary,namespace FROM instance_context WHERE id=?"
         params: list[Any] = [int(context_id)]
-        if namespace is not _UNSET:
-            if namespace is None:
-                query += " AND namespace IS NULL"
-            else:
-                query += " AND namespace=?"
-                params.append(namespace)
+        if namespace is None:
+            query += " AND namespace IS NULL"
+        else:
+            query += " AND namespace=?"
+            params.append(namespace)
         async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (await db.execute(query, params)).fetchone()
         return self._entry(row)
@@ -116,7 +115,7 @@ class ContextStore:
         self,
         context_id: int,
         *,
-        namespace: Any = _UNSET,
+        namespace: str | None = None,
         summary: Any = _UNSET,
         content: Any = _UNSET,
         primary: Any = _UNSET,
@@ -136,12 +135,11 @@ class ContextStore:
             raise ValueError("at least one context field is required")
         where = "id=?"
         params.append(int(context_id))
-        if namespace is not _UNSET:
-            if namespace is None:
-                where += " AND namespace IS NULL"
-            else:
-                where += " AND namespace=?"
-                params.append(namespace)
+        if namespace is None:
+            where += " AND namespace IS NULL"
+        else:
+            where += " AND namespace=?"
+            params.append(namespace)
         async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 f"UPDATE instance_context SET {','.join(assignments)} WHERE {where}", params
@@ -151,15 +149,14 @@ class ContextStore:
                 return None
         return await self.get(context_id, namespace=namespace)
 
-    async def delete(self, context_id: int, *, namespace: Any = _UNSET) -> bool:
+    async def delete(self, context_id: int, *, namespace: str | None = None) -> bool:
         query = "DELETE FROM instance_context WHERE id=?"
         params: list[Any] = [int(context_id)]
-        if namespace is not _UNSET:
-            if namespace is None:
-                query += " AND namespace IS NULL"
-            else:
-                query += " AND namespace=?"
-                params.append(namespace)
+        if namespace is None:
+            query += " AND namespace IS NULL"
+        else:
+            query += " AND namespace=?"
+            params.append(namespace)
         async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(query, params)
             await db.commit()

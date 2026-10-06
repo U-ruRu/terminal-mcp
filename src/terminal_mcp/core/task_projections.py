@@ -84,6 +84,9 @@ class NamespaceRecord(_Strict):
     revision: int = Field(ge=1)
     created_at: str
     updated_at: str
+    useful_work_pressure: int = Field(default=0, ge=0)
+    ready_count: int = Field(default=0, ge=0)
+    open_count: int = Field(default=0, ge=0)
 
 
 class JsonPayload(_Strict):

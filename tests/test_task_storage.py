@@ -404,3 +404,23 @@ async def test_namespace_metadata_priority_revision_and_archive_filtering(tmp_pa
         "high",
         "low",
     }
+
+
+@pytest.mark.asyncio
+async def test_namespace_discovery_orders_by_priority_then_useful_work_pressure(tmp_path):
+    _, tasks = await store(tmp_path)
+    await tasks.create_namespace("quiet", priority=1)
+    await tasks.create_namespace("busy", priority=1)
+    await tasks.create_namespace("urgent", priority=3)
+    await tasks.create_task("quiet", "Q-1", "Quiet")
+    await tasks.create_task("busy", "B-1", "Busy one", priority=2)
+    await tasks.create_task("busy", "B-2", "Busy two", priority=1)
+    await tasks.create_task("urgent", "U-1", "Urgent", state="blocked")
+
+    rows = await tasks.list_namespace_records()
+    assert [row["namespace"] for row in rows[:3]] == ["urgent", "busy", "quiet"]
+    by_name = {row["namespace"]: row for row in rows}
+    assert by_name["busy"]["useful_work_pressure"] == 6
+    assert by_name["busy"]["ready_count"] == 2
+    assert by_name["busy"]["open_count"] == 2
+    assert by_name["urgent"]["useful_work_pressure"] == 0

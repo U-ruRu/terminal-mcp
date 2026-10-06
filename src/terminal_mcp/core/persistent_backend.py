@@ -1745,9 +1745,7 @@ class PersistentBackend:
                     session.hard_expires_at if session is not None else permit.hard_expires_at
                 ),
                 "authority_node_id": (
-                    session.authority_node_id
-                    if session is not None
-                    else permit.authority_node_id
+                    session.authority_node_id if session is not None else permit.authority_node_id
                 ),
                 "node_attachment_id": permit.node_attachment_id if permit is not None else None,
                 "error": None,
@@ -1899,6 +1897,20 @@ class PersistentBackend:
         except PersistentLifecycleError as exc:
             return self._error(exc)
 
+    async def _namespace_context_once(self, work_session_id: str, namespace: str):
+        store = getattr(self.service, "context_store", None)
+        if store is None or await store.namespace_seen(work_session_id, namespace):
+            return None
+        entries = await store.list(namespace=namespace, primary_first=True, limit=20)
+        await store.mark_namespace_seen(work_session_id, namespace, seen_at=utc_text())
+        if not entries:
+            return None
+        return {
+            "namespace": namespace,
+            "primary": [item for item in entries if item["primary"]],
+            "additional": [item for item in entries if not item["primary"]],
+        }
+
     async def task(
         self,
         *,
@@ -1934,6 +1946,11 @@ class PersistentBackend:
                 )
                 actual_task = result.get("task") if isinstance(result, dict) else None
                 if result.get("ok") and actual_task:
+                    namespace_context = await self._namespace_context_once(
+                        work_session_id, actual_task["namespace"]
+                    )
+                    if namespace_context is not None:
+                        result["namespace_context"] = namespace_context
                     await self.task_store.add_event(
                         actual_task["namespace"],
                         actual_task["task_id"],

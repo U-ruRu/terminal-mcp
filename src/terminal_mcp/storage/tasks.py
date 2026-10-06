@@ -481,12 +481,24 @@ class TaskStore:
     async def list_namespace_records(
         self, *, show_archived: bool = False, limit: int = 20, offset: int = 0
     ):
-        where = "" if show_archived else " WHERE archived_at IS NULL"
+        where = "" if show_archived else " WHERE n.archived_at IS NULL"
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT namespace,priority,archived_at,archive_note,revision,created_at,updated_at "
-                    f"FROM work_namespaces{where} ORDER BY priority DESC,namespace LIMIT ? OFFSET ?",
+                    "SELECT n.namespace,n.priority,n.archived_at,n.archive_note,n.revision,"
+                    "n.created_at,n.updated_at,"
+                    "COALESCE(SUM(CASE WHEN w.archived_at IS NULL AND w.state='ready' THEN "
+                    "CASE w.priority WHEN 3 THEN 8 WHEN 2 THEN 4 WHEN 1 THEN 2 ELSE 1 END "
+                    "ELSE 0 END),0) AS useful_work_pressure,"
+                    "COALESCE(SUM(CASE WHEN w.archived_at IS NULL AND w.state='ready' "
+                    "THEN 1 ELSE 0 END),0) AS ready_count,"
+                    "COALESCE(SUM(CASE WHEN w.archived_at IS NULL AND w.state<>'done' "
+                    "THEN 1 ELSE 0 END),0) AS open_count "
+                    "FROM work_namespaces n LEFT JOIN work_items w ON w.namespace=n.namespace"
+                    f"{where} GROUP BY n.namespace,n.priority,n.archived_at,n.archive_note,"
+                    "n.revision,n.created_at,n.updated_at "
+                    "ORDER BY n.priority DESC,useful_work_pressure DESC,ready_count DESC,"
+                    "n.namespace LIMIT ? OFFSET ?",
                     (max(1, min(int(limit), 1000)), max(0, int(offset))),
                 )
             ).fetchall()
@@ -499,13 +511,14 @@ class TaskStore:
                 "revision": int(row[4]),
                 "created_at": row[5],
                 "updated_at": row[6],
+                "useful_work_pressure": int(row[7]),
+                "ready_count": int(row[8]),
+                "open_count": int(row[9]),
             }
             for row in rows
         ]
 
-    async def create_namespace(
-        self, namespace: str, *, priority: int = 1, now: str | None = None
-    ):
+    async def create_namespace(self, namespace: str, *, priority: int = 1, now: str | None = None):
         if not namespace:
             raise ValueError("namespace is required")
         value = int(priority)
