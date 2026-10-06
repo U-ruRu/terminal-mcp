@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +19,7 @@ DEFAULT_TARGET_BYTES = 192 * MIB
 DEFAULT_MAX_BYTES = 256 * MIB
 DEFAULT_MAX_ROWS = 1_000_000
 DEFAULT_PRUNE_ROWS = 500_000
+COMPACTION_DISK_HEADROOM = 64 * MIB
 
 LINE_TRUNCATED_SUFFIX = " … [truncated: line exceeded 4 MiB]"
 COMMAND_TRUNCATED_SUFFIX = " … [truncated: command output exceeded 8 MiB]"
@@ -150,7 +153,7 @@ class OutputStore:
                     raise ValueError("output replay offset must be a nonnegative integer")
                 if replay_offset > stored_lines and accepting:
                     raise ValueError("output replay gap")
-                records = records[max(0, stored_lines - replay_offset):]
+                records = records[max(0, stored_lines - replay_offset) :]
             inserts: list[tuple] = []
             explicit = bool(records and records[0][0] is not None)
             for explicit_seq, appeared_at, text in records:
@@ -283,14 +286,75 @@ class OutputStore:
                 "DELETE FROM lines; DELETE FROM output_meta; DELETE FROM cache_state;"
             )
             await db.commit()
-            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            await db.execute("PRAGMA incremental_vacuum(4096)")
+            await self._compact(db, force=True)
 
     async def delete_command(self, cmd_hash: str):
         async with self._connect("output_delete", command_hash=cmd_hash) as db:
             await db.execute("DELETE FROM lines WHERE hash=?", (cmd_hash,))
             await db.execute("DELETE FROM output_meta WHERE hash=?", (cmd_hash,))
             await db.commit()
+
+    async def _physical_stats(self, db):
+        page_size = int((await (await db.execute("PRAGMA page_size")).fetchone())[0])
+        page_count = int((await (await db.execute("PRAGMA page_count")).fetchone())[0])
+        freelist = int((await (await db.execute("PRAGMA freelist_count")).fetchone())[0])
+        auto_vacuum = int((await (await db.execute("PRAGMA auto_vacuum")).fetchone())[0])
+        return {
+            "page_size": page_size,
+            "page_count": page_count,
+            "freelist": freelist,
+            "auto_vacuum": auto_vacuum,
+            "allocated_bytes": page_size * page_count,
+            "live_page_bytes": page_size * max(0, page_count - freelist),
+        }
+
+    @staticmethod
+    def _busy(exc: sqlite3.OperationalError) -> bool:
+        code = getattr(exc, "sqlite_errorcode", None)
+        return type(code) is int and code & 0xFF in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+
+    async def _compact(self, db, *, force: bool = False) -> bool:
+        physical = await self._physical_stats(db)
+        if not force and physical["allocated_bytes"] <= self.max_bytes:
+            return False
+        if physical["freelist"] <= 0:
+            return False
+
+        try:
+            checkpoint = await (await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            if checkpoint and int(checkpoint[0]) != 0:
+                return False
+            physical = await self._physical_stats(db)
+            if physical["freelist"] <= 0:
+                return False
+            if physical["auto_vacuum"] == 2:
+                target_pages = max(
+                    1, (self.target_bytes + physical["page_size"] - 1) // physical["page_size"]
+                )
+                reclaim = min(physical["freelist"], max(0, physical["page_count"] - target_pages))
+                if reclaim <= 0:
+                    return False
+                await db.execute(f"PRAGMA incremental_vacuum({reclaim})")
+                await db.commit()
+                await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                return True
+
+            # Legacy caches created before incremental auto-vacuum need one bounded
+            # rewrite to enable future cheap page reclamation. Do not spend disk on
+            # a rewrite that cannot bring the live database below the hard ceiling.
+            if physical["live_page_bytes"] > self.max_bytes:
+                return False
+            free = shutil.disk_usage(self.path.parent).free
+            if free < physical["allocated_bytes"] + COMPACTION_DISK_HEADROOM:
+                return False
+            await db.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            await db.execute("VACUUM")
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return True
+        except sqlite3.OperationalError as exc:
+            if self._busy(exc):
+                return False
+            raise
 
     async def stats(self):
         async with self._connect("output_stats") as db:
@@ -303,9 +367,7 @@ class OutputStore:
             state = await (
                 await db.execute("SELECT value FROM cache_state WHERE key='last_prune_at'")
             ).fetchone()
-            page_size = int((await (await db.execute("PRAGMA page_size")).fetchone())[0])
-            page_count = int((await (await db.execute("PRAGMA page_count")).fetchone())[0])
-            freelist = int((await (await db.execute("PRAGMA freelist_count")).fetchone())[0])
+            physical = await self._physical_stats(db)
         return {
             "used_bytes": int(totals[0]),
             "target_bytes": self.target_bytes,
@@ -314,15 +376,17 @@ class OutputStore:
             "max_lines": self.max_rows,
             "retained_commands": int(totals[2]),
             "truncated_commands": int(totals[3]),
-            "allocated_bytes": page_size * page_count,
-            "live_page_bytes": page_size * max(0, page_count - freelist),
+            "allocated_bytes": physical["allocated_bytes"],
+            "live_page_bytes": physical["live_page_bytes"],
             "last_prune_at": state[0] if state else None,
         }
 
     async def prune(self, active_hashes: set[str] | None = None, *, force=False):
         active_hashes = active_hashes or set()
         stats = await self.stats()
-        if not force and stats["used_bytes"] <= self.max_bytes and stats["lines"] <= self.max_rows:
+        physical_pressure = stats["allocated_bytes"] > self.max_bytes
+        logical_pressure = stats["used_bytes"] > self.max_bytes or stats["lines"] > self.max_rows
+        if not force and not logical_pressure and not physical_pressure:
             return []
         used = stats["used_bytes"]
         lines = stats["lines"]
@@ -346,15 +410,14 @@ class OutputStore:
                 used -= int(stored_bytes)
                 lines -= int(stored_lines)
                 pruned.append(cmd_hash)
-            if pruned:
+            await db.commit()
+            compacted = await self._compact(db, force=force or physical_pressure)
+            if pruned or compacted:
                 stamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 await db.execute(
                     "INSERT INTO cache_state(key,value) VALUES('last_prune_at',?) "
                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (stamp,),
                 )
-            await db.commit()
-            if pruned:
-                await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                await db.execute("PRAGMA incremental_vacuum(4096)")
+                await db.commit()
         return pruned
