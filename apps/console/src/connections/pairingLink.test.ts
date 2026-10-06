@@ -83,6 +83,52 @@ test('rejects secret-bearing, malformed and oversized safe extension data', () =
   }))).toThrowError('invalid_pairing_link')
 })
 
+test('rejects security-sensitive unknown persisted keys fail-closed', () => {
+  for (const key of [
+    'api_key',
+    'access_key',
+    'credential',
+    'bearer',
+    'auth-secret',
+    'access_token_hint',
+  ]) {
+    expect(() => parseCanonicalPairingLink(pairingLink({
+      ...core,
+      profile: {
+        extensions: {
+          vendor: { [key]: 'must-not-persist' },
+        },
+      },
+    }))).toThrowError('invalid_pairing_link')
+  }
+
+  expect(parseCanonicalPairingLink(pairingLink({
+    ...core,
+    profile: {
+      extensions: {
+        vendor: { public_key_fingerprint: 'sha256:public-only' },
+      },
+    },
+  })).profile).toEqual({
+    extensions: {
+      vendor: { public_key_fingerprint: 'sha256:public-only' },
+    },
+  })
+})
+
+test('rejects prototype-control keys instead of assigning them into normalized objects', () => {
+  for (const key of ['__proto__', 'prototype', 'constructor']) {
+    expect(() => parseCanonicalPairingLink(pairingLink({
+      ...core,
+      profile: {
+        extensions: {
+          vendor: { [key]: { polluted: true } },
+        },
+      },
+    }))).toThrowError('invalid_pairing_link')
+  }
+})
+
 test('rejects encoded pairing fragments above the hard wire bound', () => {
   const oversized = PRODUCTION_CONSOLE_ORIGIN + '/connect#' + 'A'.repeat(8193)
   expect(() => parseCanonicalPairingLink(oversized)).toThrowError('invalid_pairing_link')

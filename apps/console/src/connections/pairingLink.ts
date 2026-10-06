@@ -70,25 +70,32 @@ function canonicalHttpsOrigin(value: unknown): string {
   return url.origin
 }
 
+const PROTOTYPE_CONTROL_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
+const SENSITIVE_PERSISTED_KEY_MARKERS = [
+  'secret',
+  'password',
+  'token',
+  'verifier',
+  'credential',
+  'bearer',
+  'apikey',
+  'accesskey',
+  'privatekey',
+  'signingkey',
+  'authorizationcode',
+  'authcode',
+  'assertion',
+  'nonce',
+  'challenge',
+  'cookie',
+  'sessionid',
+] as const
+
 function forbiddenPersistedKey(key: string): boolean {
-  const compact = key.toLowerCase().replace(/[^a-z0-9]/g, '')
-  return [
-    'secret',
-    'password',
-    'token',
-    'tokenhash',
-    'verifier',
-    'clientsecret',
-    'privatekey',
-    'signingkey',
-    'authorizationcode',
-    'authcode',
-    'assertion',
-    'nonce',
-    'challenge',
-    'cookie',
-    'sessionid',
-  ].some((term) => compact === term || compact.endsWith(term))
+  const lowered = key.toLowerCase()
+  if (PROTOTYPE_CONTROL_KEYS.has(lowered)) return true
+  const compact = lowered.replace(/[^a-z0-9]/g, '')
+  return SENSITIVE_PERSISTED_KEY_MARKERS.some((marker) => compact.includes(marker))
 }
 
 function normalizeSafeJson(value: unknown, depth: number): SafeJsonValue {
@@ -110,7 +117,7 @@ function normalizeSafeJson(value: unknown, depth: number): SafeJsonValue {
 
   const entries = Object.entries(value as Record<string, unknown>)
   if (entries.length > MAX_OBJECT_MEMBERS) invalidPairingLink()
-  const normalized: Record<string, SafeJsonValue> = {}
+  const normalized = Object.create(null) as Record<string, SafeJsonValue>
   for (const [key, item] of entries) {
     if (
       !key

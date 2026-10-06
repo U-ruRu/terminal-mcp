@@ -409,6 +409,39 @@ test('round-trips safe pairing extensions across reload and rename without persi
     .toEqual(paired.profile.pairingProfile)
 })
 
+test('does not persist sensitive or prototype-control pairing extensions', async () => {
+  const storage = new MemoryStorage()
+  const fetcher = vi.fn()
+  const registry = new BrowserConnectionRegistry(storage, () => 5000, ids('unsafe'))
+
+  for (const extension of [
+    { api_key: 'must-not-persist' },
+    { access_key: 'must-not-persist' },
+    { credential: 'must-not-persist' },
+    { bearer: 'must-not-persist' },
+    { ['__proto__']: { polluted: true } },
+    { constructor: { polluted: true } },
+    { prototype: { polluted: true } },
+  ]) {
+    await expect(registry.pairAndAdd(
+      pairingLink(
+        'https://unsafe.example',
+        'Unsafe',
+        'unsafe-secret-value-123456789',
+        { profile: { extensions: { vendor: extension } } },
+      ),
+      'Browser',
+      undefined,
+      new PairingTransport(fetcher),
+      async () => 'public-key-material-that-is-long-enough',
+    )).rejects.toThrowError(new ConnectionRegistryError('invalid_pairing_link'))
+  }
+
+  expect(fetcher).not.toHaveBeenCalled()
+  expect(registry.list()).toEqual([])
+  expect(JSON.stringify([...storage.data.entries()])).not.toContain('must-not-persist')
+})
+
 test('rejects unsafe pairing extensions and unsupported major before exchange', async () => {
   const storage = new MemoryStorage()
   const fetcher = vi.fn()
