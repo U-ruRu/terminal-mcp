@@ -162,6 +162,48 @@ def _read_error(code: str, reason: str | None = None) -> dict:
     return result
 
 
+def _apply_message_surface_view(rows: list[dict], *, seen_at: str) -> None:
+    for item in rows:
+        mode_value = item.get("mode")
+        if "seen_count" in item:
+            item["seen_count"] = int(item.get("seen_count") or 0) + 1
+        if seen_at:
+            if "first_seen_at" in item:
+                item["first_seen_at"] = item.get("first_seen_at") or seen_at
+            if "last_seen_at" in item:
+                item["last_seen_at"] = seen_at
+        if mode_value == "notify":
+            item["state"] = "read"
+            if "acknowledged" in item:
+                item["acknowledged"] = True
+            if seen_at and "read_at" in item:
+                item["read_at"] = item.get("read_at") or seen_at
+        elif item.get("state") == "delivered":
+            item["state"] = "seen"
+
+
+def _preflight_message_inbox_result(
+    result: dict, *, sender: str, target: str | None, mode: str | None, require_reply: bool, alert: bool
+) -> dict | None:
+    """Validate the final post-surface envelope before durable inbox mutation."""
+    preview = dict(result)
+    preview_page = [dict(item) for item in result.get("messages") or []]
+    # Longer than runtime UTC text, so success here upper-bounds final size.
+    _apply_message_surface_view(preview_page, seen_at="0" * 64)
+    preview["messages"] = preview_page
+    encoded = message_result(
+        preview, sender=sender, text=None, target=target, message_hash=None, mode=mode,
+        require_reply=require_reply, alert=alert, show_all=False,
+    )
+    structured = encoded.structuredContent or {}
+    if structured.get("ok") is False:
+        return _read_error(
+            str(structured.get("code") or "output_item_too_large"),
+            "final message page cannot be returned within the public response budget",
+        )
+    return None
+
+
 def _task_summary(item: dict) -> dict:
     owner = item.get("owner")
     owner_name = owner.get("agent_name") if isinstance(owner, dict) else owner
@@ -1296,7 +1338,19 @@ def build_mcp(
         has_more = consumed < len(candidate) or len(raw) > consumed
         next_cursor = encode_cursor(offset + consumed, scope) if has_more else None
 
+        result["messages"] = page
+        result.pop("inbox", None)
+        result["history"] = bool(history)
+        result["next_cursor"] = next_cursor
+        result.pop("show_all", None)
+
         if not history and page:
+            preflight_error = _preflight_message_inbox_result(
+                result, sender=sender, target=target, mode=mode,
+                require_reply=require_reply, alert=alert,
+            )
+            if preflight_error is not None:
+                return preflight_error
             refs = [
                 str(item.get("message_hash") or item.get("message_id") or "")
                 for item in page
@@ -1304,37 +1358,11 @@ def build_mcp(
             refs = [ref for ref in refs if ref]
             surface_page = getattr(backend, "surface_message_page", None)
             if refs and callable(surface_page):
-                surfaced = await surface_page(
-                    sender,
-                    access_code=code,
-                    message_hashes=refs,
-                )
+                surfaced = await surface_page(sender, access_code=code, message_hashes=refs)
                 if not surfaced.get("ok"):
                     return surfaced
-                seen_at = str(surfaced.get("seen_at") or "")
-                for item in page:
-                    mode_value = item.get("mode")
-                    if "seen_count" in item:
-                        item["seen_count"] = int(item.get("seen_count") or 0) + 1
-                    if seen_at:
-                        if "first_seen_at" in item:
-                            item["first_seen_at"] = item.get("first_seen_at") or seen_at
-                        if "last_seen_at" in item:
-                            item["last_seen_at"] = seen_at
-                    if mode_value == "notify":
-                        item["state"] = "read"
-                        if "acknowledged" in item:
-                            item["acknowledged"] = True
-                        if seen_at and "read_at" in item:
-                            item["read_at"] = item.get("read_at") or seen_at
-                    elif item.get("state") == "delivered":
-                        item["state"] = "seen"
+                _apply_message_surface_view(page, seen_at=str(surfaced.get("seen_at") or ""))
 
-        result["messages"] = page
-        result.pop("inbox", None)
-        result["history"] = bool(history)
-        result["next_cursor"] = next_cursor
-        result.pop("show_all", None)
         return result
 
     @mcp.tool(

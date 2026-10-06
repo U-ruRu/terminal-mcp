@@ -78,6 +78,11 @@ def json_size(value: Any) -> int:
     return len(_canonical(value))
 
 
+def mirrored_json_size(value: Any) -> int:
+    """Size after JSON is embedded in the legacy mirrored text channel."""
+    return json_size(_canonical(value).decode("utf-8"))
+
+
 def bounded_page(
     items: Iterable[dict[str, Any]],
     *,
@@ -93,7 +98,9 @@ def bounded_page(
     page: list[dict[str, Any]] = []
     used = 2
     for item in rows[offset : offset + max(1, min(int(limit), MAX_PAGE_LIMIT))]:
-        item_size = json_size(item) + 1
+        # Public structured data is mirrored as JSON text by MCP. Budget the
+        # larger mirrored representation so both copies stay inside the envelope.
+        item_size = mirrored_json_size(item) + 1
         if item_size > budget_bytes:
             if not page:
                 raise OutputItemTooLarge("one result item exceeds the response-size budget")
@@ -140,7 +147,7 @@ def _rendered_line_size(line: str) -> int:
     quotes, backslashes, and control characters at the final wire boundary.
     The larger representation bounds each copy within the existing page budget.
     """
-    return json_size(_canonical(line).decode("utf-8"))
+    return mirrored_json_size(line)
 
 
 def bound_rendered_lines(

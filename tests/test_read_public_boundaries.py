@@ -169,3 +169,44 @@ async def test_public_cmd_read_final_envelope_is_bounded_with_large_lines():
     assert result.structuredContent["next_cursor"] is not None
     assert len(result.structuredContent["lines"]) < 100
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+
+
+class _FinalEnvelopeMessageBackend:
+    def __init__(self):
+        self.surfaced = []
+
+    async def access_message(self, sender, **kwargs):
+        rows = [
+            {
+                "message_hash": f"m-{index:02d}", "sender": "Sender", "target": sender,
+                "mode": "notify", "state": "delivered", "text": "\\" * 512,
+                "created_at": "2026-10-06T00:00:00.000Z", "seen_count": 0,
+            }
+            for index in range(30)
+        ]
+        return {
+            "ok": True, "messages": rows[: kwargs.get("limit", 20)],
+            "oversized_meta": "x" * (READ_RESPONSE_BUDGET_BYTES * 2),
+        }
+
+    async def surface_message_page(self, sender, *, access_code=None, message_hashes):
+        self.surfaced.extend(message_hashes)
+        return {"ok": True, "seen_at": "2026-10-06T00:00:00.000Z"}
+
+
+class _FinalEnvelopeMessageService:
+    def __init__(self):
+        self.persistent = _FinalEnvelopeMessageBackend()
+
+
+@pytest.mark.asyncio
+async def test_message_final_envelope_failure_does_not_surface_inbox():
+    service = _FinalEnvelopeMessageService()
+    tools = {tool.name: tool for tool in build_mcp(service)._tool_manager.list_tools()}
+    result = await tools["message"].run(
+        {"sender": "Recipient", "limit": 100, "detail": "summary"}, convert_result=True
+    )
+    assert result.structuredContent["ok"] is False
+    assert result.structuredContent["code"] == "output_item_too_large"
+    assert service.persistent.surfaced == []
+    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
