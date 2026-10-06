@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     WithJsonSchema,
     field_validator,
     model_validator,
@@ -18,14 +19,44 @@ from terminal_mcp.api_models import (
     TaskPriority,
     TaskState,
 )
+from terminal_mcp.application.input_limits import (
+    MAX_SQLITE_INTEGER,
+    TASK_CHECKPOINT_MAX_BYTES,
+    TASK_RESOURCE_CONTEXT_MAX_BYTES,
+    TASK_RESULT_MAX_BYTES,
+    TASK_RESULT_TEXT_MAX_CHARS,
+    TASK_REVIEW_EVIDENCE_MAX_BYTES,
+    require_serialized_json_limit,
+)
 
 AccessCode = Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
 Namespace = Annotated[str, Field(min_length=1, max_length=120)]
 TaskId = Annotated[str, Field(min_length=1, max_length=120)]
 TaskRef = Annotated[str, Field(min_length=1, max_length=512)]
 Tag = Annotated[str, Field(min_length=1, max_length=64)]
-ExpectedRevision = Annotated[int, Field(ge=1)]
-ResultValue = str | dict[str, object] | list[object]
+ExpectedRevision = Annotated[int, Field(ge=1, le=MAX_SQLITE_INTEGER)]
+ResultText = Annotated[str, Field(max_length=TASK_RESULT_TEXT_MAX_CHARS)]
+ResultValue = Annotated[
+    ResultText | dict[str, object] | list[object],
+    WithJsonSchema(
+        {
+            "oneOf": [
+                {"type": "string", "maxLength": TASK_RESULT_TEXT_MAX_CHARS},
+                {"type": "object"},
+                {"type": "array"},
+            ],
+            "x-maxSerializedBytes": TASK_RESULT_MAX_BYTES,
+        }
+    ),
+]
+ResourceContext = Annotated[
+    dict[str, object],
+    WithJsonSchema({"type": "object", "x-maxSerializedBytes": TASK_RESOURCE_CONTEXT_MAX_BYTES}),
+]
+ReviewEvidence = Annotated[
+    dict[str, object],
+    WithJsonSchema({"type": "object", "x-maxSerializedBytes": TASK_REVIEW_EVIDENCE_MAX_BYTES}),
+]
 CheckpointText = Annotated[str, Field(max_length=4000)]
 CheckpointValue = Annotated[
     CheckpointText | dict[str, object] | list[object],
@@ -35,7 +66,8 @@ CheckpointValue = Annotated[
                 {"type": "string", "maxLength": 4000},
                 {"type": "object"},
                 {"type": "array"},
-            ]
+            ],
+            "x-maxSerializedBytes": TASK_CHECKPOINT_MAX_BYTES,
         }
     ),
 ]
@@ -46,6 +78,23 @@ Tags = Annotated[list[Tag], Field(max_length=50)]
 
 class StrictTaskModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    @field_validator(
+        "resource_context", "checkpoint", "result", "evidence", mode="after", check_fields=False
+    )
+    @classmethod
+    def bounded_extension_json(cls, value: object, info: ValidationInfo):
+        if value is None:
+            return value
+        limits = {
+            "resource_context": TASK_RESOURCE_CONTEXT_MAX_BYTES,
+            "checkpoint": TASK_CHECKPOINT_MAX_BYTES,
+            "result": TASK_RESULT_MAX_BYTES,
+            "evidence": TASK_REVIEW_EVIDENCE_MAX_BYTES,
+        }
+        return require_serialized_json_limit(
+            value, field=info.field_name, limit=limits[info.field_name]
+        )
 
 
 class TaskDependency(StrictTaskModel):
@@ -94,7 +143,7 @@ class TaskCreateRequest(StrictTaskModel):
     state: TaskState = "ready"
     description: Annotated[str, Field(max_length=8000)] | None = None
     next_action: Annotated[str, Field(max_length=2000)] | None = None
-    resource_context: dict[str, object] | None = None
+    resource_context: ResourceContext | None = None
     cooperative: bool = False
     checkpoint: CheckpointValue | None = None
     candidate_ref: Annotated[str, Field(max_length=200)] | None = None
@@ -139,7 +188,7 @@ class TaskUpdateRequest(TaskRevisionRequest):
     state: TaskState | None = None
     description: Annotated[str, Field(max_length=8000)] | None = None
     next_action: Annotated[str, Field(max_length=2000)] | None = None
-    resource_context: dict[str, object] | None = None
+    resource_context: ResourceContext | None = None
     cooperative: bool | None = None
     candidate_ref: Annotated[str, Field(max_length=200)] | None = None
     input_refs: InputRefs | None = None
@@ -250,7 +299,7 @@ class TaskReviewRequest(TaskRevisionRequest):
         Field(min_length=1, max_length=3, json_schema_extra={"uniqueItems": True}),
     ]
     verdict: ReviewVerdict
-    evidence: dict[str, object] | None = None
+    evidence: ReviewEvidence | None = None
 
     @field_validator("dimensions")
     @classmethod

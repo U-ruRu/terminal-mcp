@@ -11,6 +11,15 @@ from pydantic import Field
 from terminal_mcp.adapters.actor import actor_for
 from terminal_mcp.api_models import TaskLane, TaskOperationalStatus, TaskState
 from terminal_mcp.application import get_application
+from terminal_mcp.application.input_limits import (
+    MAX_HASH_CHARS,
+    MAX_IDENTIFIER_CHARS,
+    MAX_MESSAGE_TEXT_CHARS,
+    MAX_OPAQUE_CURSOR_CHARS,
+    MAX_PUBLIC_NAME_CHARS,
+    MAX_TAG_CHARS,
+    MAX_TAG_ITEMS,
+)
 from terminal_mcp.application.projections import (
     _finish_cmd_read_page as _finish_cmd_read_page,
 )
@@ -190,17 +199,22 @@ def build_mcp(
     )
     async def access_observe_tool(
         subject: Literal["sessions", "tasks", "namespaces"] = "sessions",
-        namespace: str | None = None,
-        task_id: str | None = None,
+        namespace: Annotated[
+            str | None, Field(min_length=1, max_length=MAX_IDENTIFIER_CHARS)
+        ] = None,
+        task_id: Annotated[str | None, Field(min_length=1, max_length=MAX_IDENTIFIER_CHARS)] = None,
         lane: TaskLane | None = None,
         state: TaskState | None = None,
         operational_status: TaskOperationalStatus | None = None,
-        tags: list[str] | None = None,
+        tags: Annotated[
+            list[Annotated[str, Field(min_length=1, max_length=MAX_TAG_CHARS)]] | None,
+            Field(max_length=MAX_TAG_ITEMS),
+        ] = None,
         detail: Literal["summary", "full"] = "summary",
         show_done: bool = False,
         show_archived: bool = False,
         limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
-        cursor: str | None = None,
+        cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None,
     ) -> dict:
         return await application.observe(
             actor_for(service, transport="mcp"),
@@ -231,22 +245,24 @@ def build_mcp(
         ),
     )
     async def access_message_tool(
-        sender: str,
+        sender: Annotated[str, Field(min_length=1, max_length=MAX_PUBLIC_NAME_CHARS)],
         code: Annotated[
             str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")
         ] = None,
-        text: str | None = None,
-        target: str | None = None,
-        message_hash: str | None = None,
+        text: Annotated[str | None, Field(max_length=MAX_MESSAGE_TEXT_CHARS)] = None,
+        target: Annotated[str | None, Field(min_length=1, max_length=MAX_PUBLIC_NAME_CHARS)] = None,
+        message_hash: Annotated[str | None, Field(min_length=1, max_length=MAX_HASH_CHARS)] = None,
         mode: Literal["notify", "ack", "alert"] | None = None,
         require_reply: bool = False,
         alert: bool = False,
         history: bool = False,
         limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
-        cursor: str | None = None,
+        cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None,
         detail: Literal["summary", "full"] = "summary",
-        namespace: str | None = None,
-        task_id: str | None = None,
+        namespace: Annotated[
+            str | None, Field(min_length=1, max_length=MAX_IDENTIFIER_CHARS)
+        ] = None,
+        task_id: Annotated[str | None, Field(min_length=1, max_length=MAX_IDENTIFIER_CHARS)] = None,
     ) -> dict:
         return await application.message(
             actor_for(service, transport="mcp"),
