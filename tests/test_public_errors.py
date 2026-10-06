@@ -336,6 +336,13 @@ def test_read_named_operation_requires_actual_retry_safety(operation):
         "missing_parent_candidate",
         "candidate_conflict",
         "persistent_auth_required",
+        "persistent_scope_required",
+        "policy_update_empty",
+        "policy_invalid_rearm",
+        "policy_invalid_duration",
+        "policy_invalid_warning",
+        "policy_invalid_alert",
+        "policy_persist_failed",
         "access_policy_revision_conflict",
         "topology_revision_conflict",
         "control_authority_unavailable",
@@ -370,6 +377,8 @@ def test_public_source_error_codes_have_explicit_catalog_policy():
     constructors = {
         "PersistentStoreError",
         "PersistentLifecycleError",
+        "PersistentAdmissionError",
+        "PersistentPolicyError",
         "TaskRelationConflict",
         "FleetControlError",
         "MeshApplicationError",
@@ -379,7 +388,8 @@ def test_public_source_error_codes_have_explicit_catalog_policy():
     }
     found = {}
     for path in source.rglob("*.py"):
-        if path.name == "public_errors.py" or "auth" in path.relative_to(source).parts:
+        relative = path.relative_to(source)
+        if path.name == "public_errors.py" or relative.as_posix() == "auth/routes.py":
             continue
         for node in ast.walk(ast.parse(path.read_text())):
             values = []
@@ -403,6 +413,17 @@ def test_public_source_error_codes_have_explicit_catalog_policy():
                     found.setdefault(value.value, []).append(
                         f"{path.relative_to(source)}:{node.lineno}"
                     )
-    assert {"session_not_found", "wrong_authority", "idempotency_conflict"} <= found.keys()
+    assert {
+        "session_not_found",
+        "wrong_authority",
+        "idempotency_conflict",
+        "persistent_scope_required",
+        "policy_update_empty",
+        "policy_invalid_rearm",
+        "policy_invalid_duration",
+        "policy_invalid_warning",
+        "policy_invalid_alert",
+        "policy_persist_failed",
+    } <= found.keys()
     missing = {code: origins for code, origins in found.items() if code not in ERROR_SPECS}
     assert not missing, f"New public codes need explicit bounded message/retry policy: {missing}"
