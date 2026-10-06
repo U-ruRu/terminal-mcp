@@ -101,7 +101,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             internal_error operation_failed run_failed recovery_failed execution_failed
             access_registration_failed access_retire_failed
             access_rotation_failed access_update_failed
-            fleet_control_invalid_header fleet_control_main_is_wal
+            fleet_control_invalid_header fleet_control_main_is_wal execution_internal_error
         """,
         ),
     )
@@ -112,7 +112,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "validation",
             "repair",
             """
-            invalid_message invalid_task_context review_task_required
+            invalid_message invalid_task_context review_task_required execution_argument_invalid
             control_mutation_invalid control_operation_invalid control_snapshot_invalid
             invalid_transfer_transition managed_snapshot_required
             managed_snapshot_revision_invalid mesh_id_required
@@ -157,6 +157,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "retry",
             """
             idempotency_in_progress route_unavailable control_authority_unavailable
+            execution_request_timeout
         """,
         ),
         (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import asynccontextmanager
 
@@ -180,8 +181,21 @@ async def open_observed_connection(
     execution_outcome: str | None = None,
     durable_finalization_outcome: str | None = None,
 ):
+    connect_task = asyncio.ensure_future(connect(path, timeout=busy_timeout))
     try:
-        raw = await connect(path, timeout=busy_timeout)
+        raw = await asyncio.shield(connect_task)
+    except asyncio.CancelledError:
+        # aiosqlite starts its worker thread before awaiting the initial connection.
+        # If the caller is cancelled in that window, let the connect finish and close
+        # it on the still-live loop before propagating cancellation; otherwise the
+        # worker may report back after event-loop teardown.
+        try:
+            raw = await connect_task
+        except BaseException:
+            pass
+        else:
+            await raw.close()
+        raise
     except sqlite3.Error as exc:
         diagnostics.record(
             exc,
@@ -207,11 +221,12 @@ async def open_observed_connection(
     try:
         for pragma in pragmas:
             await db.execute(pragma)
-    except sqlite3.Error as exc:
-        translated = diagnostics.translate_busy(exc, operation, busy_timeout)
+    except BaseException as exc:
         await db.close()
-        if translated:
-            raise translated from exc
+        if isinstance(exc, sqlite3.Error):
+            translated = diagnostics.translate_busy(exc, operation, busy_timeout)
+            if translated:
+                raise translated from exc
         raise
     return db
 
