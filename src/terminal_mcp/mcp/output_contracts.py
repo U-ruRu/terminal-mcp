@@ -11,6 +11,72 @@ from terminal_mcp.core.read_contract import (
     CALL_TOOL_RESULT_BUDGET_BYTES,
     READ_RESPONSE_BUDGET_BYTES,
 )
+from terminal_mcp.core.task_projections import (
+    Cursor as Cursor,
+)
+from terminal_mcp.core.task_projections import (
+    JsonPayload as JsonPayload,
+)
+from terminal_mcp.core.task_projections import (
+    Namespace as Namespace,
+)
+from terminal_mcp.core.task_projections import (
+    TaskCheckpointSnapshot as TaskCheckpointSnapshot,
+)
+from terminal_mcp.core.task_projections import (
+    TaskClaim as TaskClaim,
+)
+from terminal_mcp.core.task_projections import (
+    TaskDependency as TaskDependency,
+)
+from terminal_mcp.core.task_projections import (
+    TaskEvent as TaskEvent,
+)
+from terminal_mcp.core.task_projections import (
+    TaskId as TaskId,
+)
+from terminal_mcp.core.task_projections import (
+    TaskLane as TaskLane,
+)
+from terminal_mcp.core.task_projections import (
+    TaskListItem as TaskListItem,
+)
+from terminal_mcp.core.task_projections import (
+    TaskListSummary as TaskListSummary,
+)
+from terminal_mcp.core.task_projections import (
+    TaskOperationalStatus as TaskOperationalStatus,
+)
+from terminal_mcp.core.task_projections import (
+    TaskOutputState as TaskOutputState,
+)
+from terminal_mcp.core.task_projections import (
+    TaskPriority as TaskPriority,
+)
+from terminal_mcp.core.task_projections import (
+    TaskRecommendation as TaskRecommendation,
+)
+from terminal_mcp.core.task_projections import (
+    TaskRecord as TaskRecord,
+)
+from terminal_mcp.core.task_projections import (
+    TaskRelation as TaskRelation,
+)
+from terminal_mcp.core.task_projections import (
+    TaskResourceContext as TaskResourceContext,
+)
+from terminal_mcp.core.task_projections import (
+    TaskReview as TaskReview,
+)
+from terminal_mcp.core.task_projections import (
+    TaskSnapshot as TaskSnapshot,
+)
+from terminal_mcp.core.task_projections import (
+    TaskState as TaskState,
+)
+from terminal_mcp.core.task_projections import (
+    WorkflowWarning as WorkflowWarning,
+)
 
 
 class _Strict(BaseModel):
@@ -19,14 +85,6 @@ class _Strict(BaseModel):
 
 class AccessCode(RootModel[str]):
     root: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
-
-
-class TaskId(RootModel[str]):
-    root: Annotated[str, Field(min_length=1)]
-
-
-class Namespace(RootModel[str]):
-    root: Annotated[str, Field(min_length=1)]
 
 
 class CommandId(RootModel[str]):
@@ -41,10 +99,6 @@ class ContextId(RootModel[int]):
     root: Annotated[int, Field(ge=1)]
 
 
-class Cursor(RootModel[str]):
-    root: str
-
-
 class SessionMode(StrEnum):
     persistent = "persistent"
     legacy = "legacy"
@@ -55,37 +109,6 @@ class SessionState(StrEnum):
     active = "active"
     stopping = "stopping"
     interrupted = "interrupted"
-
-
-class TaskState(StrEnum):
-    ready = "ready"
-    in_progress = "in_progress"
-    blocked = "blocked"
-    deferred = "deferred"
-    done = "done"
-
-
-class TaskOperationalStatus(StrEnum):
-    ready = "ready"
-    in_progress = "in_progress"
-    blocked = "blocked"
-    deferred = "deferred"
-    done = "done"
-
-
-class TaskLane(StrEnum):
-    implementation = "implementation"
-    review = "review"
-    release = "release"
-    integration = "integration"
-    general = "general"
-
-
-class TaskPriority(StrEnum):
-    P0 = "P0"
-    P1 = "P1"
-    P2 = "P2"
-    P3 = "P3"
 
 
 class CommandStatus(StrEnum):
@@ -109,64 +132,6 @@ class MessageState(StrEnum):
     read = "read"
     acknowledged = "acknowledged"
     replied = "replied"
-
-
-class JsonPayload(_Strict):
-    """Explicit extension boundary for backend/domain JSON payloads."""
-
-    serialized: str
-
-
-class TaskResourceContext(_Strict):
-    repo: str | None = None
-    path: str | None = None
-    scope: str | None = None
-
-
-class TaskDependency(_Strict):
-    namespace: Namespace
-    task_id: TaskId
-    state: TaskState | Literal["missing"]
-    archived: bool
-    satisfied: bool
-
-
-class TaskRelation(_Strict):
-    direction: Literal["incoming", "outgoing"]
-    kind: str
-    namespace: Namespace
-    task_id: TaskId
-    created_at: str
-    created_by: str
-
-
-class TaskOutputState(_Strict):
-    output_state_id: int
-    output_refs: list[str] = Field(default_factory=list)
-    created_at: str
-
-
-class TaskEvent(_Strict):
-    id: int
-    event_type: str
-    payload: JsonPayload
-    created_at: str
-    logical_agent_id: str | None = None
-    work_session_id: str | None = None
-    session_epoch: int | None = None
-    agent_name: str | None = None
-
-
-class TaskReview(_Strict):
-    output_state_id: int | None = None
-    output_refs: list[str] = Field(default_factory=list)
-    dimension: Literal["A", "C", "R"]
-    verdict: Literal["NON_BLOCKING", "BLOCKING"]
-    evidence: JsonPayload
-    warnings: JsonPayload
-    reviewed_at: str
-    reviewer: str | None = None
-    agent_name: str | None = None
 
 
 class AccessError(_Strict):
@@ -245,127 +210,6 @@ class SessionSummary(_Strict):
     session_epoch: int | None = None
     session_state: SessionState | None = None
     hard_expires_at: str | None = None
-
-
-class TaskClaim(_Strict):
-    agent_name: str
-    claimed_at: str
-    claim_age_seconds: int
-    claim_intent: str
-    role: Literal["owner", "participant"]
-
-
-class TaskCheckpointSnapshot(_Strict):
-    text: Annotated[str, Field(max_length=4000)]
-    author: str
-    created_at: str
-    revision: Annotated[int, Field(ge=1)]
-
-
-class TaskListItem(_Strict):
-    namespace: Namespace
-    task_id: TaskId
-    title: str
-    lane: TaskLane
-    priority: TaskPriority
-    state: TaskState
-    operational_status: TaskOperationalStatus
-    revision: int
-    claimed_by: str | None
-    blocking_count: Annotated[int, Field(ge=0)]
-    has_checkpoint: bool
-
-
-class TaskSnapshot(_Strict):
-    namespace: Namespace
-    task_id: TaskId
-    title: str
-    lane: TaskLane
-    priority: TaskPriority
-    state: TaskState
-    operational_status: TaskOperationalStatus
-    revision: int
-    claim: TaskClaim | None
-    next_action: str
-    description_preview: Annotated[str, Field(max_length=1500)]
-    description_truncated: bool
-    latest_checkpoint: TaskCheckpointSnapshot | None
-    blocking_dependencies: list[TaskDependency] = Field(default_factory=list)
-
-
-class WorkflowWarning(_Strict):
-    code: str
-    severity: str = "warning"
-    message: str
-    task_id: str | None = None
-    context: JsonPayload | None = None
-
-
-class TaskRecord(_Strict):
-    namespace: Namespace
-    task_id: TaskId
-    title: str
-    lane: TaskLane
-    priority: TaskPriority
-    state: TaskState
-    operational_status: TaskOperationalStatus
-    revision: int
-    next_action: str = ""
-    cooperative: bool = False
-    checkpoint: str | JsonPayload | None = None
-    candidate_ref: str | None = None
-    result: str | JsonPayload | None = None
-    tags: list[str] = Field(default_factory=list)
-    isolation_hint: str = "none"
-    input_refs: list[str] = Field(default_factory=list)
-    output_refs: list[str] = Field(default_factory=list)
-    output_state_id: int | None = None
-    output_states: list[TaskOutputState] | None = None
-    review_requirements: list[Literal["A", "C", "R"]] = Field(default_factory=list)
-    claims: list[TaskClaim] = Field(default_factory=list)
-    owner: TaskClaim | str | None = None
-    participants: list[TaskClaim] = Field(default_factory=list)
-    active: bool = False
-    blocking_dependencies: list[TaskDependency] = Field(default_factory=list)
-    state_changed_at: str | None = None
-    ready_since: str | None = None
-    archived_at: str | None = None
-    archive_note: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
-    description: str | None = None
-    resource_context: TaskResourceContext | None = None
-    dependencies: list[TaskDependency] | None = None
-    relations: list[TaskRelation] | None = None
-    comments: list[TaskEvent] | None = None
-    reviews: list[TaskReview] | None = None
-    events: list[TaskEvent] | None = None
-
-
-class TaskRecommendation(_Strict):
-    namespace: Namespace
-    task_id: TaskId
-    title: str
-    lane: TaskLane
-    priority: TaskPriority
-    state: TaskState
-    operational_status: TaskOperationalStatus
-    tags: list[str] = Field(default_factory=list)
-    ready_since: str | None = None
-
-
-class TaskListSummary(_Strict):
-    visible: int | None = None
-    returned: int | None = None
-    by_lane: dict[str, int] | None = None
-    by_state: dict[str, int] | None = None
-    by_operational_status: dict[str, int] | None = None
-    pressure: dict[str, int] | None = None
-    tag_counts: dict[str, int] | None = None
-    claimable_count: int | None = None
-    oldest_claimable_ready_since: str | None = None
-    oldest_claimable_ready_age_seconds: int | None = None
-    missing_dependency_count: int | None = None
 
 
 class ObserveSessionsResult(_Strict):
