@@ -388,7 +388,9 @@ class ManagedSessionApplication:
             return False
         return not blockers
 
-    async def end(self, actor: ActorContext) -> dict:
+    async def end(self, actor: ActorContext, *, reason: str = "session_end") -> dict:
+        if reason not in {"session_end", "session_interrupt"}:
+            raise ManagedSessionError("invalid_request")
         grant = await self._authorize(actor, ManagedOperation.SESSION_END)
         with actor.bind():
             try:
@@ -409,9 +411,10 @@ class ManagedSessionApplication:
                     session.work_session_id,
                     session.session_epoch,
                     principal_id=grant.principal_id,
+                    reason=reason,
                     now=self.clock(),
                 )
-                if not await self._drain(session, session.end_reason or "session_end"):
+                if not await self._drain(session, session.end_reason or reason):
                     return {
                         "ok": True,
                         "session_state": "stopping",

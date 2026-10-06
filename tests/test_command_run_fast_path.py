@@ -195,7 +195,7 @@ async def test_implicit_queue_selection_remains_authoritative():
 
 
 class _Gate:
-    async def identity(self, actor, code):
+    async def identity(self, actor, code, operation=None):
         return {
             'logical_agent_id': 'logical-1',
             'work_session_id': 'ws-1',

@@ -45,7 +45,9 @@ class TerminalApplication:
         self.policy_controller = policy_controller
         self.unit_of_work = unit_of_work
         self.policy = CapabilityPolicy()
-        self.session_gate = SessionGate(service)
+        self.session_gate = SessionGate(
+            service, managed_identity=managed_identity, managed_sessions=managed_sessions
+        )
         options = {"auth_mode": auth_mode, "policy": self.policy, "unit_of_work": unit_of_work}
         self.sessions = SessionApplication(service, self.session_gate, **options)
         self.observations = ObservationApplication(service, self.session_gate, **options)

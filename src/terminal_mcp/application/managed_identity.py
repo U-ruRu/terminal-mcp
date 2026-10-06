@@ -27,6 +27,10 @@ from terminal_mcp.core.provider_identity import ProviderIdentity, ProviderIdenti
 class ManagedIdentityRepository(Protocol):
     async def resolve_provider(self, identity: ProviderIdentity) -> str | None: ...
 
+    async def bind_provider(
+        self, identity: ProviderIdentity, logical_agent_id: str, *, principal_id: str
+    ) -> str: ...
+
     async def get_slot(self, logical_agent_id: str) -> PersistentSlot | None: ...
 
 
@@ -124,6 +128,37 @@ class ManagedProviderResolver:
             and actor.authority_node_id != route.authority_node_id
         ):
             raise ManagedSessionError("authority_unavailable")
+        return actor.with_agent(logical_agent_id, route.authority_node_id)
+
+    async def bind_existing(
+        self,
+        actor: ActorContext,
+        provider: str,
+        metadata: Mapping[str, object],
+        logical_agent_id: str,
+    ) -> ActorContext:
+        """Bind provider evidence after a separate compatibility proof of slot access.
+
+        The caller must independently authenticate and prove access to the target
+        LogicalAgent (for example by resolving an existing persistent access code).
+        Provider metadata selects no permissions and cannot choose another slot.
+        """
+        admission = actor.admission()
+        if admission is None or not actor.principal_id:
+            raise ManagedSessionError("persistent_auth_required")
+        admission.require("terminal:execute")
+        if actor.provider is not None and actor.provider != provider:
+            raise ManagedSessionError("identity_mismatch")
+        identity = self.registry.resolve(provider, metadata)
+        if actor.logical_agent_id is not None and actor.logical_agent_id != logical_agent_id:
+            raise ManagedSessionError("identity_mismatch")
+        _slot, route = await self.router.resolve(logical_agent_id)
+        repository_node = getattr(self.repository, "authority_node_id", None)
+        if repository_node is not None and route.authority_node_id != repository_node:
+            raise ManagedSessionError("authority_unavailable")
+        await self.repository.bind_provider(
+            identity, logical_agent_id, principal_id=actor.principal_id
+        )
         return actor.with_agent(logical_agent_id, route.authority_node_id)
 
 

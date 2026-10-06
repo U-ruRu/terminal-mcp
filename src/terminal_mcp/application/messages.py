@@ -8,6 +8,7 @@ from pydantic import Field
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _read_error
+from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.read_contract import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -80,7 +81,18 @@ class MessagingApplication(ApplicationCapability):
                 offset = decode_cursor(cursor, scope)
             except InvalidCursor as exc:
                 return _read_error("invalid_cursor", str(exc))
-        resolution = await self.gate.resolve_message_actor(actor, sender, code)
+        operation = (
+            ManagedOperation.MESSAGE_READ
+            if is_read
+            else ManagedOperation.MESSAGE_REPLY
+            if text is not None and message_hash is not None
+            else ManagedOperation.MESSAGE_ACK
+            if message_hash is not None
+            else ManagedOperation.MESSAGE_SEND
+        )
+        resolution = await self.gate.resolve_message_actor(
+            actor, sender, code, operation
+        )
         if resolution.failure is not None:
             return resolution.failure
         result = await self.gate.message(

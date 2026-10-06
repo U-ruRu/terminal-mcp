@@ -4,6 +4,7 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _finish_cmd_read_page, _read_error
 from terminal_mcp.application.requests import CmdRequest
+from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.read_contract import (
     DEFAULT_CMD_READ_LINES,
     InvalidCursor,
@@ -31,7 +32,9 @@ class CommandApplication(ApplicationCapability):
                 agent_id=None,
             )
             return _finish_cmd_read_page(result, start=start, scope=scope)
-        identity, failure = await self.gate.identity(actor, request.code)
+        identity, failure = await self.gate.identity(
+            actor, request.code, ManagedOperation(f"command.{request.action}")
+        )
         if failure is not None:
             return failure
         backend = self.backend

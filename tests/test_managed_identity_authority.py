@@ -18,6 +18,7 @@ class Repository:
 
     def __init__(self):
         self.bound = "la_one"
+        self.bind_calls = []
         self.slot = PersistentSlot(
             logical_agent_id="la_one",
             display_name="Stable-Agent",
@@ -33,6 +34,13 @@ class Repository:
 
     async def resolve_provider(self, identity):
         return self.bound if identity.provider == "openai" else None
+
+    async def bind_provider(self, identity, logical_agent_id, *, principal_id):
+        self.bind_calls.append((identity, logical_agent_id, principal_id))
+        if self.bound not in {None, logical_agent_id}:
+            raise ManagedSessionError("identity_binding_conflict")
+        self.bound = logical_agent_id
+        return logical_agent_id
 
     async def get_slot(self, logical_agent_id):
         return self.slot if logical_agent_id == self.slot.logical_agent_id else None
@@ -126,6 +134,39 @@ async def test_provider_resolution_requires_existing_binding_and_current_fleet_r
     with pytest.raises(ManagedSessionError, match="authority_unavailable"):
         await ManagedProviderResolver(repository, routes=routes).resolve(
             actor(), "openai", metadata()
+        )
+
+
+@pytest.mark.asyncio
+async def test_provider_binding_requires_independent_authenticated_slot_proof():
+    repository = Repository()
+    repository.bound = None
+    resolver = ManagedProviderResolver(repository, routes=Routes())
+
+    with pytest.raises(ManagedSessionError, match="persistent_auth_required"):
+        await resolver.bind_existing(
+            ActorContext(provider="openai"), "openai", metadata(), "la_one"
+        )
+    assert repository.bind_calls == []
+
+    resolved = await resolver.bind_existing(actor(), "openai", metadata(), "la_one")
+    assert resolved.logical_agent_id == "la_one"
+    assert resolved.authority_node_id == "home"
+    assert repository.bind_calls[0][1:] == ("la_one", "usr_one")
+
+
+@pytest.mark.asyncio
+async def test_binding_provider_does_not_grant_managed_operation_authorization():
+    repository = Repository()
+    repository.bound = None
+    resolver = ManagedProviderResolver(repository, routes=Routes())
+    resolved = await resolver.bind_existing(actor(), "openai", metadata(), "la_one")
+
+    authority = Authority()
+    authority.grants = []
+    with pytest.raises(ManagedSessionError, match="access_denied"):
+        await ManagedGrantAuthorizer(repository, authority, routes=Routes()).authorize(
+            resolved, "la_one", ManagedOperation.COMMAND_RUN
         )
 
 
