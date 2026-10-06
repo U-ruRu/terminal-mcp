@@ -20,7 +20,7 @@ async def stores(tmp_path):
 async def test_v15_persistent_slot_schema_and_repository_round_trip(tmp_path):
     repo, persistent, _ = await stores(tmp_path)
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 20
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
         "logical_agents",
@@ -163,7 +163,7 @@ async def test_session_provenance_round_trips_without_changing_legacy_shapes(tmp
 async def test_schema_forward_guard_refuses_newer_database(tmp_path):
     database = tmp_path / "future.sqlite3"
     with sqlite3.connect(database) as db:
-        db.execute("PRAGMA user_version=20")
+        db.execute("PRAGMA user_version=21")
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     with pytest.raises(RuntimeError, match="newer than supported"):
         await repo.initialize()

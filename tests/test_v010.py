@@ -767,7 +767,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 20
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(
@@ -835,8 +835,12 @@ def test_mcp_schema_has_unified_task_contract():
         "done",
         "archive",
         "review",
+        "namespace_create",
+        "namespace_update",
+        "namespace_archive",
+        "namespace_restore",
     }
-    assert len(request["oneOf"]) == 12
+    assert len(request["oneOf"]) == 16
     assert "payload" not in task["properties"]
     claim = task["$defs"]["TaskClaimRequest"]
     assert claim["properties"]["code"]["minLength"] == 4

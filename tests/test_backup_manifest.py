@@ -52,7 +52,7 @@ def _settings(tmp_path: Path) -> Settings:
 
 
 def _complete_source(settings: Settings, *, fleet=False):
-    _sqlite(settings.database_path, 19)
+    _sqlite(settings.database_path, 20)
     _sqlite(settings.auth_database_path, 3)
     AccessVerifierKeyStore(access_verifier_key_path(settings.auth_database_path)).load_or_create(
         allow_create=True
@@ -113,7 +113,7 @@ def test_validation_accepts_complete_standalone_state_and_optional_runtime_confi
     result = validate_authoritative_backup_source(settings)
     rows = {item["member_id"]: item for item in result["validated"]}
 
-    assert rows["runtime_database"]["user_version"] == 19
+    assert rows["runtime_database"]["user_version"] == 20
     assert rows["auth_database"]["user_version"] == 3
     assert rows["access_verifier_key"]["mode"] == "0600"
     assert "runtime_config" not in rows

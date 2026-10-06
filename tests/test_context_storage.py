@@ -16,7 +16,7 @@ async def store(tmp_path):
 async def test_context_schema_and_crud_are_durable(tmp_path):
     repo, context = await store(tmp_path)
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 20
         columns = {row[1] for row in db.execute("PRAGMA table_info(instance_context)")}
     assert {"id", "summary", "content", "is_primary"} <= columns
 
@@ -88,7 +88,7 @@ async def test_existing_v10_database_migrates_to_context_schema(tmp_path):
     created = await context.create("Migrated", "Context survives v10 migration.", True)
     assert created["id"] == 1
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 20
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -111,3 +111,32 @@ async def test_namespace_context_is_isolated_and_seen_per_work_session(tmp_path)
     await context.mark_namespace_seen("ws-1", "alpha", seen_at="2026-10-06T00:00:00.000Z")
     assert await context.namespace_seen("ws-1", "alpha") is True
     assert await context.namespace_seen("ws-1", "beta") is False
+
+
+@pytest.mark.asyncio
+async def test_v19_database_migrates_namespace_context_schema_to_v20(tmp_path):
+    database = tmp_path / "legacy-v19.sqlite3"
+    repo = SqliteRepository(database, tmp_path / "output.sqlite3")
+    await repo.initialize()
+    context = ContextStore(repo.path)
+    global_entry = await context.create("Existing", "Preserve me.", True)
+
+    with sqlite3.connect(database) as db:
+        db.execute("DROP TABLE work_session_namespace_context_seen")
+        db.execute("DROP TABLE work_namespaces")
+        db.execute("DROP INDEX ix_instance_context_namespace")
+        db.execute("ALTER TABLE instance_context DROP COLUMN namespace")
+        db.execute("PRAGMA user_version=19")
+        db.commit()
+
+    reopened = SqliteRepository(database, tmp_path / "output.sqlite3")
+    await reopened.initialize()
+    migrated = ContextStore(reopened.path)
+    assert await migrated.get(global_entry["id"]) == global_entry
+    with sqlite3.connect(database) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 20
+        columns = {row[1] for row in db.execute("PRAGMA table_info(instance_context)")}
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "namespace" in columns
+    assert "work_namespaces" in tables
+    assert "work_session_namespace_context_seen" in tables

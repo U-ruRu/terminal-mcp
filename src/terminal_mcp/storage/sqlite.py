@@ -23,7 +23,7 @@ from terminal_mcp.storage.output import (
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -184,8 +184,6 @@ class SqliteRepository:
                     is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
                     namespace TEXT
                 );
-                CREATE INDEX IF NOT EXISTS ix_instance_context_namespace
-                    ON instance_context(namespace,is_primary DESC,id);
                 CREATE TABLE IF NOT EXISTS work_namespaces(
                     namespace TEXT PRIMARY KEY,
                     priority INTEGER NOT NULL DEFAULT 1 CHECK(priority BETWEEN 0 AND 3),
@@ -1844,8 +1842,7 @@ class SqliteRepository:
             return
         marks = ",".join("?" for _ in hashes)
         await db.execute(
-            f"UPDATE commands SET cmd=? WHERE hash IN ({marks}) "
-            "AND status IN (?,?,?) AND cmd<>?",
+            f"UPDATE commands SET cmd=? WHERE hash IN ({marks}) AND status IN (?,?,?) AND cmd<>?",
             (_SCRUBBED_COMMAND_BODY, *hashes, *terminal, _SCRUBBED_COMMAND_BODY),
         )
 

@@ -18,7 +18,7 @@ async def test_task_schema_create_list_and_json_round_trip(tmp_path):
     with sqlite3.connect(repo.path) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == 19
+    assert version == 20
     assert {
         "work_namespaces",
         "work_items",
@@ -234,7 +234,7 @@ async def test_schema_v8_migrates_existing_task_state_constraint_without_losing_
     legacy = await tasks.get_task("project", "LEGACY-1")
     assert legacy["isolation_hint"] == "none"
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 20
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         claim = db.execute(
             "SELECT agent_id,owner_kind,owner_id FROM work_claims "
@@ -337,7 +337,7 @@ async def test_schema_v18_preserves_pre_cutover_claimed_ready_as_in_progress(tmp
                 "FROM work_items WHERE namespace='ns' ORDER BY task_id"
             )
         }
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 20
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert rows["CLAIMED"] == ("in_progress", "2026-01-01T01:00:00Z", None)
