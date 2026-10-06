@@ -18,7 +18,7 @@ from terminal_mcp.core.managed_sessions import (
     ManagedSessionError,
     decide_session_operation,
 )
-from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.core.orchestration import parse_utc, utc_text
 from terminal_mcp.core.persistent_admission import PersistentAdmissionError
 from terminal_mcp.core.persistent_execution import PersistentExecutionFence
 from terminal_mcp.core.work_windows import (
@@ -490,3 +490,31 @@ async def test_operator_can_end_current_managed_session_without_impersonating_pr
     ended = await env.store.get_work_session(started.snapshot.session.work_session_id)
     assert ended.state == "ended"
     assert ended.end_reason == "operator_end"
+
+async def test_explicit_managed_start_adopts_active_legacy_session_without_resetting_budget(env):
+    _slot, legacy = await env.store.start_session(
+        selector="ABCD",
+        work_session_id="legacy-session",
+        expected_revision=1,
+        principal_id="principal-a",
+        auth_generation=1,
+        authority_node_id="home",
+        origin_instance_id="home",
+        session_duration_seconds=1380,
+        now=utc_text(T0),
+    )
+    assert await env.store.current_window("la_one") is None
+
+    started = await env.app.start(actor(role="legacy"))
+    assert started.snapshot.session.work_session_id == legacy.work_session_id
+    assert started.snapshot.session.session_epoch == legacy.session_epoch
+    assert started.snapshot.session.hard_expires_at == legacy.hard_expires_at
+    assert started.snapshot.binding.role == "legacy"
+    assert started.snapshot.binding.contract_version == 1
+    assert started.snapshot.window.hard_expires_at == parse_utc(legacy.hard_expires_at)
+    assert started.receipt()["remaining_seconds"] == 1380
+
+    again = await env.app.start(actor(role="legacy"))
+    assert again.snapshot.session.work_session_id == legacy.work_session_id
+    assert again.snapshot.window.work_window_id == started.snapshot.window.work_window_id
+    assert again.snapshot.window.hard_expires_at == started.snapshot.window.hard_expires_at

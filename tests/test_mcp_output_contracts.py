@@ -145,6 +145,33 @@ def test_session_variants(action, raw):
     validate(SessionOutput, session_result(raw, action))
 
 
+def test_managed_session_start_projection_preserves_work_window_receipt():
+    raw = {
+        "ok": True,
+        "mode": "persistent",
+        "public_name": "Alpha",
+        "session_ref": "ws1",
+        "work_session_id": "ws1",
+        "session_epoch": 4,
+        "session_state": "warning",
+        "state": "warning",
+        "role": "legacy",
+        "contract_version": 1,
+        "started_at": "2026-10-06T17:00:00Z",
+        "hard_expires_at": "2026-10-06T17:23:00Z",
+        "remaining_seconds": 120,
+    }
+    result = session_result(raw, "start")
+    validate(SessionOutput, result)
+    session = result.structuredContent["session"]
+    assert session["work_session_id"] == "ws1"
+    assert session["role"] == "legacy"
+    assert session["contract_version"] == 1
+    assert session["state"] == "warning"
+    assert session["started_at"] == "2026-10-06T17:00:00Z"
+    assert session["remaining_seconds"] == 120
+
+
 @pytest.mark.parametrize(
     "subject,raw",
     [

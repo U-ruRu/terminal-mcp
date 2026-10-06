@@ -114,6 +114,10 @@ class SessionMode(StrEnum):
 class SessionState(StrEnum):
     inactive = "inactive"
     active = "active"
+    warning = "warning"
+    draining = "draining"
+    expired = "expired"
+    cooldown = "cooldown"
     stopping = "stopping"
     interrupted = "interrupted"
 
@@ -162,8 +166,14 @@ class SessionInfo(_Strict):
     authority_node_id: str | None = None
     access_generation: int | None = None
     session_ref: str | None = None
+    work_session_id: str | None = None
     session_epoch: int | None = None
+    role: Literal["legacy", "executor", "coordinator"] | None = None
+    contract_version: int | None = Field(default=None, ge=1)
+    state: SessionState | None = None
+    started_at: str | None = None
     hard_expires_at: str | None = None
+    remaining_seconds: int | None = Field(default=None, ge=0)
 
 
 class SessionStartResult(_Strict):

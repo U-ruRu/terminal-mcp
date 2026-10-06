@@ -98,6 +98,16 @@ class ManagedSessionRepository(Protocol):
     ) -> ManagedSessionSnapshot: ...
     async def current_window(self, logical_agent_id: str) -> WorkWindow | None: ...
     async def policy(self, logical_agent_id: str) -> SlotPolicyRecord: ...
+    async def adopt_legacy_session(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        principal_id: str,
+        policy: SlotSessionPolicy | None = None,
+        now: datetime | None = None,
+    ) -> ManagedSessionSnapshot: ...
     async def start_managed_session(
         self,
         logical_agent_id: str,
@@ -323,9 +333,26 @@ class ManagedSessionApplication:
                     now=self.clock(),
                 )
             except ManagedSessionError as exc:
-                if exc.code in {"session_expired", "session_stopping", "window_cooldown"}:
-                    exc.return_to_chat = True
-                raise
+                if exc.code == "session_migration_required":
+                    legacy = await self.repository.active_session_for_slot(grant.logical_agent_id)
+                    if legacy is None:
+                        raise ManagedSessionError("session_not_found") from exc
+                    snapshot = await self.repository.adopt_legacy_session(
+                        grant.logical_agent_id,
+                        legacy.work_session_id,
+                        legacy.session_epoch,
+                        principal_id=grant.principal_id,
+                        now=self.clock(),
+                    )
+                else:
+                    if exc.code in {
+                        "session_expired",
+                        "session_stopping",
+                        "window_cooldown",
+                    }:
+                        exc.return_to_chat = True
+                    raise
+            self._owns(actor, grant, snapshot)
         decision = decide_session_operation(
             snapshot.window, ManagedOperation.SESSION_START, self.clock()
         )
