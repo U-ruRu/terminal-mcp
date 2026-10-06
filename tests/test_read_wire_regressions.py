@@ -87,3 +87,47 @@ def test_oversized_line_is_deferred_instead_of_clipped_to_page_remainder():
     assert len(next_page) == 1
     assert next_truncated is True
     assert len(next_page[0]) > 100
+
+
+def test_cmd_read_compacts_repeated_long_coordination_inbox_within_wire_budget():
+    inbox = [
+        {
+            "message_hash": f"message-{index:02}",
+            "sender": "Peer",
+            "text": "x" * 8000,
+            "mode": "notify",
+            "state": "delivered",
+            "created_at": "2026-10-06T00:00:00Z",
+        }
+        for index in range(12)
+    ]
+    result = cmd_result(
+        {
+            "ok": True,
+            "cmd_hash": "deadbeef",
+            "status": "completed",
+            "lines": ["ok"],
+            "overall_lines_count": 1,
+            "displayed_lines_count": 1,
+            "messages": inbox,
+            "pending_messages": inbox,
+            "ack_required_pending": False,
+            "alert_pending": False,
+        },
+        "read",
+    )
+
+    assert result.isError is False
+    assert result.structuredContent["ok"] is True
+    coordination = result.structuredContent["coordination"]
+    assert len(coordination["messages"]) == 4
+    assert coordination["pending_messages"] == []
+    assert all(item["truncated"] is True for item in coordination["messages"])
+    assert all(len(item["text"]) == MESSAGE_PREVIEW_CHARS + 1 for item in coordination["messages"])
+
+    legacy = json.loads(result.content[0].text)
+    assert legacy["status"] == "completed"
+    assert "coordination" not in legacy
+    assert legacy["messages"] == coordination["messages"]
+    assert legacy["pending_messages"] == []
+    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES

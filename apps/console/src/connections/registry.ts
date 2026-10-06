@@ -7,7 +7,12 @@ import {
   STORAGE_KEY as LEGACY_CONNECTION_KEY,
   type KeyValueStorage,
 } from '../auth/vault'
-import { parseCanonicalPairingLink } from './pairingLink'
+import {
+  cloneSafePairingProfile,
+  normalizeSafePairingProfile,
+  parseCanonicalPairingLink,
+  type SafePairingProfile,
+} from './pairingLink'
 import type {
   ConnectionProfile,
   ConnectionProfileMetadata,
@@ -88,6 +93,7 @@ function isProfile(value: unknown): value is ConnectionProfile {
   const meta = metadata as Record<string, unknown>
   try {
     if (canonicalOrigin(String(item.origin ?? '')) !== item.origin) return false
+    normalizeSafePairingProfile(item.pairingProfile)
   } catch {
     return false
   }
@@ -147,15 +153,34 @@ function parseDocument(raw: string): ConnectionRegistryDocument {
     profiles: document.profiles.map((profile) => ({
       ...profile,
       metadata: { ...profile.metadata },
+      pairingProfile: normalizeSafePairingProfile(
+        (profile as ConnectionProfile & { pairingProfile?: unknown }).pairingProfile,
+      ),
     })),
   }
 }
 
-function parsePairingLink(value: string): { origin: string; name: string; secret: string } {
+function parsePairingLink(value: string): {
+  origin: string
+  name: string
+  secret: string
+  profile: SafePairingProfile | null
+} {
   try {
     return parseCanonicalPairingLink(value)
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'unsupported_pairing_version') {
+      throw new ConnectionRegistryError('unsupported_pairing_version')
+    }
     throw new ConnectionRegistryError('invalid_pairing_link')
+  }
+}
+
+function cloneProfile(profile: ConnectionProfile): ConnectionProfile {
+  return {
+    ...profile,
+    metadata: { ...profile.metadata },
+    pairingProfile: cloneSafePairingProfile(profile.pairingProfile),
   }
 }
 
@@ -171,10 +196,7 @@ export class BrowserConnectionRegistry {
   ) {}
 
   list(): ConnectionProfile[] {
-    return this.document().profiles.map((profile) => ({
-      ...profile,
-      metadata: { ...profile.metadata },
-    }))
+    return this.document().profiles.map(cloneProfile)
   }
 
   get(instanceId: string): ConnectionProfile | null {
@@ -199,7 +221,11 @@ export class BrowserConnectionRegistry {
     return connection
   }
 
-  add(connection: StoredConnection, displayName?: string): ConnectionProfile {
+  add(
+    connection: StoredConnection,
+    displayName?: string,
+    pairingProfile: SafePairingProfile | null = normalizeSafePairingProfile(undefined),
+  ): ConnectionProfile {
     const document = this.document()
     const origin = canonicalOrigin(connection.origin)
     this.assertOriginAvailable(document, origin)
@@ -213,6 +239,7 @@ export class BrowserConnectionRegistry {
       displayName: this.cleanDisplayName(displayName ?? defaultDisplayName(origin)),
       credentialRef,
       metadata: safeMetadata(normalizedConnection),
+      pairingProfile: cloneSafePairingProfile(pairingProfile),
       createdAt: timestamp,
       updatedAt: timestamp,
     }
@@ -225,7 +252,7 @@ export class BrowserConnectionRegistry {
       credentialVault.clear()
       throw error
     }
-    return { ...profile, metadata: { ...profile.metadata } }
+    return cloneProfile(profile)
   }
 
   accessSession(instanceId: string): ConnectedProfileSession | null {
@@ -344,7 +371,7 @@ export class BrowserConnectionRegistry {
     transport = new PairingTransport(),
     keyFactory: () => Promise<string> = generateDevicePublicKey,
   ): Promise<PairedProfile> {
-    const { origin, name, secret } = parsePairingLink(pairingLink)
+    const { origin, name, secret, profile: pairingProfile } = parsePairingLink(pairingLink)
     const document = this.document()
     const existing = document.profiles.find((profile) => profile.origin === origin)
     const resolvedName = this.cleanDisplayName(displayName ?? name ?? existing?.displayName ?? defaultDisplayName(origin))
@@ -364,7 +391,7 @@ export class BrowserConnectionRegistry {
 
     let profile: ConnectionProfile
     if (!existing) {
-      profile = this.add(connection, resolvedName)
+      profile = this.add(connection, resolvedName, pairingProfile)
     } else {
       const credentialVault = BrowserCredentialVault.forReference(existing.credentialRef, this.storage)
       const previous = credentialVault.load()
@@ -372,6 +399,7 @@ export class BrowserConnectionRegistry {
         ...existing,
         displayName: resolvedName,
         metadata: safeMetadata(connection),
+        pairingProfile: cloneSafePairingProfile(pairingProfile),
         updatedAt: pairedAt,
       }
       credentialVault.save(connection)
@@ -388,7 +416,7 @@ export class BrowserConnectionRegistry {
     }
 
     const result: PairedProfile = {
-      profile: { ...profile, metadata: { ...profile.metadata } },
+      profile: cloneProfile(profile),
       accessToken: exchanged.access_token,
       accessExpiresAt: pairedAt + Math.max(0, exchanged.expires_in) * 1000,
     }
@@ -412,7 +440,7 @@ export class BrowserConnectionRegistry {
     this.persist({ version: 1, profiles })
     const session = this.accessSessions.get(instanceId)
     if (session) this.accessSessions.set(instanceId, { ...session, profile: updated })
-    return { ...updated, metadata: { ...updated.metadata } }
+    return cloneProfile(updated)
   }
 
   remove(instanceId: string): boolean {
@@ -442,7 +470,7 @@ export class BrowserConnectionRegistry {
   private cloneConnected(result: ConnectedProfileSession): ConnectedProfileSession {
     return {
       ...result,
-      profile: { ...result.profile, metadata: { ...result.profile.metadata } },
+      profile: cloneProfile(result.profile),
     }
   }
 
@@ -472,6 +500,7 @@ export class BrowserConnectionRegistry {
       displayName: defaultDisplayName(origin),
       credentialRef,
       metadata: safeMetadata(normalizedConnection),
+      pairingProfile: normalizeSafePairingProfile(undefined),
       createdAt: timestamp,
       updatedAt: timestamp,
     }
