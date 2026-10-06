@@ -5,6 +5,7 @@ from terminal_mcp.application.base import ApplicationCapability, application_ope
 from terminal_mcp.application.projections import _finish_cmd_read_page, _read_error
 from terminal_mcp.application.requests import CmdRequest
 from terminal_mcp.core.read_contract import (
+    DEFAULT_CMD_READ_LINES,
     InvalidCursor,
     decode_cursor,
 )
@@ -72,6 +73,33 @@ class CommandApplication(ApplicationCapability):
                 queue_id=request.queue_id,
                 task_scope=request.task_scope,
             )
+            if result.get("ok") and result.get("status") in {"completed", "failed"}:
+                scope = {
+                    "kind": "cmd.read",
+                    "cmd_hash": result["cmd_hash"],
+                    "authorization": identity["logical_agent_id"],
+                }
+                output = await self.service.read(
+                    cmd_hash=result["cmd_hash"],
+                    lines_count=DEFAULT_CMD_READ_LINES,
+                    offset=0,
+                    agent_id=None,
+                )
+                output = _finish_cmd_read_page(output, start=0, scope=scope)
+                for key in (
+                    "lines",
+                    "overall_lines_count",
+                    "displayed_lines_count",
+                    "next_cursor",
+                    "has_more",
+                    "output_truncated",
+                    "output_retained",
+                    "output_pruned_at",
+                    "output_bytes",
+                    "line_truncated",
+                ):
+                    if key in output:
+                        result[key] = output[key]
             result.update(message_state)
             return result
         if request.action == "cancel":

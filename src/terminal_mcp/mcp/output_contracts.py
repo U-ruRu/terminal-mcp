@@ -402,6 +402,16 @@ class CmdRunResult(_Strict):
     task_scope: str | None = None
     task_targets: list[str] = Field(default_factory=list)
     task_scope_options: list[str] = Field(default_factory=list)
+    lines: list[str] | None = None
+    overall_lines_count: int | None = None
+    displayed_lines_count: int | None = None
+    next_cursor: Cursor | None = None
+    has_more: bool | None = None
+    output_truncated: bool | None = None
+    output_retained: bool | None = None
+    output_pruned_at: str | None = None
+    output_bytes: int | None = None
+    line_truncated: bool | None = None
     coordination: CoordinationState | None = None
     identity: ExecutionIdentity | None = None
 
@@ -1065,11 +1075,11 @@ def _compact_coordination_messages(
         message_id = str(normalized.get("message_hash") or normalized.get("message_id") or "")
         if message_id and message_id in seen_ids:
             continue
-        if message_id:
-            seen_ids.add(message_id)
         if len(compact) >= MAX_COORDINATION_MESSAGES:
             continue
         compact.append(_message_record(summary_message(normalized)))
+        if message_id:
+            seen_ids.add(message_id)
     return compact, seen_ids
 
 
@@ -1146,7 +1156,21 @@ def cmd_result(raw: dict[str, Any], action: str) -> CallToolResult:
     if ident is not None:
         structured["identity"] = ident
     if action == "run":
-        for key in ("task_scope", "task_targets", "task_scope_options"):
+        for key in (
+            "task_scope",
+            "task_targets",
+            "task_scope_options",
+            "lines",
+            "overall_lines_count",
+            "displayed_lines_count",
+            "next_cursor",
+            "has_more",
+            "output_truncated",
+            "output_retained",
+            "output_pruned_at",
+            "output_bytes",
+            "line_truncated",
+        ):
             if key in raw and raw[key] is not None:
                 structured[key] = raw[key]
     elif action == "read":
