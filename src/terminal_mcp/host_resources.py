@@ -1,8 +1,44 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
+_CPU_SAMPLE_LOCK = threading.Lock()
+_CPU_SAMPLE: tuple[int, int] | None = None
+
+
+def _read_cpu_times() -> tuple[int, int] | None:
+    try:
+        first = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()
+        if not first or first[0] != "cpu":
+            return None
+        values = [int(value) for value in first[1:9]]
+        if len(values) < 5:
+            return None
+        total = sum(values)
+        idle = values[3] + values[4]
+        return total, idle
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _cpu_usage_percent() -> float | None:
+    global _CPU_SAMPLE
+    current = _read_cpu_times()
+    if current is None:
+        return None
+    with _CPU_SAMPLE_LOCK:
+        previous = _CPU_SAMPLE
+        _CPU_SAMPLE = current
+    if previous is None:
+        return None
+    delta_total = current[0] - previous[0]
+    delta_idle = current[1] - previous[1]
+    if delta_total <= 0:
+        return None
+    busy = max(0, min(delta_total, delta_total - delta_idle))
+    return round((busy / delta_total) * 100.0, 2)
 
 def _unavailable() -> dict[str, object]:
     return {"status": "unavailable"}
@@ -19,6 +55,9 @@ def _cpu() -> dict[str, object]:
     cores = os.cpu_count()
     if cores is not None and cores >= 0:
         result["logical_cores"] = cores
+    usage_percent = _cpu_usage_percent()
+    if usage_percent is not None:
+        result["usage_percent"] = usage_percent
     try:
         load1, load5, load15 = os.getloadavg()
         result.update({"load_1m": load1, "load_5m": load5, "load_15m": load15})

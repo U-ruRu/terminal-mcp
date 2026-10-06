@@ -108,22 +108,14 @@ export function ServerCard({
         </div>
       )}
 
-      {variant === 'large' ? (
-        <dl className={'server-card-metrics' + (resourceIssue ? ' server-card-metrics-attention' : '')} aria-label={t('server.hostResources')}>
-          <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
-          <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
-          <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
-        </dl>
-      ) : resourceIssue ? (
-        <dl className="server-card-metrics server-card-metrics-attention" aria-label={t('server.hostResources')}>
-          <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
-          <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
-          <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
-        </dl>
-      ) : null}
+      <dl className={'server-card-metrics' + (resourceIssue ? ' server-card-metrics-attention' : '')} aria-label={t('server.hostResources')}>
+        <ResourceMetric server={server} kind="cpu" label={t('common.cpu')} />
+        <ResourceMetric server={server} kind="memory" label={t('common.ram')} />
+        <ResourceMetric server={server} kind="filesystem" label={t('common.disk')} />
+      </dl>
 
-      {variant === 'compact' && problemReasons.length > 0 ? (
-        <p className="server-card-problem">{problemReasons.join(' · ')}{problemSeconds !== undefined ? ` · ${number(problemSeconds)}s` : ''}</p>
+      {variant === 'compact' ? (
+        <p className="server-card-problem">{problemReasons.length > 0 ? <>{problemReasons.join(' · ')}{problemSeconds !== undefined ? ` · ${number(problemSeconds)}s` : ''}</> : '\u00a0'}</p>
       ) : null}
 
       {variant === 'large' ? (
@@ -144,11 +136,7 @@ export function ServerCard({
         </div>
       ) : null}
 
-      {variant === 'compact' ? (
-        <p className="server-card-age server-card-age-slot">
-          {state === 'stale' && server.lastSeenAt ? server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC') : ''}
-        </p>
-      ) : state === 'stale' && server.lastSeenAt ? (
+      {variant === 'compact' ? null : state === 'stale' && server.lastSeenAt ? (
         <p className="server-card-age">{server.lastSeenAt.replace('T', ' ').replace('Z', ' UTC')}</p>
       ) : null}
       {interactive ? <span className="server-card-chevron" aria-hidden="true"><Icon name="chevron-right" /></span> : null}

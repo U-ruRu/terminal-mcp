@@ -94,9 +94,22 @@ test('normalizes load average by logical CPU count when direct CPU usage is abse
     },
   }
 
-  expect(resourcePercent(server, 'cpu')).toBeCloseTo(110)
-  expect(resourceDisplayValue(server, 'cpu', 'Unavailable', 'Load')).toBe('110%')
+  expect(resourcePercent(server, 'cpu')).toBe(100)
+  expect(resourceDisplayValue(server, 'cpu', 'Unavailable', 'Load')).toBe('100%')
   expect(resourceVisualState(server, 'cpu')).toBe('attention')
+})
+
+test('normalizes aggregate direct CPU percentages by logical core count', () => {
+  const server = {
+    ...healthy,
+    resources: {
+      ...healthy.resources!,
+      cpu: { ...healthy.resources!.cpu, usagePercent: 170, logicalCores: 2 },
+    },
+  }
+  expect(resourcePercent(server, 'cpu')).toBe(85)
+  expect(resourceDisplayValue(server, 'cpu', 'Unavailable', 'Load')).toBe('85%')
+  expect(resourceVisualState(server, 'cpu')).toBe('normal')
 })
 
 test('blocked tasks and communication counts do not change server health', () => {

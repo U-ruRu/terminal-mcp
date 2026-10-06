@@ -28,8 +28,8 @@ test('renders mixed fleet health and makes unavailable telemetry explicit', () =
   expect(within(offlineCard).queryByRole('progressbar')).not.toBeInTheDocument()
   expect(screen.getByRole('article', { name: 'Server B server' })).toHaveTextContent('46%')
   const healthyCard = screen.getByRole('article', { name: 'Server C server' })
-  expect(healthyCard).not.toHaveTextContent('28%')
-  expect(within(healthyCard).queryByRole('progressbar')).not.toBeInTheDocument()
+  expect(healthyCard).toHaveTextContent('28%')
+  expect(within(healthyCard).getAllByRole('progressbar')).toHaveLength(3)
   expect(screen.queryByLabelText('Fleet totals')).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Server C · Live' })).toHaveAttribute('href', '/servers/server-c')
 })
@@ -66,7 +66,7 @@ test('updates incrementally when the supplied fleet model changes', () => {
   const { rerender } = render(dashboard())
   const staleCard = screen.getByRole('article', { name: 'Server B server' })
   expect(staleCard).toHaveAttribute('data-state', 'stale')
-  expect(staleCard.querySelector('.server-card-age-slot')).toBeInTheDocument()
+  expect(staleCard.querySelector('.server-card-problem')).toBeInTheDocument()
 
   const updated = {
     ...fixtureFleetModel,
@@ -90,7 +90,7 @@ test('updates incrementally when the supplied fleet model changes', () => {
   rerender(dashboard(updated))
   const recoveredCard = screen.getByRole('article', { name: 'Server B server' })
   expect(recoveredCard).toHaveAttribute('data-state', 'healthy')
-  expect(recoveredCard.querySelector('.server-card-age-slot')).toBeInTheDocument()
+  expect(recoveredCard.querySelector('.server-card-problem')).toBeInTheDocument()
   expect(screen.queryByLabelText('Fleet totals')).not.toBeInTheDocument()
 })
 
