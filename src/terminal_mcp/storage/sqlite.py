@@ -1424,6 +1424,18 @@ class SqliteRepository:
         now = utc_text()
         async with self._connect("claim_command") as db:
             await db.execute("BEGIN IMMEDIATE")
+            # Queue authority is durable, not merely one local worker task.
+            # In particular, do not overlap an unowned/uncertain surviving
+            # process after restart or a lost execution-port response.
+            running = await (
+                await db.execute(
+                    "SELECT 1 FROM commands WHERE queue_id=? AND status='running' LIMIT 1",
+                    (queue_id,),
+                )
+            ).fetchone()
+            if running is not None:
+                await db.commit()
+                return None
             while True:
                 row = await (
                     await db.execute(

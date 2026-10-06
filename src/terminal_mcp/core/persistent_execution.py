@@ -27,12 +27,11 @@ class PersistentExecutionFence:
                 return None
         if command.status != "running":
             return None
-        process = self.terminal.processes.get(command.cmd_hash)
-        if process is None:
-            if command.pid is None and self.terminal._owns_pidless_running(command):
-                self.terminal.cancel_requested.add(command.cmd_hash)
+        if not self.terminal.owns_command(command.cmd_hash):
+            if command.pid is None and self.terminal.owns_pending(command):
+                self.terminal.cancel_pending(command.cmd_hash)
                 return self._blocker(command, "starting_command")
-            if command.pid and self.terminal._pid_exists(command.pid):
+            if command.pid and await self.terminal.process_exists(command.pid):
                 return self._blocker(command, "detached_command")
             changed = await self.repo.finish_running(
                 command.cmd_hash,
@@ -79,11 +78,11 @@ class PersistentExecutionFence:
         for command in commands:
             if command.status == "queued":
                 kind = "queued_command"
-            elif command.cmd_hash in self.terminal.processes:
+            elif self.terminal.owns_command(command.cmd_hash):
                 kind = "running_command"
-            elif command.pid and self.terminal._pid_exists(command.pid):
+            elif command.pid and await self.terminal.process_exists(command.pid):
                 kind = "detached_command"
-            elif command.pid is None and self.terminal._owns_pidless_running(command):
+            elif command.pid is None and self.terminal.owns_pending(command):
                 kind = "starting_command"
             else:
                 kind = "running_command"
@@ -98,9 +97,9 @@ class PersistentExecutionFence:
         for command in commands:
             if command.status == "queued":
                 kind = "queued_command"
-            elif command.cmd_hash in self.terminal.processes:
+            elif self.terminal.owns_command(command.cmd_hash):
                 kind = "running_command"
-            elif command.pid and self.terminal._pid_exists(command.pid):
+            elif command.pid and await self.terminal.process_exists(command.pid):
                 kind = "detached_command"
             else:
                 kind = "running_command"
@@ -118,9 +117,9 @@ class PersistentExecutionFence:
                 continue
             if command.status == "queued":
                 kind = "queued_command"
-            elif command.cmd_hash in self.terminal.processes:
+            elif self.terminal.owns_command(command.cmd_hash):
                 kind = "running_command"
-            elif command.pid and self.terminal._pid_exists(command.pid):
+            elif command.pid and await self.terminal.process_exists(command.pid):
                 kind = "detached_command"
             else:
                 kind = "running_command"
@@ -150,9 +149,7 @@ class CompositePersistentExecutionFence:
         self, logical_agent_id: str, work_session_id: str, session_epoch: int
     ) -> list[dict]:
         local, remote = await __import__("asyncio").gather(
-            self.local_fence.blockers_for_session(
-                logical_agent_id, work_session_id, session_epoch
-            ),
+            self.local_fence.blockers_for_session(logical_agent_id, work_session_id, session_epoch),
             self.remote_fence.blockers_for_session(
                 logical_agent_id, work_session_id, session_epoch
             ),
