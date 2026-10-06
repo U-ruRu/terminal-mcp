@@ -1,5 +1,7 @@
 import json
+import math
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import model_validator
@@ -23,6 +25,9 @@ class Settings(BaseSettings):
     output_retention_max_bytes: int = 256 * 1024 * 1024
     output_retention_max_rows: int = 1_000_000
     output_retention_prune_rows: int = 500_000
+    execution_mode: Literal["in_process", "unix"] = "in_process"
+    executor_socket_path: Path = Path("/run/terminal-mcp/executor.sock")
+    executor_rpc_timeout_sec: float = 10.0
     shell: str = "/bin/bash"
     cwd: Path = Path("/")
     terminal_user: str = "root"
@@ -103,6 +108,21 @@ class Settings(BaseSettings):
     persistent_session_alert_after_sec: int = 22 * 60
     persistent_session_rearm_after_sec: int = 3 * 60
     legacy_agent_admission_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_execution_topology(self):
+        timeout = self.executor_rpc_timeout_sec
+        if not math.isfinite(timeout) or not 0 < timeout <= 300:
+            raise ValueError("executor_rpc_timeout_sec must be finite and in (0, 300]")
+        path = str(self.executor_socket_path)
+        if (
+            not self.executor_socket_path.is_absolute()
+            or ".." in self.executor_socket_path.parts
+            or any(ord(char) < 32 for char in path)
+            or len(path.encode("utf-8")) > 107
+        ):
+            raise ValueError("executor_socket_path must be an absolute local Unix socket path")
+        return self
 
     @model_validator(mode="after")
     def validate_persistent_session_thresholds(self):
