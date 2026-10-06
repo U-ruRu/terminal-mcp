@@ -1,9 +1,12 @@
+import asyncio
 import sqlite3
 from types import SimpleNamespace
 
+import pytest
+
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
-from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics
+from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, open_observed_connection
 
 
 class FakeEvents:
@@ -97,3 +100,86 @@ def test_sqlite_diagnostics_never_emit_sql_or_parameter_fields():
     fields = events.records[0][2]
     assert set(fields).isdisjoint({"sql", "parameters", "cmd", "command", "body"})
     assert "hunter2" not in repr(fields)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_connection_open_is_closed_before_cancellation_propagates():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class RawConnection:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    raw = RawConnection()
+
+    async def connect(path, **kwargs):
+        assert path == "db.sqlite3"
+        assert kwargs["timeout"] == 1.0
+        started.set()
+        await release.wait()
+        return raw
+
+    task = asyncio.create_task(
+        open_observed_connection(
+            connect,
+            "db.sqlite3",
+            busy_timeout=1.0,
+            diagnostics=SqliteDiagnostics("test"),
+            operation="connect-test",
+        )
+    )
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert task.done() is False
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert raw.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_pragma_setup_closes_connected_database_before_propagating():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class RawConnection:
+        def __init__(self):
+            self.closed = False
+
+        async def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout=1000"
+            started.set()
+            await release.wait()
+
+        async def close(self):
+            self.closed = True
+
+    raw = RawConnection()
+
+    async def connect(path, **kwargs):
+        assert path == "db.sqlite3"
+        assert kwargs["timeout"] == 1.0
+        return raw
+
+    task = asyncio.create_task(
+        open_observed_connection(
+            connect,
+            "db.sqlite3",
+            busy_timeout=1.0,
+            diagnostics=SqliteDiagnostics("test"),
+            operation="pragma-test",
+            pragmas=("PRAGMA busy_timeout=1000",),
+        )
+    )
+    await started.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert raw.closed is True

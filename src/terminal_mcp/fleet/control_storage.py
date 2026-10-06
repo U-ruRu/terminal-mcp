@@ -13,7 +13,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.fleet.protocol import validate_capabilities, validate_protocol_id
 from terminal_mcp.storage.permissions import secure_database_path
-from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
+from terminal_mcp.storage.sqlite_observability import (
+    SqliteDiagnostics,
+    cancellation_safe_connection,
+    observed_connection,
+)
 
 
 class FleetControlError(RuntimeError):
@@ -68,7 +72,7 @@ class FleetControlStore:
             if not self._main_file_ready():
                 return False
             uri = f"file:{Path(self.path)}?mode=ro"
-            async with aiosqlite.connect(uri, uri=True) as db:
+            async with cancellation_safe_connection(aiosqlite.connect, uri, uri=True) as db:
                 row = await (await db.execute("PRAGMA quick_check(1)")).fetchone()
             return row is not None and row[0] == "ok"
         except (OSError, aiosqlite.Error, FleetControlError):

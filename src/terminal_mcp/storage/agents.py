@@ -6,6 +6,8 @@ import secrets
 
 import aiosqlite
 
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
+
 _SESSION_COLUMNS = (
     "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
     "details,current_step,ended_at,end_reason,preferred_queue_id,source_instance_id,"
@@ -79,7 +81,7 @@ class AgentStore:
         scopes = _scope_json(intent_scopes)
         started = registered_at or now
         activity = last_activity_at or now
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO agent_sessions("
                 "agent_id,registered_at,last_activity_at,task_summary,intent,work_scope,state,"
@@ -123,7 +125,7 @@ class AgentStore:
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT intent_scopes FROM agent_sessions WHERE agent_id=? AND state='active'",
@@ -160,7 +162,7 @@ class AgentStore:
             return cur.rowcount == 1
 
     async def create_proposal(self, agent_id, now):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO agent_admission_proposals(agent_id,created_at) VALUES(?,?) "
                 "ON CONFLICT(agent_id) DO UPDATE SET created_at=excluded.created_at",
@@ -174,7 +176,7 @@ class AgentStore:
         if cutoff is not None:
             condition += " AND created_at>=?"
             params.append(cutoff)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     f"SELECT agent_id,created_at FROM agent_admission_proposals WHERE {condition}",
@@ -184,7 +186,7 @@ class AgentStore:
         return {"agent_id": row[0], "created_at": row[1]} if row else None
 
     async def recent_proposals(self, cutoff):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT agent_id,created_at FROM agent_admission_proposals "
@@ -195,7 +197,7 @@ class AgentStore:
         return [{"agent_id": row[0], "created_at": row[1]} for row in rows]
 
     async def consume_proposal(self, agent_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "DELETE FROM agent_admission_proposals WHERE agent_id=?",
                 (agent_id,),
@@ -228,7 +230,7 @@ class AgentStore:
         visible_intent = chosen["intent"] if chosen else intent
         visible_step = chosen["current_step"] if chosen else current_step
         activity = last_activity_at or now
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE agent_sessions SET registered_at=?,last_activity_at=?,task_summary=?,intent=?,work_scope=?,state='active',"
                 "details=?,current_step=?,ended_at=NULL,end_reason=NULL,source_instance_id=?,global_expires_at=?,intent_scopes=? "
@@ -275,7 +277,7 @@ class AgentStore:
     ):
         scope = json.dumps(work_scope or [], separators=(",", ":"))
         plan = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT task_summary,intent,work_scope,details,current_step,last_activity_at,intent_scopes "
@@ -320,7 +322,7 @@ class AgentStore:
             return cur.rowcount == 1
 
     async def get_session(self, agent_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     f"SELECT {_SESSION_COLUMNS} FROM agent_sessions WHERE agent_id=?",
@@ -330,7 +332,7 @@ class AgentStore:
         return self._session(row) if row else None
 
     async def active_sessions(self):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     f"SELECT {_SESSION_COLUMNS} FROM agent_sessions "
@@ -340,7 +342,7 @@ class AgentStore:
         return [self._session(row) for row in rows]
 
     async def repair_legacy_terminal_sessions(self):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE agent_sessions SET "
                 "ended_at=CASE "
@@ -359,7 +361,7 @@ class AgentStore:
             return cur.rowcount
 
     async def set_global_expires_at_if_missing(self, agent_id, expires_at):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE agent_sessions SET global_expires_at=? "
                 "WHERE agent_id=? AND state='active' "
@@ -370,7 +372,7 @@ class AgentStore:
             return cur.rowcount == 1
 
     async def touch(self, agent_id, now):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE agent_sessions SET last_activity_at=CASE WHEN last_activity_at<? THEN ? ELSE last_activity_at END "
                 "WHERE agent_id=? AND state='active'",
@@ -380,7 +382,7 @@ class AgentStore:
             return cur.rowcount == 1
 
     async def end(self, agent_id, state, reason, now):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE agent_sessions SET state=?,ended_at=COALESCE(ended_at,?),end_reason=COALESCE(end_reason,?) "
                 "WHERE agent_id=? AND state='active'",
@@ -400,7 +402,7 @@ class AgentStore:
         return await self.end(agent_id, "finished", "explicit", now or utc_text())
 
     async def set_preferred_queue(self, agent_id, queue_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE agent_sessions SET preferred_queue_id=? WHERE agent_id=? AND state='active'",
                 (queue_id, agent_id),
@@ -409,7 +411,7 @@ class AgentStore:
             return cur.rowcount == 1
 
     async def update_coordinate(self, agent_id, intent, step, now, *, local_instance_id=None):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT work_scope,intent_scopes FROM agent_sessions WHERE agent_id=? AND state='active'",
@@ -448,7 +450,7 @@ class AgentStore:
         local_instance_id=None,
         allow_reactivate=False,
     ):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute("BEGIN IMMEDIATE")
             row = await (
                 await db.execute(
@@ -525,7 +527,7 @@ class AgentStore:
             return bool(new_activity != last_activity or scope_changed or original_state != state)
 
     async def activity(self, agent_id, tool, now, command_hash=None):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO agent_activity_events(agent_id,timestamp,tool,command_hash) VALUES(?,?,?,?)",
                 (agent_id, now, tool, command_hash),
@@ -533,7 +535,7 @@ class AgentStore:
             await db.commit()
 
     async def activity_count(self, agent_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT COUNT(*) FROM agent_activity_events WHERE agent_id=?", (agent_id,)
@@ -542,7 +544,7 @@ class AgentStore:
         return int(row[0])
 
     async def latest_activity(self, agent_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT timestamp,tool,command_hash FROM agent_activity_events WHERE agent_id=? "
@@ -553,7 +555,7 @@ class AgentStore:
         return {"timestamp": row[0], "tool": row[1], "command_hash": row[2]} if row else None
 
     async def latest_task_at(self, agent_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT timestamp FROM agent_task_events WHERE agent_id=? ORDER BY id DESC LIMIT 1",
@@ -563,7 +565,7 @@ class AgentStore:
         return row[0] if row else None
 
     async def active(self, cutoff, limit):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     f"SELECT {_SESSION_COLUMNS} FROM agent_sessions "
@@ -575,7 +577,7 @@ class AgentStore:
         return [self._session(row) for row in rows]
 
     async def recent_sessions(self, cutoff, limit=100):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     f"SELECT {_SESSION_COLUMNS} FROM agent_sessions WHERE last_activity_at>=? "
@@ -586,7 +588,7 @@ class AgentStore:
         return [self._session(row) for row in rows]
 
     async def history_sessions(self, cutoff, limit=100):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     f"SELECT {_SESSION_COLUMNS} FROM agent_sessions "
@@ -598,7 +600,7 @@ class AgentStore:
         return [self._session(row) for row in rows]
 
     async def count_active(self, cutoff):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT COUNT(*) FROM agent_sessions WHERE state='active' AND last_activity_at>=?",
@@ -626,7 +628,7 @@ class AgentStore:
             f"{exclusion}"
             "ORDER BY s.last_activity_at DESC LIMIT ?"
         )
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (await db.execute(query, params)).fetchall()
         return [
             {
@@ -667,7 +669,7 @@ class AgentStore:
             f"{end_exclusion}"
             ") ORDER BY event_at DESC LIMIT ?"
         )
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (await db.execute(query, params)).fetchall()
         return [
             {"agent_id": row[0], "event": row[1], "event_at": row[2], "intent": row[3]}
@@ -688,7 +690,7 @@ class AgentStore:
         task_namespace=None,
         task_id=None,
     ):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute(
                 "INSERT INTO coordination_messages("
                 "message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert,"
@@ -715,7 +717,7 @@ class AgentStore:
             await db.commit()
 
     async def message_record(self, message_hash):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT message_hash,sender_agent_id,target_name,text,created_at,require_reply,alert,"
@@ -739,7 +741,7 @@ class AgentStore:
         }
 
     async def recipient_record(self, message_hash, agent_id):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT delivered_at,first_seen_at,last_seen_at,seen_count,read_at,replied_at,reply_message_hash "
@@ -760,7 +762,7 @@ class AgentStore:
         }
 
     async def message_obligations(self, agent_id, *, limit=None, offset=0):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             query = (
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
                     "m.require_reply,m.alert,m.delivery_mode,m.task_namespace,m.task_id,"
@@ -816,7 +818,7 @@ class AgentStore:
             condition += " AND m.created_at>=?"
             params.append(cutoff)
         params.extend((max(1, int(limit)), max(0, int(offset))))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
@@ -867,7 +869,7 @@ class AgentStore:
         now,
         repeat_cutoff,
     ):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             await db.execute("BEGIN IMMEDIATE")
             latest = await (
                 await db.execute(
@@ -914,7 +916,7 @@ class AgentStore:
         hashes = list(dict.fromkeys(message_hashes))
         if not hashes:
             return
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             for message_hash in hashes:
                 await db.execute(
                     "UPDATE coordination_message_recipients SET "
@@ -929,7 +931,7 @@ class AgentStore:
             await db.commit()
 
     async def acknowledge_message(self, message_hash, agent_id, read_at):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             message = await (
                 await db.execute(
                     "SELECT sender_agent_id FROM coordination_messages WHERE message_hash=?",
@@ -956,7 +958,7 @@ class AgentStore:
             return message[0] == agent_id
 
     async def mark_replied(self, message_hash, agent_id, reply_hash, replied_at):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "UPDATE coordination_message_recipients SET read_at=COALESCE(read_at,?),"
                 "replied_at=COALESCE(replied_at,?),reply_message_hash=COALESCE(reply_message_hash,?) "
@@ -967,7 +969,7 @@ class AgentStore:
             return cur.rowcount == 1
 
     async def message_receipts(self, message_hash):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT recipient_agent_id,first_seen_at,read_at,replied_at "
@@ -1004,7 +1006,7 @@ class AgentStore:
             condition += " AND a.created_at>=?"
             params.append(cutoff)
         params.append(limit)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT a.created_at,a.command_hash,a.command_preview,c.status,a.command_type,"
@@ -1030,7 +1032,7 @@ class AgentStore:
         ]
 
     async def command_detail(self, command_hash):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT c.hash,c.cmd,c.status,c.queue_id,c.queue_sequence,c.enqueued_at,c.claimed_at,"
@@ -1076,7 +1078,7 @@ class AgentStore:
             condition += " AND timestamp>=?"
             params.append(cutoff)
         params.append(limit)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     "SELECT timestamp,intent,step,work_scope FROM agent_task_events "
@@ -1099,7 +1101,7 @@ class AgentStore:
         if not values:
             return {}
         marks = ",".join("?" for _ in values)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (
                 await db.execute(
                     f"SELECT command_hash,agent_id FROM command_agent_attribution WHERE command_hash IN ({marks})",
