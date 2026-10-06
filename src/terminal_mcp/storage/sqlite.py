@@ -114,7 +114,7 @@ class SqliteRepository:
             await (await db.execute("SELECT 1")).fetchone()
         return True
 
-    async def initialize(self):
+    async def initialize(self, *, preserve_active_commands: bool = False):
         secure_database_path(self.path)
         await self.output.initialize()
         async with self._connect("initialize", ensure_wal=True) as db:
@@ -449,12 +449,13 @@ class SqliteRepository:
             await self._migrate(db)
             await install_event_journal(db)
             legacy_output_migrated = await self._migrate_legacy_output(db)
-            recovered_at = utc_text()
-            await db.execute(
-                "UPDATE commands SET status='failed', error='startup.recover: application restarted', "
-                "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
-                (recovered_at,),
-            )
+            if not preserve_active_commands:
+                recovered_at = utc_text()
+                await db.execute(
+                    "UPDATE commands SET status='failed', error='startup.recover: application restarted', "
+                    "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
+                    (recovered_at,),
+                )
             await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             await db.commit()
             if legacy_output_migrated:

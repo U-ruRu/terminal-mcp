@@ -210,6 +210,15 @@ async def test_api_restart_replays_unacknowledged_output_exactly_once(executor, 
         assert (await repo.get(key)).status == "running"
         assert key in executor.spools
         assert (await repo.get(tail["cmd_hash"])).status == "queued"
+
+        # A real API restart reinitializes the durable store before the scheduler
+        # can ask the still-running executor to reattach. Preserve both the remote
+        # running owner and the application-owned queued tail until that arbitration.
+        repo = SqliteRepository(tmp_path / "state.sqlite3")
+        await repo.initialize(preserve_active_commands=True)
+        assert (await repo.get(key)).status == "running"
+        assert (await repo.get(tail["cmd_hash"])).status == "queued"
+
         new = CommandScheduler(repo, await adapter(executor), 0.1, queue_reconcile_sec=0.05)
         await new.start()
         gate.touch()
