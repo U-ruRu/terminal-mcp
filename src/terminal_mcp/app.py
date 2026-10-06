@@ -294,7 +294,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await runtime.start()
         await metrics.start()
         events.emit("application_started", outcome="success")
-        await repo.initialize()
+        await repo.initialize(
+            preserve_active_commands=bool(getattr(execution, "reconnectable", False))
+        )
         if fleet_node_meta:
             await fleet_node_meta.initialize()
         if fleet_projection:
