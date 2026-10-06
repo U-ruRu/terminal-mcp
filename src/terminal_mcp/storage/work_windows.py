@@ -26,6 +26,12 @@ from terminal_mcp.core.managed_sessions import (
 from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
 from terminal_mcp.core.persistent_agents import WorkSessionRecord
 from terminal_mcp.core.provider_identity import ProviderIdentity
+from terminal_mcp.core.window_recovery import (
+    MAX_RECOVERY_BATCH,
+    MAX_RECOVERY_LEASE_SECONDS,
+    RECOVERY_ERRORS,
+    WindowRecoveryLease,
+)
 from terminal_mcp.core.work_windows import (
     SlotSessionPolicy,
     WindowChange,
@@ -35,6 +41,10 @@ from terminal_mcp.core.work_windows import (
     WorkWindow,
 )
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
+from terminal_mcp.storage.window_recovery import (
+    install_window_recovery_schema,
+    schedule_window_recovery,
+)
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS logical_agent_provider_bindings(
@@ -78,6 +88,7 @@ async def install_work_window_schema(db: aiosqlite.Connection) -> None:
     # execute(), not executescript(): do not commit the caller's migration early.
     for sql in _SCHEMA:
         await db.execute(sql)
+    await install_window_recovery_schema(db)
 
 
 class WorkWindowStoreError(ManagedSessionError):
@@ -230,6 +241,7 @@ class WorkWindowStore(PersistentAgentStore):
             "INSERT INTO logical_agent_work_windows VALUES(?,?,?,?,NULL)",
             (window.work_window_id, window.logical_agent_id, window.window_revision, _dump(window)),
         )
+        await schedule_window_recovery(db, window)
 
     @staticmethod
     async def _replace_window(db, previous, current):
@@ -245,6 +257,7 @@ class WorkWindowStore(PersistentAgentStore):
         )
         if cur.rowcount != 1:
             raise WorkWindowStoreError("revision_conflict")
+        await schedule_window_recovery(db, current)
 
     @staticmethod
     async def _insert_binding(db, binding):
@@ -352,25 +365,50 @@ class WorkWindowStore(PersistentAgentStore):
             return await self._current(db, logical_agent_id)
 
     async def session_snapshot(
-        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        require_live: bool = False,
     ) -> ManagedSessionSnapshot:
         async with self._connect("managed_session_read") as db:
-            # Explicit snapshot transaction avoids mixing old binding/new deadline.
             await db.execute("BEGIN")
-            await self._home(db, logical_agent_id)
+            slot = await self._home(db, logical_agent_id)
             session, binding = await self._exact_session(
-                db,
-                logical_agent_id,
-                work_session_id,
-                session_epoch,
+                db, logical_agent_id, work_session_id, session_epoch
             )
             row = await (
                 await db.execute(
-                    "SELECT snapshot_json FROM logical_agent_work_windows WHERE work_window_id=?",
+                    "SELECT snapshot_json,superseded_at FROM logical_agent_work_windows "
+                    "WHERE work_window_id=?",
                     (binding.work_window_id,),
                 )
             ).fetchone()
-            return ManagedSessionSnapshot(_load(row[0]), session, binding)
+            if row is None:
+                raise WorkWindowStoreError("session_binding_invalid")
+            window = _load(row[0])
+            if window.logical_agent_id != logical_agent_id:
+                raise WorkWindowStoreError("session_binding_invalid")
+            if require_live:
+                if window.lifecycle in {WindowLifecycle.EXPIRED, WindowLifecycle.COOLDOWN}:
+                    raise WorkWindowStoreError(
+                        "session_expired", current=window, return_to_chat=True
+                    )
+                if session.state != "active" or slot[0] != "active":
+                    raise WorkWindowStoreError("session_not_active", return_to_chat=True)
+                if (
+                    session.authority_node_id != self.authority_node_id
+                    or session.authority_epoch != slot[2]
+                ):
+                    raise WorkWindowStoreError("session_authority_stale", return_to_chat=True)
+                if session.auth_generation != slot[3]:
+                    raise WorkWindowStoreError("auth_generation_mismatch", return_to_chat=True)
+                if row[1] is not None or session.hard_expires_at != utc_text(
+                    window.hard_expires_at
+                ):
+                    raise WorkWindowStoreError("session_binding_invalid", return_to_chat=True)
+            return ManagedSessionSnapshot(window, session, binding)
 
     async def start_managed_session(
         self,
@@ -636,6 +674,9 @@ class WorkWindowStore(PersistentAgentStore):
                 {"reason": reason},
                 session,
             )
+            window = await self._current(db, logical_agent_id)
+            if window is not None:
+                await schedule_window_recovery(db, window, now=now, due_at=now or utc_now())
             return replace(session, state="stopping", end_reason=reason)
 
     @staticmethod
@@ -815,3 +856,99 @@ class WorkWindowStore(PersistentAgentStore):
                 session,
             )
             return ManagedSessionSnapshot(window, session, binding, created=True)
+
+    async def claim_window_recovery(
+        self, *, limit: int = 8, lease_seconds: int = 30, now: datetime | None = None
+    ) -> list[WindowRecoveryLease]:
+        if type(limit) is not int or not 1 <= limit <= MAX_RECOVERY_BATCH:
+            raise WorkWindowStoreError("recovery_limit_invalid")
+        if type(lease_seconds) is not int or not 1 <= lease_seconds <= MAX_RECOVERY_LEASE_SECONDS:
+            raise WorkWindowStoreError("recovery_lease_invalid")
+        now = now or utc_now()
+        stamp = utc_text(now)
+        expiry = now + timedelta(seconds=lease_seconds)
+        async with self._transaction("managed_recovery_claim") as db:
+            rows = await (
+                await db.execute(
+                    "SELECT r.work_window_id,r.attempts,w.snapshot_json "
+                    "FROM logical_agent_window_recovery r "
+                    "JOIN logical_agent_work_windows w ON w.work_window_id=r.work_window_id "
+                    "JOIN logical_agents a ON a.logical_agent_id=w.logical_agent_id "
+                    "WHERE r.next_check_at<=? AND (r.lease_expires_at IS NULL "
+                    "OR r.lease_expires_at<=?) AND w.superseded_at IS NULL "
+                    "AND a.authority_node_id=? AND a.state NOT IN ('deleted','deleting') "
+                    "ORDER BY r.next_check_at,r.work_window_id LIMIT ?",
+                    (stamp, stamp, self.authority_node_id, limit),
+                )
+            ).fetchall()
+            leases = []
+            for window_id, attempts, snapshot in rows:
+                token = secrets.token_urlsafe(24)
+                await db.execute(
+                    "UPDATE logical_agent_window_recovery SET lease_token=?,lease_expires_at=?,"
+                    "attempts=MIN(attempts+1,1000000),updated_at=? WHERE work_window_id=?",
+                    (token, utc_text(expiry), stamp, window_id),
+                )
+                leases.append(
+                    WindowRecoveryLease(token, _load(snapshot), min(attempts + 1, 1000000), expiry)
+                )
+            return leases
+
+    async def finish_window_recovery(
+        self,
+        lease: WindowRecoveryLease,
+        *,
+        error_code: str | None = None,
+        now: datetime | None = None,
+    ) -> bool:
+        if error_code is not None and error_code not in RECOVERY_ERRORS:
+            raise WorkWindowStoreError("recovery_error_invalid")
+        now = now or utc_now()
+        async with self._transaction("managed_recovery_finish") as db:
+            await self._home(db, lease.window.logical_agent_id)
+            row = await (
+                await db.execute(
+                    "SELECT lease_token FROM logical_agent_window_recovery WHERE work_window_id=?",
+                    (lease.window.work_window_id,),
+                )
+            ).fetchone()
+            if row is None or row[0] != lease.token:
+                return False
+            current = await self._current(db, lease.window.logical_agent_id)
+            if (
+                current is None
+                or current.work_window_id != lease.window.work_window_id
+                or current.lifecycle is WindowLifecycle.COOLDOWN
+            ):
+                await db.execute(
+                    "DELETE FROM logical_agent_window_recovery WHERE work_window_id=?",
+                    (lease.window.work_window_id,),
+                )
+                return True
+            # A late completion cannot undo an extension or new revision. Read
+            # the current budget, not the ticket's historical deadline.
+            live = await (
+                await db.execute(
+                    "SELECT state FROM logical_agent_work_sessions WHERE logical_agent_id=? "
+                    "AND state IN ('active','stopping') ORDER BY session_epoch DESC LIMIT 1",
+                    (current.logical_agent_id,),
+                )
+            ).fetchone()
+            stopping = live is not None and live[0] == "stopping"
+            retry = stopping or current.phase(now) is WindowPhase.EXPIRED
+            if retry:
+                seconds = min(180, 3 * 2 ** min(lease.attempt - 1, 6))
+                due = now + timedelta(seconds=seconds)
+                attempts = lease.attempt
+                code = error_code or "execution_pending"
+            else:
+                due = current.hard_expires_at
+                attempts = 0
+                code = None
+            await db.execute(
+                "UPDATE logical_agent_window_recovery SET next_check_at=?,attempts=?,"
+                "lease_token=NULL,lease_expires_at=NULL,last_error_code=?,updated_at=? "
+                "WHERE work_window_id=? AND lease_token=?",
+                (utc_text(due), attempts, code, utc_text(now), current.work_window_id, lease.token),
+            )
+            return True

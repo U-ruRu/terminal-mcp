@@ -86,3 +86,28 @@ A schema-forward guard continues to reject unknown newer database versions.
 Reverting a binary below schema 20 therefore requires the supported snapshot
 restore procedure, not editing `PRAGMA user_version`. This slice has not performed
 any deployed database migration or production runtime switch.
+
+## Bounded recovery adapter
+
+`ManagedWindowRecovery.tick()` leases only a configured small due batch (default
+8, maximum 32), with at most four concurrent recovery calls and bounded item
+waits. The batch execution plus cleanup budget must fit its durable 30-second
+lease. An interrupted worker leaves the lease to expire; a replacement worker
+cannot have its lease released by a late completion from the original worker.
+Each completion re-reads the current window, so a stale timer cannot overwrite
+an operator extension. Failed execution fences retry with bounded exponential
+backoff instead of repeatedly blocking the oldest page of windows. Normal End
+cleanup is retried without expiring/replacing the window. Delayed hard-expiry
+still retains the original expiry/rearm timestamps.
+
+The recovery schedule is attached transactionally to window changes and session
+revocation. It is stored in the same authoritative SQLite snapshot, while the
+queue remains a scheduling projection rather than the source of duration policy.
+Startup additively reconstructs missing schedule entries without resetting
+existing leases. No timer tasks start merely from importing the module. Runtime
+composition must explicitly connect its tick to the accepted host lifecycle
+before enabling managed endpoints.
+
+Live operation admission now reads slot state, authority epoch, auth generation,
+session/window link and exact deadline from one SQLite snapshot. Historical
+status/end uses an explicit non-live view; that view does not authorize work.

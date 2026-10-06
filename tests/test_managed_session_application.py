@@ -369,3 +369,46 @@ def test_agent_context_preserves_authorization_without_inventing_session():
     ):
         with pytest.raises(ValueError, match="complete"):
             ActorContext(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        ("authority_epoch", 2, "session_authority_stale"),
+        ("auth_generation", 2, "auth_generation_mismatch"),
+        ("state", "suspended", "session_not_active"),
+    ],
+)
+@pytest.mark.parametrize("resolved", [False, True])
+async def test_gate_rechecks_current_slot_authority_in_same_snapshot(
+    env, field, value, code, resolved
+):
+    first = await env.app.start(actor())
+    async with env.store._transaction("test_authority_changed") as db:
+        await db.execute(
+            f"UPDATE logical_agents SET {field}=? WHERE logical_agent_id=?", (value, "la_one")
+        )
+    with pytest.raises(ManagedSessionError, match=code):
+        await env.app.authorize_operation(
+            first.actor if resolved else actor(), ManagedOperation.TASK_CHECKPOINT
+        )
+
+
+async def test_gate_rejects_current_session_deadline_inconsistent_with_window(env):
+    first = await env.app.start(actor())
+    async with env.store._transaction("test_deadline_tamper") as db:
+        await db.execute(
+            "UPDATE logical_agent_work_sessions SET hard_expires_at=? WHERE work_session_id=?",
+            (utc_text(T0 + timedelta(seconds=9999)), first.actor.work_session_id),
+        )
+    with pytest.raises(ManagedSessionError, match="session_binding_invalid"):
+        await env.app.authorize_operation(first.actor, ManagedOperation.COMMAND_RUN)
+
+
+async def test_repeated_expired_gate_calls_keep_stable_error_after_revocation(env):
+    first = await env.app.start(actor())
+    env.clock[0] = T0 + timedelta(seconds=1400)
+    for _ in range(2):
+        with pytest.raises(ManagedSessionError, match="session_expired") as error:
+            await env.app.authorize_operation(first.actor, ManagedOperation.COMMAND_RUN)
+        assert error.value.return_to_chat

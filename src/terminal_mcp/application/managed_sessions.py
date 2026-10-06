@@ -86,7 +86,12 @@ class ManagedSessionRepository(Protocol):
 
     async def active_session_for_slot(self, logical_agent_id: str) -> WorkSessionRecord | None: ...
     async def session_snapshot(
-        self, logical_agent_id: str, work_session_id: str, session_epoch: int
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        require_live: bool = False,
     ) -> ManagedSessionSnapshot: ...
     async def current_window(self, logical_agent_id: str) -> WorkWindow | None: ...
     async def start_managed_session(
@@ -247,16 +252,22 @@ class ManagedSessionApplication:
             raise ManagedSessionError("authority_unavailable")
         return grant
 
-    async def _snapshot(self, actor: ActorContext, grant: ManagedSlotGrant):
+    async def _snapshot(self, actor: ActorContext, grant: ManagedSlotGrant, *, require_live=False):
         if actor.work_session_id is not None:
             return await self.repository.session_snapshot(
-                grant.logical_agent_id, actor.work_session_id, actor.session_epoch
+                grant.logical_agent_id,
+                actor.work_session_id,
+                actor.session_epoch,
+                require_live=require_live,
             )
         session = await self.repository.active_session_for_slot(grant.logical_agent_id)
         if session is None:
             raise ManagedSessionError("session_not_found")
         return await self.repository.session_snapshot(
-            grant.logical_agent_id, session.work_session_id, session.session_epoch
+            grant.logical_agent_id,
+            session.work_session_id,
+            session.session_epoch,
+            require_live=require_live,
         )
 
     @staticmethod
@@ -320,7 +331,17 @@ class ManagedSessionApplication:
             raise ManagedSessionError("operation_not_allowed")
         grant = await self._authorize(actor, operation)
         with actor.bind():
-            snapshot = await self._snapshot(actor, grant)
+            snapshot = await self._snapshot(
+                actor,
+                grant,
+                require_live=(
+                    operation
+                    not in {
+                        ManagedOperation.SESSION_END,
+                        ManagedOperation.SESSION_STATUS,
+                    }
+                ),
+            )
             self._owns(actor, grant, snapshot)
             now = self.clock()
             decision = decide_session_operation(snapshot.window, operation, now)
@@ -460,11 +481,15 @@ class ManagedSessionApplication:
             return False
 
     async def reconcile_window(self, window: WorkWindow) -> bool:
-        """Internal scheduler entrypoint: revoke first, fence, then durable cooldown."""
+        """Bounded internal recovery: revoke first, drain, then durable cooldown."""
         now = self.clock()
-        if window.lifecycle is WindowLifecycle.OPEN:
-            if now < window.hard_expires_at:
-                return True
+        # Re-read the authoritative current revision; an old timer must never
+        # expire a window that has since been extended or superseded.
+        latest = await self.repository.current_window(window.logical_agent_id)
+        if latest is None or latest.work_window_id != window.work_window_id:
+            return True
+        window = latest
+        if window.lifecycle is WindowLifecycle.OPEN and now >= window.hard_expires_at:
             window = await self.repository.expire_window(
                 window.logical_agent_id,
                 expected_revision=window.window_revision,
@@ -479,7 +504,9 @@ class ManagedSessionApplication:
             )
             if exact.binding.work_window_id != window.work_window_id:
                 raise ManagedSessionError("session_binding_invalid")
-            if not await self._drain(session, window.expiry_reason or "hard_duration"):
+            if window.lifecycle is WindowLifecycle.OPEN and session.state == "active":
+                return True
+            if not await self._drain(session, session.end_reason or "hard_duration"):
                 return False
             await self.repository.finish_managed_stop(
                 window.logical_agent_id,
@@ -488,7 +515,8 @@ class ManagedSessionApplication:
                 principal_id="system",
                 now=now,
             )
-        await self.repository.complete_window_fence(
-            window.logical_agent_id, expected_revision=window.window_revision, now=now
-        )
+        if window.lifecycle is WindowLifecycle.EXPIRED:
+            await self.repository.complete_window_fence(
+                window.logical_agent_id, expected_revision=window.window_revision, now=now
+            )
         return True
