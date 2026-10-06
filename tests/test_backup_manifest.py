@@ -24,6 +24,7 @@ def _sqlite(path: Path, version: int = 1):
 
 
 def _settings(tmp_path: Path) -> Settings:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     env = tmp_path / "terminal-mcp.env"
     env.write_text("TERMINAL_MCP_AUTH_MODE=none\n")
     env.chmod(0o600)
@@ -161,3 +162,106 @@ def test_validation_rejects_path_alias_between_authoritative_members(tmp_path):
 
     with pytest.raises(BackupValidationError, match="resolve to the same path"):
         validate_authoritative_backup_source(aliased)
+
+
+def test_snapshot_refuses_without_explicit_quiescence(tmp_path):
+    from terminal_mcp.backup import create_authoritative_snapshot
+
+    settings = _settings(tmp_path / "source")
+    _complete_source(settings)
+    destination = tmp_path / "snapshot"
+
+    with pytest.raises(BackupValidationError, match="requires quiesced"):
+        create_authoritative_snapshot(settings, destination, quiesced=False)
+
+    assert not destination.exists()
+
+
+def test_snapshot_is_atomic_self_contained_and_excludes_derived_files(tmp_path):
+    from terminal_mcp.backup import (
+        create_authoritative_snapshot,
+        validate_authoritative_snapshot,
+    )
+
+    source = tmp_path / "source"
+    settings = _settings(source)
+    _complete_source(settings)
+    _sqlite(settings.output_cache_path, 1)
+    _sqlite(settings.effective_fleet_projection_path(), 1)
+    destination = tmp_path / "snapshot"
+
+    result = create_authoritative_snapshot(settings, destination, quiesced=True)
+    validated = {item["member_id"] for item in result["validated"]}
+
+    assert {
+        "node_environment",
+        "runtime_database",
+        "auth_database",
+        "access_verifier_key",
+    } <= validated
+    assert "output_cache" not in validated
+    assert "fleet_projection" not in validated
+    assert (destination / "manifest.json").stat().st_mode & 0o777 == 0o600
+
+    # A snapshot must remain independently verifiable after its source disappears.
+    for member in authoritative_backup_manifest(settings)["members"]:
+        Path(member["path"]).unlink(missing_ok=True)
+    assert validate_authoritative_snapshot(destination)["quiesced"] is True
+
+
+def test_snapshot_preserves_complete_fleet_authority_pair(tmp_path):
+    from terminal_mcp.backup import create_authoritative_snapshot
+
+    settings = _settings(tmp_path / "source")
+    _complete_source(settings, fleet=True)
+    destination = tmp_path / "snapshot"
+
+    result = create_authoritative_snapshot(settings, destination, quiesced=True)
+    by_id = {item["member_id"]: item for item in result["validated"]}
+
+    assert by_id["fleet_node_meta"]["mode"] == "0600"
+    assert by_id["fleet_control"]["mode"] == "0600"
+
+
+def test_snapshot_validation_detects_tampered_member(tmp_path):
+    from terminal_mcp.backup import (
+        create_authoritative_snapshot,
+        validate_authoritative_snapshot,
+    )
+
+    settings = _settings(tmp_path / "source")
+    _complete_source(settings)
+    destination = tmp_path / "snapshot"
+    create_authoritative_snapshot(settings, destination, quiesced=True)
+
+    runtime_copy = destination / "files" / "runtime_database.sqlite3"
+    runtime_copy.write_bytes(runtime_copy.read_bytes() + b"tamper")
+
+    with pytest.raises(BackupValidationError, match="size mismatch|checksum mismatch"):
+        validate_authoritative_snapshot(destination)
+
+
+def test_snapshot_failure_removes_partial_directory(tmp_path, monkeypatch):
+    import terminal_mcp.backup as backup_module
+
+    settings = _settings(tmp_path / "source")
+    _complete_source(settings)
+    destination = tmp_path / "snapshot"
+
+    original = backup_module._copy_sqlite_snapshot
+    calls = 0
+
+    def fail_second(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise BackupValidationError("injected snapshot failure")
+        return original(source, target)
+
+    monkeypatch.setattr(backup_module, "_copy_sqlite_snapshot", fail_second)
+
+    with pytest.raises(BackupValidationError, match="injected"):
+        backup_module.create_authoritative_snapshot(settings, destination, quiesced=True)
+
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".snapshot.tmp-*"))
