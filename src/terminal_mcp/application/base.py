@@ -35,7 +35,11 @@ ROLE_CAPABILITIES = {
 
 def canonical_application_result(result):
     """Normalize returned domain failures while preserving transaction exceptions."""
-    if isinstance(result, Mapping) and result.get("ok") is False:
+    if (
+        isinstance(result, Mapping)
+        and result.get("ok") is False
+        and isinstance(result.get("code"), str)
+    ):
         return normalize_public_error(result).as_dict()
     return result
 

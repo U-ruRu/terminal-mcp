@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from terminal_mcp.core.public_errors import (
     ERROR_SPECS,
+    MAX_COORDINATION_MESSAGES,
     MAX_ERROR_MESSAGE,
     MAX_RETRY_AFTER_MS,
     MAX_VALIDATION_ISSUES,
@@ -427,3 +428,28 @@ def test_public_source_error_codes_have_explicit_catalog_policy():
     } <= found.keys()
     missing = {code: origins for code, origins in found.items() if code not in ERROR_SPECS}
     assert not missing, f"New public codes need explicit bounded message/retry policy: {missing}"
+
+
+def test_coordination_error_keeps_only_bounded_next_action_messages():
+    raw = {
+        "ok": False,
+        "code": "coordination_alert",
+        "error": "secret legacy wording",
+        "messages": [
+            {"message_hash": f"m-{index}", "mode": "alert", "text": "reply", "secret": "drop"}
+            for index in range(10)
+        ],
+        "pending_messages": [
+            {"message_hash": f"p-{index}", "mode": "alert", "text": "reply"}
+            for index in range(10)
+        ],
+        "ack_required_pending": True,
+        "alert_pending": True,
+        "diagnostics": {"password": "drop"},
+    }
+    result = normalize_public_error(raw).as_dict()
+    assert result["code"] == "coordination_alert"
+    assert len(result["details"]["pending_messages"]) == MAX_COORDINATION_MESSAGES
+    assert result["details"]["pending_messages"][0]["message_hash"] == "p-0"
+    assert "diagnostics" not in repr(result)
+    assert "secret" not in repr(result)
