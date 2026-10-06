@@ -332,20 +332,28 @@ def _expectation(context: object) -> str | None:
     return None
 
 
+def validation_issue(item: Mapping[str, object], *, path: str) -> ValidationIssue:
+    """Build one schema-owned validation issue without exposing Pydantic's raw message."""
+    kind = item.get("type")
+    kind = kind if kind in _VALIDATION_MESSAGES else "invalid_value"
+    return ValidationIssue(
+        error_class=kind,
+        path=path,
+        description=_VALIDATION_MESSAGES[kind],
+        expected=_expectation(item.get("ctx")),
+    )
+
+
 def validation_error(
     exc: ValidationError, *, allowed_fields: frozenset[str] = PUBLIC_FIELDS
 ) -> PublicError:
     issues = []
     # Pydantic's msg/ctx.error may contain custom exceptions with secrets.
     for item in exc.errors(include_input=False, include_url=False)[:MAX_VALIDATION_ISSUES]:
-        kind = item.get("type")
-        kind = kind if kind in _VALIDATION_MESSAGES else "invalid_value"
         issues.append(
-            ValidationIssue(
-                error_class=kind,
+            validation_issue(
+                item,
                 path=_path(item.get("loc"), allowed_fields),
-                description=_VALIDATION_MESSAGES[kind],
-                expected=_expectation(item.get("ctx")),
             )
         )
     details = ValidationRepair(validation_errors=tuple(issues)) if issues else None
@@ -392,6 +400,12 @@ def normalize_public_error(raw: Mapping[str, object] | PublicError) -> PublicErr
     """Whitelist legacy data; never stringify raw errors or copy diagnostics."""
     if isinstance(raw, PublicError):
         return raw
+    # Preserve already-canonical bounded repair data, while extra legacy fields
+    # fail closed into the whitelist path below.
+    try:
+        return PublicError.model_validate(raw)
+    except ValidationError:
+        pass
     code = raw.get("code")
     if not isinstance(code, str) or code not in ERROR_SPECS:
         old_error = raw.get("error")

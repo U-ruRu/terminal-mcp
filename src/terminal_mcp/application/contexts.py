@@ -98,17 +98,14 @@ class ContextApplication(ApplicationCapability):
             "offset": offset,
         }
         if action not in {"create", "update", "delete"}:
-            return {
-                "ok": False,
-                "error": "context.action: mutation requires create, update or delete",
-            }
+            return {"ok": False, "code": "invalid_request"}
         if self.unit_of_work is None:
             return await self.service.context(action, **data)
         if not getattr(self.service, "context_store", None):
-            return {"ok": False, "error": "instance context unavailable"}
+            return {"ok": False, "code": "service_unavailable"}
         invalid = validate_context_request(action, **data)
         if invalid:
-            return {"ok": False, "error": invalid}
+            return {"ok": False, "code": "invalid_request"}
         try:
             async with self.unit_of_work.transaction() as repositories:
                 if action == "create":
@@ -124,14 +121,14 @@ class ContextApplication(ApplicationCapability):
                     result = (
                         {"ok": True, "entry": entry}
                         if entry is not None
-                        else {"ok": False, "error": f"context id {context_id} not found"}
+                        else {"ok": False, "code": "resource_not_found"}
                     )
                 else:
                     deleted = await repositories.context.delete(context_id)
                     result = (
                         {"ok": True, "deleted_id": int(context_id)}
                         if deleted
-                        else {"ok": False, "error": f"context id {context_id} not found"}
+                        else {"ok": False, "code": "resource_not_found"}
                     )
                 if result.get("ok") and actor.logical_agent_id is not None:
                     await repositories.sessions.activity(
@@ -140,5 +137,5 @@ class ContextApplication(ApplicationCapability):
                         utc_text(utc_now()),
                     )
             return result
-        except (TypeError, ValueError) as exc:
-            return {"ok": False, "error": f"context.{action}: {exc}"}
+        except (TypeError, ValueError):
+            return {"ok": False, "code": "invalid_request"}

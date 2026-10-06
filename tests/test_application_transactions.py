@@ -140,7 +140,9 @@ async def test_legacy_context_validation_does_not_drop_forbidden_read_controls(t
         primary=False,
         **controls,
     )
-    assert result == {"ok": False, "error": "context.create: read controls are only valid for list"}
+    assert result["ok"] is False
+    assert result["code"] == "invalid_request"
+    assert "read controls" not in result["error"]
     assert await app.service.context_store.list() == []
 
 

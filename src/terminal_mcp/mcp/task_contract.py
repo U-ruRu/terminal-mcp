@@ -102,6 +102,13 @@ from terminal_mcp.application.task_requests import (
 from terminal_mcp.application.task_requests import (
     task_request_to_backend as task_request_to_backend,
 )
+from terminal_mcp.core.public_errors import (
+    MAX_VALIDATION_ISSUES,
+    PUBLIC_FIELDS,
+    ValidationRepair,
+    public_error,
+    validation_issue,
+)
 
 
 class TaskToolArguments(ArgModelBase):
@@ -180,29 +187,26 @@ def _error_path(location: tuple[object, ...], request: object, message: str) -> 
 
     if not parts:
         return "$"
-    path = str(parts[0])
+    first = parts[0]
+    path = str(first) if isinstance(first, str) and first in PUBLIC_FIELDS else "*"
     for part in parts[1:]:
         if isinstance(part, int):
             path += f"[{part}]"
         else:
-            path += f".{part}"
+            safe = part if isinstance(part, str) and part in PUBLIC_FIELDS else "*"
+            path += f".{safe}"
     return path
 
 
 def task_validation_error(exc: ValidationError, request: object) -> dict[str, object]:
-    errors = []
-    for item in exc.errors(include_url=False, include_input=False):
-        message = str(item.get("msg") or "invalid value")
-        errors.append(
-            {
-                "error_class": str(item.get("type") or "validation_error"),
-                "path": _error_path(tuple(item.get("loc") or ()), request, message),
-                "description": message,
-            }
+    issues = []
+    for item in exc.errors(include_url=False, include_input=False)[:MAX_VALIDATION_ISSUES]:
+        raw_message = str(item.get("msg") or "")
+        issues.append(
+            validation_issue(
+                item,
+                path=_error_path(tuple(item.get("loc") or ()), request, raw_message),
+            )
         )
-    return {
-        "ok": False,
-        "code": "validation_error",
-        "error": "task request validation failed",
-        "validation_errors": errors,
-    }
+    details = ValidationRepair(validation_errors=tuple(issues)) if issues else None
+    return public_error("validation_error", details=details).as_dict()

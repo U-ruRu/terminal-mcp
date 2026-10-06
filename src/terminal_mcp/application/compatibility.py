@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Literal
 
 from terminal_mcp.application.actor import ActorContext
-from terminal_mcp.application.base import CapabilityPolicy
+from terminal_mcp.application.base import CapabilityPolicy, canonical_application_result
 
 LegacyOperation = Literal[
     "agent_start",
@@ -72,11 +72,9 @@ class ApplicationCompatibility:
             "health": "health",
         }[operation]
         if not CapabilityPolicy().allows(actor, capability):
-            return {
-                "ok": False,
-                "code": "capability_not_allowed",
-                "error": "capability_not_allowed",
-            }
+            from terminal_mcp.core.public_errors import public_error
+
+            return public_error("capability_not_allowed").as_dict()
         with actor.bind():
             application = getattr(self._service, "application", None)
             action = args[0] if args else kwargs.get("action")
@@ -95,8 +93,10 @@ class ApplicationCompatibility:
                         "offset",
                     }
                 }
-                return await application.contexts.mutate(actor, action, **data)
-            return await getattr(self._service, operation)(*args, **kwargs)
+                result = await application.contexts.mutate(actor, action, **data)
+                return canonical_application_result(result)
+            result = await getattr(self._service, operation)(*args, **kwargs)
+            return canonical_application_result(result)
 
 
 LegacyApplication = ApplicationCompatibility

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import wraps
 
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.public_errors import normalize_public_error, public_error
 
 CAPABILITIES = frozenset(
     {
@@ -30,6 +32,14 @@ ROLE_CAPABILITIES = {
 }
 
 
+
+def canonical_application_result(result):
+    """Normalize returned domain failures while preserving transaction exceptions."""
+    if isinstance(result, Mapping) and result.get("ok") is False:
+        return normalize_public_error(result).as_dict()
+    return result
+
+
 class CapabilityPolicy:
     def allows(self, actor: ActorContext, capability: str) -> bool:
         return capability in ROLE_CAPABILITIES.get(actor.endpoint_role, frozenset())
@@ -44,13 +54,10 @@ def application_operation(capability: str):
         @wraps(function)
         async def invoke(self, actor: ActorContext, *args, **kwargs):
             if not self.policy.allows(actor, capability):
-                return {
-                    "ok": False,
-                    "code": "capability_not_allowed",
-                    "error": "capability_not_allowed",
-                }
+                return public_error("capability_not_allowed").as_dict()
             with actor.bind():
-                return await function(self, actor, *args, **kwargs)
+                result = await function(self, actor, *args, **kwargs)
+                return canonical_application_result(result)
 
         return invoke
 

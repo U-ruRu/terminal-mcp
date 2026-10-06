@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.version import __version__
 
@@ -396,7 +397,7 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
             convert_result=True,
         )
     )
-    assert session == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+    assert session == public_error("policy_incompatible").as_dict()
 
     task = _text_json(
         await tools["task"].run(
@@ -412,7 +413,7 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
             convert_result=True,
         )
     )
-    assert task == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+    assert task == public_error("policy_incompatible").as_dict()
 
     cmd = _text_json(
         await tools["cmd"].run(
@@ -420,4 +421,4 @@ async def test_mcp_mutation_paths_fail_closed_without_access_backend():
             convert_result=True,
         )
     )
-    assert cmd == {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+    assert cmd == public_error("policy_incompatible").as_dict()

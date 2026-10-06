@@ -4,6 +4,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.mcp.output_contracts import (
     CmdOutput,
     ContextOutput,
@@ -13,6 +14,7 @@ from terminal_mcp.mcp.output_contracts import (
     OutputContractViolation,
     SessionOutput,
     TaskOutput,
+    _result,
     cmd_result,
     context_result,
     health_result,
@@ -20,9 +22,10 @@ from terminal_mcp.mcp.output_contracts import (
     observe_result,
     session_result,
     task_result,
-    _result,
 )
 from terminal_mcp.mcp.server import build_mcp
+
+
 class FakeService:
     pass
 
@@ -384,3 +387,29 @@ def test_health_review_counts_are_closed_and_reject_nested_backend_payload():
 
     schema = HealthOutput.success_schema()
     assert not _has_unbounded_object(schema)
+
+
+def test_error_result_is_canonical_bounded_and_marked_as_error():
+    secret = "raw backend detail must never reach the agent"
+    raw = {
+        "ok": False,
+        "code": "policy_incompatible",
+        "error": secret,
+        "diagnostics": {"exception": secret},
+    }
+    result = session_result(raw, "start")
+    expected = public_error("policy_incompatible").as_dict()
+    assert result.structuredContent == expected
+    assert json.loads(result.content[0].text) == expected
+    assert result.isError is True
+    assert secret not in result.model_dump_json()
+
+
+def test_unknown_raw_error_fails_closed_to_internal_error():
+    secret = "database password is hunter2"
+    result = session_result({"ok": False, "error": secret, "trace": secret}, "start")
+    expected = public_error("internal_error").as_dict()
+    assert result.structuredContent == expected
+    assert json.loads(result.content[0].text) == expected
+    assert result.isError is True
+    assert secret not in result.model_dump_json()

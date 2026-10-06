@@ -462,12 +462,12 @@ async def test_schema_invalid_task_request_is_rejected_before_backend():
         {
             "error_class": "missing",
             "path": "request.claim_intent",
-            "description": "Field required",
+            "description": "Provide this required field.",
         },
         {
             "error_class": "extra_forbidden",
-            "path": "request.claim_intnet",
-            "description": "Extra inputs are not permitted",
+            "path": "request.*",
+            "description": "Remove this unsupported field.",
         },
     ]
 
@@ -801,7 +801,7 @@ def test_fastmcp_runtime_arg_model_is_the_discovery_schema_source():
                 },
                 "unexpected": 1,
             },
-            ["unexpected"],
+            ["*"],
         ),
         ({"request": "bad"}, ["request"]),
         ({"request": []}, ["request"]),
