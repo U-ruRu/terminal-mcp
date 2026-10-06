@@ -307,8 +307,14 @@ def build_access_router(settings, auth, pairing_store, access_store):
                 client_id=body.client_id,
                 grant_id=body.grant_id,
             )
-        except AuthConflictError:
-            return _error("stale_security_generation", 409)
+        except AuthConflictError as exc:
+            code = str(exc)
+            return _error(
+                "last_auth_manager_required"
+                if code == "last_auth_manager_required"
+                else "stale_security_generation",
+                409,
+            )
         except AuthNotFoundError:
             return _error("revocation_target_not_found", 404)
 

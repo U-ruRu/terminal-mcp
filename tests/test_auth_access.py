@@ -197,3 +197,78 @@ def test_invite_reset_and_independent_client_revoke_are_single_use(tmp_path):
         )
         assert stale.status_code == 409
         assert stale.json()["error"] == "stale_security_generation"
+
+
+
+def test_last_auth_manager_cannot_self_revoke_without_replacement(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app) as client:
+        owner_device = pair(app, client, "Owner phone")
+        owner = client.post(
+            "/access/bootstrap/owner",
+            headers=bearer(owner_device),
+            json={"username": "owner", "password": "owner-password"},
+        ).json()
+        owner_headers = bearer(owner_device)
+
+        preview = client.post(
+            "/access/revocations/preview",
+            headers=owner_headers,
+            json={"client_id": owner_device["client_id"]},
+        ).json()
+        blocked = client.post(
+            "/access/revocations/commit",
+            headers=owner_headers,
+            json={
+                "client_id": owner_device["client_id"],
+                "expected_generation": preview["security_generation"],
+            },
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["error"] == "last_auth_manager_required"
+        assert client.get("/access/me", headers=owner_headers).status_code == 200
+        assert client.get("/access/principals", headers=owner_headers).status_code == 200
+
+        invite = client.post(
+            "/access/enrollments",
+            headers=owner_headers,
+            json={"purpose": "human_invite", "display_name": "Backup manager"},
+        ).json()
+        backup_principal = client.post(
+            "/access/enrollments/exchange",
+            json={
+                "secret": invite["secret"],
+                "username": "backup-manager",
+                "password": "backup-manager-password",
+            },
+        ).json()["principal"]
+        backup_device = pair(app, client, "Backup phone")
+        assigned = client.post(
+            f"/access/clients/{backup_device['client_id']}/assign",
+            headers=owner_headers,
+            json={
+                "principal_id": backup_principal["principal_id"],
+                "role": "owner",
+                "scopes": ["auth:manage", "terminal:read"],
+            },
+        )
+        assert assigned.status_code == 200
+
+        preview = client.post(
+            "/access/revocations/preview",
+            headers=owner_headers,
+            json={"client_id": owner_device["client_id"]},
+        ).json()
+        revoked = client.post(
+            "/access/revocations/commit",
+            headers=owner_headers,
+            json={
+                "client_id": owner_device["client_id"],
+                "expected_generation": preview["security_generation"],
+            },
+        )
+        assert revoked.status_code == 200
+        assert client.get("/access/me", headers=owner_headers).status_code == 401
+        backup_headers = bearer(backup_device)
+        assert client.get("/access/principals", headers=backup_headers).status_code == 200
+        assert owner["principal"]["principal_id"] != backup_principal["principal_id"]

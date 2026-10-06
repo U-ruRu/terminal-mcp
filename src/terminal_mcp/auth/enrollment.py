@@ -587,6 +587,21 @@ class AccessStore:
             "grants": affected_grants,
         }
 
+    @staticmethod
+    async def _has_active_manager(db) -> bool:
+        rows = await (
+            await db.execute(
+                "SELECT g.scopes_json FROM auth_grants g "
+                "JOIN auth_clients c ON c.client_id=g.client_id "
+                "JOIN auth_principals p ON p.principal_id=g.principal_id "
+                "WHERE g.revoked_at IS NULL AND c.status='active' AND p.status='active'"
+            )
+        ).fetchall()
+        return any(
+            "auth:manage" in json.loads(row[0])
+            for row in rows
+        )
+
     async def revoke_commit(
         self,
         *,
@@ -646,6 +661,8 @@ class AccessStore:
                 changed += cursor.rowcount
             if changed == 0:
                 raise AuthNotFoundError("nothing active to revoke")
+            if not await self._has_active_manager(db):
+                raise AuthConflictError("last_auth_manager_required")
             generation = await self.foundation._bump_generation(db, now)
             await self.foundation._audit(
                 db,
