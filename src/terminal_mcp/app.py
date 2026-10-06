@@ -207,6 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             control_node_id=settings.fleet_control_node_id,
         )
         fleet_control.configure_observability(events, metrics)
+    service.fleet_control = fleet_control
 
     persistent_store = PersistentAgentStore(settings.database_path)
     persistent_store.configure_observability(events, metrics)
