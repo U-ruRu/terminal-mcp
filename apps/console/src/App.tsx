@@ -45,7 +45,10 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/settings" element={<Settings />} />
         <Route path="/connections" element={<Connections />} />
         <Route path="/meshes/:meshId" element={<Connections />} />
+        <Route path="/meshes/:meshId/agents" element={<ServerChooser model={model} section="agents" />} />
         <Route path="/meshes/:meshId/persistent" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
+        <Route path="/meshes/:meshId/tasks" element={<ServerChooser model={model} section="tasks" />} />
+        <Route path="/meshes/:meshId/activity" element={<Activity instances={instances} loadActivity={loadActivity} />} />
         <Route path="/meshes/:meshId/persistent/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/ui-kit" element={<UiKitShowcase />} />
         <Route path="/connect" element={<Connections />} />
