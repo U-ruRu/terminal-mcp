@@ -15,6 +15,10 @@ from terminal_mcp.core.persistent_lifecycle import (
 )
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
+COMMAND_RUN_INLINE_BUDGET_SECONDS = 5.0
+COMMAND_RUN_INLINE_POLL_SECONDS = 0.05
+COMMAND_RUN_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
+
 
 class PersistentBackend:
     """Feature-gated application service for Persistent Slots."""
@@ -1612,6 +1616,8 @@ class PersistentBackend:
         queue_id: int | None,
         task_scope: str,
     ):
+        loop = asyncio.get_running_loop()
+        inline_deadline = loop.time() + COMMAND_RUN_INLINE_BUDGET_SECONDS
         if not cmd:
             return {"ok": False, "code": "invalid_command", "error": "command is required"}
         try:
@@ -1689,11 +1695,46 @@ class PersistentBackend:
                         work_session_id=work_session_id,
                         session_epoch=session_epoch,
                     )
+                current = await self.repo.get(command.cmd_hash)
+                queue_position = await self.repo.queue_position(command.cmd_hash)
+                backlogged = False
+                if current is not None and current.status == "queued":
+                    snapshot = await self.repo.queue_snapshot(self.terminal.queue_workers)
+                    queue_state = next(
+                        (item for item in snapshot if item.get("queue_id") == command.queue_id),
+                        None,
+                    )
+                    running_hash = queue_state.get("running") if queue_state is not None else None
+                    backlogged = bool(
+                        (running_hash is not None and running_hash != command.cmd_hash)
+                        or (queue_position is not None and queue_position > 1)
+                    )
+
+                while (
+                    not backlogged
+                    and current is not None
+                    and current.status not in COMMAND_RUN_TERMINAL_STATES
+                    and loop.time() < inline_deadline
+                ):
+                    remaining = inline_deadline - loop.time()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(COMMAND_RUN_INLINE_POLL_SECONDS, remaining))
+                    current = await self.repo.get(command.cmd_hash)
+                    queue_position = await self.repo.queue_position(command.cmd_hash)
+
+                current = current or command
                 return {
                     "ok": True,
                     "cmd_hash": command.cmd_hash,
+                    "status": current.status,
                     "queue_id": command.queue_id,
-                    "queue_position": await self.repo.queue_position(command.cmd_hash),
+                    "queue_position": queue_position,
+                    "exit_code": current.exit_code,
+                    "execution_started": bool(current.claimed_at or current.started_at),
+                    "claimed_at": current.claimed_at,
+                    "started_at": current.started_at,
+                    "finished_at": current.finished_at,
                     "task_scope": task_scope,
                     "task_targets": [f"{item['namespace']}/{item['task_id']}" for item in selected],
                     "task_scope_options": options,
