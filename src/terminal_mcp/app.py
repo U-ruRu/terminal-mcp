@@ -8,6 +8,7 @@ from starlette.routing import Mount
 from terminal_mcp.application import TerminalApplication
 from terminal_mcp.application.command_scheduler import CommandScheduler
 from terminal_mcp.auth.credentials import CredentialManager
+from terminal_mcp.auth.enrollment import AccessStore
 from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.auth.pairing import PairingStore
@@ -35,6 +36,7 @@ from terminal_mcp.fleet.replication import FleetReplicationService
 from terminal_mcp.fleet.source import FleetSourceService
 from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
 from terminal_mcp.fleet.storage import FleetIdentityStore
+from terminal_mcp.http.access import build_access_router
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
 from terminal_mcp.http.browser_security import BrowserSecurityMiddleware
@@ -81,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     oauth_store = OAuthStore(settings.database_path)
     auth_foundation = AuthFoundationStore(settings.auth_database_path)
+    access_store = AccessStore(auth_foundation)
     pairing_store = PairingStore(settings.database_path)
     ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     fleet_ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
@@ -359,6 +362,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.application = application
     app.state.oauth_store = oauth_store
     app.state.auth_foundation = auth_foundation
+    app.state.access_store = access_store
     app.state.pairing_store = pairing_store
     app.state.ws_ticket_store = ws_ticket_store
     app.state.fleet_ws_ticket_store = fleet_ws_ticket_store
@@ -416,6 +420,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
     app.include_router(build_pairing_router(settings, auth, pairing_store))
+    app.include_router(build_access_router(settings, auth, pairing_store, access_store))
     app.include_router(
         build_console_events_router(
             settings,

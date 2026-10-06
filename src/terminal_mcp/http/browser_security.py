@@ -31,6 +31,7 @@ def browser_transport_path(path: str) -> bool:
         or path == "/oauth/token"
         or path.startswith("/actions/")
         or path.startswith("/console/")
+        or path.startswith("/access/")
     )
 
 

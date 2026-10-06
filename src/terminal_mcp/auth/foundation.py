@@ -147,6 +147,20 @@ class AuthFoundationStore:
                     details_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS auth_enrollments(
+                    enrollment_id TEXT PRIMARY KEY,
+                    purpose TEXT NOT NULL CHECK(purpose IN ('human_invite','password_reset')),
+                    secret_hash TEXT NOT NULL UNIQUE,
+                    issuer_principal_id TEXT NOT NULL,
+                    issuer_client_id TEXT NOT NULL,
+                    target_principal_id TEXT,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS ix_auth_enrollments_expiry
+                    ON auth_enrollments(expires_at,consumed_at);
                 CREATE INDEX IF NOT EXISTS ix_auth_clients_principal
                     ON auth_clients(principal_id,status);
                 CREATE INDEX IF NOT EXISTS ix_auth_grants_principal

@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     env_file_path: Path = Path("/etc/terminal-mcp/terminal-mcp.env")
     database_path: Path = Path("./data/terminal-mcp.sqlite3")
     auth_database_path: Path = Path("./data/auth.sqlite3")
+    auth_enrollment_ttl_sec: int = 15 * 60
+    auth_recovery_ttl_sec: int = 10 * 60
     output_cache_path: Path = Path("./data/output.sqlite3")
     output_line_max_bytes: int = 4 * 1024 * 1024
     output_command_max_bytes: int = 8 * 1024 * 1024
