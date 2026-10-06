@@ -309,17 +309,19 @@ class WorkWindowStore(PersistentAgentStore):
         return logical_agent_id
 
     async def resolve_provider(self, identity: ProviderIdentity) -> str | None:
+        # Identity resolution is fleet-wide evidence lookup, not local authority
+        # admission. A non-authority node must be able to learn the LogicalAgent
+        # and route the call to its current authority. Binding remains authority-only.
         async with self._connect("provider_resolve") as db:
             row = await (
                 await db.execute(
-                    "SELECT logical_agent_id FROM logical_agent_provider_bindings "
-                    "WHERE provider=? AND binding_key=?",
+                    "SELECT b.logical_agent_id,a.state FROM logical_agent_provider_bindings b "
+                    "JOIN logical_agents a ON a.logical_agent_id=b.logical_agent_id "
+                    "WHERE b.provider=? AND b.binding_key=?",
                     (identity.provider, identity.binding_key),
                 )
             ).fetchone()
-            if row:
-                await self._home(db, row[0])
-        return row[0] if row else None
+        return row[0] if row and row[1] != "deleted" else None
 
     async def policy(self, logical_agent_id: str) -> SlotPolicyRecord:
         async with self._transaction("window_policy_read") as db:

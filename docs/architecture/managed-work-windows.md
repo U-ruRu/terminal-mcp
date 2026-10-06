@@ -111,3 +111,25 @@ before enabling managed endpoints.
 Live operation admission now reads slot state, authority epoch, auth generation,
 session/window link and exact deadline from one SQLite snapshot. Historical
 status/end uses an explicit non-live view; that view does not authorize work.
+
+## Provider resolution, authorization and Fleet routing
+
+`ManagedProviderResolver` converts trusted server-side provider metadata through the
+explicit provider registry and resolves only an existing provider binding. It never
+creates or chooses a slot. Provider binding lookup is fleet-readable so a non-authority
+node can learn the `logical_agent_id`; creating or changing a binding remains restricted
+to the canonical slot authority.
+
+`ManagedAuthorityRouter` then compares the canonical slot authority node/epoch with the
+Fleet control route. A configured Fleet route must exist, be active, and match both
+values exactly. Standalone resolution accepts only a slot owned by the repository's
+local authority. Stale or incomplete routing fails closed before session admission.
+
+`ManagedGrantAuthorizer` separately checks the verified principal/credential against
+active AuthFoundation grants. The grant must match the concrete client credential, the
+required read/execute scope, and either the slot resource or its current authority-node
+resource. Operator operations additionally require the `operator` role. The public name
+comes from the active Access Authority slot and its authority must match the same route.
+These adapters are production-capable boundaries but are not yet connected to public MCP
+transport; transport metadata capture, runtime composition and cutover remain explicit
+follow-up work.

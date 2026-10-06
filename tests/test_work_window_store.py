@@ -258,6 +258,10 @@ async def test_provider_binding_idempotent_durable_and_contains_no_raw_identity(
     await store.bind_provider(identity, "la_one", principal_id="operator", now=T0)
     again = WorkWindowStore(store.path, authority_node_id="home")
     assert await again.resolve_provider(identity) == "la_one"
+    # Provider evidence can be resolved on a non-authority Fleet node so that
+    # transport can route to the canonical authority. Binding still requires home.
+    peer = WorkWindowStore(store.path, authority_node_id="other-node")
+    assert await peer.resolve_provider(identity) == "la_one"
     assert await again.resolve_provider(replace(identity, conversation="different")) is None
     with pytest.raises(WorkWindowStoreError, match="identity_binding_conflict"):
         await again.bind_provider(identity, "la_two", principal_id="operator")
