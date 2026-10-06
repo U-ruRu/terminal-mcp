@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 import time
+
+from terminal_mcp.core.public_errors import error_from_exception
+
+logger = logging.getLogger(__name__)
+
 
 current_transport: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "terminal_mcp_transport", default=None
@@ -31,9 +37,10 @@ async def observed(service, transport: str, tool: str, operation):
             metrics.inc("terminal_mcp_upstream_cancellations_total", labels)
             metrics.inc("terminal_mcp_client_disconnects_total", labels)
         raise
-    except Exception:
+    except Exception as exc:
         outcome = "error"
-        raise
+        logger.exception("public transport operation failed: %s.%s", transport, tool)
+        return error_from_exception(exc).as_dict()
     finally:
         duration = time.monotonic() - started
         outcome = locals().get("outcome", "error")

@@ -7,9 +7,14 @@ from typing import Annotated, Any, ClassVar, Literal
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError
 
+from terminal_mcp.core.public_errors import (
+    MAX_ERROR_MESSAGE,
+    ErrorRepair,
+    normalize_public_error,
+    public_error,
+)
 from terminal_mcp.core.read_contract import (
     CALL_TOOL_RESULT_BUDGET_BYTES,
-    READ_RESPONSE_BUDGET_BYTES,
 )
 from terminal_mcp.core.task_projections import (
     Cursor as Cursor,
@@ -136,9 +141,9 @@ class MessageState(StrEnum):
 
 class AccessError(_Strict):
     ok: Literal[False]
-    error: str
-    code: str | None = None
-    details: dict[str, Any] | None = None
+    code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    error: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
+    details: ErrorRepair | None = None
 
 
 def _success_schema(annotation: Any) -> dict[str, Any]:
@@ -660,17 +665,7 @@ def _workflow_warning(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _error_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    details = {
-        key: value
-        for key, value in raw.items()
-        if key not in {"ok", "code", "error"} and value is not None
-    }
-    return {
-        "ok": False,
-        "error": str(raw.get("error") or raw.get("code") or "operation_failed"),
-        **({"code": str(raw["code"])} if raw.get("code") is not None else {}),
-        **({"details": details} if details else {}),
-    }
+    return normalize_public_error(raw).as_dict()
 
 
 def serialized_call_tool_result_size(result: CallToolResult) -> int:
@@ -697,6 +692,7 @@ def _call_tool_result(
     data: dict[str, Any],
     *,
     content_data: dict[str, Any] | None = None,
+    is_error: bool = False,
 ) -> CallToolResult:
     return CallToolResult(
         content=[
@@ -706,7 +702,7 @@ def _call_tool_result(
             )
         ],
         structuredContent=data,
-        isError=False,
+        isError=is_error,
     )
 
 
@@ -717,7 +713,8 @@ def _result(
     raw: dict[str, Any],
     structured: dict[str, Any],
 ) -> CallToolResult:
-    candidate = structured if raw.get("ok") else _error_payload(raw)
+    is_error = raw.get("ok") is False
+    candidate = _error_payload(raw) if is_error else structured
     try:
         validated = output_model.model_validate(candidate)
     except ValidationError as exc:
@@ -729,7 +726,11 @@ def _result(
         ) from exc
 
     data = validated.model_dump(mode="json", exclude_unset=True)
-    result = _call_tool_result(data, content_data=raw)
+    result = _call_tool_result(
+        data,
+        content_data=data if is_error else raw,
+        is_error=is_error,
+    )
     serialized_bytes = serialized_call_tool_result_size(result)
     if serialized_bytes <= CALL_TOOL_RESULT_BUDGET_BYTES:
         return result
@@ -737,18 +738,7 @@ def _result(
     # Fail closed at the final public serialization boundary. Normal paginated
     # reads should stay below this via their lower page-data budget; this guard
     # also covers unexpectedly large coordination/error metadata.
-    bounded_error = {
-        "ok": False,
-        "code": "output_item_too_large",
-        "error": "serialized MCP result exceeds response-size budget",
-        "details": {
-            "tool": tool,
-            "variant": variant,
-            "serialized_bytes": serialized_bytes,
-            "budget_bytes": READ_RESPONSE_BUDGET_BYTES,
-            "tool_result_budget_bytes": CALL_TOOL_RESULT_BUDGET_BYTES,
-        },
-    }
+    bounded_error = public_error("output_item_too_large").as_dict()
     try:
         error_validated = output_model.model_validate(bounded_error)
     except ValidationError as exc:
@@ -757,7 +747,7 @@ def _result(
             "could not encode bounded size error"
         ) from exc
     error_data = error_validated.model_dump(mode="json", exclude_unset=True)
-    error_result = _call_tool_result(error_data, content_data=error_data)
+    error_result = _call_tool_result(error_data, content_data=error_data, is_error=True)
     if serialized_call_tool_result_size(error_result) > CALL_TOOL_RESULT_BUDGET_BYTES:
         raise OutputContractViolation(
             f"output_contract_violation tool={tool} variant={variant} "
