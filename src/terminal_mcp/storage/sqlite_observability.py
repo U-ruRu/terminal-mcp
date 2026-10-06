@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import asynccontextmanager
 
@@ -168,6 +169,32 @@ class ObservedConnection:
         return getattr(self._db, name)
 
 
+async def _open_cancellation_safe_connection(connect, path, **kwargs):
+    connect_task = asyncio.ensure_future(connect(path, **kwargs))
+    try:
+        return await asyncio.shield(connect_task)
+    except asyncio.CancelledError:
+        # aiosqlite starts the worker thread before its initial connection future
+        # resolves. Finish that handshake and close on the live loop before
+        # propagating cancellation, otherwise the worker can outlive the loop.
+        try:
+            db = await connect_task
+        except BaseException:
+            pass
+        else:
+            await db.close()
+        raise
+
+
+@asynccontextmanager
+async def cancellation_safe_connection(connect, path, **kwargs):
+    db = await _open_cancellation_safe_connection(connect, path, **kwargs)
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
 async def open_observed_connection(
     connect,
     path,
@@ -181,7 +208,7 @@ async def open_observed_connection(
     durable_finalization_outcome: str | None = None,
 ):
     try:
-        raw = await connect(path, timeout=busy_timeout)
+        raw = await _open_cancellation_safe_connection(connect, path, timeout=busy_timeout)
     except sqlite3.Error as exc:
         diagnostics.record(
             exc,
@@ -207,11 +234,12 @@ async def open_observed_connection(
     try:
         for pragma in pragmas:
             await db.execute(pragma)
-    except sqlite3.Error as exc:
-        translated = diagnostics.translate_busy(exc, operation, busy_timeout)
+    except BaseException as exc:
         await db.close()
-        if translated:
-            raise translated from exc
+        if isinstance(exc, sqlite3.Error):
+            translated = diagnostics.translate_busy(exc, operation, busy_timeout)
+            if translated:
+                raise translated from exc
         raise
     return db
 

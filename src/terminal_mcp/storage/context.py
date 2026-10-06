@@ -4,6 +4,8 @@ from typing import Any
 
 import aiosqlite
 
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
+
 _UNSET = object()
 
 
@@ -64,12 +66,12 @@ class ContextStore:
         if limit is not None:
             query += " LIMIT ? OFFSET ?"
             params.extend((max(1, int(limit)), max(0, int(offset))))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             rows = await (await db.execute(query, params)).fetchall()
         return [self._entry(row) for row in rows]
 
     async def get(self, context_id: int):
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             row = await (
                 await db.execute(
                     "SELECT id,summary,content,is_primary FROM instance_context WHERE id=?",
@@ -82,7 +84,7 @@ class ContextStore:
         summary = self._summary(summary)
         content = self._content(content)
         primary = self._primary(primary)
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 "INSERT INTO instance_context(summary,content,is_primary) VALUES(?,?,?)",
                 (summary, content, int(primary)),
@@ -113,7 +115,7 @@ class ContextStore:
         if not assignments:
             raise ValueError("at least one context field is required")
         params.append(int(context_id))
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute(
                 f"UPDATE instance_context SET {','.join(assignments)} WHERE id=?",
                 params,
@@ -124,7 +126,7 @@ class ContextStore:
         return await self.get(context_id)
 
     async def delete(self, context_id: int) -> bool:
-        async with aiosqlite.connect(self.path, timeout=1.0) as db:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             cur = await db.execute("DELETE FROM instance_context WHERE id=?", (int(context_id),))
             await db.commit()
         return cur.rowcount == 1

@@ -29,6 +29,7 @@ _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
     "queue_id,queue_sequence,enqueued_at,claimed_at"
 )
+_SCRUBBED_COMMAND_BODY = "[command body pruned]"
 
 
 class SqliteRepository:
@@ -455,6 +456,7 @@ class SqliteRepository:
                 "finished_at=COALESCE(finished_at, ?) WHERE status IN ('queued', 'running')",
                 (recovered_at,),
             )
+            await self._scrub_pruned_command_bodies(db)
             await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             await db.commit()
             if legacy_output_migrated:
@@ -1796,6 +1798,26 @@ class SqliteRepository:
             ).fetchall()
         return [Command(*row) for row in rows]
 
+    async def _scrub_pruned_command_bodies(self, db, command_hashes=None):
+        terminal = ("completed", "failed", "cancelled")
+        if command_hashes is None:
+            await db.execute(
+                "UPDATE commands SET cmd=? "
+                "WHERE status IN (?,?,?) AND cmd<>? AND hash IN ("
+                "SELECT command_hash FROM command_output_state WHERE pruned_at IS NOT NULL)",
+                (_SCRUBBED_COMMAND_BODY, *terminal, _SCRUBBED_COMMAND_BODY),
+            )
+            return
+        hashes = tuple(dict.fromkeys(str(value) for value in command_hashes if value))
+        if not hashes:
+            return
+        marks = ",".join("?" for _ in hashes)
+        await db.execute(
+            f"UPDATE commands SET cmd=? WHERE hash IN ({marks}) "
+            "AND status IN (?,?,?) AND cmd<>?",
+            (_SCRUBBED_COMMAND_BODY, *hashes, *terminal, _SCRUBBED_COMMAND_BODY),
+        )
+
     async def mark_output_truncated(self, cmd_hash):
         async with self._connect("mark_output_truncated", command_hash=cmd_hash) as db:
             await db.execute(
@@ -1852,6 +1874,7 @@ class SqliteRepository:
                     "ON CONFLICT(command_hash) DO UPDATE SET pruned_at=excluded.pruned_at",
                     [(cmd_hash, stamp) for cmd_hash in pruned],
                 )
+                await self._scrub_pruned_command_bodies(db, pruned)
                 await db.commit()
         return pruned
 
