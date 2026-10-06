@@ -51,6 +51,7 @@ test('opens a stable server workspace from fleet dashboard', async () => {
   const applicationNavigation = screen.getByRole('navigation', { name: 'Application navigation' })
   expect(within(applicationNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/servers/server-c/agents')
   expect(within(applicationNavigation).getAllByRole('link', { name: 'Slots' }).some((link) => link.getAttribute('href') === '/servers/server-c/slots')).toBe(true)
+  expect(document.querySelector('.server-entity-context .server-slots-link')).not.toBeInTheDocument()
   expect(within(applicationNavigation).getByRole('link', { name: 'Context' })).toHaveAttribute('href', '/servers/server-c/context')
   expect(within(applicationNavigation).queryByRole('link', { name: 'Diagnostics' })).not.toBeInTheDocument()
   expect(document.querySelector('.server-local-navigation')).not.toBeInTheDocument()
@@ -92,15 +93,23 @@ test('direct route keeps stale cached server readable after reload', () => {
   renderApp('/servers/server-b')
   expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server B')
   expect(screen.queryByRole('heading', { name: 'Server B' })).not.toBeInTheDocument()
-  expect(screen.getByRole('status')).toHaveTextContent('last cached snapshot')
+  expect(screen.queryByText(/last cached snapshot/i)).not.toBeInTheDocument()
+  const serverCard = screen.getByRole('article', { name: 'Server B server' })
+  const statusStrip = serverCard.querySelector('.server-state-strip') as HTMLElement
+  expect(within(statusStrip).getByText('Live')).toBeInTheDocument()
+  expect(within(statusStrip).getByText('Stale')).toBeInTheDocument()
   expect(screen.getByText('Review Android release path')).toBeInTheDocument()
 })
 
-test('direct route keeps offline server snapshot readable', () => {
+test('direct route keeps offline server snapshot readable without a layout-shifting connection strip', () => {
   renderApp('/servers/server-a')
   expect(document.querySelector('.app-bar-title')).toHaveTextContent('Server A')
   expect(screen.queryByRole('heading', { name: 'Server A' })).not.toBeInTheDocument()
-  expect(screen.getByRole('status')).toHaveTextContent('Offline')
+  expect(screen.queryByText(/last cached snapshot/i)).not.toBeInTheDocument()
+  const serverCard = screen.getByRole('article', { name: 'Server A server' })
+  const statusStrip = serverCard.querySelector('.server-state-strip') as HTMLElement
+  expect(within(statusStrip).getByText('Offline')).toBeInTheDocument()
+  expect(within(statusStrip).getByText('Stale')).toBeInTheDocument()
   expect(screen.getByText('No active sessions in the cached snapshot.')).toBeInTheDocument()
 })
 

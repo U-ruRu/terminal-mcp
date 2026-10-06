@@ -43,7 +43,7 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
-  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.34 · code 36')
+  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.35 · code 37')
 })
 
 

@@ -2387,12 +2387,6 @@ h3 { font-size: var(--font-card-size); line-height: var(--font-card-line); }
   justify-self: start;
   padding-inline: 14px;
 }
-.server-slots-link {
-  text-decoration: none;
-  min-height: var(--control-standard);
-  display: inline-flex;
-  align-items: center;
-}
 
 /* M4 Slots global operator surface */
 .slots-global-filter { grid-template-columns: minmax(0, 20rem); }
