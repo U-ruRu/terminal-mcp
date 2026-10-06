@@ -2,25 +2,47 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
+from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.application.mesh import MeshApplicationError
+from terminal_mcp.application.replication import (
+    FleetProjectionApplication,
+    FleetSourceApplication,
+)
 from terminal_mcp.fleet.protocol import MAX_SOURCE_REPLAY_LIMIT
 
+_ERROR_STATUS = {
+    "invalid_request": 400,
+    "unauthorized": 401,
+    "forbidden": 403,
+    "not_found": 404,
+    "conflict": 409,
+}
 
-def build_fleet_v1_source_router(source, replication) -> APIRouter:
+
+def build_fleet_v1_source_router(source, replication, *, application=None) -> APIRouter:
     router = APIRouter()
+    target = application if application is not None else FleetSourceApplication(source)
 
     def authenticate(peer_id: str, authorization: str):
         peer = replication.authenticate(peer_id, authorization)
         if peer is None:
             raise HTTPException(status_code=401, detail="invalid fleet peer")
-        return peer
+        return ActorContext(
+            transport="mesh",
+            endpoint_role="mesh",
+            node_id=str(getattr(getattr(replication, "config", None), "instance_id", "") or ""),
+            peer_node_id=peer.instance_id,
+        )
 
     @router.get("/internal/fleet/v1/source/manifest", include_in_schema=False)
     async def manifest(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        return await source.manifest()
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.manifest(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/events", include_in_schema=False)
     async def events(
@@ -30,39 +52,43 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         limit: int = Query(default=100, ge=1, le=MAX_SOURCE_REPLAY_LIMIT),
         source_stream_generation: str | None = Query(default=None),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            return await source.events(
-                since=since,
-                limit=limit,
-                source_stream_generation=source_stream_generation,
+            return await target.events(
+                actor, since=since, limit=limit, source_stream_generation=source_stream_generation
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/runtime-health", include_in_schema=False)
     async def runtime_health(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        return await source.runtime_health()
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.runtime_health(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/snapshot", include_in_schema=False)
     async def snapshot(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        return await source.snapshot()
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.snapshot(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/bootstrap", include_in_schema=False)
     async def bootstrap(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        return await source.bootstrap()
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.bootstrap(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/current/{scope}", include_in_schema=False)
     async def current_recovery(
@@ -75,23 +101,21 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         limit: int = Query(default=100, ge=1, le=100),
         barrier_source_seq: int | None = Query(default=None, ge=0),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            return await source.current_recovery(
-                scope,
+            return await target.current_recovery(
+                actor,
+                scope=scope,
                 source_stream_generation=source_stream_generation,
                 snapshot_id=snapshot_id,
                 cursor=cursor,
                 limit=limit,
                 barrier_source_seq=barrier_source_seq,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
-    @router.get(
-        "/internal/fleet/v1/source/current/{scope}/entity",
-        include_in_schema=False,
-    )
+    @router.get("/internal/fleet/v1/source/current/{scope}/entity", include_in_schema=False)
     async def current_entity(
         scope: str,
         entity_id: str = Query(min_length=1, max_length=260),
@@ -99,15 +123,16 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            return await source.current_entity(
-                scope,
-                entity_id,
+            return await target.current_entity(
+                actor,
+                scope=scope,
+                entity_id=entity_id,
                 source_stream_generation=source_stream_generation,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/query/{resource}", include_in_schema=False)
     async def query(
@@ -132,33 +157,31 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         include_count: bool = Query(default=False),
         include_facets: bool = Query(default=False),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        filters = {
-            "namespace": namespace,
-            "task_id": task_id,
-            "state": state,
-            "lane": lane,
-            "priority": priority,
-            "status": status,
-            "agent_id": agent_id,
-            "logical_agent_id": logical_agent_id,
-            "work_session_id": work_session_id,
-            "event_type": event_type,
-        }
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            return await source.query(
-                resource,
+            return await target.query(
+                actor,
+                resource=resource,
                 cursor=cursor,
                 limit=limit,
                 q=q,
-                filters={key: value for key, value in filters.items() if value is not None},
+                namespace=namespace,
+                task_id=task_id,
+                state=state,
+                lane=lane,
+                priority=priority,
+                status=status,
+                agent_id=agent_id,
+                logical_agent_id=logical_agent_id,
+                work_session_id=work_session_id,
+                event_type=event_type,
                 as_of=as_of,
                 through_seq=through_seq,
                 include_count=include_count,
                 include_facets=include_facets,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/detail/{resource}", include_in_schema=False)
     async def detail(
@@ -167,14 +190,11 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            item = await source.detail(resource, entity_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if item is None:
-            raise HTTPException(status_code=404, detail="entity not found")
-        return item
+            return await target.detail(actor, resource=resource, entity_id=entity_id)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/namespaces", include_in_schema=False)
     async def namespaces(
@@ -184,8 +204,11 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         limit: int = Query(default=100, ge=1, le=100),
         q: str | None = Query(default=None),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        return await source.query_namespaces(cursor=cursor, limit=limit, q=q)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.namespaces(actor, cursor=cursor, limit=limit, q=q)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/source/task-graph", include_in_schema=False)
     async def task_graph(
@@ -195,43 +218,55 @@ def build_fleet_v1_source_router(source, replication) -> APIRouter:
         authorization: str = Header(default=""),
         depth: int = Query(default=2, ge=0, le=8),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        return await source.task_graph(namespace=namespace, task_id=task_id, depth=depth)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.task_graph(actor, namespace=namespace, task_id=task_id, depth=depth)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     return router
 
 
-def build_fleet_v1_projection_router(projection, replication, projection_service=None) -> APIRouter:
+def build_fleet_v1_projection_router(
+    projection, replication, projection_service=None, *, application=None
+) -> APIRouter:
     router = APIRouter()
+    target = (
+        application
+        if application is not None
+        else FleetProjectionApplication(projection, projection_service)
+    )
 
     def authenticate(peer_id: str, authorization: str):
         peer = replication.authenticate(peer_id, authorization)
         if peer is None:
             raise HTTPException(status_code=401, detail="invalid fleet peer")
-        return peer
+        return ActorContext(
+            transport="mesh",
+            endpoint_role="mesh",
+            node_id=str(getattr(getattr(replication, "config", None), "instance_id", "") or ""),
+            peer_node_id=peer.instance_id,
+        )
 
     @router.get("/internal/fleet/v1/projection/manifest", include_in_schema=False)
     async def manifest(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        result = await projection.meta()
-        result["capabilities"] = (
-            projection_service.capabilities if projection_service else []
-        )
-        return result
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.manifest(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/projection/snapshot", include_in_schema=False)
     async def snapshot(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
+        actor = authenticate(x_terminal_mcp_peer, authorization)
         try:
-            return await projection.replica_snapshot()
-        except Exception as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return await target.snapshot(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/v1/projection/events", include_in_schema=False)
     async def events(
@@ -241,35 +276,22 @@ def build_fleet_v1_projection_router(projection, replication, projection_service
         projection_epoch: int | None = Query(default=None, ge=1),
         limit: int = Query(default=100, ge=1, le=1000),
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        meta = await projection.meta()
-        if projection_epoch is not None and projection_epoch != meta["projection_epoch"]:
-            return {
-                "projection_epoch": meta["projection_epoch"],
-                "projection_seq": meta["projection_seq"],
-                "events": [],
-                "reset_required": True,
-            }
-        result = await projection.events(since=since, limit=limit)
-        result["reset_required"] = False
-        return result
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.events(
+                actor, since=since, projection_epoch=projection_epoch, limit=limit
+            )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
-    @router.get(
-        "/internal/fleet/v1/projection/runtime-overlays",
-        include_in_schema=False,
-    )
+    @router.get("/internal/fleet/v1/projection/runtime-overlays", include_in_schema=False)
     async def runtime_overlays(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        authenticate(x_terminal_mcp_peer, authorization)
-        snapshot = await projection.snapshot()
-        return {
-            "projection_epoch": snapshot["projection_epoch"],
-            "projection_seq": snapshot["projection_seq"],
-            "sources": snapshot["sources"],
-            "scope_statuses": snapshot.get("scope_statuses") or [],
-            "runtime_overlays": snapshot["runtime_overlays"],
-        }
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.runtime_overlays(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     return router

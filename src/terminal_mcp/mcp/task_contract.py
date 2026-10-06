@@ -1,296 +1,107 @@
-from typing import Annotated, Literal
+"""FastMCP argument validation; canonical request models live in application."""
 
 from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    PrivateAttr,
-    ValidationError,
-    WithJsonSchema,
-    field_validator,
-    model_validator,
+from pydantic import ConfigDict, PrivateAttr, ValidationError, model_validator
+
+from terminal_mcp.application.task_requests import (
+    TASK_ACTIONS as TASK_ACTIONS,
 )
-
-from terminal_mcp.api_models import (
-    ReviewDimension,
-    ReviewVerdict,
-    TaskLane,
-    TaskPriority,
-    TaskState,
+from terminal_mcp.application.task_requests import (
+    AccessCode as AccessCode,
 )
-
-AccessCode = Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
-Namespace = Annotated[str, Field(min_length=1, max_length=120)]
-TaskId = Annotated[str, Field(min_length=1, max_length=120)]
-TaskRef = Annotated[str, Field(min_length=1, max_length=512)]
-Tag = Annotated[str, Field(min_length=1, max_length=64)]
-ExpectedRevision = Annotated[int, Field(ge=1)]
-ResultValue = str | dict[str, object] | list[object]
-CheckpointText = Annotated[str, Field(max_length=4000)]
-CheckpointValue = Annotated[
-    CheckpointText | dict[str, object] | list[object],
-    WithJsonSchema(
-        {
-            "oneOf": [
-                {"type": "string", "maxLength": 4000},
-                {"type": "object"},
-                {"type": "array"},
-            ]
-        }
-    ),
-]
-InputRefs = Annotated[list[TaskRef], Field(max_length=64)]
-OutputRefs = Annotated[list[TaskRef], Field(max_length=64)]
-Tags = Annotated[list[Tag], Field(max_length=50)]
-
-
-class StrictTaskModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-
-class TaskDependency(StrictTaskModel):
-    task_id: TaskId
-    namespace: Namespace | None = None
-
-
-TaskDependencies = Annotated[list[TaskDependency], Field(max_length=100)]
-
-
-class TaskIdentityRequest(StrictTaskModel):
-    code: AccessCode
-    namespace: Namespace
-    task_id: TaskId
-
-
-class TaskRevisionRequest(TaskIdentityRequest):
-    expected_revision: ExpectedRevision | None = None
-
-
-class TaskCreateRequest(StrictTaskModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        strict=True,
-        json_schema_extra={
-            "allOf": [
-                {
-                    "if": {"properties": {"state": {"const": "done"}}, "required": ["state"]},
-                    "then": {
-                        "required": ["result"],
-                        "properties": {"result": {"not": {"type": "null"}}},
-                    },
-                }
-            ]
-        },
-    )
-
-    action: Literal["create"]
-    code: AccessCode
-    namespace: Namespace
-    task_id: TaskId | None = None
-    isolation_hint: Annotated[str, Field(min_length=1, max_length=160)]
-    title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
-    lane: TaskLane = "general"
-    priority: TaskPriority = "P2"
-    state: TaskState = "ready"
-    description: Annotated[str, Field(max_length=8000)] | None = None
-    next_action: Annotated[str, Field(max_length=2000)] | None = None
-    resource_context: dict[str, object] | None = None
-    cooperative: bool = False
-    checkpoint: CheckpointValue | None = None
-    candidate_ref: Annotated[str, Field(max_length=200)] | None = None
-    input_refs: InputRefs | None = None
-    output_refs: OutputRefs | None = None
-    result: ResultValue | None = None
-    tags: Tags | None = None
-    dependencies: TaskDependencies | None = None
-    force: bool = False
-    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-    @model_validator(mode="after")
-    def require_result_for_done(self):
-        if self.state == "done" and self.result is None:
-            raise ValueError("result is required when state=done")
-        return self
-
-
-class TaskClaimRequest(TaskRevisionRequest):
-    action: Literal["claim"]
-    claim_intent: Annotated[str, Field(min_length=1, max_length=160)]
-    force: bool = False
-    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-
-class TaskReleaseRequest(TaskRevisionRequest):
-    action: Literal["release"]
-    release_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
-        default=None,
-        description=(
-            "Required only when releasing an existing live claim; omitted for the idempotent "
-            "not-claimed path, which TaskCoordinator resolves from current claim state."
-        ),
-    )
-
-
-class TaskUpdateRequest(TaskRevisionRequest):
-    action: Literal["update"]
-    title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
-    lane: TaskLane | None = None
-    priority: TaskPriority | None = None
-    state: TaskState | None = None
-    description: Annotated[str, Field(max_length=8000)] | None = None
-    next_action: Annotated[str, Field(max_length=2000)] | None = None
-    resource_context: dict[str, object] | None = None
-    cooperative: bool | None = None
-    candidate_ref: Annotated[str, Field(max_length=200)] | None = None
-    input_refs: InputRefs | None = None
-    output_refs: OutputRefs | None = None
-    tags: Tags | None = None
-    dependencies: TaskDependencies | None = None
-    checkpoint: CheckpointValue | None = None
-    result: ResultValue | None = None
-    blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
-    force: bool = False
-    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-
-class TaskCheckpointRequest(TaskRevisionRequest):
-    action: Literal["checkpoint"]
-    checkpoint: CheckpointValue
-
-
-class TaskCommentRequest(TaskIdentityRequest):
-    action: Literal["comment"]
-    comment_text: Annotated[str, Field(min_length=1, max_length=4000)]
-
-
-class TaskRelationRequest(TaskRevisionRequest):
-    relation_kind: Annotated[str, Field(min_length=1, max_length=64)]
-    related_namespace: Namespace | None = None
-    related_task_id: TaskId
-
-
-class TaskRelateRequest(TaskRelationRequest):
-    action: Literal["relate"]
-
-
-class TaskUnrelateRequest(TaskRelationRequest):
-    action: Literal["unrelate"]
-
-
-class TaskStateRequest(TaskRevisionRequest):
-    action: Literal["state"]
-    state: TaskState
-    blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
-        default=None,
-        description=(
-            "Required by TaskCoordinator only for a real transition into blocked while a live "
-            "claim exists; optional for idempotent blocked state calls."
-        ),
-    )
-    result: ResultValue | None = Field(
-        default=None,
-        description=(
-            "Required by TaskCoordinator only for a real transition into done; optional for "
-            "idempotent already-done state calls."
-        ),
-    )
-    force: bool = False
-    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-
-class TaskDoneRequest(TaskRevisionRequest):
-    action: Literal["done"]
-    result: ResultValue | None = Field(
-        default=None,
-        description=(
-            "Required for normal completion. It may be omitted only for the existing idempotent "
-            "already-done compatibility path; TaskCoordinator remains authoritative for that "
-            "state check."
-        ),
-    )
-    output_refs: OutputRefs | None = None
-    candidate_ref: Annotated[str, Field(max_length=200)] | None = None
-    force: bool = False
-    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-
-class TaskArchiveRequest(TaskRevisionRequest):
-    model_config = ConfigDict(
-        extra="forbid",
-        strict=True,
-        json_schema_extra={
-            "anyOf": [
-                {
-                    "required": ["archive_note"],
-                    "properties": {"archive_note": {"not": {"type": "null"}}},
-                },
-                {
-                    "required": ["note"],
-                    "properties": {"note": {"not": {"type": "null"}}},
-                },
-            ]
-        },
-    )
-
-    action: Literal["archive"]
-    archive_note: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
-    note: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
-
-    @model_validator(mode="after")
-    def require_archive_note(self):
-        if self.archive_note is None and self.note is None:
-            raise ValueError("archive_note or note is required")
-        return self
-
-
-class TaskReviewRequest(TaskRevisionRequest):
-    action: Literal["review"]
-    dimensions: Annotated[
-        list[ReviewDimension],
-        Field(min_length=1, max_length=3, json_schema_extra={"uniqueItems": True}),
-    ]
-    verdict: ReviewVerdict
-    evidence: dict[str, object] | None = None
-
-    @field_validator("dimensions")
-    @classmethod
-    def dimensions_are_unique(cls, value: list[ReviewDimension]):
-        if len(value) != len(set(value)):
-            raise ValueError("dimensions must be unique")
-        return value
-
-
-TaskRequest = Annotated[
-    TaskCreateRequest
-    | TaskClaimRequest
-    | TaskReleaseRequest
-    | TaskUpdateRequest
-    | TaskCheckpointRequest
-    | TaskCommentRequest
-    | TaskRelateRequest
-    | TaskUnrelateRequest
-    | TaskStateRequest
-    | TaskDoneRequest
-    | TaskArchiveRequest
-    | TaskReviewRequest,
-    Field(discriminator="action"),
-]
-
-TASK_ACTIONS = {
-    "create",
-    "claim",
-    "release",
-    "update",
-    "checkpoint",
-    "comment",
-    "relate",
-    "unrelate",
-    "state",
-    "done",
-    "archive",
-    "review",
-}
+from terminal_mcp.application.task_requests import (
+    CheckpointText as CheckpointText,
+)
+from terminal_mcp.application.task_requests import (
+    CheckpointValue as CheckpointValue,
+)
+from terminal_mcp.application.task_requests import (
+    ExpectedRevision as ExpectedRevision,
+)
+from terminal_mcp.application.task_requests import (
+    InputRefs as InputRefs,
+)
+from terminal_mcp.application.task_requests import (
+    Namespace as Namespace,
+)
+from terminal_mcp.application.task_requests import (
+    OutputRefs as OutputRefs,
+)
+from terminal_mcp.application.task_requests import (
+    ResultValue as ResultValue,
+)
+from terminal_mcp.application.task_requests import (
+    StrictTaskModel as StrictTaskModel,
+)
+from terminal_mcp.application.task_requests import (
+    Tag as Tag,
+)
+from terminal_mcp.application.task_requests import (
+    Tags as Tags,
+)
+from terminal_mcp.application.task_requests import (
+    TaskArchiveRequest as TaskArchiveRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskCheckpointRequest as TaskCheckpointRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskClaimRequest as TaskClaimRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskCommentRequest as TaskCommentRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskCreateRequest as TaskCreateRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskDependencies as TaskDependencies,
+)
+from terminal_mcp.application.task_requests import (
+    TaskDependency as TaskDependency,
+)
+from terminal_mcp.application.task_requests import (
+    TaskDoneRequest as TaskDoneRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskId as TaskId,
+)
+from terminal_mcp.application.task_requests import (
+    TaskIdentityRequest as TaskIdentityRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskRef as TaskRef,
+)
+from terminal_mcp.application.task_requests import (
+    TaskRelateRequest as TaskRelateRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskRelationRequest as TaskRelationRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskReleaseRequest as TaskReleaseRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskRequest as TaskRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskReviewRequest as TaskReviewRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskRevisionRequest as TaskRevisionRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskStateRequest as TaskStateRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskUnrelateRequest as TaskUnrelateRequest,
+)
+from terminal_mcp.application.task_requests import (
+    TaskUpdateRequest as TaskUpdateRequest,
+)
+from terminal_mcp.application.task_requests import (
+    task_request_to_backend as task_request_to_backend,
+)
 
 
 class TaskToolArguments(ArgModelBase):
@@ -395,12 +206,3 @@ def task_validation_error(exc: ValidationError, request: object) -> dict[str, ob
         "error": "task request validation failed",
         "validation_errors": errors,
     }
-
-
-def task_request_to_backend(request: TaskRequest) -> tuple[str, str, str | None, dict[str, object]]:
-    data = request.model_dump(exclude_none=True)
-    action = data.pop("action")
-    code = data.pop("code")
-    namespace = data.pop("namespace")
-    task_id = data.pop("task_id", None)
-    return code, namespace, task_id, {"action": action, **data}

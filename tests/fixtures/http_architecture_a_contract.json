@@ -1,0 +1,657 @@
+{
+  "baseline": "7183a65",
+  "description": "Public and peer HTTP signatures preserved by Architecture A. Update deliberately with any versioned surface change.",
+  "files": {
+    "actions.py": [
+      {
+        "name": "terminal_health",
+        "arguments": "agent_id: str | None=None",
+        "decorators": [
+          "router.get('/health', operation_id='getTerminalHealth', response_model=HealthResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "agent_finish",
+        "arguments": "body: AgentRequest",
+        "decorators": [
+          "router.post('/agent/finish', operation_id='finishAgentSession', response_model=AgentFinishResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "agent_start",
+        "arguments": "body: AgentStartRequest",
+        "decorators": [
+          "router.post('/agent/start', operation_id='startAgentSession', response_model=AgentOverviewResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "agents",
+        "arguments": "body: AgentsRequest",
+        "decorators": [
+          "router.post('/agents', operation_id='listActiveAgents', response_model=AgentOverviewResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "cancel_command",
+        "arguments": "body: CancelRequest",
+        "decorators": [
+          "router.post('/cancel', operation_id='cancelCommand', response_model=CancelResponse)"
+        ]
+      },
+      {
+        "name": "context",
+        "arguments": "body: ContextRequest",
+        "decorators": [
+          "router.post('/context', operation_id='manageInstanceContext', response_model=ContextResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "coordinate",
+        "arguments": "body: CoordinateRequest",
+        "decorators": [
+          "router.post('/coordinate', operation_id='coordinateAgent', response_model=CoordinateResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "message",
+        "arguments": "body: MessageRequest",
+        "decorators": [
+          "router.post('/message', operation_id='messageAgent', response_model=MessageResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "read_terminal",
+        "arguments": "body: ReadRequest",
+        "decorators": [
+          "router.post('/read', operation_id='readTerminal', response_model=ReadResponse)"
+        ]
+      },
+      {
+        "name": "recovery_command",
+        "arguments": "body: RecoveryRequest",
+        "decorators": [
+          "router.post('/recovery', operation_id='recoveryCommand', response_model=RecoveryResponse)"
+        ]
+      },
+      {
+        "name": "run_command",
+        "arguments": "body: RunRequest",
+        "decorators": [
+          "router.post('/run', operation_id='runCommand', response_model=RunResponse)"
+        ]
+      },
+      {
+        "name": "task",
+        "arguments": "body: TaskRequest",
+        "decorators": [
+          "router.post('/task', operation_id='mutateTask', response_model=TaskMutationResponse, response_model_exclude_none=True)"
+        ]
+      },
+      {
+        "name": "tasks",
+        "arguments": "body: TasksRequest",
+        "decorators": [
+          "router.post('/tasks', operation_id='listTasks', response_model=TasksResponse, response_model_exclude_none=True)"
+        ]
+      }
+    ],
+    "console.py": [
+      {
+        "name": "snapshot",
+        "arguments": "",
+        "decorators": [
+          "router.get('/snapshot', operation_id='getConsoleSnapshot', response_model=ConsoleSnapshotResponse, response_model_exclude_none=True)"
+        ]
+      }
+    ],
+    "persistent.py": [
+      {
+        "name": "slot_list",
+        "arguments": "",
+        "decorators": [
+          "router.post('/slots/list', operation_id='listPersistentSlots')"
+        ]
+      },
+      {
+        "name": "claim_reassign",
+        "arguments": "body: ClaimReassignRequest",
+        "decorators": [
+          "router.post('/claims/reassign', operation_id='reassignPersistentClaim')"
+        ]
+      },
+      {
+        "name": "claim_release",
+        "arguments": "body: ClaimReleaseRequest",
+        "decorators": [
+          "router.post('/claims/release', operation_id='releasePersistentClaim')"
+        ]
+      },
+      {
+        "name": "cancel",
+        "arguments": "body: PersistentCancelRequest",
+        "decorators": [
+          "router.post('/cancel', operation_id='cancelPersistentCommand')"
+        ]
+      },
+      {
+        "name": "policy_update",
+        "arguments": "body: PersistentPolicyRequest",
+        "decorators": [
+          "router.post('/policy', operation_id='updatePersistentPolicy')"
+        ]
+      },
+      {
+        "name": "run",
+        "arguments": "body: PersistentRunRequest",
+        "decorators": [
+          "router.post('/run', operation_id='runPersistentCommand')"
+        ]
+      },
+      {
+        "name": "task",
+        "arguments": "body: PersistentTaskRequest",
+        "decorators": [
+          "router.post('/task', operation_id='mutatePersistentTask')"
+        ]
+      },
+      {
+        "name": "session_end",
+        "arguments": "body: SessionRequest",
+        "decorators": [
+          "router.post('/sessions/end', operation_id='endPersistentSession')"
+        ]
+      },
+      {
+        "name": "session_start",
+        "arguments": "body: SessionStartRequest",
+        "decorators": [
+          "router.post('/sessions/start', operation_id='startPersistentSession')"
+        ]
+      },
+      {
+        "name": "slot_create",
+        "arguments": "body: SlotCreateRequest",
+        "decorators": [
+          "router.post('/slots/create', operation_id='createPersistentSlot')"
+        ]
+      },
+      {
+        "name": "slot_get",
+        "arguments": "body: SlotGetRequest",
+        "decorators": [
+          "router.post('/slots/get', operation_id='getPersistentSlot')"
+        ]
+      },
+      {
+        "name": "slot_migrate_access",
+        "arguments": "body: SlotGetRequest",
+        "decorators": [
+          "router.post('/slots/migrate-access', operation_id='migratePersistentSlotAccess')"
+        ]
+      },
+      {
+        "name": "slot_rotate_access_code",
+        "arguments": "body: SlotGetRequest",
+        "decorators": [
+          "router.post('/slots/rotate-access-code', operation_id='rotatePersistentSlotAccessCode')"
+        ]
+      },
+      {
+        "name": "slot_delete",
+        "arguments": "body: SlotMutationRequest",
+        "decorators": [
+          "router.post('/slots/delete', operation_id='deletePersistentSlot')"
+        ]
+      },
+      {
+        "name": "slot_play",
+        "arguments": "body: SlotMutationRequest",
+        "decorators": [
+          "router.post('/slots/play', operation_id='playPersistentSlot')"
+        ]
+      },
+      {
+        "name": "slot_suspend",
+        "arguments": "body: SlotMutationRequest",
+        "decorators": [
+          "router.post('/slots/suspend', operation_id='suspendPersistentSlot')"
+        ]
+      },
+      {
+        "name": "slot_rename",
+        "arguments": "body: SlotRenameRequest",
+        "decorators": [
+          "router.post('/slots/rename', operation_id='renamePersistentSlot')"
+        ]
+      },
+      {
+        "name": "slot_rotate",
+        "arguments": "body: SlotRotateRequest",
+        "decorators": [
+          "router.post('/slots/rotate-selector', operation_id='rotatePersistentSlotSelector')"
+        ]
+      }
+    ],
+    "persistent_fleet.py": [
+      {
+        "name": "route",
+        "arguments": "logical_agent_id: str, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/persistent/route/{logical_agent_id}', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "unified_session_stop",
+        "arguments": "operation: str, payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/unified-session/{operation}', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_by_name",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/by-name', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_display",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/display', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_get",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/get', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_list",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/list', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_register",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/register', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_resolve",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/resolve', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_retire",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/retire', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "access_rotate",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/access/rotate', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "detach",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/detach', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "drain",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/drain', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "materialize",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/materialize', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "obligation_create",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/obligation-create', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "obligation_delivery",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/obligation-delivery', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "obligation_inbox",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/obligation-inbox', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "obligation_list",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/obligation-list', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "obligation_receipt",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/obligation-receipt', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "obligation_surface",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/obligation-surface', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "issue_permit",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/permit', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "presence",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/presence', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "revoke",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/revoke', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "unified_session_start",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/unified-session/start', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "unified_session_status",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/unified-session/status', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "unified_session_status_name",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/unified-session/status-name', include_in_schema=False)"
+        ]
+      }
+    ],
+    "fleet.py": [
+      {
+        "name": "receive_identity",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/identities', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "finish_session",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/session-finish', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "update_session",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/session-update', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "read_identities",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), agent_id: str | None=Query(default=None), limit: int=Query(default=500, ge=1, le=1000)",
+        "decorators": [
+          "router.get('/internal/fleet/identities', include_in_schema=False)"
+        ]
+      }
+    ],
+    "fleet_v1.py": [
+      {
+        "name": "task_graph",
+        "arguments": "namespace: str, task_id: str, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), depth: int=Query(default=2, ge=0, le=8)",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/task-graph', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "detail",
+        "arguments": "resource: str, entity_id: str=Query(...), x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/detail/{resource}', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "query",
+        "arguments": "resource: str, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), cursor: str | None=Query(default=None), limit: int=Query(default=100, ge=1, le=100), q: str | None=Query(default=None), namespace: str | None=Query(default=None), task_id: str | None=Query(default=None), state: str | None=Query(default=None), lane: str | None=Query(default=None), priority: int | None=Query(default=None), status: str | None=Query(default=None), agent_id: str | None=Query(default=None), logical_agent_id: str | None=Query(default=None), work_session_id: str | None=Query(default=None), event_type: str | None=Query(default=None), as_of: str | None=Query(default=None), through_seq: int | None=Query(default=None, ge=0), include_count: bool=Query(default=False), include_facets: bool=Query(default=False)",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/query/{resource}', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "current_entity",
+        "arguments": "scope: str, entity_id: str=Query(min_length=1, max_length=260), source_stream_generation: str | None=Query(default=None), x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/current/{scope}/entity', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "current_recovery",
+        "arguments": "scope: str, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), source_stream_generation: str | None=Query(default=None), snapshot_id: str | None=Query(default=None), cursor: str | None=Query(default=None), limit: int=Query(default=100, ge=1, le=100), barrier_source_seq: int | None=Query(default=None, ge=0)",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/current/{scope}', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "manifest",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/projection/manifest', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "runtime_overlays",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/projection/runtime-overlays', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "snapshot",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/projection/snapshot', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "bootstrap",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/bootstrap', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "manifest",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/manifest', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "runtime_health",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/runtime-health', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "snapshot",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/snapshot', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "namespaces",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), cursor: str | None=Query(default=None), limit: int=Query(default=100, ge=1, le=100), q: str | None=Query(default=None)",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/namespaces', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "events",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), since: int=Query(default=0, ge=0), limit: int=Query(default=100, ge=1, le=MAX_SOURCE_REPLAY_LIMIT), source_stream_generation: str | None=Query(default=None)",
+        "decorators": [
+          "router.get('/internal/fleet/v1/source/events', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "events",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default=''), since: int=Query(default=0, ge=0), projection_epoch: int | None=Query(default=None, ge=1), limit: int=Query(default=100, ge=1, le=1000)",
+        "decorators": [
+          "router.get('/internal/fleet/v1/projection/events', include_in_schema=False)"
+        ]
+      }
+    ],
+    "fleet_control.py": [
+      {
+        "name": "state",
+        "arguments": "",
+        "decorators": [
+          "router.get('/actions/fleet/control', operation_id='getManagedFleetControl')"
+        ]
+      },
+      {
+        "name": "enrollment",
+        "arguments": "",
+        "decorators": [
+          "router.get('/actions/fleet/control/enrollment', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "reconcile",
+        "arguments": "",
+        "decorators": [
+          "router.post('/actions/fleet/control/reconcile', operation_id='reconcileManagedFleetControl')"
+        ]
+      },
+      {
+        "name": "policy",
+        "arguments": "body: AccessPolicyRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/policy', operation_id='updateManagedAccessPolicy')"
+        ]
+      },
+      {
+        "name": "adopt",
+        "arguments": "body: AdoptRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/adopt', operation_id='adoptManagedFleetControl')"
+        ]
+      },
+      {
+        "name": "delete_mesh",
+        "arguments": "body: DeleteMeshRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/mesh/delete', operation_id='deleteManagedMesh')"
+        ]
+      },
+      {
+        "name": "internal_apply",
+        "arguments": "body: InternalApplyRequest, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/control/apply', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "detach_node",
+        "arguments": "body: NodeDetachRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/nodes/detach', operation_id='detachManagedFleetNode')"
+        ]
+      },
+      {
+        "name": "move_node",
+        "arguments": "body: NodeMoveRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/nodes/move', operation_id='moveManagedFleetNode')"
+        ]
+      },
+      {
+        "name": "upsert_node",
+        "arguments": "body: NodeUpsertRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/nodes/upsert', operation_id='upsertManagedFleetNode')"
+        ]
+      },
+      {
+        "name": "rename",
+        "arguments": "body: RenameRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/mesh/rename', operation_id='renameManagedMesh')"
+        ]
+      },
+      {
+        "name": "policy_reset",
+        "arguments": "body: ResetPolicyRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/policy/reset', operation_id='resetManagedAccessPolicy')"
+        ]
+      },
+      {
+        "name": "rotate_trust",
+        "arguments": "body: RotateTrustRequest",
+        "decorators": [
+          "router.post('/actions/fleet/control/trust/rotate', operation_id='rotateManagedFleetTrust')"
+        ]
+      },
+      {
+        "name": "internal_mutate",
+        "arguments": "operation: str, body: InternalMutationRequest, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/control/mutate/{operation}', include_in_schema=False)"
+        ]
+      },
+      {
+        "name": "internal_state",
+        "arguments": "x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.get('/internal/fleet/control/state', include_in_schema=False)"
+        ]
+      }
+    ]
+  }
+}

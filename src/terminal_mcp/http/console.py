@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
+from terminal_mcp.adapters.actor import actor_for
 from terminal_mcp.api_models import ConsoleSnapshotResponse
+from terminal_mcp.application import get_application
 from terminal_mcp.telemetry import observed
 
 
@@ -18,7 +20,9 @@ def build_console_router(service, settings):
             service,
             "rest",
             "console_snapshot",
-            service.console_snapshot(
+            get_application(service).compatibility.call(
+                actor_for(service, transport="http", endpoint_role="legacy"),
+                "console_snapshot",
                 settings.mode_for("actions"),
                 public_base_url=settings.public_base_url,
                 persistent_policy={

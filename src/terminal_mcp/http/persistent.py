@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from terminal_mcp.core.persistent_policy import PersistentPolicyError
+from terminal_mcp.adapters.actor import actor_for
+from terminal_mcp.application import get_application
 
 
 class StrictRequest(BaseModel):
@@ -92,200 +93,116 @@ class ClaimReassignRequest(ClaimReleaseRequest):
 
 def build_persistent_router(service, policy_controller=None) -> APIRouter:
     router = APIRouter(prefix="/actions/persistent", tags=["persistent-agents"])
-
-    def backend():
-        return getattr(service, "persistent", None)
-
-    def unavailable():
-        return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
+    target = get_application(service).operator
+    if policy_controller is not None:
+        target.policy_controller = policy_controller
 
     @router.post("/policy", operation_id="updatePersistentPolicy")
     async def policy_update(body: PersistentPolicyRequest):
-        if policy_controller is None:
-            return unavailable()
-        try:
-            policy = await policy_controller.update(
-                duration_seconds=body.duration_seconds,
-                warning_after_seconds=body.warning_after_seconds,
-                alert_after_seconds=body.alert_after_seconds,
-                rearm_after_seconds=body.rearm_after_seconds,
-                legacy_admission_enabled=body.legacy_admission_enabled,
-            )
-        except PersistentPolicyError as exc:
-            result = {"ok": False, "code": exc.code, "error": exc.code}
-            if exc.blockers:
-                result["blockers"] = exc.blockers
-            return result
-        return {"ok": True, "policy": policy}
+        return await target.policy_update(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
+        )
 
     @router.post("/slots/list", operation_id="listPersistentSlots")
     async def slot_list():
-        target = backend()
-        return await target.slot_list() if target else unavailable()
+        return await target.slot_list(
+            actor_for(service, transport="http", endpoint_role="operator")
+        )
 
     @router.post("/slots/get", operation_id="getPersistentSlot")
     async def slot_get(body: SlotGetRequest):
-        target = backend()
-        return await target.slot_get(body.logical_agent_id) if target else unavailable()
+        return await target.slot_get(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
+        )
 
     @router.post("/slots/create", operation_id="createPersistentSlot")
     async def slot_create(body: SlotCreateRequest):
-        target = backend()
-        return await target.slot_create(body.display_name) if target else unavailable()
+        return await target.slot_create(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
+        )
 
     @router.post("/slots/rename", operation_id="renamePersistentSlot")
     async def slot_rename(body: SlotRenameRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.slot_rename(
-            body.logical_agent_id,
-            body.display_name,
-            expected_revision=body.expected_revision,
-            idempotency_key=body.idempotency_key,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/slots/rotate-selector", operation_id="rotatePersistentSlotSelector")
     async def slot_rotate(body: SlotRotateRequest):
-        target = backend()
-        if not target:
-            return unavailable()
-        return await target.slot_rotate_selector(
-            body.logical_agent_id,
-            body.selector,
-            expected_revision=body.expected_revision,
-            idempotency_key=body.idempotency_key,
+        return await target.slot_rotate(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/slots/migrate-access", operation_id="migratePersistentSlotAccess")
     async def slot_migrate_access(body: SlotGetRequest):
-        target = backend()
-        return await target.slot_migrate_access(body.logical_agent_id) if target else unavailable()
+        return await target.slot_migrate_access(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
+        )
 
     @router.post("/slots/rotate-access-code", operation_id="rotatePersistentSlotAccessCode")
     async def slot_rotate_access_code(body: SlotGetRequest):
-        target = backend()
-        return (
-            await target.slot_rotate_access_code(body.logical_agent_id) if target else unavailable()
+        return await target.slot_rotate_access_code(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/slots/play", operation_id="playPersistentSlot")
     async def slot_play(body: SlotMutationRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.slot_play(
-            body.logical_agent_id,
-            expected_revision=body.expected_revision,
-            idempotency_key=body.idempotency_key,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/slots/suspend", operation_id="suspendPersistentSlot")
     async def slot_suspend(body: SlotMutationRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.slot_suspend(
-            body.logical_agent_id,
-            expected_revision=body.expected_revision,
-            idempotency_key=body.idempotency_key,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/slots/delete", operation_id="deletePersistentSlot")
     async def slot_delete(body: SlotMutationRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.slot_delete(
-            body.logical_agent_id,
-            expected_revision=body.expected_revision,
-            idempotency_key=body.idempotency_key,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/sessions/start", operation_id="startPersistentSession")
     async def session_start(body: SessionStartRequest):
-        target = backend()
-        if not target:
-            return unavailable()
-        return await target.session_start(body.selector, expected_revision=body.expected_revision)
+        return await target.session_start(
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
+        )
 
     @router.post("/sessions/end", operation_id="endPersistentSession")
     async def session_end(body: SessionRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.session_end(
-            body.logical_agent_id, body.work_session_id, body.session_epoch
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/run", operation_id="runPersistentCommand")
     async def run(body: PersistentRunRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.run(
-            body.cmd,
-            logical_agent_id=body.logical_agent_id,
-            work_session_id=body.work_session_id,
-            session_epoch=body.session_epoch,
-            queue_id=body.queue_id,
-            task_scope=body.task_scope,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/cancel", operation_id="cancelPersistentCommand")
     async def cancel(body: PersistentCancelRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.cancel(
-            body.cmd_hash,
-            logical_agent_id=body.logical_agent_id,
-            work_session_id=body.work_session_id,
-            session_epoch=body.session_epoch,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/task", operation_id="mutatePersistentTask")
     async def task(body: PersistentTaskRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.task(
-            logical_agent_id=body.logical_agent_id,
-            work_session_id=body.work_session_id,
-            session_epoch=body.session_epoch,
-            action=body.action,
-            namespace=body.namespace,
-            task_id=body.task_id,
-            **body.payload,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/claims/release", operation_id="releasePersistentClaim")
     async def claim_release(body: ClaimReleaseRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.claim_release(
-            body.namespace,
-            body.task_id,
-            body.logical_agent_id,
-            work_session_id=body.work_session_id,
-            session_epoch=body.session_epoch,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     @router.post("/claims/reassign", operation_id="reassignPersistentClaim")
     async def claim_reassign(body: ClaimReassignRequest):
-        target = backend()
-        if not target:
-            return unavailable()
         return await target.claim_reassign(
-            body.namespace,
-            body.task_id,
-            body.logical_agent_id,
-            body.to_logical_agent_id,
-            work_session_id=body.work_session_id,
-            session_epoch=body.session_epoch,
-            expected_revision=body.expected_revision,
-            idempotency_key=body.idempotency_key,
+            actor_for(service, transport="http", endpoint_role="operator"), **body.model_dump()
         )
 
     return router

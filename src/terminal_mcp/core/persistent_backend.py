@@ -292,7 +292,12 @@ class PersistentBackend:
         return self._session_result(access, started["work_session"])
 
     async def access_session_start(
-        self, *, mode: str, access_code: str | None = None, display_name: str | None = None
+        self,
+        *,
+        mode: str,
+        access_code: str | None = None,
+        display_name: str | None = None,
+        _resolved_access: dict | None = None,
     ) -> dict:
         if mode not in {"persistent", "legacy"}:
             return {"ok": False, "code": "invalid_mode", "error": "invalid_mode"}
@@ -300,7 +305,11 @@ class PersistentBackend:
             if mode == "persistent":
                 if not access_code:
                     raise PersistentStoreError("access_code_required")
-                access = await self._resolve_access(access_code)
+                access = (
+                    _resolved_access
+                    if _resolved_access is not None
+                    else await self._resolve_access(access_code)
+                )
                 if access["slot_kind"] != "persistent":
                     raise PersistentStoreError("access_mode_mismatch")
                 if access["authority_node_id"] != self.lifecycle.authority_node_id:
@@ -310,7 +319,6 @@ class PersistentBackend:
                         access["authority_node_id"], "start", {"access_code": access_code}
                     )
                 return await self._local_session_start_resolved(access)
-
             if not self.service.legacy_agent_admission_enabled:
                 raise PersistentStoreError("legacy_admission_disabled")
             created = await self.lifecycle.create_slot(
@@ -409,6 +417,7 @@ class PersistentBackend:
         surface_limit: int | None = None,
         namespace: str | None = None,
         task_id: str | None = None,
+        _resolved_identity: dict | None = None,
     ) -> dict:
         normalized_mode = "notify"
         if mode is not None:
@@ -422,7 +431,6 @@ class PersistentBackend:
             require_reply = normalized_mode in {"ack", "alert"}
             alert = normalized_mode == "alert"
         elif alert or require_reply:
-            # Backward compatibility: old reply-required messages map to the strict alert mode.
             normalized_mode = "alert"
             require_reply = True
             alert = True
@@ -441,19 +449,20 @@ class PersistentBackend:
                 surface_limit=surface_limit,
                 namespace=namespace,
                 task_id=task_id,
+                sender_identity=_resolved_identity,
             )
-        sender = await self.access_identity(access_code)
+        sender = (
+            _resolved_identity
+            if _resolved_identity is not None
+            else await self.access_identity(access_code)
+        )
         if not sender.get("ok"):
             return sender
         if (
             sender_public_name
             and sender_public_name.casefold() != str(sender["public_name"]).casefold()
         ):
-            return {
-                "ok": False,
-                "code": "sender_not_authorized",
-                "error": "sender_not_authorized",
-            }
+            return {"ok": False, "code": "sender_not_authorized", "error": "sender_not_authorized"}
         if self.fleet_bridge is None:
             return await self._access_message_legacy(
                 str(sender["public_name"]),
@@ -550,20 +559,27 @@ class PersistentBackend:
         *,
         access_code: str | None,
         message_hashes: list[str],
+        _resolved_identity: dict | None = None,
     ) -> dict:
         refs = list(dict.fromkeys(str(ref) for ref in message_hashes if ref))
         if not refs:
             return {"ok": True, "seen_at": utc_text(), "surfaced": []}
-
         if access_code is None:
-            sender = await self.access_sender_identity(sender_public_name)
+            sender = (
+                _resolved_identity
+                if _resolved_identity is not None
+                else await self.access_sender_identity(sender_public_name)
+            )
         else:
-            sender = await self.access_identity(access_code)
+            sender = (
+                _resolved_identity
+                if _resolved_identity is not None
+                else await self.access_identity(access_code)
+            )
             if (
                 sender.get("ok")
                 and sender_public_name
-                and sender_public_name.casefold()
-                != str(sender["public_name"]).casefold()
+                and (sender_public_name.casefold() != str(sender["public_name"]).casefold())
             ):
                 return {
                     "ok": False,
@@ -572,43 +588,27 @@ class PersistentBackend:
                 }
         if not sender.get("ok"):
             return sender
-
         sender_id = str(sender["logical_agent_id"])
         seen_at = utc_text()
         if access_code is None or self.fleet_bridge is None:
             coordinator = self.service.agent_coordinator
             if coordinator is None:
-                return {
-                    "ok": False,
-                    "code": "message_unavailable",
-                    "error": "message_unavailable",
-                }
+                return {"ok": False, "code": "message_unavailable", "error": "message_unavailable"}
             await coordinator.store.mark_messages_seen(sender_id, refs, seen_at)
             return {"ok": True, "seen_at": seen_at, "surfaced": refs}
-
         work_session_id = str(sender["work_session_id"])
         session_epoch = int(sender["session_epoch"])
         try:
             _session, permit = await self._execution_authority(
-                sender_id,
-                work_session_id,
-                session_epoch,
-                scope="message",
-                access_code=access_code,
+                sender_id, work_session_id, session_epoch, scope="message", access_code=access_code
             )
             if permit is not None:
                 self.fleet_bridge.ensure_permit_valid(permit)
             inbox = await self.fleet_bridge.inbox_obligations(
-                sender_id,
-                work_session_id=work_session_id,
-                session_epoch=session_epoch,
+                sender_id, work_session_id=work_session_id, session_epoch=session_epoch
             )
             wanted = set(refs)
-            obligations = [
-                item
-                for item in inbox
-                if str(item.get("message_ref") or "") in wanted
-            ]
+            obligations = [item for item in inbox if str(item.get("message_ref") or "") in wanted]
             if obligations:
                 await self.fleet_bridge.surface_obligations(
                     logical_agent_id=sender_id,
@@ -624,9 +624,7 @@ class PersistentBackend:
             "ok": True,
             "seen_at": seen_at,
             "surfaced": [
-                str(item.get("message_ref"))
-                for item in obligations
-                if item.get("message_ref")
+                str(item.get("message_ref")) for item in obligations if item.get("message_ref")
             ],
         }
 
@@ -1244,9 +1242,20 @@ class PersistentBackend:
         elif self.access_authority is not None:
             await self.access_authority.retire_access_slot(logical_agent_id)
 
-    async def access_session_stop(self, access_code: str, *, interrupt: bool = False) -> dict:
+    async def access_session_stop(
+        self,
+        access_code: str,
+        *,
+        interrupt: bool = False,
+        _resolved_access: dict | None = None,
+    ) -> dict:
+        """Compatibility entry; canonical callers supply a verified access resolution."""
         try:
-            access = await self._resolve_access(access_code)
+            access = (
+                _resolved_access
+                if _resolved_access is not None
+                else await self._resolve_access(access_code)
+            )
             if access["authority_node_id"] != self.lifecycle.authority_node_id:
                 if self.fleet_bridge is None:
                     raise PersistentStoreError("authority_unavailable")
@@ -1259,35 +1268,39 @@ class PersistentBackend:
                 session = await self._local_access_session(
                     access, allow_stopping=True, access_code_verified=True
                 )
-                stop = self.lifecycle.session_interrupt if interrupt else self.lifecycle.session_end
-                result = await stop(
-                    access["logical_agent_id"],
-                    session.work_session_id,
-                    session.session_epoch,
-                    access_code_verified=True,
-                )
-            if access["slot_kind"] == "legacy" and not result.get("stopping"):
-                await self._cleanup_legacy_access(access)
-            response = {
-                "ok": True,
-                "mode": access["slot_kind"],
-                "public_name": access["public_name"],
-                "session_ref": session.work_session_id,
-                "interrupted": bool(interrupt),
-                "stopping": bool(result.get("stopping")),
-                "blockers": result.get("blockers") or [],
-            }
-            if not result.get("stopping"):
-                response["hard_expires_at"] = result.get("hard_expires_at")
-                response["remaining_d_seconds"] = result.get("remaining_d_seconds", 0)
-                response["roaming_available"] = bool(result.get("roaming_available"))
-                if result.get("roaming_message"):
-                    response["roaming_message"] = result["roaming_message"]
-            return response
+                return await self._stop_resolved_session(access, session, interrupt=interrupt)
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
         except PersistentLifecycleError as exc:
             return self._error(exc)
+
+    async def _stop_resolved_session(self, access, session, *, interrupt=False) -> dict:
+        """Apply a session stop resolved under the caller-held operation guard."""
+        stop = self.lifecycle.session_interrupt if interrupt else self.lifecycle.session_end
+        result = await stop(
+            access["logical_agent_id"],
+            session.work_session_id,
+            session.session_epoch,
+            access_code_verified=True,
+        )
+        if access["slot_kind"] == "legacy" and (not result.get("stopping")):
+            await self._cleanup_legacy_access(access)
+        response = {
+            "ok": True,
+            "mode": access["slot_kind"],
+            "public_name": access["public_name"],
+            "session_ref": session.work_session_id,
+            "interrupted": bool(interrupt),
+            "stopping": bool(result.get("stopping")),
+            "blockers": result.get("blockers") or [],
+        }
+        if not result.get("stopping"):
+            response["hard_expires_at"] = result.get("hard_expires_at")
+            response["remaining_d_seconds"] = result.get("remaining_d_seconds", 0)
+            response["roaming_available"] = bool(result.get("roaming_available"))
+            if result.get("roaming_message"):
+                response["roaming_message"] = result["roaming_message"]
+        return response
 
     async def slot_migrate_access(self, logical_agent_id: str):
         try:

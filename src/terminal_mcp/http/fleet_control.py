@@ -3,8 +3,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from terminal_mcp.core.persistent_policy import PersistentPolicyError
-from terminal_mcp.fleet.control_storage import FleetControlError
+from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.application.fleet_control import FleetControlApplication
+from terminal_mcp.application.mesh import MeshApplicationError
+from terminal_mcp.core.persistent_admission import current_admission_context
+
+_ERROR_STATUS = {
+    "invalid_request": 400,
+    "unauthorized": 401,
+    "forbidden": 403,
+    "not_found": 404,
+    "conflict": 409,
+}
 
 
 class StrictRequest(BaseModel):
@@ -79,61 +89,93 @@ class InternalMutationRequest(StrictRequest):
     payload: dict = Field(default_factory=dict)
 
 
-def build_fleet_control_router(controller, replication) -> APIRouter:
+def build_fleet_control_router(controller, replication, *, application=None) -> APIRouter:
     router = APIRouter(tags=["fleet-control"])
+    target = application if application is not None else FleetControlApplication(controller)
 
-    async def mutation(call):
-        try:
-            return {"ok": True, "control": await call}
-        except PersistentPolicyError as exc:
-            result = {"ok": False, "code": exc.code, "error": exc.code}
-            if exc.blockers:
-                result["blockers"] = exc.blockers
-            return result
-        except (FleetControlError, ValueError) as exc:
-            return {"ok": False, "code": str(exc), "error": str(exc)}
+    def operator_actor() -> ActorContext:
+        return ActorContext.from_admission(
+            current_admission_context(),
+            transport="http",
+            endpoint_role="operator",
+            node_id=str(getattr(getattr(controller, "config", None), "instance_id", "") or ""),
+        )
+
+    async def authenticate(peer_id: str, authorization: str, *, first_apply_control_node_id=None):
+        verified_peer_id = await controller.authenticate_management_peer(
+            peer_id,
+            authorization,
+            first_apply_control_node_id=first_apply_control_node_id,
+        )
+        if verified_peer_id is None:
+            raise HTTPException(status_code=401, detail="invalid fleet peer")
+        return ActorContext(
+            transport="mesh",
+            endpoint_role="mesh",
+            node_id=str(getattr(getattr(controller, "config", None), "instance_id", "") or ""),
+            peer_node_id=verified_peer_id,
+        )
 
     @router.get("/actions/fleet/control", operation_id="getManagedFleetControl")
     async def state():
-        return {"ok": True, "control": await controller.snapshot()}
+        actor = operator_actor()
+        try:
+            return await target.state(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/actions/fleet/control/enrollment", include_in_schema=False)
     async def enrollment():
-        return {"ok": True, "enrollment": await controller.enrollment_descriptor()}
+        actor = operator_actor()
+        try:
+            return await target.enrollment(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/adopt", operation_id="adoptManagedFleetControl")
     async def adopt(body: AdoptRequest):
-        return await mutation(
-            controller.adopt(
+        actor = operator_actor()
+        try:
+            return await target.adopt(
+                actor,
                 mesh_id=body.mesh_id,
                 display_name=body.display_name,
                 control_node_id=body.control_node_id,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/mesh/delete", operation_id="deleteManagedMesh")
     async def delete_mesh(body: DeleteMeshRequest):
-        return await mutation(
-            controller.delete_mesh(
+        actor = operator_actor()
+        try:
+            return await target.delete_mesh(
+                actor,
                 mesh_id=body.mesh_id,
                 expected_topology_revision=body.expected_topology_revision,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/mesh/rename", operation_id="renameManagedMesh")
     async def rename(body: RenameRequest):
-        return await mutation(
-            controller.rename(
-                body.display_name,
+        actor = operator_actor()
+        try:
+            return await target.rename(
+                actor,
                 mesh_id=body.mesh_id,
+                display_name=body.display_name,
                 expected_topology_revision=body.expected_topology_revision,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/nodes/upsert", operation_id="upsertManagedFleetNode")
     async def upsert_node(body: NodeUpsertRequest):
-        return await mutation(
-            controller.upsert_node(
+        actor = operator_actor()
+        try:
+            return await target.upsert_node(
+                actor,
                 node_id=body.node_id,
                 mesh_id=body.mesh_id,
                 origin=body.origin,
@@ -141,31 +183,40 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
                 auth_token=body.auth_token,
                 expected_topology_revision=body.expected_topology_revision,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/nodes/detach", operation_id="detachManagedFleetNode")
     async def detach_node(body: NodeDetachRequest):
-        return await mutation(
-            controller.detach_node(
-                body.node_id,
+        actor = operator_actor()
+        try:
+            return await target.detach_node(
+                actor,
+                node_id=body.node_id,
                 expected_topology_revision=body.expected_topology_revision,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/nodes/move", operation_id="moveManagedFleetNode")
     async def move_node(body: NodeMoveRequest):
-        return await mutation(
-            controller.move_node(
-                body.node_id,
-                body.target_mesh_id,
+        actor = operator_actor()
+        try:
+            return await target.move_node(
+                actor,
+                node_id=body.node_id,
+                target_mesh_id=body.target_mesh_id,
                 expected_topology_revision=body.expected_topology_revision,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/policy", operation_id="updateManagedAccessPolicy")
     async def policy(body: AccessPolicyRequest):
-        return await mutation(
-            controller.update_policy(
+        actor = operator_actor()
+        try:
+            return await target.policy(
+                actor,
                 duration_seconds=body.duration_seconds,
                 warning_after_seconds=body.warning_after_seconds,
                 alert_after_seconds=body.alert_after_seconds,
@@ -173,50 +224,44 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
                 legacy_admission_enabled=body.legacy_admission_enabled,
                 expected_revision=body.expected_revision,
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/policy/reset", operation_id="resetManagedAccessPolicy")
     async def policy_reset(body: ResetPolicyRequest):
-        return await mutation(controller.reset_policy(expected_revision=body.expected_revision))
+        actor = operator_actor()
+        try:
+            return await target.policy_reset(actor, expected_revision=body.expected_revision)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/trust/rotate", operation_id="rotateManagedFleetTrust")
     async def rotate_trust(body: RotateTrustRequest):
-        return await mutation(
-            controller.rotate_local_trust(
-                expected_trust_revision=body.expected_trust_revision,
+        actor = operator_actor()
+        try:
+            return await target.rotate_trust(
+                actor, expected_trust_revision=body.expected_trust_revision
             )
-        )
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/actions/fleet/control/reconcile", operation_id="reconcileManagedFleetControl")
     async def reconcile():
-        return await mutation(controller.replicate())
-
-    async def authenticate(
-        peer_id: str,
-        authorization: str,
-        *,
-        first_apply_control_node_id: str | None = None,
-    ):
-        peer = await controller.authenticate_management_peer(
-            peer_id,
-            authorization,
-            first_apply_control_node_id=first_apply_control_node_id,
-        )
-        if peer is None:
-            raise HTTPException(status_code=401, detail="invalid fleet peer")
-        return peer
+        actor = operator_actor()
+        try:
+            return await target.reconcile(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.get("/internal/fleet/control/state", include_in_schema=False)
     async def internal_state(
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
+        x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")
     ):
-        await authenticate(x_terminal_mcp_peer, authorization)
+        actor = await authenticate(x_terminal_mcp_peer, authorization)
         try:
-            control = await controller.authoritative_replication_snapshot()
-        except (FleetControlError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"ok": True, "control": control}
+            return await target.internal_state(actor)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/internal/fleet/control/mutate/{operation}", include_in_schema=False)
     async def internal_mutate(
@@ -225,16 +270,11 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        await authenticate(x_terminal_mcp_peer, authorization)
+        actor = await authenticate(x_terminal_mcp_peer, authorization)
         try:
-            control = await controller.execute_forwarded(
-                operation,
-                body.payload,
-                authenticated_peer_id=x_terminal_mcp_peer,
-            )
-        except (FleetControlError, ValueError, KeyError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"ok": True, "control": control}
+            return await target.internal_mutate(actor, operation=operation, payload=body.payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     @router.post("/internal/fleet/control/apply", include_in_schema=False)
     async def internal_apply(
@@ -242,18 +282,14 @@ def build_fleet_control_router(controller, replication) -> APIRouter:
         x_terminal_mcp_peer: str = Header(default=""),
         authorization: str = Header(default=""),
     ):
-        await authenticate(
+        actor = await authenticate(
             x_terminal_mcp_peer,
             authorization,
             first_apply_control_node_id=str(body.state.get("control_node_id") or "") or None,
         )
         try:
-            state = await controller.apply_replica(
-                body.state,
-                source_node_id=x_terminal_mcp_peer,
-            )
-        except (FleetControlError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"ok": True, "control": state}
+            return await target.internal_apply(actor, control_state=body.state)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
     return router
