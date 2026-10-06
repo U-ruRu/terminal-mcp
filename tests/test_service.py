@@ -360,3 +360,17 @@ async def test_context_service_enforces_shared_action_contract(tmp_path):
         assert await service.context("list") == compact
     finally:
         await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_health_fails_storage_when_fleet_control_is_unhealthy(tmp_path):
+    _repo, _terminal, service = await create_runtime(tmp_path)
+
+    class BrokenFleetControl:
+        async def healthy(self):
+            return False
+
+    service.fleet_control = BrokenFleetControl()
+    result = await service.health("none")
+    assert result["ok"] is False
+    assert result["storage"] == "error"

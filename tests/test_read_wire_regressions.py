@@ -121,7 +121,12 @@ def test_cmd_read_compacts_repeated_long_coordination_inbox_within_wire_budget()
     assert result.structuredContent["ok"] is True
     coordination = result.structuredContent["coordination"]
     assert len(coordination["messages"]) == 4
-    assert coordination["pending_messages"] == []
+    assert [item["message_hash"] for item in coordination["pending_messages"]] == [
+        "message-04",
+        "message-05",
+        "message-06",
+        "message-07",
+    ]
     assert all(item["truncated"] is True for item in coordination["messages"])
     assert all(len(item["text"]) == MESSAGE_PREVIEW_CHARS + 1 for item in coordination["messages"])
 
@@ -129,5 +134,50 @@ def test_cmd_read_compacts_repeated_long_coordination_inbox_within_wire_budget()
     assert legacy["status"] == "completed"
     assert "coordination" not in legacy
     assert legacy["messages"] == coordination["messages"]
-    assert legacy["pending_messages"] == []
+    assert legacy["pending_messages"] == coordination["pending_messages"]
+    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+
+
+def test_cmd_read_preserves_pending_messages_not_emitted_from_messages_cap():
+    messages = [
+        {
+            "message_hash": f"m-{index}",
+            "sender": "Peer",
+            "text": "x" * 8000,
+            "mode": "notify",
+            "state": "delivered",
+            "created_at": "2026-10-06T00:00:00Z",
+        }
+        for index in range(12)
+    ]
+    pending = messages[8:12]
+    result = cmd_result(
+        {
+            "ok": True,
+            "cmd_hash": "deadbeef",
+            "status": "completed",
+            "lines": ["ok"],
+            "overall_lines_count": 1,
+            "displayed_lines_count": 1,
+            "messages": messages,
+            "pending_messages": pending,
+            "ack_required_pending": False,
+            "alert_pending": False,
+        },
+        "read",
+    )
+
+    coordination = result.structuredContent["coordination"]
+    assert [item["message_hash"] for item in coordination["messages"]] == [
+        "m-0",
+        "m-1",
+        "m-2",
+        "m-3",
+    ]
+    assert [item["message_hash"] for item in coordination["pending_messages"]] == [
+        "m-8",
+        "m-9",
+        "m-10",
+        "m-11",
+    ]
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
