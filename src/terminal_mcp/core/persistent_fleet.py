@@ -425,12 +425,15 @@ class PersistentFleetBridge:
                 "transport": admission.transport,
                 "auth_mode": admission.auth_mode,
             }
-        async with self.client_factory() as client:
-            response = await client.post(
-                f"{peer.origin}/internal/fleet/persistent/unified-session/{operation}",
-                headers=self._headers(peer),
-                json=body,
-            )
+        try:
+            async with self.client_factory() as client:
+                response = await client.post(
+                    f"{peer.origin}/internal/fleet/persistent/unified-session/{operation}",
+                    headers=self._headers(peer),
+                    json=body,
+                )
+        except httpx.HTTPError as exc:
+            raise PersistentStoreError("authority_unavailable") from exc
         if response.status_code >= 400:
             raise PersistentStoreError("authority_unavailable")
         data = response.json()

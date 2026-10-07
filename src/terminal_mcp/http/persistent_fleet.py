@@ -145,6 +145,20 @@ def build_persistent_fleet_router(
         except MeshApplicationError as exc:
             raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
+    @router.post(
+        "/internal/fleet/persistent/unified-session/status-batch", include_in_schema=False
+    )
+    async def unified_session_status_batch(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        actor = authenticate(x_terminal_mcp_peer, authorization)
+        try:
+            return await target.unified_session_status_batch(actor, payload)
+        except MeshApplicationError as exc:
+            raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
+
     @router.post("/internal/fleet/persistent/unified-session/status", include_in_schema=False)
     async def unified_session_status(
         payload: dict,

@@ -395,6 +395,47 @@ class PersistentBackend:
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
 
+    async def access_active_statuses(self, accesses: list[dict]) -> list[dict]:
+        """Resolve active local sessions for a bounded batch of access slots."""
+        semaphore = asyncio.Semaphore(16)
+
+        async def project(access: dict):
+            logical_agent_id = str(access.get("logical_agent_id") or "")
+            authority_node_id = str(access.get("authority_node_id") or "")
+            if not logical_agent_id or authority_node_id != self.lifecycle.authority_node_id:
+                return None
+            async with semaphore:
+                session = await self.lifecycle.store.active_session_for_slot(logical_agent_id)
+                if session is None or session.state != "active":
+                    return None
+                try:
+                    session = await self.lifecycle.store.assert_session_authority(
+                        logical_agent_id,
+                        session.work_session_id,
+                        session.session_epoch,
+                    )
+                except PersistentStoreError:
+                    return None
+                if session.authority_node_id != self.lifecycle.authority_node_id:
+                    return None
+                last_seen = None
+                provider_last_seen = getattr(self.lifecycle.store, "provider_last_seen", None)
+                if callable(provider_last_seen):
+                    last_seen = await provider_last_seen(logical_agent_id)
+            return {
+                "logical_agent_id": logical_agent_id,
+                "session_state": session.state,
+                "session_started_at": session.started_at,
+                "hard_expires_at": session.hard_expires_at,
+                "remaining_seconds": max(
+                    0, int((parse_utc(session.hard_expires_at) - utc_now()).total_seconds())
+                ),
+                "last_active_at": last_seen,
+            }
+
+        projected = await asyncio.gather(*(project(access) for access in accesses))
+        return [item for item in projected if item is not None]
+
     async def access_sender_identity(self, public_name: str) -> dict:
         try:
             access = await self._resolve_access_name(public_name)
@@ -1231,20 +1272,41 @@ class PersistentBackend:
             matched = 0
             sessions: list[dict] = []
             batch_size = 64
-            semaphore = asyncio.Semaphore(8)
 
-            async def project(item):
-                async with semaphore:
-                    status = await self.access_sender_identity(str(item["public_name"]))
-                if not status.get("ok"):
-                    return None
+            async def statuses_for_batch(slots: list[dict]) -> dict[str, dict]:
+                groups: dict[str, list[dict]] = {}
+                for slot in slots:
+                    authority = str(slot.get("authority_node_id") or "")
+                    logical_agent_id = str(slot.get("logical_agent_id") or "")
+                    if authority and logical_agent_id:
+                        groups.setdefault(authority, []).append(
+                            {
+                                "logical_agent_id": logical_agent_id,
+                                "authority_node_id": authority,
+                            }
+                        )
+
+                async def resolve(authority: str, items: list[dict]) -> list[dict]:
+                    if authority == self.lifecycle.authority_node_id:
+                        return await self.access_active_statuses(items)
+                    if self.fleet_bridge is None:
+                        return []
+                    try:
+                        result = await self.fleet_bridge.unified_session_call(
+                            authority, "status-batch", {"access": items}
+                        )
+                    except PersistentStoreError:
+                        return []
+                    return list(result.get("sessions") or [])
+
+                resolved = await asyncio.gather(
+                    *(resolve(authority, items) for authority, items in groups.items())
+                )
                 return {
-                    "public_name": item["public_name"],
-                    "session_state": status.get("session_state", "active"),
-                    "session_started_at": status.get("session_started_at"),
-                    "hard_expires_at": status.get("hard_expires_at"),
-                    "remaining_seconds": status.get("remaining_seconds", 0),
-                    "last_active_at": status.get("last_active_at"),
+                    str(item.get("logical_agent_id")): item
+                    for group in resolved
+                    for item in group
+                    if item.get("logical_agent_id")
                 }
 
             while page_limit is None or len(sessions) < page_limit:
@@ -1260,14 +1322,24 @@ class PersistentBackend:
                     raise PersistentStoreError("authority_unavailable")
                 if not slots:
                     break
-                projected = await asyncio.gather(*(project(item) for item in slots))
-                for item in projected:
-                    if item is None:
+                statuses = await statuses_for_batch(slots)
+                for slot in slots:
+                    status = statuses.get(str(slot.get("logical_agent_id") or ""))
+                    if status is None:
                         continue
                     if matched < active_offset:
                         matched += 1
                         continue
-                    sessions.append(item)
+                    sessions.append(
+                        {
+                            "public_name": slot["public_name"],
+                            "session_state": status.get("session_state", "active"),
+                            "session_started_at": status.get("session_started_at"),
+                            "hard_expires_at": status.get("hard_expires_at"),
+                            "remaining_seconds": status.get("remaining_seconds", 0),
+                            "last_active_at": status.get("last_active_at"),
+                        }
+                    )
                     matched += 1
                     if page_limit is not None and len(sessions) >= page_limit:
                         break

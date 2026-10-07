@@ -140,39 +140,53 @@ async def test_backend_slot_list_drains_siblings_when_access_lookup_fails():
 
 
 @pytest.mark.asyncio
-async def test_access_observe_slots_paginates_after_filtering_inactive_slots():
+async def test_access_observe_slots_paginates_after_bulk_filtering_inactive_slots():
     backend = object.__new__(PersistentBackend)
-    slots = [{"public_name": f"Agent-{index:03d}"} for index in range(70)]
-    calls = []
+    slots = [
+        {
+            "logical_agent_id": f"la_{index:03d}",
+            "public_name": f"Agent-{index:03d}",
+            "authority_node_id": "remote-a" if index % 2 else "remote-b",
+        }
+        for index in range(70)
+    ]
+    list_calls = []
+    status_calls = []
+    active = {"la_065", "la_067", "la_069"}
 
     class Fleet:
         async def list_access_slots(self, *, limit=None, offset=0):
-            calls.append((limit, offset))
+            list_calls.append((limit, offset))
             end = None if limit is None else offset + limit
             return slots[offset:end]
 
+        async def unified_session_call(self, authority, operation, payload):
+            status_calls.append((authority, operation, len(payload["access"])))
+            return {
+                "sessions": [
+                    {
+                        "logical_agent_id": item["logical_agent_id"],
+                        "session_state": "active",
+                        "session_started_at": "2026-10-07T00:00:00Z",
+                        "hard_expires_at": "2026-10-07T01:00:00Z",
+                        "remaining_seconds": 1200,
+                        "last_active_at": "2026-10-07T00:10:00Z",
+                    }
+                    for item in payload["access"]
+                    if item["logical_agent_id"] in active
+                ]
+            }
+
     backend.fleet_bridge = Fleet()
     backend.access_authority = None
-    active = {"Agent-065", "Agent-067", "Agent-069"}
-
-    async def sender_identity(public_name):
-        if public_name not in active:
-            return {"ok": False, "code": "session_not_found"}
-        return {
-            "ok": True,
-            "session_state": "active",
-            "session_started_at": "2026-10-07T00:00:00Z",
-            "hard_expires_at": "2026-10-07T01:00:00Z",
-            "remaining_seconds": 1200,
-            "last_active_at": "2026-10-07T00:10:00Z",
-        }
-
-    backend.access_sender_identity = sender_identity
+    backend.lifecycle = SimpleNamespace(authority_node_id="local")
 
     first = await backend.access_observe_slots(limit=2, offset=0)
     second = await backend.access_observe_slots(limit=2, offset=1)
 
     assert [row["public_name"] for row in first["sessions"]] == ["Agent-065", "Agent-067"]
     assert [row["public_name"] for row in second["sessions"]] == ["Agent-067", "Agent-069"]
-    assert (64, 0) in calls
-    assert (64, 64) in calls
+    assert (64, 0) in list_calls
+    assert (64, 64) in list_calls
+    assert all(operation == "status-batch" for _, operation, _ in status_calls)
+    assert len(status_calls) == 8

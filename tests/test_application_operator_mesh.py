@@ -147,6 +147,61 @@ async def test_mesh_forwarded_admission_is_scoped_and_restored(forwarded, outcom
     assert seen[0].principal_id == "forwarded" if forwarded else seen[0] is None
 
 
+async def test_mesh_status_batch_uses_bounded_local_logical_ids_and_forwarded_admission():
+    seen = []
+
+    async def statuses(access):
+        seen.append((access, current_admission_context()))
+        return [{"logical_agent_id": "la_one", "session_state": "active"}]
+
+    backend = SimpleNamespace(access_active_statuses=statuses)
+    app = MeshApplication(bridge(), backend)
+    payload = {
+        "requesting_instance_id": "peer",
+        "access": [
+            {"logical_agent_id": "la_one", "authority_node_id": "local", "public_name": "spoof"},
+            {"logical_agent_id": "la_two", "authority_node_id": "local"},
+        ],
+        "forwarded_admission": {
+            "principal_id": "forwarded",
+            "credential_id": "oauth:forwarded",
+            "auth_generation": 1,
+            "auth_mode": "oauth",
+            "transport": "mesh-forward",
+            "scopes": ["terminal:read", "terminal:execute"],
+        },
+    }
+
+    result = await app.unified_session_status_batch(mesh_actor(), payload)
+
+    assert result == {
+        "ok": True,
+        "result": {"sessions": [{"logical_agent_id": "la_one", "session_state": "active"}]},
+    }
+    assert seen[0][0] == [
+        {"logical_agent_id": "la_one", "authority_node_id": "local"},
+        {"logical_agent_id": "la_two", "authority_node_id": "local"},
+    ]
+    assert seen[0][1].principal_id == "forwarded"
+
+
+async def test_mesh_status_batch_rejects_foreign_authority():
+    statuses = AsyncMock()
+    app = MeshApplication(bridge(), SimpleNamespace(access_active_statuses=statuses))
+
+    with pytest.raises(MeshApplicationError) as rejected:
+        await app.unified_session_status_batch(
+            mesh_actor(),
+            {
+                "requesting_instance_id": "peer",
+                "access": [{"logical_agent_id": "la_one", "authority_node_id": "remote"}],
+            },
+        )
+
+    assert rejected.value.kind == "invalid_request"
+    statuses.assert_not_awaited()
+
+
 async def test_wrong_authority_does_not_start_a_session():
     start = AsyncMock()
     app = MeshApplication(

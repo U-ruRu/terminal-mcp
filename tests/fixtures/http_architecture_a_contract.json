@@ -402,6 +402,13 @@
         ]
       },
       {
+        "name": "unified_session_status_batch",
+        "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
+        "decorators": [
+          "router.post('/internal/fleet/persistent/unified-session/status-batch', include_in_schema=False)"
+        ]
+      },
+      {
         "name": "unified_session_status_name",
         "arguments": "payload: dict, x_terminal_mcp_peer: str=Header(default=''), authorization: str=Header(default='')",
         "decorators": [

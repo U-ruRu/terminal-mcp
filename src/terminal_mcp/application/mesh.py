@@ -343,6 +343,48 @@ class MeshApplication:
                 result["last_active_at"] = await last_seen(access["logical_agent_id"])
             return {"ok": True, "result": result}
 
+    async def unified_session_status_batch(self, actor: ActorContext, payload: dict):
+        self._require_peer(actor)
+        with actor.bind():
+            if payload.get("requesting_instance_id") != actor.peer_node_id:
+                raise MeshApplicationError("invalid_request", "requesting instance mismatch")
+            if self._backend is None:
+                return {"ok": False, "code": "authority_unavailable"}
+            raw_access = payload.get("access")
+            if not isinstance(raw_access, list) or len(raw_access) > 64:
+                raise MeshApplicationError(
+                    "invalid_request", "access batch must contain at most 64 items"
+                )
+            access = []
+            for item in raw_access:
+                if not isinstance(item, dict):
+                    raise MeshApplicationError(
+                        "invalid_request", "access batch items must be objects"
+                    )
+                logical_agent_id = str(item.get("logical_agent_id") or "")
+                authority_node_id = str(item.get("authority_node_id") or "")
+                if (
+                    not logical_agent_id
+                    or authority_node_id != self._bridge.config.instance_id
+                ):
+                    raise MeshApplicationError("invalid_request", "access batch authority mismatch")
+                access.append(
+                    {
+                        "logical_agent_id": logical_agent_id,
+                        "authority_node_id": authority_node_id,
+                    }
+                )
+            token = None
+            forwarded = self._forwarded_admission(payload)
+            if forwarded is not None:
+                token = bind_admission_context(forwarded)
+            try:
+                sessions = await self._backend.access_active_statuses(access)
+            finally:
+                if token is not None:
+                    reset_admission_context(token)
+            return {"ok": True, "result": {"sessions": sessions}}
+
     async def unified_session_status(self, actor: ActorContext, payload: dict):
         self._require_peer(actor)
         with actor.bind():
