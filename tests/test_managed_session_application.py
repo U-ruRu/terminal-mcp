@@ -402,7 +402,6 @@ async def test_gate_rechecks_current_slot_authority_in_same_snapshot(
         ManagedOperation.COMMAND_RUN,
         ManagedOperation.TASK_CREATE,
         ManagedOperation.MESSAGE_SEND,
-        ManagedOperation.CONTEXT_WRITE,
     ],
 )
 @pytest.mark.parametrize("resolved", [False, True])

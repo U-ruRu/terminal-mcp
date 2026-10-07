@@ -26,6 +26,7 @@ class CommandApplication(ApplicationCapability):
             request.action == "read"
             and request.code is None
             and not actor.provider_metadata
+            and actor.endpoint_role in {"legacy", "internal"}
         ):
             scope = {
                 "kind": "cmd.read",

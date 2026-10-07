@@ -172,6 +172,47 @@ class SessionGate:
         result = await self.resolve(actor, code, operation)
         return result.identity, result.failure
 
+    async def current_state(self, actor: ActorContext) -> dict:
+        """Return compact server-resolved managed identity/window/session state."""
+        if not self._has_provider_identity(actor):
+            return failure("identity_not_bound")
+        try:
+            resolved = await self._resolve_provider_actor(actor)
+            admitted = await self.managed_sessions.authorize_operation(
+                resolved, ManagedOperation.OBSERVE
+            )
+        except ManagedSessionError as exc:
+            return self._managed_failure(exc)
+        snapshot = admitted.snapshot
+        window = snapshot.window
+        session = snapshot.session
+        binding = snapshot.binding
+        return {
+            "ok": True,
+            "logical_agent": {
+                "logical_agent_id": session.logical_agent_id,
+                "public_name": admitted.public_name,
+                "authority_node_id": session.authority_node_id,
+            },
+            "work_window": {
+                "work_window_id": window.work_window_id,
+                "state": admitted.lifecycle.phase.value,
+                "opened_at": window.opened_at.isoformat(),
+                "hard_expires_at": window.hard_expires_at.isoformat(),
+                "remaining_seconds": admitted.lifecycle.remaining_seconds,
+                "revision": window.window_revision,
+            },
+            "work_session": {
+                "work_session_id": session.work_session_id,
+                "session_epoch": session.session_epoch,
+                "state": session.state.value,
+                "started_at": session.started_at,
+                "hard_expires_at": session.hard_expires_at,
+                "role": binding.role,
+                "contract_version": binding.contract_version,
+            },
+        }
+
     async def command_state(self, actor: ActorContext, identity: dict, action: str):
         try:
             with actor.with_identity(identity).bind():

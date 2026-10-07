@@ -61,6 +61,7 @@ from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
 from terminal_mcp.http.provider_identity_fleet import build_provider_identity_fleet_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
+from terminal_mcp.mcp.roles import build_role_mcp
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.metrics import Metrics
 from terminal_mcp.observability import EventLogger
@@ -320,6 +321,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         persistent_enabled=settings.persistent_agents_enabled,
     )
 
+    executor_mcp = build_role_mcp(
+        application, "executor", settings.public_base_url, settings.mode_for("mcp")
+    )
+    coordinator_mcp = build_role_mcp(
+        application, "coordinator", settings.public_base_url, settings.mode_for("mcp")
+    )
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         events.start()
@@ -370,7 +378,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await persistent_lifecycle.start()
         await managed_runtime.start()
         try:
-            async with mcp.session_manager.run():
+            async with contextlib.AsyncExitStack() as stack:
+                await stack.enter_async_context(mcp.session_manager.run())
+                await stack.enter_async_context(executor_mcp.session_manager.run())
+                await stack.enter_async_context(coordinator_mcp.session_manager.run())
                 yield
         finally:
             await managed_runtime.stop()
@@ -489,6 +500,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(build_managed_sessions_router(service))
     app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
+    app.router.routes.append(
+        Mount("/terminal-mcp/executor/v1/mcp", app=executor_mcp.streamable_http_app())
+    )
+    app.router.routes.append(
+        Mount("/terminal-mcp/coordinator/v1/mcp", app=coordinator_mcp.streamable_http_app())
+    )
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))
 
     @app.get("/health/live", include_in_schema=False)

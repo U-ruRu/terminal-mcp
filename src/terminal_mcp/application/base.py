@@ -27,8 +27,26 @@ ROLE_CAPABILITIES = {
     "internal": CAPABILITIES,
     "operator": CAPABILITIES,
     "mesh": CAPABILITIES,
-    "executor": CAPABILITIES,
-    "coordinator": CAPABILITIES - {"commands"},
+    "executor": frozenset({"sessions", "observations", "messages", "tasks", "commands"}),
+    "coordinator": frozenset({"sessions", "observations", "messages", "tasks", "health"}),
+}
+
+ROLE_TASK_ACTIONS = {
+    "executor": frozenset({"claim", "release", "state", "comment"}),
+    "coordinator": frozenset(
+        {
+            "create",
+            "update",
+            "checkpoint",
+            "done",
+            "archive",
+            "review",
+            "relate",
+            "unrelate",
+            "state",
+            "comment",
+        }
+    ),
 }
 
 
@@ -47,6 +65,10 @@ def canonical_application_result(result):
 class CapabilityPolicy:
     def allows(self, actor: ActorContext, capability: str) -> bool:
         return capability in ROLE_CAPABILITIES.get(actor.endpoint_role, frozenset())
+
+    def allows_task_action(self, actor: ActorContext, action: str) -> bool:
+        allowed = ROLE_TASK_ACTIONS.get(actor.endpoint_role)
+        return True if allowed is None else action in allowed
 
 
 def application_operation(capability: str):

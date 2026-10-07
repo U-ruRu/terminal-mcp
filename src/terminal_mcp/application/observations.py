@@ -8,6 +8,8 @@ from terminal_mcp.api_models import TaskLane, TaskOperationalStatus, TaskState
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _read_error, _task_summary
+from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.core.read_contract import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -37,6 +39,19 @@ class ObservationApplication(ApplicationCapability):
         limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
         cursor: str | None = None,
     ) -> dict:
+        if actor.endpoint_role == "executor":
+            if subject != "tasks" or task_id is not None or detail != "summary":
+                return public_error("capability_not_allowed").as_dict()
+        elif actor.endpoint_role == "coordinator" and subject not in {"tasks", "sessions"}:
+            return public_error("capability_not_allowed").as_dict()
+        if actor.endpoint_role in {"executor", "coordinator"}:
+            operation = (
+                ManagedOperation.TASK_LIST if subject == "tasks" else ManagedOperation.OBSERVE
+            )
+            resolution = await self.gate.resolve(actor, None, operation)
+            if resolution.failure is not None:
+                return resolution.failure
+
         backend = self.backend
         filters = {
             "namespace": namespace,
