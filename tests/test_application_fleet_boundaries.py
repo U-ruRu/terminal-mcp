@@ -310,7 +310,10 @@ async def test_control_enrollment_hint_is_used_only_during_peer_authentication()
         )
     assert response.status_code == 200
     authenticate.assert_awaited_once_with(
-        "peer", "Bearer mesh-test-key", first_apply_control_node_id="proposed-control"
+        "peer",
+        "Bearer mesh-test-key",
+        first_apply_control_node_id="proposed-control",
+        allow_detached_peer=False,
     )
     apply.assert_awaited_once_with(state, source_node_id="verified-peer")
 
