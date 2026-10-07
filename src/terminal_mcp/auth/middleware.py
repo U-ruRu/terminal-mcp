@@ -13,6 +13,8 @@ MCP_PREFIXES = (
 PUBLIC_PREFIXES = (
     "/.well-known/",
     "/mcp/.well-known/",
+    "/terminal-mcp/executor/v1/mcp/.well-known/",
+    "/terminal-mcp/coordinator/v1/mcp/.well-known/",
     "/oauth/",
     "/docs",
     "/openapi.json",
@@ -69,7 +71,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         token = header[7:].strip() if header.lower().startswith("bearer ") else ""
         if not token:
             reset_admission_context(context_token)
-            return self._deny("missing_token")
+            return self._deny("missing_token", path)
         claims = None
         effective_mode = mode
         try:
@@ -104,7 +106,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             context_token = bind_admission_context(admission)
         except Exception as exc:
             reset_admission_context(context_token)
-            return self._deny(str(exc))
+            return self._deny(str(exc), path)
         try:
             return await call_next(request)
         finally:
@@ -138,8 +140,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Application session/coordination guardrails remain authoritative.
         return ["terminal:read"]
 
-    def _deny(self, detail):
-        metadata = f"{self.s.public_base_url}/.well-known/oauth-protected-resource/mcp"
+    def _deny(self, detail, path: str = "/mcp"):
+        resource_path = "/mcp"
+        for prefix in MCP_PREFIXES:
+            if path == prefix or path.startswith(f"{prefix}/"):
+                resource_path = prefix
+                break
+        metadata = (
+            f"{self.s.public_base_url}/.well-known/oauth-protected-resource{resource_path}"
+        )
         header = f'Bearer resource_metadata="{metadata}"'
         return JSONResponse(
             {"error": "unauthorized", "detail": detail},

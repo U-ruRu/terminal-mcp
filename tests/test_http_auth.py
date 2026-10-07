@@ -488,6 +488,23 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path, file_oauth_credential
         resource = client.get("/.well-known/oauth-protected-resource/mcp").json()
         assert resource == client.get("/mcp/.well-known/oauth-protected-resource").json()
         assert resource["resource"] == "https://terminal.example/mcp"
+        for role in ("executor", "coordinator"):
+            role_path = f"/terminal-mcp/{role}/v1/mcp"
+            role_metadata = client.get(
+                f"/.well-known/oauth-protected-resource{role_path}"
+            )
+            assert role_metadata.status_code == 200
+            assert role_metadata.json()["resource"] == f"https://terminal.example{role_path}"
+            embedded = client.get(f"{role_path}/.well-known/oauth-protected-resource")
+            assert embedded.status_code == 200
+            assert embedded.json() == role_metadata.json()
+            unauthorized = client.post(f"{role_path}/")
+            assert unauthorized.status_code == 401
+            assert unauthorized.headers["www-authenticate"] == (
+                'Bearer resource_metadata="'
+                f"https://terminal.example/.well-known/oauth-protected-resource{role_path}"
+                '"'
+            )
         reg = client.post(
             "/oauth/register",
             json={

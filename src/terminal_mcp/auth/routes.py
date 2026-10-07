@@ -35,9 +35,11 @@ def build_oauth_router(settings, auth, store):
             "scopes_supported": settings.oauth_required_scopes.split(),
         }
 
-    def protected_resource_metadata():
+    def protected_resource_metadata(resource: str | None = None):
         return {
-            "resource": settings.oauth_audience or f"{settings.public_base_url}/mcp",
+            "resource": resource
+            or settings.oauth_audience
+            or f"{settings.public_base_url}/mcp",
             "authorization_servers": [issuer],
             "scopes_supported": settings.oauth_required_scopes.split(),
             "bearer_methods_supported": ["header"],
@@ -48,6 +50,20 @@ def build_oauth_router(settings, auth, store):
     @r.get("/mcp/.well-known/oauth-protected-resource")
     async def protected_metadata():
         return protected_resource_metadata()
+
+    @r.get("/.well-known/oauth-protected-resource/terminal-mcp/executor/v1/mcp")
+    @r.get("/terminal-mcp/executor/v1/mcp/.well-known/oauth-protected-resource")
+    async def executor_protected_metadata():
+        return protected_resource_metadata(
+            f"{settings.public_base_url}/terminal-mcp/executor/v1/mcp"
+        )
+
+    @r.get("/.well-known/oauth-protected-resource/terminal-mcp/coordinator/v1/mcp")
+    @r.get("/terminal-mcp/coordinator/v1/mcp/.well-known/oauth-protected-resource")
+    async def coordinator_protected_metadata():
+        return protected_resource_metadata(
+            f"{settings.public_base_url}/terminal-mcp/coordinator/v1/mcp"
+        )
 
     @r.post("/oauth/register")
     async def register(request: Request):
