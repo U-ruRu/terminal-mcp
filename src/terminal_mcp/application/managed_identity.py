@@ -66,7 +66,7 @@ class ManagedAuthorityRoute:
 
 
 class ManagedAuthorityRouter:
-    """Resolve one fail-closed authority route from canonical slot + Fleet state."""
+    """Resolve canonical Fleet identity routes; local authorization still needs a local slot."""
 
     def __init__(
         self, repository: ManagedIdentityRepository, routes: ManagedFleetRoutes | None = None
@@ -74,23 +74,8 @@ class ManagedAuthorityRouter:
         self.repository = repository
         self.routes = routes
 
-    async def resolve(self, logical_agent_id: str) -> tuple[PersistentSlot, ManagedAuthorityRoute]:
-        slot = await self.repository.get_slot(logical_agent_id)
-        if slot is None or slot.state == "deleted":
-            raise ManagedSessionError("slot_not_found")
-        local = ManagedAuthorityRoute(
-            logical_agent_id=slot.logical_agent_id,
-            authority_node_id=slot.authority_node_id,
-            authority_epoch=slot.authority_epoch,
-        )
-        if self.routes is None:
-            repository_node = getattr(self.repository, "authority_node_id", None)
-            if repository_node is not None and slot.authority_node_id != repository_node:
-                raise ManagedSessionError("authority_unavailable")
-            return slot, local
-        raw = await self.routes.route_info(logical_agent_id)
-        if not isinstance(raw, Mapping):
-            raise ManagedSessionError("authority_unavailable")
+    @staticmethod
+    def _decode_route(logical_agent_id: str, raw: Mapping[str, object]) -> ManagedAuthorityRoute:
         try:
             route = ManagedAuthorityRoute(
                 logical_agent_id=str(raw["logical_agent_id"]),
@@ -104,7 +89,35 @@ class ManagedAuthorityRouter:
             or route.logical_agent_id != logical_agent_id
             or not route.authority_node_id
             or route.authority_epoch < 1
-            or route.authority_node_id != slot.authority_node_id
+        ):
+            raise ManagedSessionError("authority_unavailable")
+        return route
+
+    async def identity_route(self, logical_agent_id: str) -> ManagedAuthorityRoute:
+        if self.routes is not None:
+            raw = await self.routes.route_info(logical_agent_id)
+            if not isinstance(raw, Mapping):
+                raise ManagedSessionError("authority_unavailable")
+            return self._decode_route(logical_agent_id, raw)
+        slot = await self.repository.get_slot(logical_agent_id)
+        if slot is None or slot.state == "deleted":
+            raise ManagedSessionError("slot_not_found")
+        repository_node = getattr(self.repository, "authority_node_id", None)
+        if repository_node is not None and slot.authority_node_id != repository_node:
+            raise ManagedSessionError("authority_unavailable")
+        return ManagedAuthorityRoute(
+            logical_agent_id=slot.logical_agent_id,
+            authority_node_id=slot.authority_node_id,
+            authority_epoch=slot.authority_epoch,
+        )
+
+    async def resolve(self, logical_agent_id: str) -> tuple[PersistentSlot, ManagedAuthorityRoute]:
+        slot = await self.repository.get_slot(logical_agent_id)
+        if slot is None or slot.state == "deleted":
+            raise ManagedSessionError("slot_not_found")
+        route = await self.identity_route(logical_agent_id)
+        if (
+            route.authority_node_id != slot.authority_node_id
             or route.authority_epoch != slot.authority_epoch
         ):
             raise ManagedSessionError("authority_unavailable")
@@ -148,7 +161,7 @@ class ManagedProviderResolver:
             raise ManagedSessionError("identity_not_bound")
         if actor.logical_agent_id is not None and actor.logical_agent_id != logical_agent_id:
             raise ManagedSessionError("identity_mismatch")
-        _slot, route = await self.router.resolve(logical_agent_id)
+        route = await self.router.identity_route(logical_agent_id)
         if (
             actor.authority_node_id is not None
             and actor.authority_node_id != route.authority_node_id
@@ -180,7 +193,7 @@ class ManagedProviderResolver:
         identity = self.registry.resolve(provider, metadata)
         if actor.logical_agent_id is not None and actor.logical_agent_id != logical_agent_id:
             raise ManagedSessionError("identity_mismatch")
-        _slot, route = await self.router.resolve(logical_agent_id)
+        route = await self.router.identity_route(logical_agent_id)
         repository_node = getattr(self.repository, "authority_node_id", None)
         route_binder = (
             getattr(self.router.routes, "bind_provider_binding", None)

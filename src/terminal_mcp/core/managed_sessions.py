@@ -86,7 +86,6 @@ READ_OPERATIONS = frozenset(
 )
 FINALIZATION_OPERATIONS = READ_OPERATIONS | frozenset(
     {
-        ManagedOperation.SESSION_START,
         ManagedOperation.SESSION_END,
         ManagedOperation.COMMAND_CANCEL,
         ManagedOperation.TASK_CHECKPOINT,

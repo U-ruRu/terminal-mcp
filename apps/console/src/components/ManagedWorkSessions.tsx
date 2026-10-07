@@ -205,7 +205,7 @@ export function ManagedWorkSessions({
     return value
   }
 
-  const items = Object.values(statuses).filter((status) => status.window || status.session)
+  const items = Object.values(statuses)
   if (!instanceId || !mutatePersistent || items.length === 0) return null
 
   return (

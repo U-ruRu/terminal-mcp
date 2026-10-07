@@ -131,9 +131,14 @@ async def test_provider_resolution_requires_existing_binding_and_current_fleet_r
     repository.bound = "la_one"
     routes = Routes()
     routes.value["authority_epoch"] = 4
+    resolved = await ManagedProviderResolver(repository, routes=routes).resolve(
+        actor(), "openai", metadata()
+    )
+    assert resolved.logical_agent_id == "la_one"
+    assert resolved.authority_node_id == "home"
     with pytest.raises(ManagedSessionError, match="authority_unavailable"):
-        await ManagedProviderResolver(repository, routes=routes).resolve(
-            actor(), "openai", metadata()
+        await ManagedGrantAuthorizer(repository, Authority(), routes=routes).authorize(
+            resolved, "la_one", ManagedOperation.COMMAND_RUN
         )
 
 
@@ -327,3 +332,46 @@ async def test_fleet_provider_bind_requires_access_code_proof():
     )
     assert resolved.logical_agent_id == "la_one"
     assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one")
+
+
+class RemoteRepository(Repository):
+    authority_node_id = "edge"
+
+    async def get_slot(self, logical_agent_id):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fleet_provider_identity_resolves_without_local_slot_replica():
+    repository = RemoteRepository()
+    repository.bound = None
+    routes = FleetIdentityRoutes()
+
+    resolved = await ManagedProviderResolver(repository, routes=routes).resolve(
+        actor(), "openai", metadata()
+    )
+
+    assert resolved.logical_agent_id == "la_one"
+    assert resolved.authority_node_id == "home"
+    assert repository.bound is None
+    with pytest.raises(ManagedSessionError, match="slot_not_found"):
+        await ManagedGrantAuthorizer(repository, Authority(), routes=routes).authorize(
+            resolved, "la_one", ManagedOperation.COMMAND_RUN
+        )
+
+
+@pytest.mark.asyncio
+async def test_remote_provider_binding_uses_control_authority_without_local_replica():
+    repository = RemoteRepository()
+    repository.bound = None
+    routes = FleetIdentityRoutes()
+    resolver = ManagedProviderResolver(repository, routes=routes)
+
+    resolved = await resolver.bind_existing(
+        actor(), "openai", metadata(), "la_one", access_code="1234"
+    )
+
+    assert resolved.logical_agent_id == "la_one"
+    assert resolved.authority_node_id == "home"
+    assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one")
+    assert repository.bind_calls == []

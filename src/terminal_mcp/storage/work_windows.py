@@ -496,6 +496,10 @@ class WorkWindowStore(PersistentAgentStore):
                 window = None
             if window and window.phase(now) is WindowPhase.EXPIRED:
                 raise WorkWindowStoreError("session_expired", current=window)
+            if window and window.phase(now) is WindowPhase.DRAINING:
+                raise WorkWindowStoreError(
+                    "session_draining", current=window, return_to_chat=True
+                )
             if window is None:
                 policy = await self._policy_on(db, logical_agent_id, stamp)
                 window = WorkWindow.open(
@@ -868,7 +872,7 @@ class WorkWindowStore(PersistentAgentStore):
                 {"window": json.loads(_dump(window)), "legacy_started_at": session.started_at},
                 session,
             )
-            return ManagedSessionSnapshot(window, session, binding, created=True)
+            return ManagedSessionSnapshot(window, session, binding, created=False)
 
     async def claim_window_recovery(
         self, *, limit: int = 8, lease_seconds: int = 30, now: datetime | None = None

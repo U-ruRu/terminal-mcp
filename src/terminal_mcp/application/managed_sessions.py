@@ -353,9 +353,18 @@ class ManagedSessionApplication:
                         exc.return_to_chat = True
                     raise
             self._owns(actor, grant, snapshot)
-        decision = decide_session_operation(
-            snapshot.window, ManagedOperation.SESSION_START, self.clock()
-        )
+        now = self.clock()
+        if not snapshot.created and snapshot.window.phase(now).value == "draining":
+            decision = LifecycleDecision(
+                True,
+                snapshot.window.phase(now),
+                snapshot.window.remaining_seconds(now),
+                True,
+            )
+        else:
+            decision = decide_session_operation(
+                snapshot.window, ManagedOperation.SESSION_START, now
+            )
         if not decision.allowed:
             raise ManagedSessionError(decision.code, current=snapshot.window, return_to_chat=True)
         return self._admitted(actor, grant, snapshot, decision)
@@ -461,6 +470,9 @@ class ManagedSessionApplication:
                 "public_name": grant.public_name,
                 "work_session_id": session.work_session_id,
             }
+
+    async def has_managed_window(self, logical_agent_id: str) -> bool:
+        return await self.repository.current_window(logical_agent_id) is not None
 
     async def operator_status(self, actor: ActorContext, logical_agent_id: str) -> dict:
         grant = await self._authorize(actor, ManagedOperation.OPERATOR_READ, logical_agent_id)

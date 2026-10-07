@@ -518,3 +518,44 @@ async def test_explicit_managed_start_adopts_active_legacy_session_without_reset
     assert again.snapshot.session.work_session_id == legacy.work_session_id
     assert again.snapshot.window.work_window_id == started.snapshot.window.work_window_id
     assert again.snapshot.window.hard_expires_at == started.snapshot.window.hard_expires_at
+
+async def test_draining_allows_idempotent_active_start_but_blocks_new_session_after_end(env):
+    first = await env.app.start(actor())
+    env.clock[0] = T0 + timedelta(seconds=1320)
+
+    repeated = await env.app.start(actor())
+    assert repeated.snapshot.session.work_session_id == first.snapshot.session.work_session_id
+    assert repeated.lifecycle.phase is WindowPhase.DRAINING
+    assert repeated.lifecycle.return_to_chat is True
+
+    ended = await env.app.end(actor())
+    assert ended["session_state"] == "inactive"
+    assert await env.store.active_session_for_slot("la_one") is None
+
+    with pytest.raises(ManagedSessionError, match="session_draining") as blocked:
+        await env.app.start(actor())
+    assert blocked.value.return_to_chat is True
+    assert await env.store.active_session_for_slot("la_one") is None
+    window = await env.store.current_window("la_one")
+    assert window is not None and window.phase(env.clock[0]) is WindowPhase.DRAINING
+
+async def test_legacy_adoption_in_draining_preserves_existing_session_instead_of_starting_new(env):
+    _slot, legacy = await env.store.start_session(
+        selector="ABCD",
+        work_session_id="legacy-draining",
+        expected_revision=1,
+        principal_id="principal-a",
+        auth_generation=1,
+        authority_node_id="home",
+        origin_instance_id="home",
+        session_duration_seconds=1380,
+        now=utc_text(T0),
+    )
+    env.clock[0] = T0 + timedelta(seconds=1320)
+
+    adopted = await env.app.start(actor(role="legacy"))
+
+    assert adopted.snapshot.created is False
+    assert adopted.snapshot.session.work_session_id == legacy.work_session_id
+    assert adopted.lifecycle.phase is WindowPhase.DRAINING
+    assert adopted.lifecycle.return_to_chat is True

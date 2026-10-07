@@ -177,9 +177,10 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Start, end, or interrupt a unified Access session. start requires an explicit "
-            "mode: persistent requires an existing Access code; legacy creates a temporary "
-            "slot and returns its Access code once. end/interrupt require the Access code."
+            "Start, end, or interrupt a unified session. Provider-bound managed callers are "
+            "identified from server request context and omit code after binding; an existing "
+            "persistent Access code can perform initial compatibility binding. legacy creates "
+            "a temporary slot and returns its Access code once."
         ),
     )
     async def access_session_tool(
@@ -248,10 +249,11 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Send, acknowledge, reply to, or read bounded agent messaging for an acti"
-            "ve unified session using the same Access code used by cmd/task/context. "
-            "A read (no text and "
-            "no message_hash) defaults to the active inbox; history=true selects history. "
+            "Send, acknowledge, reply to, or read bounded agent messaging for an active "
+            "unified session. Provider-bound managed callers use server request identity and "
+            "omit code; legacy compatibility callers may supply the slot Access code. "
+            "A read (no text and no message_hash) defaults to the active inbox; history=true "
+            "selects history. "
             "Read pages use limit/cursor and compact summary records by default."
         ),
     )
@@ -306,9 +308,10 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Mutate a managed task under an active unified Access session using a strict "
-            "action-discriminated request. Claim ownership is durable per logical slot; "
-            "WIP is one live managed-task claim per slot."
+            "Mutate a managed task under an active unified session using a strict "
+            "action-discriminated request. Provider-bound managed callers omit code; legacy "
+            "compatibility callers use their Access code. Claim ownership is durable per logical "
+            "slot; WIP is one live managed-task claim per slot."
         ),
     )
     async def access_task_tool(boundary: TaskToolArguments) -> dict:
@@ -321,9 +324,10 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Run, read, cancel, or execute recovery commands. run/cancel/recovery require "
-            "an Access code; read may omit code for anonymous output access, or provide code "
-            "to surface the caller's inbox. ack-required messages block run and alerts block "
+            "Run, read, cancel, or execute recovery commands. Provider-bound managed callers "
+            "omit code and are resolved from server request identity; legacy mutations require "
+            "an Access code. A read without provider identity and without code remains anonymous. "
+            "ack-required messages block run and alerts block "
             "work until reply."
         ),
     )
@@ -335,8 +339,9 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Read or mutate instance context using an action-discriminated request. list has "
-            "no code field; create/update/delete require an active unified Access code."
+            "Read or mutate instance context using an action-discriminated request. list is "
+            "code-free; provider-bound managed mutations omit code, while legacy compatibility "
+            "create/update/delete requests use an active Access code."
         ),
     )
     async def access_context_tool(request: ContextRequest) -> dict:

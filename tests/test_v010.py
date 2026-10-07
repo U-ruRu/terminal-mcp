@@ -839,8 +839,10 @@ def test_mcp_schema_has_unified_task_contract():
     assert len(request["oneOf"]) == 12
     assert "payload" not in task["properties"]
     claim = task["$defs"]["TaskClaimRequest"]
-    assert claim["properties"]["code"]["minLength"] == 4
-    assert claim["properties"]["code"]["maxLength"] == 4
+    claim_code = claim["properties"]["code"]["anyOf"][0]
+    assert claim_code["minLength"] == 4
+    assert claim_code["maxLength"] == 4
+    assert "code" not in claim["required"]
 
     observe = tools["observe"].parameters["properties"]
     assert observe["subject"]["enum"] == ["sessions", "tasks", "namespaces"]
@@ -865,7 +867,8 @@ def test_mcp_schema_has_unified_task_contract():
     mapping = cmd["properties"]["request"]["discriminator"]["mapping"]
     assert set(mapping) == {"read", "run", "cancel", "recovery"}
     run = cmd["$defs"]["CmdRunRequest"]
-    assert {"action", "code", "command"} <= set(run["required"])
+    assert {"action", "command"} <= set(run["required"])
+    assert "code" not in run["required"]
     assert "task_scope" in run["properties"]
     read = cmd["$defs"]["CmdReadRequest"]
     assert "code" in read["properties"]
@@ -876,7 +879,8 @@ def test_mcp_schema_has_unified_task_contract():
     assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
     assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
     assert "active unified session" in tools["message"].description
-    assert "same Access code used by cmd/task/context" in tools["message"].description
+    assert "Provider-bound managed callers" in tools["message"].description
+    assert "omit code" in tools["message"].description
 
 
 @pytest.mark.asyncio

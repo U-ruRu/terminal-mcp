@@ -22,7 +22,11 @@ def _with_session_lifecycle(result: dict, identity: dict) -> dict:
 class CommandApplication(ApplicationCapability):
     @application_operation("commands")
     async def cmd(self, actor: ActorContext, request: CmdRequest) -> dict:
-        if request.action == "read" and request.code is None:
+        if (
+            request.action == "read"
+            and request.code is None
+            and not actor.provider_metadata
+        ):
             scope = {
                 "kind": "cmd.read",
                 "cmd_hash": request.cmd_hash,

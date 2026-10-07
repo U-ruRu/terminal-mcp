@@ -8,7 +8,7 @@ import pytest
 import terminal_mcp.core.persistent_backend as persistent_backend_module
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.commands import CommandApplication
-from terminal_mcp.application.requests import CmdRunRequest
+from terminal_mcp.application.requests import CmdReadRequest, CmdRunRequest
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.mcp.output_contracts import cmd_result
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -265,6 +265,37 @@ async def test_command_application_adds_canonical_first_page_to_fast_run():
     assert wire.structuredContent['command']['status'] == 'completed'
     assert wire.structuredContent['lines'] == ['first', 'second']
     assert wire.structuredContent['displayed_lines_count'] == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_code_free_read_uses_managed_gate_not_anonymous_fast_path():
+    class ManagedReadGate(_Gate):
+        def __init__(self):
+            self.identity_called = False
+
+        async def identity(self, actor, code, operation=None):
+            self.identity_called = True
+            assert code is None
+            assert actor.provider == "openai"
+            assert actor.provider_metadata["openai/session"] == "conversation-1"
+            return await super().identity(actor, code, operation)
+
+    gate = ManagedReadGate()
+    app = CommandApplication(_CompletedService(), gate)
+    result = await app.cmd(
+        ActorContext(
+            provider="openai",
+            provider_metadata={
+                "openai/subject": "user-1",
+                "openai/session": "conversation-1",
+            },
+        ),
+        CmdReadRequest(action="read", cmd_hash="deadbeef"),
+    )
+    assert gate.identity_called is True
+    assert result["logical_agent_id"] == "logical-1"
+    assert result["work_session_id"] == "ws-1"
+
 
 
 @pytest.mark.asyncio

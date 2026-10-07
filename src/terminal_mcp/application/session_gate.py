@@ -80,6 +80,24 @@ class SessionGate:
             access_code=code,
         )
 
+    async def _legacy_compatibility_allowed(
+        self, actor: ActorContext, managed: SessionResolution
+    ) -> bool:
+        failure_payload = managed.failure or {}
+        code = failure_payload.get("code")
+        if code == "identity_not_bound":
+            return True
+        if code not in {"access_denied", "persistent_auth_required"}:
+            return False
+        try:
+            resolved = await self._resolve_provider_actor(actor)
+        except ManagedSessionError:
+            return False
+        logical_agent_id = resolved.logical_agent_id
+        if not logical_agent_id:
+            return False
+        return not await self.managed_sessions.has_managed_window(logical_agent_id)
+
     async def _managed_resolution(
         self, actor: ActorContext, operation: ManagedOperation
     ) -> SessionResolution | None:
@@ -127,10 +145,9 @@ class SessionGate:
                 if bound is not None:
                     managed = await self._managed_resolution(bound, operation)
             if managed is not None:
-                # A compatibility code remains an independent authorization path
-                # while AuthFoundation grants are being migrated. Without a code,
-                # the managed authorization result is authoritative.
                 if managed.failure is None or not code:
+                    return managed
+                if not await self._legacy_compatibility_allowed(actor, managed):
                     return managed
         backend = self.backend
         if backend is None:
@@ -201,8 +218,11 @@ class SessionGate:
                     return SessionResolution(actor, failure=failure(code_value))
                 if bound is not None:
                     managed = await self._managed_resolution(bound, operation)
-            if managed is not None and (managed.failure is None or code is None):
-                return managed
+            if managed is not None:
+                if managed.failure is None or code is None:
+                    return managed
+                if not await self._legacy_compatibility_allowed(actor, managed):
+                    return managed
         if code is not None:
             return await self.resolve(actor, code)
         if self.backend is None:
@@ -285,6 +305,11 @@ class SessionGate:
                 except ManagedSessionError as exc:
                     if not code:
                         return self._managed_failure(exc)
+                    managed_failure = SessionResolution(
+                        resolved, failure=self._managed_failure(exc), managed=True
+                    )
+                    if not await self._legacy_compatibility_allowed(resolved, managed_failure):
+                        return managed_failure.failure
                 else:
                     receipt = started.receipt()
                     return {
