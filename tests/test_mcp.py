@@ -282,7 +282,8 @@ def test_mcp_tools_advertise_canonical_access_surface():
     ]
 
     message = tools["message"].parameters
-    assert message["required"] == ["sender"]
+    assert "sender" not in message.get("properties", {})
+    assert "required" not in message or "sender" not in message["required"]
     assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
     assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
     assert "show_all" not in message["properties"]

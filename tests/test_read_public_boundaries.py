@@ -219,13 +219,11 @@ class _FinalEnvelopeMessageService:
 async def test_message_final_envelope_failure_does_not_surface_inbox():
     service = _FinalEnvelopeMessageService()
     tools = {tool.name: tool for tool in build_mcp(service)._tool_manager.list_tools()}
-    result = await tools["message"].run(
-        {"sender": "Recipient", "limit": 100, "detail": "summary"}, convert_result=True
-    )
+    result = await tools["message"].run({"limit": 100, "detail": "summary"}, convert_result=True)
     assert result.structuredContent["ok"] is False
     assert result.structuredContent["code"] == "output_item_too_large"
     assert service.persistent.surfaced == []
-    assert service.persistent.resolved == ["Recipient"]
+    assert service.persistent.resolved == [""]
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
 
 
@@ -234,12 +232,10 @@ async def test_message_success_surfaces_only_returned_page_once_after_preflight(
     service = _FinalEnvelopeMessageService()
     service.persistent.oversized = False
     tools = {tool.name: tool for tool in build_mcp(service)._tool_manager.list_tools()}
-    result = await tools["message"].run(
-        {"sender": "Recipient", "limit": 100, "detail": "summary"}, convert_result=True
-    )
+    result = await tools["message"].run({"limit": 100, "detail": "summary"}, convert_result=True)
     data = result.structuredContent
     assert data["ok"] is True
-    assert service.persistent.resolved == ["Recipient"]
+    assert service.persistent.resolved == [""]
     assert service.persistent.surfaced == [row["message_hash"] for row in data["messages"]]
     assert data["messages"]
     assert all(row["state"] == "read" for row in data["messages"])

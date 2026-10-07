@@ -259,7 +259,6 @@ def build_mcp(
         ),
     )
     async def access_message_tool(
-        sender: Annotated[str, Field(min_length=1, max_length=MAX_PUBLIC_NAME_CHARS)],
         code: Annotated[
             str | None, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")
         ] = None,
@@ -270,6 +269,7 @@ def build_mcp(
         require_reply: bool = False,
         alert: bool = False,
         history: bool = False,
+        recipients: bool = False,
         limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
         cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None,
         detail: Literal["summary", "full"] = "summary",
@@ -280,7 +280,7 @@ def build_mcp(
     ) -> dict:
         return await application.message(
             _mcp_actor(service),
-            sender=sender,
+            sender="",
             code=code,
             text=text,
             target=target,
@@ -289,6 +289,7 @@ def build_mcp(
             require_reply=require_reply,
             alert=alert,
             history=history,
+            recipients=recipients,
             limit=limit,
             cursor=cursor,
             detail=detail,
@@ -296,7 +297,7 @@ def build_mcp(
             task_id=task_id,
             response_preflight=lambda preview: _preflight_message_inbox_result(
                 preview,
-                sender=sender,
+                sender="",
                 target=target,
                 mode=mode,
                 require_reply=require_reply,
@@ -376,7 +377,7 @@ def build_mcp(
         MessageOutput,
         lambda raw, kw: message_result(
             raw,
-            sender=kw["sender"],
+            sender=str(raw.get("sender") or ""),
             text=kw.get("text"),
             target=kw.get("target"),
             message_hash=kw.get("message_hash"),
@@ -384,6 +385,7 @@ def build_mcp(
             require_reply=kw.get("require_reply", False),
             alert=kw.get("alert", False),
             show_all=kw.get("history", kw.get("show_all", False)),
+            recipients=kw.get("recipients", False),
         ),
     )
     install_public_output_contract(
@@ -399,5 +401,27 @@ def build_mcp(
         mcp, "context", ContextOutput, lambda raw, kw: context_result(raw, kw["request"].action)
     )
     install_public_output_contract(mcp, "health", HealthOutput, lambda raw, kw: health_result(raw))
+
+    def _install_activity_touch() -> None:
+        for tool in mcp._tool_manager.list_tools():
+            raw_fn = tool.fn
+
+            async def touched(*, _raw_fn=raw_fn, **kwargs):
+                result = await _raw_fn(**kwargs)
+                structured = getattr(result, "structuredContent", None)
+                succeeded = (
+                    structured.get("ok") is True
+                    if isinstance(structured, dict)
+                    else result.get("ok") is True
+                    if isinstance(result, dict)
+                    else False
+                )
+                if succeeded:
+                    await application.session_gate.touch_provider(_mcp_actor(service))
+                return result
+
+            tool.fn = touched
+
+    _install_activity_touch()
 
     return mcp

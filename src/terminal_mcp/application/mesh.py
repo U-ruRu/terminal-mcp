@@ -324,16 +324,17 @@ class MeshApplication:
             finally:
                 if token is not None:
                     reset_admission_context(token)
-            return {
-                "ok": True,
-                "result": {
-                    **self._backend._session_result(access, session),
-                    "logical_agent_id": access["logical_agent_id"],
-                    "work_session_id": session.work_session_id,
-                    "authority_node_id": session.authority_node_id,
-                    "authority_epoch": session.authority_epoch,
-                },
+            result = {
+                **self._backend._session_result(access, session),
+                "logical_agent_id": access["logical_agent_id"],
+                "work_session_id": session.work_session_id,
+                "authority_node_id": session.authority_node_id,
+                "authority_epoch": session.authority_epoch,
             }
+            last_seen = getattr(self._backend.lifecycle.store, "provider_last_seen", None)
+            if callable(last_seen):
+                result["last_active_at"] = await last_seen(access["logical_agent_id"])
+            return {"ok": True, "result": result}
 
     async def unified_session_status(self, actor: ActorContext, payload: dict):
         self._require_peer(actor)

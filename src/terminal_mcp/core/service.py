@@ -735,6 +735,42 @@ class TerminalService:
                 }
                 if self.task_coordinator:
                     result["workflow"] = await self.task_coordinator.health()
+                    result["ok"] = bool(result["ok"] and result["workflow"].get("ok", False))
+                components = [
+                    {
+                        "id": "storage",
+                        "status": "healthy" if storage_ok else "failed",
+                        "reason": None if storage_ok else "storage_unavailable",
+                    },
+                    {
+                        "id": "terminal",
+                        "status": (
+                            "healthy"
+                            if terminal.get("ok", False)
+                            else "degraded"
+                            if terminal.get("degraded")
+                            else "failed"
+                        ),
+                        "reason": None if terminal.get("ok", False) else "terminal_unavailable",
+                    },
+                ]
+                if self.task_coordinator:
+                    workflow_ok = bool(result["workflow"].get("ok", False))
+                    components.append(
+                        {
+                            "id": "workflow",
+                            "status": "healthy" if workflow_ok else "degraded",
+                            "reason": None if workflow_ok else "workflow_degraded",
+                        }
+                    )
+                result["components"] = components
+                result["status"] = (
+                    "healthy"
+                    if result["ok"]
+                    else "failed"
+                    if any(item["status"] == "failed" for item in components)
+                    else "degraded"
+                )
                 if self.event_store:
                     signature = {
                         "ok": bool(result["ok"]),
@@ -761,6 +797,15 @@ class TerminalService:
                         **custom,
                     }
                     result["ok"] = result["ok"] and custom["ok"]
+                    result["components"].append(
+                        {
+                            "id": "custom_command",
+                            "status": "healthy" if custom["ok"] else "degraded",
+                            "reason": None if custom["ok"] else "custom_health_failed",
+                        }
+                    )
+                    if not custom["ok"] and result["status"] == "healthy":
+                        result["status"] = "degraded"
                 return result
         except asyncio.CancelledError:
             if self.events:

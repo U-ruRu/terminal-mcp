@@ -690,7 +690,29 @@ class AuthFoundationStore:
                     (provider, binding_key),
                 )
             ).fetchone()
-            return str(row[0]) if row is not None else None
+            if row is not None:
+                await db.execute(
+                    "UPDATE auth_provider_bindings SET last_seen_at=? "
+                    "WHERE provider=? AND binding_key=?",
+                    (_utc_now(), provider, binding_key),
+                )
+                await db.commit()
+                return str(row[0])
+            return None
+        finally:
+            await db.close()
+
+    async def provider_last_seen(self, logical_agent_id: str) -> str | None:
+        logical_agent_id = _normalized(logical_agent_id, "logical_agent_id")
+        db = await self._connect()
+        try:
+            row = await (
+                await db.execute(
+                    "SELECT MAX(last_seen_at) FROM auth_provider_bindings WHERE logical_agent_id=?",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+            return str(row[0]) if row is not None and row[0] is not None else None
         finally:
             await db.close()
 

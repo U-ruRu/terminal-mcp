@@ -43,9 +43,7 @@ class ManagedAccessAuthority(Protocol):
 class ManagedFleetRoutes(Protocol):
     async def route_info(self, logical_agent_id: str) -> dict | None: ...
 
-    async def resolve_provider_binding(
-        self, provider: str, binding_key: str
-    ) -> str | None: ...
+    async def resolve_provider_binding(self, provider: str, binding_key: str) -> str | None: ...
 
     async def bind_provider_binding(
         self,
@@ -148,7 +146,7 @@ class ManagedProviderResolver:
             getattr(self.router.routes, "resolve_provider_binding", None)
             if self.router.routes is not None
             else None
-         )
+        )
         if callable(route_resolver):
             try:
                 logical_agent_id = await route_resolver(identity.provider, identity.binding_key)
@@ -161,6 +159,9 @@ class ManagedProviderResolver:
             raise ManagedSessionError("identity_not_bound")
         if actor.logical_agent_id is not None and actor.logical_agent_id != logical_agent_id:
             raise ManagedSessionError("identity_mismatch")
+        touch = getattr(self.repository, "touch_provider", None)
+        if callable(touch):
+            await touch(identity)
         route = await self.router.identity_route(logical_agent_id)
         if (
             actor.authority_node_id is not None
@@ -284,6 +285,45 @@ class ManagedGrantAuthorizer:
             return False
         return True
 
+    async def ensure_agent_grant(self, actor: ActorContext, logical_agent_id: str) -> None:
+        """Grant the authenticated OAuth client access to a freshly bootstrapped agent."""
+        if actor.auth_mode != "oauth" or not actor.principal_id or not actor.credential_id:
+            raise ManagedSessionError("persistent_auth_required")
+        credential = actor.credential_id
+        client_id = (
+            credential.removeprefix("oauth:") if credential.startswith("oauth:") else credential
+        )
+        scopes = [value for value in ("terminal:read", "terminal:execute") if value in actor.scopes]
+        if "terminal:execute" not in scopes:
+            raise ManagedSessionError("access_denied")
+        grants = await self.authority.active_grants(actor.principal_id)
+        for grant in grants:
+            if not isinstance(grant, Mapping) or grant.get("client_id") != client_id:
+                continue
+            resources = grant.get("resources")
+            granted_scopes = grant.get("scopes")
+            if (
+                isinstance(resources, list)
+                and logical_agent_id in resources
+                and isinstance(granted_scopes, list)
+                and all(scope in granted_scopes for scope in scopes)
+            ):
+                return
+        creator = getattr(self.authority, "create_grant", None)
+        if not callable(creator):
+            raise ManagedSessionError("authority_unavailable")
+        try:
+            await creator(
+                actor.principal_id,
+                client_id,
+                [logical_agent_id],
+                scopes,
+                role="agent",
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", "access_denied")
+            raise ManagedSessionError(str(code)) from exc
+
     async def authorize(
         self, actor: ActorContext, logical_agent_id: str, operation: ManagedOperation
     ) -> ManagedSlotGrant:
@@ -298,7 +338,16 @@ class ManagedGrantAuthorizer:
         slot, route = await self.router.resolve(logical_agent_id)
         if actor.auth_generation != slot.auth_generation:
             raise ManagedSessionError("auth_generation_mismatch", return_to_chat=True)
-        access = await self.authority.access_slot(logical_agent_id)
+        route_access = (
+            getattr(self.router.routes, "get_access_slot", None)
+            if self.router.routes is not None
+            else None
+        )
+        access = (
+            await route_access(logical_agent_id)
+            if callable(route_access)
+            else await self.authority.access_slot(logical_agent_id)
+        )
         if (
             not isinstance(access, Mapping)
             or access.get("logical_agent_id") != logical_agent_id

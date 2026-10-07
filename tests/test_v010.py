@@ -875,7 +875,8 @@ def test_mcp_schema_has_unified_task_contract():
     assert "code" not in read["required"]
 
     message = tools["message"].parameters
-    assert message["required"] == ["sender"]
+    assert "sender" not in message.get("properties", {})
+    assert "required" not in message or "sender" not in message["required"]
     assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
     assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
     assert "active unified session" in tools["message"].description

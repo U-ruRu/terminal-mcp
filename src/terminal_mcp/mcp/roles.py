@@ -35,7 +35,11 @@ from terminal_mcp.application.task_requests import (
 )
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.public_errors import public_error
-from terminal_mcp.core.read_contract import InvalidCursor, decode_cursor, encode_cursor
+from terminal_mcp.core.read_contract import (
+    InvalidCursor,
+    OutputItemTooLarge,
+    bounded_page,
+)
 from terminal_mcp.core.task_projections import (
     TaskHistory,
     TaskRecord,
@@ -48,6 +52,7 @@ from terminal_mcp.mcp.output_contracts import (
     health_result,
     message_result,
     observe_result,
+    session_result,
     task_result,
 )
 from terminal_mcp.mcp.role_contracts import (
@@ -74,6 +79,7 @@ from terminal_mcp.mcp.role_contracts import (
     validate_boundary,
     validation_error,
 )
+from terminal_mcp.mcp.role_outputs import install_role_output_contract
 
 RoleName = Literal["executor", "coordinator"]
 EXECUTOR_TOOLS = (
@@ -205,6 +211,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
         "send": ManagedOperation.MESSAGE_SEND,
         "read": ManagedOperation.MESSAGE_READ,
         "history": ManagedOperation.MESSAGE_READ,
+        "recipients": ManagedOperation.MESSAGE_READ,
         "ack": ManagedOperation.MESSAGE_ACK,
         "reply": ManagedOperation.MESSAGE_REPLY,
     }[request.action]
@@ -233,7 +240,10 @@ async def _message(application, actor, request: MessageInput) -> dict:
         detail=request.detail,
         namespace=request.namespace,
         task_id=request.task_id,
+        recipients=request.action == "recipients",
     )
+    if request.action == "recipients":
+        return raw
     return _structured(
         message_result(
             raw,
@@ -298,7 +308,10 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
     assert record is not None
 
     if request.detail == "detail":
-        detail = project_task_detail(record).model_dump(mode="json", exclude_none=True)
+        try:
+            detail = project_task_detail(record).model_dump(mode="json", exclude_none=True)
+        except ValidationError:
+            return public_error("output_item_too_large").as_dict()
         return {"ok": True, "detail": "detail", "task": detail}
 
     scope = {
@@ -307,22 +320,23 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
         "task_id": request.task_id,
         "stream": request.history_kind,
     }
-    try:
-        offset = decode_cursor(request.cursor, scope)
-    except InvalidCursor:
-        return {"ok": False, "code": "invalid_cursor", "error": "invalid_cursor"}
-
     streams = {
         "comments": list(record.comments or []),
         "events": list(record.events or []),
         "reviews": list(record.reviews or []),
         "output_states": list(record.output_states or []),
     }
-    items = streams[request.history_kind]
-    page = items[offset : offset + request.limit]
-    next_cursor = (
-        encode_cursor(offset + len(page), scope) if offset + len(page) < len(items) else None
-    )
+    items = [
+        item.model_dump(mode="json", exclude_none=True) for item in streams[request.history_kind]
+    ]
+    try:
+        page, next_cursor = bounded_page(
+            items, limit=request.limit, cursor=request.cursor, scope=scope
+        )
+    except InvalidCursor:
+        return public_error("invalid_cursor").as_dict()
+    except OutputItemTooLarge:
+        return public_error("output_item_too_large").as_dict()
     history = TaskHistory.model_validate(
         {
             "kind": request.history_kind,
@@ -391,13 +405,13 @@ async def _task_graph(application, actor, request: TaskGraphInput) -> dict:
         "kinds": sorted(request.kinds or []),
     }
     try:
-        offset = decode_cursor(request.cursor, scope)
+        page, next_cursor = bounded_page(
+            edges, limit=request.limit, cursor=request.cursor, scope=scope
+        )
     except InvalidCursor:
-        return {"ok": False, "code": "invalid_cursor", "error": "invalid_cursor"}
-    page = edges[offset : offset + request.limit]
-    next_cursor = (
-        encode_cursor(offset + len(page), scope) if offset + len(page) < len(edges) else None
-    )
+        return public_error("invalid_cursor").as_dict()
+    except OutputItemTooLarge:
+        return public_error("output_item_too_large").as_dict()
     nodes = [{"namespace": request.namespace, "task_id": request.task_id, "state": record.state}]
     seen = {(request.namespace, request.task_id)}
     for edge in page:
@@ -420,6 +434,8 @@ def _compact_health(raw: dict) -> dict:
         "application": raw.get("application"),
         "version": raw.get("version"),
         "storage": raw.get("storage"),
+        "status": raw.get("status"),
+        "components": raw.get("components") or [],
         "terminal": {
             key: terminal.get(key)
             for key in ("ok", "scheduler", "parallelism", "queue_size", "degraded")
@@ -475,7 +491,7 @@ def build_role_mcp(
             mode="persistent" if request.action == "start" else None,
             code=None,
         )
-        return raw
+        return _structured(session_result(raw, request.action))
 
     @mcp.tool(
         name="task_list",
@@ -720,6 +736,30 @@ def build_role_mcp(
             return _structured(health_result(raw)) if request.extended else _compact_health(raw)
 
     install_role_input_contract(mcp, role)
+    install_role_output_contract(mcp, role)
+
+    def _install_activity_touch() -> None:
+        for tool in mcp._tool_manager.list_tools():
+            raw_fn = tool.fn
+
+            async def touched(*, _raw_fn=raw_fn, **kwargs):
+                result = await _raw_fn(**kwargs)
+                structured = getattr(result, "structuredContent", None)
+                succeeded = (
+                    structured.get("ok") is True
+                    if isinstance(structured, dict)
+                    else result.get("ok") is True
+                    if isinstance(result, dict)
+                    else False
+                )
+                if succeeded:
+                    await application.session_gate.touch_provider(_actor(application, role))
+                return result
+
+            tool.fn = touched
+
+    _install_activity_touch()
+
     registered = mcp._tool_manager._tools
     mcp._tool_manager._tools = {name: registered[name] for name in ROLE_TOOLS[role]}
     mcp.role_schema_contract = role_schema_contract(role)

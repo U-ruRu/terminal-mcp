@@ -5,6 +5,7 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from terminal_mcp.core.public_errors import public_error
+from terminal_mcp.core.read_contract import CALL_TOOL_RESULT_BUDGET_BYTES
 from terminal_mcp.mcp.output_contracts import (
     CmdOutput,
     ContextOutput,
@@ -20,6 +21,7 @@ from terminal_mcp.mcp.output_contracts import (
     health_result,
     message_result,
     observe_result,
+    serialized_call_tool_result_size,
     session_result,
     task_result,
 )
@@ -686,3 +688,21 @@ def test_unknown_raw_error_fails_closed_to_internal_error():
     assert json.loads(result.content[0].text) == expected
     assert result.isError is True
     assert secret not in result.model_dump_json()
+
+
+def test_task_done_large_committed_result_stays_successful_and_bounded():
+    raw_task = {
+        **TASK,
+        "state": "done",
+        "operational_status": "done",
+        "revision": 5,
+        "result": {"payload": "x" * 30000},
+    }
+    result = task_result({"ok": True, "task": raw_task, "warnings": []}, "done")
+    assert result.structuredContent["ok"] is True
+    assert result.structuredContent["task"]["state"] == "done"
+    assert "result" in result.structuredContent["task"]
+    compatibility = json.loads(result.content[0].text)
+    assert compatibility["ok"] is True
+    assert "result" not in compatibility["task"]
+    assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES

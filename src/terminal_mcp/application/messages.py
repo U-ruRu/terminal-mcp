@@ -60,6 +60,7 @@ class MessagingApplication(ApplicationCapability):
         detail: Literal["summary", "full"] = "summary",
         namespace: str | None = None,
         task_id: str | None = None,
+        recipients: bool = False,
         response_preflight: Callable[[dict], dict | None] | None = None,
     ) -> dict:
         backend = self.backend
@@ -67,7 +68,7 @@ class MessagingApplication(ApplicationCapability):
             return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
         is_read = text is None and message_hash is None
         scope = {
-            "kind": "message.read",
+            "kind": "message.recipients" if recipients else "message.read",
             "sender": sender,
             "authorization": code or sender,
             "history": history,
@@ -90,11 +91,23 @@ class MessagingApplication(ApplicationCapability):
             if message_hash is not None
             else ManagedOperation.MESSAGE_SEND
         )
-        resolution = await self.gate.resolve_message_actor(
-            actor, sender, code, operation
-        )
+        resolution = await self.gate.resolve_message_actor(actor, sender, code, operation)
         if resolution.failure is not None:
             return resolution.failure
+        if recipients:
+            raw = await backend.access_observe_slots(limit=limit + 1, offset=offset)
+            if not raw.get("ok"):
+                return raw
+            rows = list(raw.get("sessions") or [])
+            page = rows[:limit]
+            next_cursor = encode_cursor(offset + len(page), scope) if len(rows) > limit else None
+            return {
+                "ok": True,
+                "action": "recipients",
+                "sender": str((resolution.identity or {}).get("public_name") or sender),
+                "recipients": page,
+                "next_cursor": next_cursor,
+            }
         result = await self.gate.message(
             resolution,
             sender,

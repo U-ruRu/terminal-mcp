@@ -255,10 +255,17 @@ class PersistentBackend:
             session_ref = session["work_session_id"]
             session_epoch = session["session_epoch"]
             hard_expires_at = session["hard_expires_at"]
+            started_at = session.get("started_at")
+            session_state = session.get("state") or "active"
         else:
             session_ref = session.work_session_id
             session_epoch = session.session_epoch
             hard_expires_at = session.hard_expires_at
+            started_at = session.started_at
+            session_state = (
+                session.state.value if hasattr(session.state, "value") else session.state
+            )
+        remaining = max(0, int((parse_utc(hard_expires_at) - utc_now()).total_seconds()))
         result = {
             "ok": True,
             "mode": access["slot_kind"],
@@ -266,7 +273,10 @@ class PersistentBackend:
             "display_suffix": access.get("display_suffix"),
             "session_ref": session_ref,
             "session_epoch": session_epoch,
+            "session_state": session_state,
+            "session_started_at": started_at,
             "hard_expires_at": hard_expires_at,
+            "remaining_seconds": remaining,
         }
         if access_code is not None:
             result["access_code"] = access_code
@@ -396,11 +406,24 @@ class PersistentBackend:
                 )
                 return result
             session = await self._local_access_session(access)
-            return {
+            result = {
                 **self._session_result(access, session),
                 "logical_agent_id": access["logical_agent_id"],
                 "work_session_id": session.work_session_id,
             }
+            seen_values = []
+            last_seen = getattr(self.lifecycle.store, "provider_last_seen", None)
+            if callable(last_seen):
+                value = await last_seen(access["logical_agent_id"])
+                if value:
+                    seen_values.append(value)
+            authority_seen = getattr(self.access_authority, "provider_last_seen", None)
+            if callable(authority_seen):
+                value = await authority_seen(access["logical_agent_id"])
+                if value:
+                    seen_values.append(value)
+            result["last_active_at"] = max(seen_values) if seen_values else None
+            return result
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
 
@@ -1208,30 +1231,24 @@ class PersistentBackend:
                 slots = await self.access_authority.access_slots(limit=limit, offset=offset)
             else:
                 raise PersistentStoreError("authority_unavailable")
-            public = []
-            for item in slots:
-                view = {
+            semaphore = asyncio.Semaphore(8)
+
+            async def project(item):
+                async with semaphore:
+                    status = await self.access_sender_identity(str(item["public_name"]))
+                if not status.get("ok"):
+                    return None
+                return {
                     "public_name": item["public_name"],
-                    "mode": item["slot_kind"],
-                    "display_suffix": item.get("display_suffix"),
-                    "authority_node_id": item["authority_node_id"],
-                    "access_generation": item["access_generation"],
+                    "session_state": status.get("session_state", "active"),
+                    "session_started_at": status.get("session_started_at"),
+                    "hard_expires_at": status.get("hard_expires_at"),
+                    "remaining_seconds": status.get("remaining_seconds", 0),
+                    "last_active_at": status.get("last_active_at"),
                 }
-                if item["authority_node_id"] == self.lifecycle.authority_node_id:
-                    session = await self.lifecycle.store.active_session_for_slot(
-                        item["logical_agent_id"]
-                    )
-                    if session is not None:
-                        view.update(
-                            session_ref=session.work_session_id,
-                            session_epoch=session.session_epoch,
-                            session_state=session.state,
-                            hard_expires_at=session.hard_expires_at,
-                        )
-                    else:
-                        view["session_state"] = "inactive"
-                public.append(view)
-            return {"ok": True, "sessions": public}
+
+            projected = await asyncio.gather(*(project(item) for item in slots))
+            return {"ok": True, "sessions": [item for item in projected if item is not None]}
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
 
@@ -1400,6 +1417,12 @@ class PersistentBackend:
             result = await self.lifecycle.create_slot(display_name)
             if result.get("ok"):
                 logical_agent_id = result["slot"]["logical_agent_id"]
+                if self.fleet_bridge is not None:
+                    await self.fleet_bridge.publish_authority(
+                        logical_agent_id,
+                        result["slot"]["authority_node_id"],
+                        int(result["slot"]["authority_epoch"]),
+                    )
                 try:
                     result["access"] = await self._access_ensure(
                         logical_agent_id, display_suffix=display_name

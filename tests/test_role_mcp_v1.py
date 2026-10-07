@@ -46,6 +46,13 @@ def test_role_catalogs_are_exact_and_identity_free():
             assert "required" not in (tool.description or "").lower()
 
 
+def test_role_tools_publish_output_schemas():
+    for role in ("executor", "coordinator"):
+        for name, tool in _tool_map(role).items():
+            assert isinstance(tool.output_schema, dict), (role, name)
+            assert tool.output_schema
+
+
 def test_planning_schema_is_typed_relaxed_runtime_superset():
     for _key, model in ROLE_TOOL_MODELS.items():
         schema = planning_schema(model)
@@ -66,7 +73,7 @@ async def test_structural_errors_reach_authoritative_validator():
     )
     for name, args, reason, path in cases:
         result = await tools[name].run(args, convert_result=True)
-        payload = json.loads(result[0].text)
+        payload = result.structuredContent
         assert payload == {
             "ok": False,
             "code": "input_validation_failed",
@@ -77,7 +84,7 @@ async def test_structural_errors_reach_authoritative_validator():
             "reason": reason,
             "path": path,
         }
-        assert len(result[0].text.encode()) < 512
+        assert len(json.dumps(payload, separators=(",", ":")).encode()) < 512
 
 
 def test_application_role_authorization_sets():

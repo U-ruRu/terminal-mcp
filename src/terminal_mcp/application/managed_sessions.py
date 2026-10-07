@@ -310,6 +310,12 @@ class ManagedSessionApplication:
         )
         return ManagedSessionAdmission(resolved, snapshot, grant.public_name, decision)
 
+    async def ensure_agent_grant(self, actor: ActorContext, logical_agent_id: str) -> None:
+        ensure = getattr(self.authorizer, "ensure_agent_grant", None)
+        if not callable(ensure):
+            raise ManagedSessionError("authority_unavailable")
+        await ensure(actor, logical_agent_id)
+
     async def start(self, actor: ActorContext) -> ManagedSessionAdmission:
         grant = await self._authorize(actor, ManagedOperation.SESSION_START)
         with actor.bind():

@@ -190,6 +190,15 @@ class SessionGate:
         }
         return SessionResolution(resolved, identity=identity, managed=True)
 
+    async def touch_provider(self, actor: ActorContext) -> None:
+        """Best-effort activity touch after a successful public MCP call."""
+        if not self._has_provider_identity(actor):
+            return
+        try:
+            await self._resolve_provider_actor(actor)
+        except ManagedSessionError:
+            return
+
     async def current_state(self, actor: ActorContext) -> dict:
         """Return compact server-resolved managed identity/window/session state."""
         if not self._has_provider_identity(actor):
@@ -301,8 +310,8 @@ class SessionGate:
         if resolution.identity is None:
             return failure("session_not_found")
         effective_sender = (
-            str(resolution.identity["public_name"])
-            if resolution.managed and resolution.identity is not None
+            str(resolution.identity.get("public_name") or sender)
+            if resolution.identity is not None
             else sender
         )
         with resolution.actor.bind():
@@ -326,8 +335,8 @@ class SessionGate:
         if resolution.failure is not None:
             return resolution.failure
         effective_sender = (
-            str(resolution.identity["public_name"])
-            if resolution.managed and resolution.identity is not None
+            str(resolution.identity.get("public_name") or sender)
+            if resolution.identity is not None
             else sender
         )
         with resolution.actor.bind():
@@ -336,6 +345,37 @@ class SessionGate:
                 _resolved_identity=resolution.identity,
                 **kwargs,
             )
+
+    async def _bootstrap_provider_actor(self, actor: ActorContext) -> ActorContext:
+        if actor.endpoint_role not in {"executor", "coordinator"}:
+            raise ManagedSessionError("identity_not_bound")
+        admission = actor.admission()
+        if admission is None or not actor.principal_id:
+            raise ManagedSessionError("persistent_auth_required")
+        admission.require("terminal:execute")
+        backend = self.backend
+        if backend is None or self.managed_identity is None or self.managed_sessions is None:
+            raise ManagedSessionError("policy_incompatible")
+        display_name = f"{actor.provider or 'provider'} {actor.endpoint_role}"
+        with actor.bind():
+            created = await backend.slot_create(display_name)
+        if not created.get("ok"):
+            raise ManagedSessionError(str(created.get("code") or "identity_binding_failed"))
+        slot = created.get("slot") or {}
+        access = created.get("access") or {}
+        logical_agent_id = str(slot.get("logical_agent_id") or "")
+        access_code = access.get("access_code")
+        if not logical_agent_id or not isinstance(access_code, str):
+            raise ManagedSessionError("identity_binding_failed")
+        bound = await self.managed_identity.bind_existing(
+            actor,
+            actor.provider or "",
+            actor.provider_metadata,
+            logical_agent_id,
+            access_code=access_code,
+        )
+        await self.managed_sessions.ensure_agent_grant(bound, logical_agent_id)
+        return bound
 
     async def start(
         self,
@@ -355,7 +395,13 @@ class SessionGate:
                 if exc.code != "identity_not_bound":
                     return self._managed_failure(exc)
                 resolved = None
-                if mode == "persistent" and code:
+                if actor.endpoint_role in {"executor", "coordinator"} and code is None:
+                    try:
+                        resolved = await self._bootstrap_provider_actor(actor)
+                    except (ManagedSessionError, PersistentStoreError) as bind_exc:
+                        code_value = getattr(bind_exc, "code", "identity_binding_failed")
+                        return failure(code_value)
+                elif mode == "persistent" and code:
                     try:
                         resolved = await self._bind_provider_from_access_code(actor, code)
                     except (ManagedSessionError, PersistentStoreError) as bind_exc:
@@ -432,7 +478,7 @@ class SessionGate:
         interrupt=False,
         resolved_access: dict | None = None,
     ) -> dict:
-        if self._has_provider_identity(actor):
+        if code is None and self._has_provider_identity(actor):
             try:
                 resolved = await self._resolve_provider_actor(actor)
                 ended = await self.managed_sessions.end(

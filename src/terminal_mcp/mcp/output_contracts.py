@@ -259,12 +259,10 @@ class ObserveTasksResult(_Strict):
     ok: Literal[True]
     subject: Literal["tasks"]
     summary: TaskListSummary | None = None
-    tag_counts: dict[str, int] = Field(default_factory=dict)
     recommended: TaskRecommendation | None = None
     tasks: list[TaskListItem | TaskRecord] = Field(default_factory=list)
     task: TaskSnapshot | TaskRecord | None = None
     next_cursor: Cursor | None
-    namespaces: list[Namespace] = Field(default_factory=list)
 
 
 class ObserveNamespacesResult(_Strict):
@@ -342,8 +340,29 @@ class MessageReplyResult(_SessionAware):
     message: MessageRecord
 
 
+class RecipientRecord(_Strict):
+    public_name: str
+    session_state: str
+    session_started_at: str | None = None
+    hard_expires_at: str | None = None
+    remaining_seconds: int = Field(ge=0)
+    last_active_at: str | None = None
+
+
+class MessageRecipientsResult(_SessionAware):
+    ok: Literal[True]
+    action: Literal["recipients"]
+    sender: str | None = None
+    recipients: list[RecipientRecord]
+    next_cursor: Cursor | None = None
+
+
 MessageSuccess = Annotated[
-    MessageListResult | MessageSendResult | MessageAcknowledgeResult | MessageReplyResult,
+    MessageListResult
+    | MessageSendResult
+    | MessageAcknowledgeResult
+    | MessageReplyResult
+    | MessageRecipientsResult,
     Field(discriminator="action"),
 ]
 
@@ -624,8 +643,14 @@ class HealthCommandResult(_Strict):
     duration_ms: int
 
 
+class HealthComponent(_Strict):
+    id: str
+    status: Literal["healthy", "degraded", "failed"]
+    reason: str | None = None
+
+
 class HealthResult(_Strict):
-    ok: Literal[True]
+    ok: bool
     application: str
     version: str
     storage: str
@@ -634,6 +659,8 @@ class HealthResult(_Strict):
     workflow: WorkflowHealth | None = None
     custom_command: HealthCommandResult | None = None
     agent_name: str | None = None
+    status: Literal["healthy", "degraded", "failed"] = "healthy"
+    components: list[HealthComponent] = Field(default_factory=list)
 
 
 class HealthOutput(RootModel[HealthResult | AccessError]):
@@ -747,6 +774,24 @@ def _call_tool_result(
     )
 
 
+def projected_result(
+    raw: dict[str, Any],
+    output_model: type[RootModel],
+    *,
+    tool: str,
+    variant: str,
+) -> CallToolResult:
+    """Encode an already-projected role result into structured MCP output."""
+    return _result(
+        tool,
+        variant,
+        output_model,
+        raw,
+        raw,
+        compact_success_text=True,
+    )
+
+
 def _result(
     tool: str,
     variant: str,
@@ -755,6 +800,7 @@ def _result(
     structured: dict[str, Any],
     *,
     compact_success_text: bool = False,
+    success_content: dict[str, Any] | None = None,
 ) -> CallToolResult:
     is_error = raw.get("ok") is False
     if not is_error and isinstance(raw.get("session_lifecycle"), dict):
@@ -771,7 +817,11 @@ def _result(
         ) from exc
 
     data = validated.model_dump(mode="json", exclude_unset=True)
-    if is_error or compact_success_text:
+    if is_error:
+        content_data = data
+    elif success_content is not None:
+        content_data = success_content
+    elif compact_success_text:
         content_data = data
     else:
         # Preserve the legacy success text shape while bounding only the coordination
@@ -984,9 +1034,7 @@ def observe_result(
                 _task_list_item(item) if detail == "summary" else _task_record(item)
                 for item in raw.get("tasks", [])
             ],
-            "tag_counts": raw.get("tag_counts") or {},
             "next_cursor": None if next_cursor is None else str(next_cursor),
-            "namespaces": raw.get("namespaces") or [],
         }
         if isinstance(raw.get("task"), dict):
             structured["task"] = (
@@ -1012,10 +1060,13 @@ def message_result(
     require_reply: bool,
     alert: bool,
     show_all: bool,
+    recipients: bool = False,
 ) -> CallToolResult:
     if not raw.get("ok"):
         variant = (
-            "reply"
+            "recipients"
+            if recipients
+            else "reply"
             if message_hash is not None and text is not None
             else "acknowledge"
             if message_hash is not None
@@ -1026,6 +1077,15 @@ def message_result(
             else "inbox"
         )
         return _result("message", variant, MessageOutput, raw, {})
+    if recipients or raw.get("action") == "recipients":
+        structured = {
+            "ok": True,
+            "action": "recipients",
+            "sender": raw.get("sender") or sender,
+            "recipients": raw.get("recipients") or [],
+            "next_cursor": raw.get("next_cursor"),
+        }
+        return _result("message", "recipients", MessageOutput, raw, structured)
     if message_hash is not None and text is not None:
         action = "reply"
         record = {
@@ -1100,7 +1160,19 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
         "task": task,
         "warnings": warnings,
     }
-    return _result("task", action, TaskOutput, raw, structured, compact_success_text=True)
+    content_task = {
+        key: task[key]
+        for key in ("namespace", "task_id", "revision", "state", "operational_status")
+        if key in task
+    }
+    return _result(
+        "task",
+        action,
+        TaskOutput,
+        raw,
+        structured,
+        success_content={"ok": True, "action": action, "task": content_task},
+    )
 
 
 def _compact_coordination_messages(
@@ -1287,18 +1359,20 @@ def context_result(raw: dict[str, Any], action: str) -> CallToolResult:
 
 
 def health_result(raw: dict[str, Any]) -> CallToolResult:
-    if not raw.get("ok"):
+    if raw.get("ok") is False and raw.get("code"):
         return _result("health", "health", HealthOutput, raw, {})
     terminal = _known(TerminalHealth, raw.get("terminal") or {}).model_dump(
         mode="json", exclude_unset=True
     )
     structured: dict[str, Any] = {
-        "ok": True,
+        "ok": bool(raw.get("ok")),
         "application": raw.get("application"),
         "version": raw.get("version"),
         "storage": raw.get("storage"),
         "auth_mode": raw.get("auth_mode"),
         "terminal": terminal,
+        "status": raw.get("status") or ("healthy" if raw.get("ok") else "degraded"),
+        "components": raw.get("components") or [],
     }
     if isinstance(raw.get("workflow"), dict):
         structured["workflow"] = _known(WorkflowHealth, raw["workflow"]).model_dump(
@@ -1310,7 +1384,9 @@ def health_result(raw: dict[str, Any]) -> CallToolResult:
         ).model_dump(mode="json", exclude_unset=True)
     if raw.get("agent_name") is not None:
         structured["agent_name"] = raw["agent_name"]
-    return _result("health", "health", HealthOutput, raw, structured)
+    validated = HealthOutput.model_validate(structured)
+    data = validated.model_dump(mode="json", exclude_unset=True)
+    return _call_tool_result(data, content_data=data, is_error=False)
 
 
 def install_public_output_contract(

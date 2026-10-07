@@ -119,7 +119,7 @@ class TaskCommentInput(StrictRoleInput):
 
 
 class MessageInput(StrictRoleInput):
-    action: Literal["send", "read", "ack", "reply", "history"]
+    action: Literal["send", "read", "ack", "reply", "history", "recipients"]
     text: Annotated[str | None, Field(max_length=MAX_MESSAGE_TEXT_CHARS)] = None
     target: Identifier | None = None
     message_hash: Hash | None = None
@@ -139,9 +139,11 @@ class MessageInput(StrictRoleInput):
                 raise ValueError("text is required for action=send")
             if self.message_hash is not None:
                 raise ValueError("message_hash is not allowed for action=send")
-        elif self.action in {"read", "history"}:
+        elif self.action in {"read", "history", "recipients"}:
             if self.text is not None or self.message_hash is not None:
-                raise ValueError("text and message_hash are not allowed for read/history")
+                raise ValueError(
+                    "text and message_hash are not allowed for read/history/recipients"
+                )
         elif self.action == "ack":
             if self.message_hash is None:
                 raise ValueError("message_hash is required for action=ack")

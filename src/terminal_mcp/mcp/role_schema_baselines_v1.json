@@ -53,9 +53,9 @@
       {
         "contract_version": 1,
         "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 1021,
-        "planning_input_schema_digest": "bfdf1bbc1b89ce75a4a01ba61adb9b0bb422d4c85767019760889d84400a8f41",
-        "runtime_input_schema_digest": "9baee70ff1dcc3d89b74b9a09b92f61c3ac0fb063512ae75a8045ea638e2e736",
+        "planning_input_schema_bytes": 1034,
+        "planning_input_schema_digest": "c0166e4b7baad378873e28d4d9d4983e99fc58c76e11717750f3f62516aa3bf9",
+        "runtime_input_schema_digest": "b11746e9f2d97658baf8547c388120895833b82e925c25ccc2520e88424d944a",
         "tool_name": "message"
       },
       {
@@ -143,9 +143,9 @@
       {
         "contract_version": 1,
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 1021,
-        "planning_input_schema_digest": "bfdf1bbc1b89ce75a4a01ba61adb9b0bb422d4c85767019760889d84400a8f41",
-        "runtime_input_schema_digest": "9baee70ff1dcc3d89b74b9a09b92f61c3ac0fb063512ae75a8045ea638e2e736",
+        "planning_input_schema_bytes": 1034,
+        "planning_input_schema_digest": "c0166e4b7baad378873e28d4d9d4983e99fc58c76e11717750f3f62516aa3bf9",
+        "runtime_input_schema_digest": "b11746e9f2d97658baf8547c388120895833b82e925c25ccc2520e88424d944a",
         "tool_name": "message"
       }
     ]

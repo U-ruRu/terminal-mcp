@@ -319,6 +319,27 @@ class WorkWindowStore(PersistentAgentStore):
                 )
         return logical_agent_id
 
+    async def touch_provider(self, identity: ProviderIdentity, *, now: str | None = None) -> None:
+        stamp = now or utc_text()
+        async with self._connect("provider_touch") as db:
+            await db.execute(
+                "UPDATE logical_agent_provider_bindings SET last_seen_at=? "
+                "WHERE provider=? AND binding_key=?",
+                (stamp, identity.provider, identity.binding_key),
+            )
+            await db.commit()
+
+    async def provider_last_seen(self, logical_agent_id: str) -> str | None:
+        async with self._connect("provider_last_seen") as db:
+            row = await (
+                await db.execute(
+                    "SELECT MAX(last_seen_at) FROM logical_agent_provider_bindings "
+                    "WHERE logical_agent_id=?",
+                    (logical_agent_id,),
+                )
+            ).fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else None
+
     async def resolve_provider(self, identity: ProviderIdentity) -> str | None:
         # Identity resolution is fleet-wide evidence lookup, not local authority
         # admission. A non-authority node must be able to learn the LogicalAgent
@@ -497,9 +518,7 @@ class WorkWindowStore(PersistentAgentStore):
             if window and window.phase(now) is WindowPhase.EXPIRED:
                 raise WorkWindowStoreError("session_expired", current=window)
             if window and window.phase(now) is WindowPhase.DRAINING:
-                raise WorkWindowStoreError(
-                    "session_draining", current=window, return_to_chat=True
-                )
+                raise WorkWindowStoreError("session_draining", current=window, return_to_chat=True)
             if window is None:
                 policy = await self._policy_on(db, logical_agent_id, stamp)
                 window = WorkWindow.open(
