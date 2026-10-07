@@ -38,6 +38,7 @@ from terminal_mcp.application.task_requests import (
     ReviewEvidence,
     TaskDependencies,
 )
+from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.core.read_contract import (
     DEFAULT_CMD_READ_LINES,
     DEFAULT_PAGE_LIMIT,
@@ -429,7 +430,7 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
             if candidate in message:
                 path = candidate
                 break
-    return {"code": "input_validation_failed", "reason": reason, "path": path}
+    return public_error("input_validation_failed", reason=reason, path=path).as_dict()
 
 
 def validate_boundary(boundary: RuntimeBoundary, model: type[StrictRoleInput]):

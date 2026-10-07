@@ -44,15 +44,22 @@ class CommandApplication(ApplicationCapability):
                 agent_id=None,
             )
             return _finish_cmd_read_page(result, start=start, scope=scope)
-        identity, failure = await self.gate.identity(
-            actor, request.code, ManagedOperation(f"command.{request.action}")
-        )
+        if request.action == "read" and request.code is None and actor.provider_metadata:
+            resolution = await self.gate.provider_identity(actor, ManagedOperation.COMMAND_READ)
+            identity, failure = resolution.identity, resolution.failure
+        else:
+            identity, failure = await self.gate.identity(
+                actor, request.code, ManagedOperation(f"command.{request.action}")
+            )
         if failure is not None:
             return failure
         backend = self.backend
-        message_state, failure = await self.gate.command_state(actor, identity, request.action)
-        if failure is not None:
-            return failure
+        if request.action == "read" and request.code is None and actor.provider_metadata:
+            message_state = {}
+        else:
+            message_state, failure = await self.gate.command_state(actor, identity, request.action)
+            if failure is not None:
+                return failure
         if request.action == "read":
             scope = {
                 "kind": "cmd.read",
@@ -73,8 +80,10 @@ class CommandApplication(ApplicationCapability):
             result.update(
                 {
                     "logical_agent_id": identity["logical_agent_id"],
-                    "work_session_id": identity["work_session_id"],
-                    "session_epoch": identity["session_epoch"],
+                    "work_session_id": identity.get("work_session_id"),
+                    "session_epoch": identity.get("session_epoch"),
+                    "public_name": identity.get("public_name"),
+                    "authority_node_id": identity.get("authority_node_id"),
                 }
             )
             return _with_session_lifecycle(

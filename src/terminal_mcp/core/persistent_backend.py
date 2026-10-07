@@ -1745,9 +1745,7 @@ class PersistentBackend:
                     session.hard_expires_at if session is not None else permit.hard_expires_at
                 ),
                 "authority_node_id": (
-                    session.authority_node_id
-                    if session is not None
-                    else permit.authority_node_id
+                    session.authority_node_id if session is not None else permit.authority_node_id
                 ),
                 "node_attachment_id": permit.node_attachment_id if permit is not None else None,
                 "error": None,
@@ -1909,6 +1907,7 @@ class PersistentBackend:
         action: str,
         namespace: str,
         task_id: str | None = None,
+        idempotency_key: str | None = None,
         **kwargs,
     ):
         if self.task_coordinator is None:
@@ -1924,35 +1923,66 @@ class PersistentBackend:
                 )
                 if permit is not None and self.fleet_bridge is not None:
                     self.fleet_bridge.ensure_permit_valid(permit)
-                result = await self.task_coordinator.mutate(
-                    logical_agent_id,
-                    action=action,
-                    namespace=namespace,
-                    task_id=task_id,
-                    _claim_owner=ClaimOwner.logical_agent(logical_agent_id),
-                    **kwargs,
-                )
-                actual_task = result.get("task") if isinstance(result, dict) else None
-                if result.get("ok") and actual_task:
-                    await self.task_store.add_event(
-                        actual_task["namespace"],
-                        actual_task["task_id"],
-                        "persistent_mutation",
-                        agent_id=logical_agent_id,
-                        payload={"action": action},
-                        logical_agent_id=logical_agent_id,
-                        work_session_id=work_session_id,
-                        session_epoch=session_epoch,
+
+                async def mutate_once():
+                    result = await self.task_coordinator.mutate(
+                        logical_agent_id,
+                        action=action,
+                        namespace=namespace,
+                        task_id=task_id,
+                        _claim_owner=ClaimOwner.logical_agent(logical_agent_id),
+                        **kwargs,
                     )
-                    if action == "claim":
-                        snapshot = await self.task_coordinator.list(
-                            namespace=actual_task["namespace"],
-                            task_id=actual_task["task_id"],
-                            snapshot=True,
-                        )
-                        if snapshot.get("ok") and snapshot.get("task") is not None:
-                            result["task"] = snapshot["task"]
-                return result
+                    actual_task = result.get("task") if isinstance(result, dict) else None
+                    if result.get("ok") and actual_task:
+                        try:
+                            await self.task_store.add_event(
+                                actual_task["namespace"],
+                                actual_task["task_id"],
+                                "persistent_mutation",
+                                agent_id=logical_agent_id,
+                                payload={"action": action},
+                                logical_agent_id=logical_agent_id,
+                                work_session_id=work_session_id,
+                                session_epoch=session_epoch,
+                            )
+                        except Exception as exc:
+                            if self.service.events:
+                                self.service.events.emit(
+                                    "task_postcommit_audit_failed",
+                                    level="ERROR",
+                                    outcome="error",
+                                    logical_agent_id=logical_agent_id,
+                                    action=action,
+                                    error=exc.__class__.__name__,
+                                )
+                        if action == "claim":
+                            try:
+                                snapshot = await self.task_coordinator.list(
+                                    namespace=actual_task["namespace"],
+                                    task_id=actual_task["task_id"],
+                                    snapshot=True,
+                                )
+                                if snapshot.get("ok") and snapshot.get("task") is not None:
+                                    result["task"] = snapshot["task"]
+                            except Exception:
+                                pass
+                    return result
+
+                if idempotency_key:
+                    return await self._idempotent(
+                        logical_agent_id,
+                        f"task.{action}",
+                        idempotency_key,
+                        {
+                            "namespace": namespace,
+                            "task_id": task_id,
+                            "action": action,
+                            "kwargs": kwargs,
+                        },
+                        mutate_once,
+                    )
+                return await mutate_once()
         except PersistentLifecycleError as exc:
             return self._error(exc)
 

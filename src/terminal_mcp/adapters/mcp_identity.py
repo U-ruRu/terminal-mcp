@@ -25,6 +25,18 @@ class ProviderRequestEvidence:
     metadata: Mapping[str, object]
 
 
+def current_mcp_request_id() -> str | None:
+    """Return the server-owned JSON-RPC request id for replay correlation."""
+    try:
+        context = request_ctx.get()
+    except LookupError:
+        return None
+    value = context.request_id
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
 def current_provider_evidence() -> ProviderRequestEvidence | None:
     """Capture provider identity from server-side MCP request context.
 

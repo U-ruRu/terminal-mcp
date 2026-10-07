@@ -28,9 +28,7 @@ class SessionResolution:
 
 
 class SessionGate:
-    def __init__(
-        self, service=None, *, backend=None, managed_identity=None, managed_sessions=None
-    ):
+    def __init__(self, service=None, *, backend=None, managed_identity=None, managed_sessions=None):
         self.service = service
         self._explicit_backend = backend
         self.managed_identity = managed_identity
@@ -58,9 +56,7 @@ class SessionGate:
         )
 
     async def _resolve_provider_actor(self, actor: ActorContext) -> ActorContext:
-        return await self.managed_identity.resolve(
-            actor, actor.provider, actor.provider_metadata
-        )
+        return await self.managed_identity.resolve(actor, actor.provider, actor.provider_metadata)
 
     async def _bind_provider_from_access_code(
         self, actor: ActorContext, code: str
@@ -134,8 +130,11 @@ class SessionGate:
     ) -> SessionResolution:
         if operation is not None:
             managed = await self._managed_resolution(actor, operation)
-            if managed is not None and managed.failure is not None and code and (
-                managed.failure.get("code") == "identity_not_bound"
+            if (
+                managed is not None
+                and managed.failure is not None
+                and code
+                and (managed.failure.get("code") == "identity_not_bound")
             ):
                 try:
                     bound = await self._bind_provider_from_access_code(actor, code)
@@ -171,6 +170,25 @@ class SessionGate:
     ):
         result = await self.resolve(actor, code, operation)
         return result.identity, result.failure
+
+    async def provider_identity(
+        self, actor: ActorContext, operation: ManagedOperation
+    ) -> SessionResolution:
+        """Resolve provider-bound identity for reads that do not require a live WorkSession."""
+        if not self._has_provider_identity(actor):
+            return SessionResolution(actor, failure=failure("identity_not_bound"), managed=True)
+        try:
+            resolved = await self._resolve_provider_actor(actor)
+            grant = await self.managed_sessions._authorize(resolved, operation)
+        except ManagedSessionError as exc:
+            return SessionResolution(actor, failure=self._managed_failure(exc), managed=True)
+        identity = {
+            "ok": True,
+            "logical_agent_id": grant.logical_agent_id,
+            "authority_node_id": grant.authority_node_id,
+            "public_name": grant.public_name,
+        }
+        return SessionResolution(resolved, identity=identity, managed=True)
 
     async def current_state(self, actor: ActorContext) -> dict:
         """Return compact server-resolved managed identity/window/session state."""
@@ -249,8 +267,11 @@ class SessionGate:
     ) -> SessionResolution:
         if operation is not None:
             managed = await self._managed_resolution(actor, operation)
-            if managed is not None and managed.failure is not None and code and (
-                managed.failure.get("code") == "identity_not_bound"
+            if (
+                managed is not None
+                and managed.failure is not None
+                and code
+                and (managed.failure.get("code") == "identity_not_bound")
             ):
                 try:
                     bound = await self._bind_provider_from_access_code(actor, code)

@@ -68,7 +68,12 @@ async def test_structural_errors_reach_authoritative_validator():
         result = await tools[name].run(args, convert_result=True)
         payload = json.loads(result[0].text)
         assert payload == {
+            "ok": False,
             "code": "input_validation_failed",
+            "message": "Correct the indicated request field.",
+            "error": "Correct the indicated request field.",
+            "outcome": "not_committed",
+            "retry": "repair",
             "reason": reason,
             "path": path,
         }

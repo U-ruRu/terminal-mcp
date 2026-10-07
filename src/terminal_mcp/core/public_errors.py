@@ -31,6 +31,7 @@ ErrorKind = Literal[
     "validation", "access", "conflict", "transient", "missing", "policy", "internal"
 ]
 RecoveryAction = Literal["repair", "reauthenticate", "reconcile", "retry", "stop"]
+ErrorOutcome = Literal["not_committed", "committed", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -289,14 +290,30 @@ _REPAIR_TYPES = {
 class PublicError(_BoundedValue):
     ok: Literal[False] = False
     code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    message: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
     error: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
     details: ErrorRepair | None = None
+    outcome: ErrorOutcome
+    retry: RecoveryAction
+    reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    path: str | None = Field(default=None, max_length=MAX_ERROR_PATH)
 
     @model_validator(mode="after")
     def canonical(self):
         spec = ERROR_SPECS.get(self.code)
-        if spec is None or self.error != spec.message:
-            raise ValueError("public error code/message must come from the registered catalog")
+        if (
+            spec is None
+            or self.message != spec.message
+            or self.error != spec.message
+            or self.retry != spec.recovery
+        ):
+            raise ValueError(
+                "public error code/message/retry must come from the registered catalog"
+            )
+        if (self.reason is None) != (self.path is None):
+            raise ValueError("reason and path must be supplied together")
+        if self.reason is not None and self.code != "input_validation_failed":
+            raise ValueError("reason/path apply only to input_validation_failed")
         expected_type = (
             CoordinationRepair
             if self.code in {"coordination_alert", "coordination_ack_required"}
@@ -471,13 +488,27 @@ def _repair(code: str, kind: ErrorKind, raw: object) -> ErrorRepair | None:
     return None
 
 
-def public_error(code: str, *, details: object = None) -> PublicError:
+def public_error(
+    code: str,
+    *,
+    details: object = None,
+    outcome: ErrorOutcome | None = None,
+    reason: str | None = None,
+    path: str | None = None,
+) -> PublicError:
     canonical_code = code if isinstance(code, str) and code in ERROR_SPECS else "internal_error"
     spec = ERROR_SPECS[canonical_code]
+    if outcome is None:
+        outcome = "unknown" if spec.kind in {"transient", "internal"} else "not_committed"
     return PublicError(
         code=canonical_code,
+        message=spec.message,
         error=spec.message,
         details=_repair(canonical_code, spec.kind, details),
+        outcome=outcome,
+        retry=spec.recovery,
+        reason=reason,
+        path=path,
     )
 
 

@@ -11,7 +11,7 @@ from mcp.types import ToolAnnotations
 from pydantic import ValidationError
 
 from terminal_mcp.adapters.actor import actor_for
-from terminal_mcp.adapters.mcp_identity import current_provider_evidence
+from terminal_mcp.adapters.mcp_identity import current_mcp_request_id, current_provider_evidence
 from terminal_mcp.application import get_application
 from terminal_mcp.application.requests import (
     CmdCancelRequest,
@@ -156,6 +156,7 @@ def _actor(service, role: RoleName):
         contract_version=1,
         provider=evidence.provider if evidence is not None else None,
         provider_metadata=evidence.metadata if evidence is not None else None,
+        request_id=current_mcp_request_id(),
     )
 
 

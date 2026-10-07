@@ -35,7 +35,16 @@ SECRET = "PRIVATE_TOKEN_must_never_be_echoed"
 def test_registered_codes_are_stable_bounded_and_serializable(code):
     value = public_error(code)
     wire = value.as_dict()
-    assert wire == {"ok": False, "code": code, "error": ERROR_SPECS[code].message}
+    assert wire == {
+        "ok": False,
+        "code": code,
+        "message": ERROR_SPECS[code].message,
+        "error": ERROR_SPECS[code].message,
+        "outcome": (
+            "unknown" if ERROR_SPECS[code].kind in {"transient", "internal"} else "not_committed"
+        ),
+        "retry": ERROR_SPECS[code].recovery,
+    }
     assert 0 < len(value.error) <= MAX_ERROR_MESSAGE
     assert PublicError.model_validate_json(json.dumps(wire)) == value
     assert len(json.dumps(wire).encode()) < 512
@@ -62,7 +71,7 @@ def test_catalog_and_public_values_are_immutable():
 def test_unknown_codes_and_diagnostics_fail_closed(raw):
     result = normalize_public_error(raw)
     assert result.code == "internal_error"
-    assert set(result.as_dict()) == {"ok", "code", "error"}
+    assert set(result.as_dict()) == {"ok", "code", "message", "error", "outcome", "retry"}
     assert SECRET not in json.dumps(result.as_dict())
 
 

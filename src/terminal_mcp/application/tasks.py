@@ -19,6 +19,9 @@ class TaskApplication(ApplicationCapability):
         )
         if failure is not None:
             return failure
+        replay_key = None
+        if actor.transport == "mcp" and actor.request_id:
+            replay_key = f"{identity['work_session_id']}:{actor.request_id}"
         result = await self.backend.task(
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
@@ -27,6 +30,7 @@ class TaskApplication(ApplicationCapability):
             action=action,
             namespace=namespace,
             task_id=task_id,
+            idempotency_key=replay_key,
             **backend_request,
         )
         lifecycle = identity.get("session_lifecycle")

@@ -586,8 +586,8 @@ def test_task_nested_backend_fields_are_projected_out_and_schema_is_closed():
     validate(TaskOutput, result)
     structured_task = result.structuredContent["task"]
 
-    assert "backend_only_new_field" not in structured_task["resource_context"]
     for key in (
+        "resource_context",
         "blocking_dependencies",
         "dependencies",
         "relations",
@@ -596,7 +596,7 @@ def test_task_nested_backend_fields_are_projected_out_and_schema_is_closed():
         "comments",
         "reviews",
     ):
-        assert "backend_only_new_field" not in structured_task[key][0]
+        assert key not in structured_task
 
     # Arbitrary domain payloads remain explicit and schema-stable JSON payloads.
     assert (

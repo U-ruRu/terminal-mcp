@@ -293,13 +293,16 @@ class TaskListSummary(_Strict):
 
 
 class TaskReceipt(_BoundedProjection):
-    """Mutation outcome without current-state bodies or historical collections."""
+    """Mutation outcome without historical collections or unbounded task bodies."""
 
     namespace: Namespace
     task_id: TaskId
     revision: Annotated[int, Field(ge=1)]
     state: TaskState
     operational_status: TaskOperationalStatus
+    description: str | None = None
+    checkpoint: str | JsonPayload | None = None
+    result: str | JsonPayload | None = None
     owner: str | None = None
     output_state_id: Annotated[int, Field(ge=1)] | None = None
     archived: Literal[True] | None = None
@@ -361,6 +364,9 @@ def project_task_receipt(
     *,
     output_state_changed: bool = False,
     warnings: Iterable[WorkflowWarning] = (),
+    include_description: bool = False,
+    include_checkpoint: bool = False,
+    include_result: bool = False,
 ) -> TaskReceipt:
     """Project an authoritative mutation result, preserving its revision/state."""
     data = {
@@ -370,6 +376,12 @@ def project_task_receipt(
         "state": record.state,
         "operational_status": record.operational_status,
     }
+    if include_description and record.description is not None:
+        data["description"] = record.description
+    if include_checkpoint and record.checkpoint is not None:
+        data["checkpoint"] = record.checkpoint
+    if include_result and record.result is not None:
+        data["result"] = record.result
     owner = record.owner
     if owner is not None:
         data["owner"] = owner.agent_name if isinstance(owner, TaskClaim) else owner

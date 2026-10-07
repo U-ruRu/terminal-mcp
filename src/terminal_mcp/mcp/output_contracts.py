@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, Valid
 from terminal_mcp.core.public_errors import (
     MAX_COORDINATION_MESSAGES,
     MAX_ERROR_MESSAGE,
+    MAX_ERROR_PATH,
+    ErrorOutcome,
     ErrorRepair,
+    RecoveryAction,
     normalize_public_error,
     public_error,
 )
@@ -61,6 +64,9 @@ from terminal_mcp.core.task_projections import (
     TaskPriority as TaskPriority,
 )
 from terminal_mcp.core.task_projections import (
+    TaskReceipt as TaskReceipt,
+)
+from terminal_mcp.core.task_projections import (
     TaskRecommendation as TaskRecommendation,
 )
 from terminal_mcp.core.task_projections import (
@@ -84,6 +90,7 @@ from terminal_mcp.core.task_projections import (
 from terminal_mcp.core.task_projections import (
     WorkflowWarning as WorkflowWarning,
 )
+from terminal_mcp.core.task_projections import project_task_receipt
 
 
 class _Strict(BaseModel):
@@ -155,8 +162,13 @@ class MessageState(StrEnum):
 class AccessError(_Strict):
     ok: Literal[False]
     code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    message: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
     error: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
     details: ErrorRepair | None = None
+    outcome: ErrorOutcome
+    retry: RecoveryAction
+    reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    path: str | None = Field(default=None, max_length=MAX_ERROR_PATH)
 
 
 def _success_schema(annotation: Any) -> dict[str, Any]:
@@ -359,7 +371,7 @@ class TaskMutationResult(_SessionAware):
         "archive",
         "review",
     ]
-    task: TaskRecord
+    task: TaskReceipt
     warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
@@ -741,6 +753,8 @@ def _result(
     output_model: type[RootModel],
     raw: dict[str, Any],
     structured: dict[str, Any],
+    *,
+    compact_success_text: bool = False,
 ) -> CallToolResult:
     is_error = raw.get("ok") is False
     if not is_error and isinstance(raw.get("session_lifecycle"), dict):
@@ -757,7 +771,7 @@ def _result(
         ) from exc
 
     data = validated.model_dump(mode="json", exclude_unset=True)
-    if is_error:
+    if is_error or compact_success_text:
         content_data = data
     else:
         # Preserve the legacy success text shape while bounding only the coordination
@@ -1069,17 +1083,24 @@ def message_result(
 def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
     if not raw.get("ok"):
         return _result("task", action, TaskOutput, raw, {})
+    warnings = [_workflow_warning(item) for item in raw.get("warnings", [])]
+    if action == "claim":
+        task = _task_snapshot(raw.get("task") or {})
+    else:
+        record = TaskRecord.model_validate(_task_record(raw.get("task") or {}))
+        task = project_task_receipt(
+            record,
+            include_description=action in {"create", "update"},
+            include_checkpoint=action in {"create", "update", "checkpoint"},
+            include_result=action in {"create", "update", "done", "state"},
+        ).model_dump(mode="json", exclude_none=True)
     structured = {
         "ok": True,
         "action": action,
-        "task": (
-            _task_snapshot(raw.get("task") or {})
-            if action == "claim"
-            else _task_record(raw.get("task") or {})
-        ),
-        "warnings": [_workflow_warning(item) for item in raw.get("warnings", [])],
+        "task": task,
+        "warnings": warnings,
     }
-    return _result("task", action, TaskOutput, raw, structured)
+    return _result("task", action, TaskOutput, raw, structured, compact_success_text=True)
 
 
 def _compact_coordination_messages(
