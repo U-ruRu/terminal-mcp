@@ -87,6 +87,24 @@ async def test_initialize_migrates_v1_commands_to_lifecycle_timestamps(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_initialize_can_preserve_active_commands_for_reconnectable_execution(tmp_path):
+    database = tmp_path / "reconnectable.sqlite3"
+    repo = SqliteRepository(database)
+    await repo.initialize()
+    queued = await repo.create("printf queued", status="queued", queue_id=1)
+    running = await repo.create("sleep 30", status="running", queue_id=1)
+
+    restarted = SqliteRepository(database)
+    await restarted.initialize(preserve_active_commands=True)
+
+    assert (await restarted.get(queued.cmd_hash)).status == "queued"
+    recovered = await restarted.get(running.cmd_hash)
+    assert recovered.status == "running"
+    assert recovered.error is None
+    assert recovered.finished_at is None
+
+
+@pytest.mark.asyncio
 async def test_run_timeout_rolls_back_persisted_command(tmp_path, monkeypatch):
     repo, terminal, service = await create_runtime(tmp_path)
     monkeypatch.setattr(service_module, "OPERATION_TIMEOUT_SECONDS", 0.02)
