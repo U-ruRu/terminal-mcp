@@ -171,6 +171,10 @@ class AuthFoundationStore:
                 "CREATE INDEX IF NOT EXISTS ix_auth_provider_bindings_slot "
                 "ON auth_provider_bindings(logical_agent_id)"
             )
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_provider_binding_slot "
+                "ON auth_provider_bindings(provider,logical_agent_id)"
+            )
             await db.execute(f"PRAGMA user_version={AUTH_SCHEMA_VERSION}")
             now = _utc_now()
             await db.execute(
@@ -721,6 +725,15 @@ class AuthFoundationStore:
             ).fetchone()
             if existing is not None and existing[0] != logical_agent_id:
                 raise AuthConflictError("provider identity is already bound")
+            slot_binding = await (
+                await db.execute(
+                    "SELECT binding_key FROM auth_provider_bindings "
+                    "WHERE provider=? AND logical_agent_id=?",
+                    (provider, logical_agent_id),
+                )
+            ).fetchone()
+            if slot_binding is not None and slot_binding[0] != binding_key:
+                raise AuthConflictError("provider slot is already bound")
             if existing is None:
                 await db.execute(
                     "INSERT INTO auth_provider_bindings"

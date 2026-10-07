@@ -106,7 +106,7 @@ TaskDependencies = Annotated[list[TaskDependency], Field(max_length=100)]
 
 
 class TaskIdentityRequest(StrictTaskModel):
-    code: AccessCode
+    code: AccessCode | None = None
     namespace: Namespace
     task_id: TaskId
 
@@ -133,7 +133,7 @@ class TaskCreateRequest(StrictTaskModel):
     )
 
     action: Literal["create"]
-    code: AccessCode
+    code: AccessCode | None = None
     namespace: Namespace
     task_id: TaskId | None = None
     isolation_hint: Annotated[str, Field(min_length=1, max_length=160)]

@@ -148,3 +148,19 @@ def test_provider_binding_registry_is_canonical_and_conflict_safe(tmp_path):
         assert any(e["event_type"] == "provider_binding_create" for e in events)
 
     run(scenario())
+
+
+def test_one_provider_slot_cannot_be_shared_by_different_conversations(tmp_path):
+    async def scenario():
+        store = AuthFoundationStore(tmp_path / "auth-provider-unique.sqlite3")
+        await store.initialize()
+        await store.register_access_slot("la_one", "secondary")
+        await store.bind_provider_binding("openai", "a" * 64, "la_one", principal_id="usr_one")
+        with pytest.raises(AuthConflictError, match="slot is already bound"):
+            await store.bind_provider_binding(
+                "openai", "b" * 64, "la_one", principal_id="usr_one"
+            )
+        assert await store.resolve_provider_binding("openai", "a" * 64) == "la_one"
+        assert await store.resolve_provider_binding("openai", "b" * 64) is None
+
+    run(scenario())

@@ -68,7 +68,11 @@ class ContextApplication(ApplicationCapability):
         )
         if resolution.failure is not None:
             return resolution.failure
-        return await self.mutate(resolution.actor, request.action, **data)
+        result = await self.mutate(resolution.actor, request.action, **data)
+        lifecycle = (resolution.identity or {}).get("session_lifecycle")
+        if result.get("ok") and isinstance(lifecycle, dict):
+            result["session_lifecycle"] = lifecycle
+        return result
 
     @application_operation("contexts")
     async def mutate(

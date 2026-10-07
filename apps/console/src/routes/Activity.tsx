@@ -13,6 +13,7 @@ import type { FleetActivityOptions, FleetInstanceView } from '../fleet/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
 import { FeedbackState, IconButton } from '../components/UiPrimitives'
+import { ManagedWorkSessions, type ManagedSessionMutator } from '../components/ManagedWorkSessions'
 
 export type ActivityLoader = (instanceId: string, options?: FleetActivityOptions) => Promise<ActivityFeedReadModel>
 
@@ -81,7 +82,7 @@ function userError(code: string, t: ReturnType<typeof useI18n>['t']): string {
   return t('diagnostics.connectionError')
 }
 
-export function Activity({ instances = [], loadActivity }: { instances?: FleetInstanceView[]; loadActivity?: ActivityLoader }) {
+export function Activity({ instances = [], loadActivity, mutatePersistent }: { instances?: FleetInstanceView[]; loadActivity?: ActivityLoader; mutatePersistent?: ManagedSessionMutator }) {
   const { t, locale } = useI18n()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -410,6 +411,7 @@ export function Activity({ instances = [], loadActivity }: { instances?: FleetIn
           </div>
         ) : null}
       </div>
+      <ManagedWorkSessions instance={selected} mutatePersistent={mutatePersistent} />
       {instances.length === 0 && <FeedbackState variant="empty" title={t('activity.noPairedServers')} />}
       {instances.length > 0 && !selectedId && <FeedbackState variant="empty" title={t('activity.chooseToView')} />}
       {feed.gap && <FeedbackState variant="partial" title={t('activity.historyGap')} detail={t('activity.historyGapDescription')} />}

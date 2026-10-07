@@ -16,7 +16,7 @@ class TaskApplication(ApplicationCapability):
         )
         if failure is not None:
             return failure
-        return await self.backend.task(
+        result = await self.backend.task(
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
             session_epoch=identity["session_epoch"],
@@ -26,3 +26,7 @@ class TaskApplication(ApplicationCapability):
             task_id=task_id,
             **backend_request,
         )
+        lifecycle = identity.get("session_lifecycle")
+        if result.get("ok") and isinstance(lifecycle, dict):
+            result["session_lifecycle"] = lifecycle
+        return result

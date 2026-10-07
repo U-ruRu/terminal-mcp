@@ -101,6 +101,12 @@ class SessionGate:
                 "authority_node_id": session.authority_node_id,
                 "public_name": admitted.public_name,
                 "hard_expires_at": session.hard_expires_at,
+                "session_lifecycle": {
+                    "state": admitted.lifecycle.phase.value,
+                    "remaining_seconds": admitted.lifecycle.remaining_seconds,
+                    "hard_expires_at": session.hard_expires_at,
+                    "return_to_chat": admitted.lifecycle.return_to_chat,
+                },
             },
             managed=True,
         )
@@ -218,11 +224,16 @@ class SessionGate:
             else sender
         )
         with resolution.actor.bind():
-            return await self.backend.access_message(
+            result = await self.backend.access_message(
                 effective_sender,
                 _resolved_identity=resolution.identity,
                 **kwargs,
             )
+        if result.get("ok") and resolution.identity is not None:
+            lifecycle = resolution.identity.get("session_lifecycle")
+            if isinstance(lifecycle, dict):
+                result["session_lifecycle"] = lifecycle
+        return result
 
     async def surface_message_page(
         self,

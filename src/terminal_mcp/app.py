@@ -58,6 +58,7 @@ from terminal_mcp.http.managed_sessions import build_managed_sessions_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.persistent import build_persistent_router
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
+from terminal_mcp.http.provider_identity_fleet import build_provider_identity_fleet_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.server import build_mcp
@@ -446,6 +447,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     persistent_fleet,
                     service.persistent,
                     application=application.mesh,
+                )
+            )
+            app.include_router(
+                build_provider_identity_fleet_router(
+                    fleet_replication, persistent_fleet, application=application.mesh
                 )
             )
         if managed_fleet_control:

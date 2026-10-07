@@ -52,6 +52,8 @@ _SCHEMA = (
         logical_agent_id TEXT NOT NULL REFERENCES logical_agents(logical_agent_id),
         created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
         PRIMARY KEY(provider,binding_key))""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_agent_provider_binding_slot
+        ON logical_agent_provider_bindings(provider,logical_agent_id)""",
     """CREATE TABLE IF NOT EXISTS logical_agent_session_policies(
         logical_agent_id TEXT PRIMARY KEY REFERENCES logical_agents(logical_agent_id),
         revision INTEGER NOT NULL CHECK(revision > 0),
@@ -286,6 +288,15 @@ class WorkWindowStore(PersistentAgentStore):
                 )
             ).fetchone()
             if row and row[0] != logical_agent_id:
+                raise WorkWindowStoreError("identity_binding_conflict")
+            slot_binding = await (
+                await db.execute(
+                    "SELECT binding_key FROM logical_agent_provider_bindings "
+                    "WHERE provider=? AND logical_agent_id=?",
+                    (identity.provider, logical_agent_id),
+                )
+            ).fetchone()
+            if slot_binding and slot_binding[0] != identity.binding_key:
                 raise WorkWindowStoreError("identity_binding_conflict")
             if row is None:
                 await db.execute(

@@ -178,15 +178,16 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
     defs = ADAPTER.json_schema()["$defs"]
     assert defs["TaskCreateRequest"]["required"] == [
         "action",
-        "code",
         "namespace",
         "isolation_hint",
     ]
-    assert {"action", "code", "namespace", "task_id", "claim_intent"} <= set(
+    assert {"action", "namespace", "task_id", "claim_intent"} <= set(
         defs["TaskClaimRequest"]["required"]
     )
+    assert "code" not in defs["TaskClaimRequest"]["required"]
     release = defs["TaskReleaseRequest"]
-    assert {"action", "code", "namespace", "task_id"} <= set(release["required"])
+    assert {"action", "namespace", "task_id"} <= set(release["required"])
+    assert "code" not in release["required"]
     assert "release_reason" not in release["required"]
     assert "release_reason" in release["properties"]
     update_props = defs["TaskUpdateRequest"]["properties"]

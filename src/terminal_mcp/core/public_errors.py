@@ -114,6 +114,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             invalid_message invalid_task_context review_task_required
+            identity_metadata_invalid
             control_mutation_invalid control_operation_invalid control_snapshot_invalid
             invalid_transfer_transition managed_snapshot_required
             managed_snapshot_revision_invalid mesh_id_required

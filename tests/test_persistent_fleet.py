@@ -690,3 +690,70 @@ async def test_access_by_name_does_not_mask_real_authority_failure(tmp_path):
     bridge._remote_access_call = remote_call
     with pytest.raises(PersistentStoreError, match="authority_unavailable"):
         await bridge.get_access_slot_by_public_name("Alpha-CompatName")
+
+class ProviderRegistryResponse:
+    status_code = 200
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def json(self):
+        return self.payload
+
+
+class ProviderRegistryClient:
+    def __init__(self, requests):
+        self.requests = requests
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def post(self, url, *, headers, json):
+        self.requests.append((url, headers, json))
+        if url.endswith('/provider-resolve'):
+            return ProviderRegistryResponse({'ok': True, 'logical_agent_id': 'la_shared'})
+        if url.endswith('/provider-bind'):
+            assert json['access_code'] == '0042'
+            assert json['logical_agent_id'] == 'la_shared'
+            return ProviderRegistryResponse({'ok': True, 'logical_agent_id': 'la_shared'})
+        raise AssertionError(url)
+
+
+@pytest.mark.asyncio
+async def test_provider_identity_registry_is_shared_by_all_fleet_callers():
+    main_private, main_public = keypair()
+    secondary_private, _ = keypair()
+    firstbyte_private, _ = keypair()
+    main = FleetPeer('main', 'https://main.example', main_public, 'main-token')
+    requests = []
+
+    def bridge(node_id, private_key):
+        config = FleetConfig(node_id, private_key, (main,), 1.0, 1.0)
+        return PersistentFleetBridge(
+            config,
+            object(),
+            object(),
+            object(),
+            object(),
+            client_factory=lambda: ProviderRegistryClient(requests),
+            control_node_id='main',
+        )
+
+    secondary = bridge('secondary', secondary_private)
+    firstbyte = bridge('firstbyte', firstbyte_private)
+    key = 'a' * 64
+
+    assert await secondary.resolve_provider_binding('openai', key) == 'la_shared'
+    assert await firstbyte.resolve_provider_binding('openai', key) == 'la_shared'
+    assert await secondary.bind_provider_binding(
+        'openai', key, 'la_shared', access_code='0042', principal_id='usr_one'
+    ) == 'la_shared'
+
+    resolve_bodies = [body for url, _headers, body in requests if url.endswith('/provider-resolve')]
+    assert {body['requesting_instance_id'] for body in resolve_bodies} == {'secondary', 'firstbyte'}
+    bind_body = next(body for url, _headers, body in requests if url.endswith('/provider-bind'))
+    assert bind_body['requesting_instance_id'] == 'secondary'
+    assert bind_body['binding_key'] == key

@@ -114,12 +114,19 @@ class SessionMode(StrEnum):
 class SessionState(StrEnum):
     inactive = "inactive"
     active = "active"
-    warning = "warning"
-    draining = "draining"
-    expired = "expired"
-    cooldown = "cooldown"
     stopping = "stopping"
     interrupted = "interrupted"
+
+
+class SessionLifecycleInfo(_Strict):
+    state: Literal["active", "warning", "draining", "expired", "cooldown"]
+    remaining_seconds: int = Field(ge=0)
+    hard_expires_at: str
+    return_to_chat: bool = False
+
+
+class _SessionAware(_Strict):
+    session_lifecycle: SessionLifecycleInfo | None = None
 
 
 class CommandStatus(StrEnum):
@@ -161,7 +168,7 @@ def _success_schema(annotation: Any) -> dict[str, Any]:
 class SessionInfo(_Strict):
     public_name: str
     mode: SessionMode
-    session_state: SessionState
+    session_state: SessionState | Literal["warning", "draining", "expired", "cooldown"]
     display_suffix: str | None = None
     authority_node_id: str | None = None
     access_generation: int | None = None
@@ -170,7 +177,7 @@ class SessionInfo(_Strict):
     session_epoch: int | None = None
     role: Literal["legacy", "executor", "coordinator"] | None = None
     contract_version: int | None = Field(default=None, ge=1)
-    state: SessionState | None = None
+    state: SessionState | Literal["warning", "draining", "expired", "cooldown"] | None = None
     started_at: str | None = None
     hard_expires_at: str | None = None
     remaining_seconds: int | None = Field(default=None, ge=0)
@@ -296,7 +303,7 @@ class MessageRecord(_Strict):
     message_hashes: dict[str, str] | None = None
 
 
-class MessageListResult(_Strict):
+class MessageListResult(_SessionAware):
     ok: Literal[True]
     action: Literal["inbox", "history"]
     sender: str | None = None
@@ -304,20 +311,20 @@ class MessageListResult(_Strict):
     next_cursor: Cursor | None
 
 
-class MessageSendResult(_Strict):
+class MessageSendResult(_SessionAware):
     ok: Literal[True]
     action: Literal["send"]
     message: MessageRecord
 
 
-class MessageAcknowledgeResult(_Strict):
+class MessageAcknowledgeResult(_SessionAware):
     ok: Literal[True]
     action: Literal["acknowledge"]
     message_hash: MessageId | None = None
     state: Literal["acknowledged"]
 
 
-class MessageReplyResult(_Strict):
+class MessageReplyResult(_SessionAware):
     ok: Literal[True]
     action: Literal["reply"]
     message: MessageRecord
@@ -337,7 +344,7 @@ class MessageOutput(RootModel[MessageSuccess | AccessError]):
         return _success_schema(cls.__success_type__)
 
 
-class TaskMutationResult(_Strict):
+class TaskMutationResult(_SessionAware):
     ok: Literal[True]
     action: Literal[
         "create",
@@ -356,7 +363,7 @@ class TaskMutationResult(_Strict):
     warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
-class TaskClaimMutationResult(_Strict):
+class TaskClaimMutationResult(_SessionAware):
     ok: Literal[True]
     action: Literal["claim"]
     task: TaskSnapshot
@@ -405,7 +412,7 @@ class ExecutionIdentity(_Strict):
     node_attachment_id: str | None = None
 
 
-class CmdRunResult(_Strict):
+class CmdRunResult(_SessionAware):
     ok: Literal[True]
     action: Literal["run"]
     command: CommandView
@@ -426,7 +433,7 @@ class CmdRunResult(_Strict):
     identity: ExecutionIdentity | None = None
 
 
-class CmdReadResult(_Strict):
+class CmdReadResult(_SessionAware):
     ok: Literal[True]
     action: Literal["read"]
     command: CommandView
@@ -445,7 +452,7 @@ class CmdReadResult(_Strict):
     identity: ExecutionIdentity | None = None
 
 
-class CmdCancelResult(_Strict):
+class CmdCancelResult(_SessionAware):
     ok: Literal[True]
     action: Literal["cancel"]
     command: CommandView
@@ -453,7 +460,7 @@ class CmdCancelResult(_Strict):
     identity: ExecutionIdentity | None = None
 
 
-class CmdRecoveryResult(_Strict):
+class CmdRecoveryResult(_SessionAware):
     ok: Literal[True]
     action: Literal["recovery"]
     command: CommandView
@@ -504,19 +511,19 @@ class ContextListResult(_Strict):
     next_cursor: Cursor | None = None
 
 
-class ContextCreateResult(_Strict):
+class ContextCreateResult(_SessionAware):
     ok: Literal[True]
     action: Literal["create"]
     context: ContextEntry
 
 
-class ContextUpdateResult(_Strict):
+class ContextUpdateResult(_SessionAware):
     ok: Literal[True]
     action: Literal["update"]
     context: ContextEntry
 
 
-class ContextDeleteResult(_Strict):
+class ContextDeleteResult(_SessionAware):
     ok: Literal[True]
     action: Literal["delete"]
     context_id: ContextId
@@ -736,6 +743,8 @@ def _result(
     structured: dict[str, Any],
 ) -> CallToolResult:
     is_error = raw.get("ok") is False
+    if not is_error and isinstance(raw.get("session_lifecycle"), dict):
+        structured = {**structured, "session_lifecycle": raw["session_lifecycle"]}
     candidate = _error_payload(raw) if is_error else structured
     try:
         validated = output_model.model_validate(candidate)
