@@ -23,6 +23,7 @@ from terminal_mcp.storage.application_uow import (
 from terminal_mcp.storage.context import ContextStore
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite_observability import SqliteMainFileError
 from terminal_mcp.storage.tasks import TaskStore
 
 NOW = "2026-10-06T08:00:00.000Z"
@@ -428,3 +429,19 @@ async def test_cancellation_during_open_drains_and_closes_connection(repository,
     monkeypatch.setattr(aiosqlite, "connect", original)
     async with SqliteApplicationUnitOfWork(repository.path).transaction() as tx:
         await tx.context.create("Recovered", "Open ownership was drained", False)
+
+
+async def test_uow_and_task_store_reject_overwritten_main_database(tmp_path):
+    path = tmp_path / "overwritten.sqlite3"
+    path.write_bytes(b"HTTP/1.1 500 Internal Server Error\r\n\r\nInternal Server Error")
+
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
+        async with SqliteApplicationUnitOfWork(path).transaction():
+            pytest.fail("UOW must reject a non-SQLite main file")
+
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
+        await TaskStore(path).list_tasks()
+
+    repository = SqliteRepository(path, tmp_path / "output.sqlite3")
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
+        await repository.initialize()

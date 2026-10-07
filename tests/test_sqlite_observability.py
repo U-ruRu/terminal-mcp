@@ -2,11 +2,17 @@ import asyncio
 import sqlite3
 from types import SimpleNamespace
 
+import aiosqlite
 import pytest
 
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
-from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, open_observed_connection
+from terminal_mcp.storage.sqlite_observability import (
+    SqliteDiagnostics,
+    SqliteMainFileError,
+    cancellation_safe_connection,
+    open_observed_connection,
+)
 
 
 class FakeEvents:
@@ -183,3 +189,47 @@ async def test_cancelled_pragma_setup_closes_connected_database_before_propagati
     with pytest.raises(asyncio.CancelledError):
         await task
     assert raw.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cancellation_safe_connection_rejects_http_overwrite_before_open(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    path.write_bytes(b"HTTP/1.1 500 Internal Server Error\r\n\r\nInternal Server Error")
+
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
+        async with cancellation_safe_connection(aiosqlite.connect, path):
+            pytest.fail("malformed main file must be rejected before SQLite opens it")
+
+
+@pytest.mark.asyncio
+async def test_cancellation_safe_connection_rejects_wal_at_main_path(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    path.write_bytes(bytes.fromhex("377f0682") + b"\x00" * 64)
+
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_is_wal"):
+        async with cancellation_safe_connection(aiosqlite.connect, path):
+            pytest.fail("WAL data must not be accepted as a SQLite main database")
+
+
+@pytest.mark.asyncio
+async def test_cancellation_safe_connection_allows_empty_bootstrap_file(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    path.touch()
+
+    async with cancellation_safe_connection(aiosqlite.connect, path) as db:
+        await db.execute("CREATE TABLE bootstrap_ok(value INTEGER)")
+        await db.commit()
+
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_safe_connection_validates_file_uri(tmp_path):
+    path = tmp_path / "runtime uri.sqlite3"
+    path.write_bytes(b"HTTP/1.1 500 Internal Server Error\r\n\r\nInternal Server Error")
+    uri = path.as_uri() + "?mode=ro"
+
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
+        async with cancellation_safe_connection(aiosqlite.connect, uri, uri=True):
+            pytest.fail("malformed file URI must be rejected before SQLite opens it")

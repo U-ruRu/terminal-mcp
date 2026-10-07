@@ -9,6 +9,7 @@ import aiosqlite
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
+from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 LANES = frozenset({"implementation", "review", "release", "integration", "general"})
 STATES = frozenset({"ready", "in_progress", "blocked", "deferred", "done"})
@@ -62,13 +63,10 @@ class TaskStore:
 
     @asynccontextmanager
     async def _connect(self):
-        db = await aiosqlite.connect(self.path, timeout=1.0)
-        await db.execute("PRAGMA busy_timeout=1000")
-        await db.execute("PRAGMA foreign_keys=ON")
-        try:
+        async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
+            await db.execute("PRAGMA busy_timeout=1000")
+            await db.execute("PRAGMA foreign_keys=ON")
             yield db
-        finally:
-            await db.close()
 
     @staticmethod
     def _json(value: Any) -> str:

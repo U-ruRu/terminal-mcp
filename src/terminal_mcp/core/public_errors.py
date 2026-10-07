@@ -50,7 +50,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             validation_error invalid_request invalid_command invalid_queue invalid_mode
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
             mode_required access_code_required legacy_code_not_allowed invalid_connect_url
-            output_item_too_large
+            output_item_too_large execution_argument_invalid
         """,
         ),
         (
@@ -99,6 +99,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "reconcile",
             """
             internal_error operation_failed run_failed recovery_failed execution_failed
+            execution_request_timeout execution_internal_error
             access_registration_failed access_retire_failed
             access_rotation_failed access_update_failed
             fleet_control_invalid_header fleet_control_main_is_wal
@@ -173,6 +174,13 @@ def _catalog() -> Mapping[str, ErrorSpec]:
     messages = {
         "internal_error": "The operation failed internally. Check current state before retrying.",
         "operation_failed": "The operation did not complete. Check current state before retrying.",
+        "execution_argument_invalid": "The execution request is invalid.",
+        "execution_request_timeout": (
+            "The execution outcome is uncertain. Reconcile command state before retrying."
+        ),
+        "execution_internal_error": (
+            "Execution failed internally. Check current command state before retrying."
+        ),
         "validation_error": "Correct the indicated request fields.",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
@@ -205,6 +213,13 @@ def _catalog() -> Mapping[str, ErrorSpec]:
 
 
 ERROR_SPECS = _catalog()
+
+LEGACY_PUBLIC_ERROR_ALIASES = MappingProxyType(
+    {
+        "already_claimed": "task_claim_conflict",
+        "agent_busy": "wip_limit_exceeded",
+    }
+)
 
 
 class _BoundedValue(BaseModel):
@@ -473,8 +488,12 @@ def normalize_public_error(raw: Mapping[str, object] | PublicError) -> PublicErr
     except ValidationError:
         pass
     code = raw.get("code")
+    if isinstance(code, str):
+        code = LEGACY_PUBLIC_ERROR_ALIASES.get(code, code)
     if not isinstance(code, str) or code not in ERROR_SPECS:
         old_error = raw.get("error")
+        if isinstance(old_error, str):
+            old_error = LEGACY_PUBLIC_ERROR_ALIASES.get(old_error, old_error)
         code = (
             old_error
             if isinstance(old_error, str) and old_error in ERROR_SPECS

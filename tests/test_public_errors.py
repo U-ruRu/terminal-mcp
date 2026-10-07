@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from terminal_mcp.core.public_errors import (
     ERROR_SPECS,
+    LEGACY_PUBLIC_ERROR_ALIASES,
     MAX_COORDINATION_MESSAGES,
     MAX_ERROR_MESSAGE,
     MAX_RETRY_AFTER_MS,
@@ -63,6 +64,62 @@ def test_unknown_codes_and_diagnostics_fail_closed(raw):
     assert result.code == "internal_error"
     assert set(result.as_dict()) == {"ok", "code", "error"}
     assert SECRET not in json.dumps(result.as_dict())
+
+
+@pytest.mark.parametrize(
+    ("legacy_code", "public_code"),
+    [
+        ("already_claimed", "task_claim_conflict"),
+        ("agent_busy", "wip_limit_exceeded"),
+    ],
+)
+def test_legacy_task_conflicts_map_to_registered_public_codes(legacy_code, public_code):
+    result = normalize_public_error(
+        {"ok": False, "code": legacy_code, "error": f"private {legacy_code} details"}
+    )
+    assert result == public_error(public_code)
+
+
+def test_legacy_public_error_aliases_are_immutable():
+    with pytest.raises(TypeError):
+        LEGACY_PUBLIC_ERROR_ALIASES["already_claimed"] = "internal_error"
+
+
+def test_task_backend_error_codes_have_public_policy():
+    import ast
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "src" / "terminal_mcp" / "core" / "tasks.py"
+    tree = ast.parse(path.read_text())
+    codes = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "code"
+                    and isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                ):
+                    codes.add(value.value)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == "code"
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                ):
+                    codes.add(node.value.value)
+
+    missing = sorted(
+        code
+        for code in codes
+        if code not in ERROR_SPECS and code not in LEGACY_PUBLIC_ERROR_ALIASES
+    )
+    assert not missing, f"Task backend codes need public policy or alias: {missing}"
+    assert all(target in ERROR_SPECS for target in LEGACY_PUBLIC_ERROR_ALIASES.values())
 
 
 def test_legacy_code_preserved_but_raw_message_and_context_discarded():
@@ -256,6 +313,14 @@ def test_managed_session_legacy_guard_has_explicit_repair_policy():
         public_error("managed_session_required").error
         == "Use the managed session path for this slot."
     )
+
+
+def test_execution_request_timeout_requires_reconciliation_before_retry():
+    value = public_error("execution_request_timeout")
+    assert ERROR_SPECS["execution_request_timeout"].recovery == "reconcile"
+    decision = retry_decision(value, operation="cmd.run")
+    assert decision.action == "reconcile"
+    assert decision.retry_after_ms is None
 
 
 def test_ambiguous_mutation_is_never_blindly_retried():

@@ -276,6 +276,23 @@ def test_task_variants(action):
 
 
 @pytest.mark.parametrize(
+    ("legacy_code", "public_code"),
+    [
+        ("already_claimed", "task_claim_conflict"),
+        ("agent_busy", "wip_limit_exceeded"),
+    ],
+)
+def test_task_legacy_conflicts_are_public_errors(legacy_code, public_code):
+    result = task_result(
+        {"ok": False, "code": legacy_code, "error": f"task.claim: {legacy_code}"},
+        "claim",
+    )
+    assert result.isError is True
+    assert result.structuredContent == public_error(public_code).as_dict()
+    assert json.loads(result.content[0].text) == public_error(public_code).as_dict()
+
+
+@pytest.mark.parametrize(
     "action,raw",
     [
         ("run", {"ok": True, "cmd_hash": "c1", "status": "queued", "queue_id": 1}),

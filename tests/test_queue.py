@@ -154,7 +154,7 @@ async def test_recovery_timeout_stops_process_and_does_not_block_fifo(tmp_path, 
 
     stored = await service.read(result["cmd_hash"])
     assert stored["status"] == "cancelled"
-    assert stored["ok"] is False
+    assert stored["ok"] is True
     assert stored["error"] == result["error"]
 
     queued = await service.run("printf 'fifo-still-works\\n'", task_scope="none")

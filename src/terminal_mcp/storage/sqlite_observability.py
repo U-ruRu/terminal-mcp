@@ -3,6 +3,59 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from contextlib import asynccontextmanager
+from os import fspath
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
+
+SQLITE_MAIN_HEADER = b"SQLite format 3\x00"
+SQLITE_WAL_MAGICS = {bytes.fromhex("377f0682"), bytes.fromhex("377f0683")}
+
+
+class SqliteMainFileError(sqlite3.DatabaseError):
+    pass
+
+
+def _sqlite_filesystem_path(path, *, uri: bool = False) -> Path | None:
+    raw = fspath(path)
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    if raw == ":memory:":
+        return None
+    if not uri or not raw.startswith("file:"):
+        return Path(raw)
+
+    parsed = urlsplit(raw)
+    query = parse_qs(parsed.query)
+    if parsed.path == ":memory:" or query.get("mode") == ["memory"]:
+        return None
+    if parsed.netloc and parsed.netloc != "localhost":
+        value = f"//{parsed.netloc}{parsed.path}"
+    else:
+        value = parsed.path
+    return Path(unquote(value))
+
+
+def validate_sqlite_main_file(path, *, uri: bool = False) -> None:
+    # Fail closed before SQLite opens an existing non-database main file.
+    resolved = _sqlite_filesystem_path(path, uri=uri)
+    if resolved is None:
+        return
+    try:
+        size = resolved.stat().st_size
+    except FileNotFoundError:
+        return
+    if size == 0:
+        return
+    try:
+        with resolved.open("rb") as handle:
+            header = handle.read(len(SQLITE_MAIN_HEADER))
+    except FileNotFoundError:
+        return
+    if header == SQLITE_MAIN_HEADER:
+        return
+    if header[:4] in SQLITE_WAL_MAGICS:
+        raise SqliteMainFileError("sqlite_main_is_wal")
+    raise SqliteMainFileError("sqlite_main_invalid_header")
 
 
 def _error_kind(exc: sqlite3.Error) -> str:
@@ -170,6 +223,7 @@ class ObservedConnection:
 
 
 async def _open_cancellation_safe_connection(connect, path, **kwargs):
+    validate_sqlite_main_file(path, uri=bool(kwargs.get("uri", False)))
     connect_task = asyncio.ensure_future(connect(path, **kwargs))
     try:
         return await asyncio.shield(connect_task)
