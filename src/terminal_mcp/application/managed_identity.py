@@ -296,6 +296,13 @@ class ManagedGrantAuthorizer:
         scopes = [value for value in ("terminal:read", "terminal:execute") if value in actor.scopes]
         if "terminal:execute" not in scopes:
             raise ManagedSessionError("access_denied")
+        ensure_identity = getattr(self.authority, "ensure_oauth_client_identity", None)
+        if callable(ensure_identity):
+            try:
+                await ensure_identity(client_id)
+            except Exception as exc:
+                code = getattr(exc, "code", "access_denied")
+                raise ManagedSessionError(str(code)) from exc
         grants = await self.authority.active_grants(actor.principal_id)
         for grant in grants:
             if not isinstance(grant, Mapping) or grant.get("client_id") != client_id:

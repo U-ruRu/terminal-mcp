@@ -516,6 +516,79 @@ class AuthFoundationStore:
         finally:
             await db.close()
 
+    async def ensure_oauth_client_identity(self, client_id: str) -> dict:
+        """Materialize a legacy OAuth client as a non-login AuthFoundation principal/client."""
+        client_id = _normalized(client_id, "client_id")
+        principal_id = client_id
+        username = f"oauth-client:{client_id}"
+        now = _utc_now()
+        changed = False
+        db = await self._connect()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            principal = await (
+                await db.execute(
+                    "SELECT status FROM auth_principals WHERE principal_id=?",
+                    (principal_id,),
+                )
+            ).fetchone()
+            if principal is None:
+                await db.execute(
+                    "INSERT INTO auth_principals("
+                    "principal_id,username,username_key,display_name,password_verifier,status,"
+                    "created_at,updated_at) VALUES(?,?,?,?,?,'active',?,?)",
+                    (
+                        principal_id,
+                        username,
+                        username.casefold(),
+                        "OAuth client",
+                        "!external-oauth-client!",
+                        now,
+                        now,
+                    ),
+                )
+                changed = True
+            elif principal[0] != "active":
+                raise AuthNotFoundError("active OAuth principal does not exist")
+            client = await (
+                await db.execute(
+                    "SELECT principal_id,status FROM auth_clients WHERE client_id=?",
+                    (client_id,),
+                )
+            ).fetchone()
+            if client is None:
+                await db.execute(
+                    "INSERT INTO auth_clients("
+                    "client_id,principal_id,client_type,label,status,created_at,revoked_at) "
+                    "VALUES(?,?,?,?,'active',?,NULL)",
+                    (client_id, principal_id, "oauth", "OAuth client", now),
+                )
+                changed = True
+            elif client[0] != principal_id or client[1] != "active":
+                raise AuthConflictError("OAuth client identity is not active for its principal")
+            if changed:
+                await self._bump_generation(db, now)
+                await self._audit(
+                    db,
+                    "oauth_client_identity_ensure",
+                    "success",
+                    principal_id=principal_id,
+                    client_id=client_id,
+                    details={"client_type": "oauth"},
+                    now=now,
+                )
+            await db.commit()
+            return {
+                "principal_id": principal_id,
+                "client_id": client_id,
+                "status": "active",
+            }
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
     async def create_grant(
         self,
         principal_id: str,

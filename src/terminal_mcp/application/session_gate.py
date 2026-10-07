@@ -389,6 +389,7 @@ class SessionGate:
         if backend is None:
             return failure("policy_incompatible")
         if self._has_provider_identity(actor):
+            bootstrapped = False
             try:
                 resolved = await self._resolve_provider_actor(actor)
             except ManagedSessionError as exc:
@@ -398,6 +399,7 @@ class SessionGate:
                 if actor.endpoint_role in {"executor", "coordinator"} and code is None:
                     try:
                         resolved = await self._bootstrap_provider_actor(actor)
+                        bootstrapped = True
                     except (ManagedSessionError, PersistentStoreError) as bind_exc:
                         code_value = getattr(bind_exc, "code", "identity_binding_failed")
                         return failure(code_value)
@@ -409,6 +411,15 @@ class SessionGate:
                         return failure(code_value)
             if resolved is not None:
                 try:
+                    if (
+                        actor.endpoint_role in {"executor", "coordinator"}
+                        and code is None
+                        and not bootstrapped
+                        and resolved.logical_agent_id
+                    ):
+                        await self.managed_sessions.ensure_agent_grant(
+                            resolved, resolved.logical_agent_id
+                        )
                     started = await self.managed_sessions.start(resolved)
                 except ManagedSessionError as exc:
                     if not code:

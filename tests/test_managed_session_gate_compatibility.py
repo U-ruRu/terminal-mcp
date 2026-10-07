@@ -215,7 +215,7 @@ async def test_role_session_bootstrap_binds_provider_once_without_public_access_
     assert "access_code" not in first
     assert backend.create_calls == 1
     assert resolver.bind_calls == ["la_bootstrap"]
-    assert sessions.grants == ["la_bootstrap"]
+    assert sessions.grants == ["la_bootstrap", "la_bootstrap"]
     assert sessions.starts == 2
 
 
