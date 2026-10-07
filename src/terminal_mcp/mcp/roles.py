@@ -815,6 +815,10 @@ def build_role_mcp(
                     try:
                         async with asyncio.timeout(0.25):
                             await application.session_gate.touch_provider(_actor(application, role))
+                    except TimeoutError:
+                        logging.getLogger(__name__).debug(
+                            "provider_activity_touch_timeout role=%s", role
+                        )
                     except Exception:
                         logging.getLogger(__name__).exception(
                             "provider_activity_touch_failed role=%s", role

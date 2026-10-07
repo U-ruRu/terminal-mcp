@@ -546,3 +546,15 @@ def test_session_lifecycle_errors_direct_agent_to_start_session():
     assert expired.retry == "start_session"
     assert "session.start" in required.message
     assert "session.start" in expired.message
+
+
+@pytest.mark.parametrize(
+    "code", ["session_contract_conflict", "session_principal_mismatch", "window_cooldown"]
+)
+def test_work_window_rejection_preserves_machine_error(code):
+    from terminal_mcp.core.work_windows import WorkWindowError
+
+    result = error_from_exception(WorkWindowError(code))
+    assert result.code == code
+    assert result.outcome == "not_committed"
+    assert result.retry != "reconcile"

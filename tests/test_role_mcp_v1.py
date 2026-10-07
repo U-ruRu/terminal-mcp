@@ -438,3 +438,33 @@ async def test_session_start_exposes_only_hashed_provider_evidence(monkeypatch):
     from jsonschema import Draft202012Validator
 
     Draft202012Validator(tool.output_schema).validate(result.structuredContent)
+
+
+@pytest.mark.asyncio
+async def test_role_contract_rejection_is_structured_and_preserves_identity_fingerprint(
+    monkeypatch,
+):
+    import terminal_mcp.mcp.role_outputs as outputs
+    import terminal_mcp.mcp.roles as roles
+    from terminal_mcp.adapters.mcp_identity import ProviderRequestEvidence
+    from terminal_mcp.core.work_windows import WorkWindowError
+
+    async def reject(*args, **kwargs):
+        raise WorkWindowError("session_contract_conflict")
+
+    monkeypatch.setattr(roles, "_task_list", reject)
+    monkeypatch.setattr(
+        outputs,
+        "current_provider_evidence",
+        lambda: ProviderRequestEvidence(
+            "openai", {"openai/subject": "private-subject", "openai/session": "private-session"}
+        ),
+    )
+    tool = _tool_map("executor")["task_list"]
+    result = await tool.run({}, convert_result=True)
+    assert result.isError is False
+    payload = result.structuredContent
+    assert payload["error"]["code"] == "session_contract_conflict"
+    assert payload["error"]["outcome"] == "not_committed"
+    assert len(payload["provider_identity"]["binding_key"]) == 64
+    assert "private-" not in result.model_dump_json()

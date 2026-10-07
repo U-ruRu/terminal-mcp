@@ -337,6 +337,7 @@ class RoleErrorBody(_Strict):
 
 class RoleFailure(_Strict):
     ok: Literal[False]
+    provider_identity: ProviderFingerprint | None = None
     error: RoleErrorBody
 
 
@@ -344,9 +345,11 @@ def role_error_result(raw: dict) -> CallToolResult:
     """Return a handled application failure as transport-successful structured data."""
     canonical = normalize_public_error(raw).as_dict()
     body = {key: value for key, value in canonical.items() if key not in {"ok", "error"}}
-    data = RoleFailure(ok=False, error=RoleErrorBody.model_validate(body)).model_dump(
-        mode="json", exclude_none=True
-    )
+    data = RoleFailure(
+        ok=False,
+        error=RoleErrorBody.model_validate(body),
+        provider_identity=session_provider_fingerprint(),
+    ).model_dump(mode="json", exclude_none=True)
     return CallToolResult(
         isError=False,
         structuredContent=data,

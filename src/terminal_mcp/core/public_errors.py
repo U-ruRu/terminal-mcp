@@ -61,7 +61,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             """
             unauthorized invalid_access_code invalid_code access_denied access_code_invalid
             access_code_expired sender_not_authorized message_forbidden capability_not_allowed
-            legacy_admission_disabled
+            legacy_admission_disabled session_principal_mismatch session_authority_stale
         """,
         ),
         (
@@ -69,7 +69,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "start_session",
             """
             session_required session_expired session_inactive session_not_active
-            work_session_expired
+            work_session_expired window_cooldown
             stale_session stale_session_epoch session_epoch_mismatch session_not_found
         """,
         ),
@@ -90,6 +90,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "retry",
             """
             busy queue_busy storage_busy rate_limited authority_unavailable
+            session_stopping session_drain_pending
             service_unavailable transport_unavailable storage_unavailable
             message_state_unavailable message_unavailable task_unavailable query_v2_unavailable
         """,
@@ -102,7 +103,11 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             slot_not_found recipient_not_active no_active_recipients unknown_source
         """,
         ),
-        ("policy", "repair", "policy_incompatible managed_session_required"),
+        (
+            "policy",
+            "repair",
+            "policy_incompatible managed_session_required session_contract_conflict",
+        ),
         (
             "internal",
             "reconcile",
@@ -215,6 +220,17 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "coordination_alert": "Read and reply to the pending alert before continuing.",
         "coordination_ack_required": (
             "Read and acknowledge the pending message before running work."
+        ),
+        "session_contract_conflict": (
+            "Use the role and contract version that opened the active session. "
+            "End it through that endpoint before starting a different role or version."
+        ),
+        "session_principal_mismatch": (
+            "The active session belongs to a different authenticated principal. "
+            "Use its original connection or start after that session ends."
+        ),
+        "window_cooldown": (
+            "The previous work window is cooling down. Call session.start after its rearm time."
         ),
         "policy_incompatible": "The requested operation is incompatible with the active policy.",
         "managed_session_required": "Use the managed session path for this slot.",
@@ -564,9 +580,11 @@ def error_from_exception(exc: BaseException) -> PublicError:
     """Map known exception classes without inspecting their text; propagate cancellation."""
     if not isinstance(exc, Exception):
         raise exc
+    from terminal_mcp.core.managed_sessions import ManagedSessionError
     from terminal_mcp.core.provider_identity import ProviderIdentityError
+    from terminal_mcp.core.work_windows import WorkWindowError
 
-    if isinstance(exc, ProviderIdentityError):
+    if isinstance(exc, (ProviderIdentityError, WorkWindowError, ManagedSessionError)):
         return public_error(exc.code)
     if isinstance(exc, PublicFailure):
         return exc.public

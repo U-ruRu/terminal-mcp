@@ -525,7 +525,10 @@ class SessionGate:
                     resolved, reason="session_interrupt" if interrupt else "session_end"
                 )
             except ManagedSessionError as exc:
-                if exc.code != "identity_not_bound":
+                if exc.code != "identity_not_bound" or actor.endpoint_role in {
+                    "executor",
+                    "coordinator",
+                }:
                     return self._managed_failure(exc)
             else:
                 return {
