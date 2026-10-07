@@ -115,6 +115,15 @@ _READ = ToolAnnotations(
 _MUTATE = ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
 )
+
+# Mixed-mode tools are destructive if *any* action has irreversible effects.
+_DURABLE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+)
+# Arbitrary shell commands can modify state and contact external systems.
+_SHELL = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
+)
 _CANCEL = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
 )
@@ -530,7 +539,7 @@ def build_role_mcp(
     @mcp.tool(
         name="session",
         structured_output=False,
-        annotations=_MUTATE,
+        annotations=_DURABLE,
         description=ROLE_TOOL_DESCRIPTIONS[(role, "session")],
     )
     async def role_session(boundary: RuntimeBoundary) -> dict:
@@ -561,7 +570,7 @@ def build_role_mcp(
     @mcp.tool(
         name="message",
         structured_output=False,
-        annotations=_MUTATE,
+        annotations=_DURABLE,
         description=ROLE_TOOL_DESCRIPTIONS[(role, "message")],
     )
     async def role_message(boundary: RuntimeBoundary) -> dict:
@@ -575,7 +584,7 @@ def build_role_mcp(
         @mcp.tool(
             name="command_run",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_SHELL,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "command_run")],
         )
         async def command_run(boundary: RuntimeBoundary) -> dict:
@@ -632,7 +641,7 @@ def build_role_mcp(
         @mcp.tool(
             name="command_recovery",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_SHELL,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "command_recovery")],
         )
         async def command_recovery(boundary: RuntimeBoundary) -> dict:
@@ -677,7 +686,7 @@ def build_role_mcp(
         @mcp.tool(
             name="task_state",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_DURABLE,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_state")],
         )
         async def task_state(boundary: RuntimeBoundary) -> dict:
@@ -696,7 +705,7 @@ def build_role_mcp(
         @mcp.tool(
             name="task_comment",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_DURABLE,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_comment")],
         )
         async def task_comment(boundary: RuntimeBoundary) -> dict:
@@ -731,7 +740,7 @@ def build_role_mcp(
         @mcp.tool(
             name="task_manage",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_DURABLE,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_manage")],
         )
         async def task_manage(boundary: RuntimeBoundary) -> dict:
