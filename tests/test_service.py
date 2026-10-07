@@ -107,7 +107,8 @@ async def test_initialize_can_preserve_active_commands_for_reconnectable_executi
 @pytest.mark.asyncio
 async def test_run_timeout_rolls_back_persisted_command(tmp_path, monkeypatch):
     repo, terminal, service = await create_runtime(tmp_path)
-    monkeypatch.setattr(service_module, "OPERATION_TIMEOUT_SECONDS", 0.02)
+    # Allow SQLite fsync to finish; the deliberately stalled enqueue owns the timeout.
+    monkeypatch.setattr(service_module, "OPERATION_TIMEOUT_SECONDS", 0.2)
 
     async def stalled_submit(command):
         await asyncio.sleep(1)

@@ -20,6 +20,28 @@ def _with_session_lifecycle(result: dict, identity: dict) -> dict:
 
 
 class CommandApplication(ApplicationCapability):
+    async def _launch(self, actor: ActorContext, identity: dict, request: CmdRequest) -> dict:
+        options = {
+            "logical_agent_id": identity["logical_agent_id"],
+            "work_session_id": identity["work_session_id"],
+            "session_epoch": identity["session_epoch"],
+            "access_code": request.code,
+        }
+        if actor.transport == "mcp" and actor.request_id not in {None, "", "0"}:
+            return await self.backend.replay_command(
+                request.action,
+                request.command,
+                idempotency_key=f"{identity['work_session_id']}:{actor.request_id}",
+                queue_id=request.queue_id if request.action == "run" else None,
+                task_scope=request.task_scope if request.action == "run" else "none",
+                **options,
+            )
+        if request.action == "run":
+            return await self.backend.run(
+                request.command, queue_id=request.queue_id, task_scope=request.task_scope, **options
+            )
+        return await self.backend.recovery(request.command, **options)
+
     @application_operation("commands")
     async def cmd(self, actor: ActorContext, request: CmdRequest) -> dict:
         if (
@@ -90,15 +112,7 @@ class CommandApplication(ApplicationCapability):
                 _finish_cmd_read_page(result, start=start, scope=scope), identity
             )
         if request.action == "run":
-            result = await backend.run(
-                request.command,
-                logical_agent_id=identity["logical_agent_id"],
-                work_session_id=identity["work_session_id"],
-                session_epoch=identity["session_epoch"],
-                access_code=request.code,
-                queue_id=request.queue_id,
-                task_scope=request.task_scope,
-            )
+            result = await self._launch(actor, identity, request)
             if result.get("ok") and result.get("status") in {"completed", "failed"}:
                 scope = {
                     "kind": "cmd.read",
@@ -138,13 +152,7 @@ class CommandApplication(ApplicationCapability):
             )
             result.update(message_state)
             return _with_session_lifecycle(result, identity)
-        result = await backend.recovery(
-            request.command,
-            logical_agent_id=identity["logical_agent_id"],
-            work_session_id=identity["work_session_id"],
-            session_epoch=identity["session_epoch"],
-            access_code=request.code,
-        )
+        result = await self._launch(actor, identity, request)
         result["public_name"] = identity["public_name"]
         result["session_ref"] = identity["work_session_id"]
         result.update(message_state)

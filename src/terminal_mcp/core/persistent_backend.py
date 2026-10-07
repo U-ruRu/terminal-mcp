@@ -13,6 +13,7 @@ from terminal_mcp.core.persistent_lifecycle import (
     PersistentLifecycleCoordinator,
     PersistentLifecycleError,
 )
+from terminal_mcp.core.public_errors import normalize_public_error
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
 COMMAND_RUN_INLINE_BUDGET_SECONDS = 5.0
@@ -85,6 +86,8 @@ class PersistentBackend:
         idempotency_key: str,
         request: dict,
         action,
+        *,
+        preserve_uncertain: bool = False,
     ):
         fingerprint = self.lifecycle.store.idempotency_fingerprint(request)
         try:
@@ -96,14 +99,19 @@ class PersistentBackend:
             try:
                 result = await action()
             except (PersistentLifecycleError, ValueError):
-                await self.lifecycle.store.idempotency_abort(
-                    logical_agent_id, operation, idempotency_key, fingerprint
-                )
+                if not preserve_uncertain:
+                    await self.lifecycle.store.idempotency_abort(
+                        logical_agent_id, operation, idempotency_key, fingerprint
+                    )
                 raise
             if not result.get("ok"):
-                await self.lifecycle.store.idempotency_abort(
-                    logical_agent_id, operation, idempotency_key, fingerprint
-                )
+                if (
+                    not preserve_uncertain
+                    or normalize_public_error(result).outcome == "not_committed"
+                ):
+                    await self.lifecycle.store.idempotency_abort(
+                        logical_agent_id, operation, idempotency_key, fingerprint
+                    )
                 return result
             result = await self.lifecycle.store.idempotency_complete(
                 logical_agent_id,
@@ -1725,6 +1733,64 @@ class PersistentBackend:
         return [
             item for item in available if f"{item['namespace']}/{item['task_id']}" == task_scope
         ], options
+
+    async def replay_command(
+        self,
+        action: str,
+        cmd: str,
+        *,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        idempotency_key: str,
+        access_code: str | None = None,
+        queue_id: int | None = None,
+        task_scope: str = "none",
+    ):
+        """Reuse a durable launch receipt after rechecking the caller's execution fence."""
+        if action not in {"run", "recovery"}:
+            return {
+                "ok": False,
+                "code": "input_validation_failed",
+                "error": "Unsupported command action.",
+            }
+        try:
+            async with self.lifecycle.operation_guard(logical_agent_id):
+                await self._execution_authority(
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    scope=action,
+                    access_code=access_code,
+                )
+        except PersistentLifecycleError as exc:
+            return self._error(exc)
+
+        async def launch_once():
+            identity = {
+                "logical_agent_id": logical_agent_id,
+                "work_session_id": work_session_id,
+                "session_epoch": session_epoch,
+                "access_code": access_code,
+            }
+            if action == "run":
+                return await self.run(cmd, queue_id=queue_id, task_scope=task_scope, **identity)
+            return await self.recovery(cmd, **identity)
+
+        return await self._idempotent(
+            logical_agent_id,
+            f"command.{action}",
+            idempotency_key,
+            {
+                "command": cmd,
+                "queue_id": queue_id,
+                "task_scope": task_scope,
+                "work_session_id": work_session_id,
+                "session_epoch": session_epoch,
+            },
+            launch_once,
+            preserve_uncertain=True,
+        )
 
     async def run(
         self,
