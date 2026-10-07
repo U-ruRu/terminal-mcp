@@ -44,6 +44,7 @@ class ObservationApplication(ApplicationCapability):
         show_archived: bool = False,
         limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
         cursor: str | None = None,
+        _defer_full_task_budget: bool = False,
     ) -> dict:
         if actor.endpoint_role == "executor":
             if subject != "tasks" or task_id is not None or detail != "summary":
@@ -150,7 +151,15 @@ class ObservationApplication(ApplicationCapability):
                 result["code"] = "resource_not_found"
             return result
         if task_id:
-            if result.get("task"):
+            # Coordinator task_get projects a single selected history stream or
+            # the current fields before budgeting the final response. Its
+            # private adapter call must not budget the unprojected full record.
+            defer_budget = (
+                _defer_full_task_budget
+                and actor.endpoint_role == "coordinator"
+                and detail == "full"
+            )
+            if result.get("task") and not defer_budget:
                 try:
                     bounded_page(
                         [result["task"]],
