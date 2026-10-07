@@ -386,6 +386,17 @@ def test_public_request_adapter_preserves_backend_contract():
     }
 
 
+def test_backend_contract_accepts_server_resolved_access_code():
+    payload = dict(FULL_VALID["claim"])
+    payload.pop("code")
+    request = ADAPTER.validate_python(payload)
+    code, namespace, task_id, backend = task_request_to_backend(request)
+    assert code is None
+    assert namespace == "terminal-mcp"
+    assert task_id == "TASK-001"
+    assert backend["action"] == "claim"
+
+
 class _RecordingBackend:
     def __init__(self):
         self.identity_calls = 0
@@ -418,8 +429,14 @@ class _RecordingBackend:
                 **{
                     key: task[key]
                     for key in (
-                        "namespace", "task_id", "title", "lane", "priority", "state",
-                        "operational_status", "revision",
+                        "namespace",
+                        "task_id",
+                        "title",
+                        "lane",
+                        "priority",
+                        "state",
+                        "operational_status",
+                        "revision",
                     )
                 },
                 "claim": None,

@@ -344,7 +344,7 @@ TASK_ACTIONS = {
 def task_request_to_backend(request: TaskRequest) -> tuple[str, str, str | None, dict[str, object]]:
     data = request.model_dump(exclude_none=True)
     action = data.pop("action")
-    code = data.pop("code")
+    code = data.pop("code", None)
     namespace = data.pop("namespace")
     task_id = data.pop("task_id", None)
     return code, namespace, task_id, {"action": action, **data}
