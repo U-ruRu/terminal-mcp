@@ -312,8 +312,10 @@ def test_mcp_tools_advertise_canonical_access_surface():
     }
     assert len(task_request["oneOf"]) == 12
     assert "payload" not in task["properties"]
-    assert task["$defs"]["TaskClaimRequest"]["properties"]["code"]["minLength"] == 4
-    assert task["$defs"]["TaskClaimRequest"]["properties"]["code"]["maxLength"] == 4
+    claim_code = task["$defs"]["TaskClaimRequest"]["properties"]["code"]["anyOf"][0]
+    assert claim_code["minLength"] == 4
+    assert claim_code["maxLength"] == 4
+    assert "code" not in task["$defs"]["TaskClaimRequest"]["required"]
     assert "WIP is one live managed-task claim per slot" in tools["task"].description
 
     cmd = tools["cmd"].parameters
@@ -330,9 +332,10 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert read_schema["properties"]["limit"]["maximum"] == 100
     assert "cursor" in read_schema["properties"]
     for name in ("CmdRunRequest", "CmdCancelRequest", "CmdRecoveryRequest"):
-        assert "code" in cmd["$defs"][name]["required"]
-        assert cmd["$defs"][name]["properties"]["code"]["minLength"] == 4
-        assert cmd["$defs"][name]["properties"]["code"]["maxLength"] == 4
+        assert "code" not in cmd["$defs"][name]["required"]
+        code_schema = cmd["$defs"][name]["properties"]["code"]["anyOf"][0]
+        assert code_schema["minLength"] == 4
+        assert code_schema["maxLength"] == 4
 
     context = tools["context"].parameters
     assert context["required"] == ["request"]
@@ -344,7 +347,7 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert list_schema["properties"]["limit"]["maximum"] == 100
     assert "cursor" in list_schema["properties"]
     for name in ("ContextCreateRequest", "ContextUpdateRequest", "ContextDeleteRequest"):
-        assert "code" in context["$defs"][name]["required"]
+        assert "code" not in context["$defs"][name]["required"]
 
     assert tools["health"].parameters.get("required", []) == []
     assert tools["health"].parameters["properties"] == {}

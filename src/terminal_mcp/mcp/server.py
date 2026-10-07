@@ -9,6 +9,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from terminal_mcp.adapters.actor import actor_for
+from terminal_mcp.adapters.mcp_identity import current_provider_evidence
 from terminal_mcp.api_models import TaskLane, TaskOperationalStatus, TaskState
 from terminal_mcp.application import get_application
 from terminal_mcp.application.input_limits import (
@@ -94,6 +95,16 @@ _SAFE_OPERATION = ToolAnnotations(
 )
 
 
+def _mcp_actor(service):
+    evidence = current_provider_evidence()
+    return actor_for(
+        service,
+        transport="mcp",
+        provider=evidence.provider if evidence is not None else None,
+        provider_metadata=evidence.metadata if evidence is not None else None,
+    )
+
+
 def _preflight_message_inbox_result(
     result: dict,
     *,
@@ -166,9 +177,10 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Start, end, or interrupt a unified Access session. start requires an explicit "
-            "mode: persistent requires an existing Access code; legacy creates a temporary "
-            "slot and returns its Access code once. end/interrupt require the Access code."
+            "Start, end, or interrupt a unified session. Provider-bound managed callers are "
+            "identified from server request context and omit code after binding; an existing "
+            "persistent Access code can perform initial compatibility binding. legacy creates "
+            "a temporary slot and returns its Access code once."
         ),
     )
     async def access_session_tool(
@@ -180,7 +192,7 @@ def build_mcp(
         display_name: Annotated[str | None, Field(max_length=80)] = None,
     ) -> dict:
         return await application.session(
-            actor_for(service, transport="mcp"),
+            _mcp_actor(service),
             action=action,
             mode=mode,
             code=code,
@@ -217,7 +229,7 @@ def build_mcp(
         cursor: Annotated[str | None, Field(max_length=MAX_OPAQUE_CURSOR_CHARS)] = None,
     ) -> dict:
         return await application.observe(
-            actor_for(service, transport="mcp"),
+            _mcp_actor(service),
             subject=subject,
             namespace=namespace,
             task_id=task_id,
@@ -237,10 +249,11 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Send, acknowledge, reply to, or read bounded agent messaging for an acti"
-            "ve unified session using the same Access code used by cmd/task/context. "
-            "A read (no text and "
-            "no message_hash) defaults to the active inbox; history=true selects history. "
+            "Send, acknowledge, reply to, or read bounded agent messaging for an active "
+            "unified session. Provider-bound managed callers use server request identity and "
+            "omit code; legacy compatibility callers may supply the slot Access code. "
+            "A read (no text and no message_hash) defaults to the active inbox; history=true "
+            "selects history. "
             "Read pages use limit/cursor and compact summary records by default."
         ),
     )
@@ -265,7 +278,7 @@ def build_mcp(
         task_id: Annotated[str | None, Field(min_length=1, max_length=MAX_IDENTIFIER_CHARS)] = None,
     ) -> dict:
         return await application.message(
-            actor_for(service, transport="mcp"),
+            _mcp_actor(service),
             sender=sender,
             code=code,
             text=text,
@@ -295,41 +308,44 @@ def build_mcp(
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Mutate a managed task under an active unified Access session using a strict "
-            "action-discriminated request. Claim ownership is durable per logical slot; "
-            "WIP is one live managed-task claim per slot."
+            "Mutate a managed task under an active unified session using a strict "
+            "action-discriminated request. Provider-bound managed callers omit code; legacy "
+            "compatibility callers use their Access code. Claim ownership is durable per logical "
+            "slot; WIP is one live managed-task claim per slot."
         ),
     )
     async def access_task_tool(boundary: TaskToolArguments) -> dict:
         if boundary.validation_error is not None:
             return task_validation_error(boundary.validation_error, boundary)
-        return await application.task(actor_for(service, transport="mcp"), request=boundary.request)
+        return await application.task(_mcp_actor(service), request=boundary.request)
 
     @mcp.tool(
         name="cmd",
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Run, read, cancel, or execute recovery commands. run/cancel/recovery require "
-            "an Access code; read may omit code for anonymous output access, or provide code "
-            "to surface the caller's inbox. ack-required messages block run and alerts block "
+            "Run, read, cancel, or execute recovery commands. Provider-bound managed callers "
+            "omit code and are resolved from server request identity; legacy mutations require "
+            "an Access code. A read without provider identity and without code remains anonymous. "
+            "ack-required messages block run and alerts block "
             "work until reply."
         ),
     )
     async def access_cmd_tool(request: CmdRequest) -> dict:
-        return await application.cmd(actor_for(service, transport="mcp"), request=request)
+        return await application.cmd(_mcp_actor(service), request=request)
 
     @mcp.tool(
         name="context",
         structured_output=False,
         annotations=_SAFE_OPERATION,
         description=(
-            "Read or mutate instance context using an action-discriminated request. list has "
-            "no code field; create/update/delete require an active unified Access code."
+            "Read or mutate instance context using an action-discriminated request. list is "
+            "code-free; provider-bound managed mutations omit code, while legacy compatibility "
+            "create/update/delete requests use an active Access code."
         ),
     )
     async def access_context_tool(request: ContextRequest) -> dict:
-        return await application.context(actor_for(service, transport="mcp"), request=request)
+        return await application.context(_mcp_actor(service), request=request)
 
     @mcp.tool(
         name="health",
@@ -338,7 +354,7 @@ def build_mcp(
         description="Return terminal service health without requiring an Access code.",
     )
     async def access_health_tool() -> dict:
-        return await application.health(actor_for(service, transport="mcp"))
+        return await application.health(_mcp_actor(service))
 
     install_task_input_contract(mcp)
 

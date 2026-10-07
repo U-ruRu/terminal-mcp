@@ -7,6 +7,13 @@ from starlette.routing import Mount
 
 from terminal_mcp.application import TerminalApplication
 from terminal_mcp.application.command_scheduler import CommandScheduler
+from terminal_mcp.application.managed_identity import (
+    ManagedGrantAuthorizer,
+    ManagedProviderResolver,
+)
+from terminal_mcp.application.managed_runtime import ManagedSessionRuntime
+from terminal_mcp.application.managed_sessions import ManagedSessionApplication
+from terminal_mcp.application.window_recovery import ManagedWindowRecovery
 from terminal_mcp.auth.credentials import CredentialManager
 from terminal_mcp.auth.foundation import AuthFoundationStore
 from terminal_mcp.auth.middleware import AuthMiddleware
@@ -47,9 +54,11 @@ from terminal_mcp.http.fleet_v1 import (
     build_fleet_v1_projection_router,
     build_fleet_v1_source_router,
 )
+from terminal_mcp.http.managed_sessions import build_managed_sessions_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.persistent import build_persistent_router
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
+from terminal_mcp.http.provider_identity_fleet import build_provider_identity_fleet_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.server import build_mcp
@@ -58,8 +67,8 @@ from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
-from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.work_windows import WorkWindowStore
 from terminal_mcp.terminal.composition import build_execution
 from terminal_mcp.trace import TraceMiddleware
 from terminal_mcp.version import __version__
@@ -207,7 +216,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet_control.configure_observability(events, metrics)
     service.fleet_control = fleet_control
 
-    persistent_store = PersistentAgentStore(settings.database_path)
+    managed_authority_node_id = (
+        fleet_config.instance_id
+        if fleet_config
+        else (settings.fleet_instance_id.strip() or socket.gethostname())
+    )
+    # WorkWindowStore is a strict PersistentAgentStore superset. Legacy routes
+    # keep using the same object while managed capabilities gain schema-20 state.
+    persistent_store = WorkWindowStore(
+        settings.database_path, authority_node_id=managed_authority_node_id
+    )
     persistent_store.configure_observability(events, metrics)
     persistent_local_fence = PersistentExecutionFence(repo, terminal, service.task_store)
     persistent_fleet = (
@@ -237,11 +255,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     persistent_lifecycle = PersistentLifecycleCoordinator(
         persistent_store,
         enabled=settings.persistent_agents_enabled,
-        authority_node_id=(
-            fleet_config.instance_id
-            if fleet_config
-            else (settings.fleet_instance_id.strip() or socket.gethostname())
-        ),
+        authority_node_id=managed_authority_node_id,
         session_duration_seconds=settings.persistent_session_duration_sec,
         rearm_delay_seconds=settings.persistent_session_rearm_after_sec,
         execution_fence=persistent_fence,
@@ -253,6 +267,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     persistent_policy_controller = PersistentPolicyController(
         settings, service, persistent_lifecycle
     )
+    managed_routes = persistent_fleet if fleet_config is not None else None
+    managed_identity = ManagedProviderResolver(persistent_store, routes=managed_routes)
+    managed_authorizer = ManagedGrantAuthorizer(
+        persistent_store, auth_foundation, routes=managed_routes
+    )
+    managed_sessions = ManagedSessionApplication(
+        persistent_store, managed_authorizer, persistent_fence
+    )
+    managed_recovery = ManagedWindowRecovery(persistent_store, managed_sessions)
+    managed_runtime = ManagedSessionRuntime(
+        managed_identity,
+        managed_sessions,
+        managed_recovery,
+        enabled=settings.persistent_agents_enabled,
+    )
+
     managed_fleet_control = (
         ManagedFleetControl(
             fleet_control,
@@ -278,6 +308,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet_projection=fleet_projection,
         projection_service=fleet_projection_service,
         fleet_control=managed_fleet_control,
+        managed_identity=managed_identity,
+        managed_sessions=managed_sessions,
     )
     service.application = application
     auth = AuthService(settings, oauth_store, credentials)
@@ -336,10 +368,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if managed_fleet_control:
             await managed_fleet_control.start()
         await persistent_lifecycle.start()
+        await managed_runtime.start()
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
+            await managed_runtime.stop()
             await persistent_lifecycle.stop()
             if managed_fleet_control:
                 await managed_fleet_control.stop()
@@ -378,6 +412,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.fleet_projection = fleet_projection
     app.state.fleet_projection_service = fleet_projection_service
     app.state.persistent_backend = service.persistent
+    app.state.managed_identity = managed_identity
+    app.state.managed_sessions = managed_sessions
+    app.state.managed_recovery = managed_recovery
+    app.state.managed_runtime = managed_runtime
     app.state.persistent_lifecycle = persistent_lifecycle
     app.state.persistent_policy_controller = persistent_policy_controller
     app.state.persistent_fleet = persistent_fleet
@@ -409,6 +447,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     persistent_fleet,
                     service.persistent,
                     application=application.mesh,
+                )
+            )
+            app.include_router(
+                build_provider_identity_fleet_router(
+                    fleet_replication, persistent_fleet, application=application.mesh
                 )
             )
         if managed_fleet_control:
@@ -443,6 +486,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_actions_router(service, settings.mode_for("actions")))
     if settings.persistent_agents_enabled:
         app.include_router(build_persistent_router(service, persistent_policy_controller))
+        app.include_router(build_managed_sessions_router(service))
     app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))

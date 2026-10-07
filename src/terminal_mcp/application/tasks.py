@@ -3,6 +3,7 @@
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.task_requests import TaskRequest, task_request_to_backend
+from terminal_mcp.core.managed_sessions import ManagedOperation
 
 
 class TaskApplication(ApplicationCapability):
@@ -10,10 +11,12 @@ class TaskApplication(ApplicationCapability):
     async def task(self, actor: ActorContext, request: TaskRequest) -> dict:
         code, namespace, task_id, backend_request = task_request_to_backend(request)
         action = backend_request.pop("action")
-        identity, failure = await self.gate.identity(actor, code)
+        identity, failure = await self.gate.identity(
+            actor, code, ManagedOperation(f"task.{action}")
+        )
         if failure is not None:
             return failure
-        return await self.backend.task(
+        result = await self.backend.task(
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
             session_epoch=identity["session_epoch"],
@@ -23,3 +26,7 @@ class TaskApplication(ApplicationCapability):
             task_id=task_id,
             **backend_request,
         )
+        lifecycle = identity.get("session_lifecycle")
+        if result.get("ok") and isinstance(lifecycle, dict):
+            result["session_lifecycle"] = lifecycle
+        return result

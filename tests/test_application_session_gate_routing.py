@@ -29,7 +29,7 @@ class RecordingGate:
     def __init__(self):
         self.calls = []
 
-    async def resolve_message_actor(self, actor_value, sender, code):
+    async def resolve_message_actor(self, actor_value, sender, code, operation=None):
         self.calls.append(("resolve_message_actor", sender, code))
         return SimpleNamespace(
             failure=None,

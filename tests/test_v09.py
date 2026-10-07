@@ -8,7 +8,7 @@ from terminal_mcp.core.agent_policy import DEFAULT_SESSION_ALERT_MESSAGE, AgentP
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.storage.agents import AgentStore
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
 
@@ -139,7 +139,7 @@ async def test_v4_lines_migrate_and_duplicate_index_is_removed(tmp_path):
         assert "lines" not in tables
         assert "ix_lines_hash_seq" not in indexes
         assert "idx_lines_hash_seq" not in indexes
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     with sqlite3.connect(output) as db:
         indexes = {
             row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")

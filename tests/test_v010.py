@@ -8,7 +8,7 @@ from terminal_mcp.core.orchestration import public_agent_name, utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.storage.output import OutputStore
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
 
@@ -767,7 +767,7 @@ async def test_v8_to_v9_migration_preserves_result_and_initializes_task_metadata
     repo = SqliteRepository(database, tmp_path / "output.sqlite3")
     await repo.initialize()
     with sqlite3.connect(database) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {row[1] for row in db.execute("PRAGMA table_info(work_items)")}
         assert {"result_json", "state_changed_at", "ready_since", "tags_json"} <= columns
         ready = db.execute(
@@ -839,8 +839,10 @@ def test_mcp_schema_has_unified_task_contract():
     assert len(request["oneOf"]) == 12
     assert "payload" not in task["properties"]
     claim = task["$defs"]["TaskClaimRequest"]
-    assert claim["properties"]["code"]["minLength"] == 4
-    assert claim["properties"]["code"]["maxLength"] == 4
+    claim_code = claim["properties"]["code"]["anyOf"][0]
+    assert claim_code["minLength"] == 4
+    assert claim_code["maxLength"] == 4
+    assert "code" not in claim["required"]
 
     observe = tools["observe"].parameters["properties"]
     assert observe["subject"]["enum"] == ["sessions", "tasks", "namespaces"]
@@ -865,7 +867,8 @@ def test_mcp_schema_has_unified_task_contract():
     mapping = cmd["properties"]["request"]["discriminator"]["mapping"]
     assert set(mapping) == {"read", "run", "cancel", "recovery"}
     run = cmd["$defs"]["CmdRunRequest"]
-    assert {"action", "code", "command"} <= set(run["required"])
+    assert {"action", "command"} <= set(run["required"])
+    assert "code" not in run["required"]
     assert "task_scope" in run["properties"]
     read = cmd["$defs"]["CmdReadRequest"]
     assert "code" in read["properties"]
@@ -876,7 +879,8 @@ def test_mcp_schema_has_unified_task_contract():
     assert message["properties"]["code"]["anyOf"][0]["minLength"] == 4
     assert message["properties"]["code"]["anyOf"][0]["maxLength"] == 4
     assert "active unified session" in tools["message"].description
-    assert "same Access code used by cmd/task/context" in tools["message"].description
+    assert "Provider-bound managed callers" in tools["message"].description
+    assert "omit code" in tools["message"].description
 
 
 @pytest.mark.asyncio

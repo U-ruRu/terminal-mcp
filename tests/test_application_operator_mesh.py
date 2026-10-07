@@ -282,3 +282,50 @@ async def test_operator_policy_error_keeps_blockers_and_unavailable_contract():
         "code": "policy_incompatible",
         "error": "policy_incompatible",
     }
+
+
+async def test_mesh_provider_registry_resolve_and_bind_are_peer_authenticated():
+    resolver = AsyncMock(return_value="la_one")
+    binder = AsyncMock(return_value="la_one")
+    app = MeshApplication(
+        bridge(resolve_provider_binding=resolver, bind_provider_binding=binder)
+    )
+    key = "a" * 64
+
+    resolved = await app.provider_resolve(
+        mesh_actor(),
+        {"requesting_instance_id": "peer", "provider": "openai", "binding_key": key},
+    )
+    assert resolved == {"ok": True, "logical_agent_id": "la_one"}
+    resolver.assert_awaited_once_with("openai", key)
+
+    bound = await app.provider_bind(
+        mesh_actor(),
+        {
+            "requesting_instance_id": "peer",
+            "provider": "openai",
+            "binding_key": key,
+            "logical_agent_id": "la_one",
+            "access_code": "1234",
+            "principal_id": "usr_one",
+        },
+    )
+    assert bound == {"ok": True, "logical_agent_id": "la_one"}
+    binder.assert_awaited_once_with(
+        "openai",
+        key,
+        "la_one",
+        access_code="1234",
+        principal_id="usr_one",
+    )
+
+
+async def test_mesh_provider_registry_rejects_spoofed_requesting_instance():
+    resolver = AsyncMock(return_value="la_one")
+    app = MeshApplication(bridge(resolve_provider_binding=resolver))
+    with pytest.raises(MeshApplicationError, match="requesting instance mismatch"):
+        await app.provider_resolve(
+            mesh_actor(),
+            {"requesting_instance_id": "other", "provider": "openai", "binding_key": "a" * 64},
+        )
+    resolver.assert_not_awaited()

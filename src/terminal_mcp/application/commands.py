@@ -4,6 +4,7 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _finish_cmd_read_page, _read_error
 from terminal_mcp.application.requests import CmdRequest
+from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.read_contract import (
     DEFAULT_CMD_READ_LINES,
     InvalidCursor,
@@ -11,10 +12,21 @@ from terminal_mcp.core.read_contract import (
 )
 
 
+def _with_session_lifecycle(result: dict, identity: dict) -> dict:
+    lifecycle = identity.get("session_lifecycle")
+    if result.get("ok") and isinstance(lifecycle, dict):
+        result["session_lifecycle"] = lifecycle
+    return result
+
+
 class CommandApplication(ApplicationCapability):
     @application_operation("commands")
     async def cmd(self, actor: ActorContext, request: CmdRequest) -> dict:
-        if request.action == "read" and request.code is None:
+        if (
+            request.action == "read"
+            and request.code is None
+            and not actor.provider_metadata
+        ):
             scope = {
                 "kind": "cmd.read",
                 "cmd_hash": request.cmd_hash,
@@ -31,7 +43,9 @@ class CommandApplication(ApplicationCapability):
                 agent_id=None,
             )
             return _finish_cmd_read_page(result, start=start, scope=scope)
-        identity, failure = await self.gate.identity(actor, request.code)
+        identity, failure = await self.gate.identity(
+            actor, request.code, ManagedOperation(f"command.{request.action}")
+        )
         if failure is not None:
             return failure
         backend = self.backend
@@ -62,7 +76,9 @@ class CommandApplication(ApplicationCapability):
                     "session_epoch": identity["session_epoch"],
                 }
             )
-            return _finish_cmd_read_page(result, start=start, scope=scope)
+            return _with_session_lifecycle(
+                _finish_cmd_read_page(result, start=start, scope=scope), identity
+            )
         if request.action == "run":
             result = await backend.run(
                 request.command,
@@ -101,7 +117,7 @@ class CommandApplication(ApplicationCapability):
                     if key in output:
                         result[key] = output[key]
             result.update(message_state)
-            return result
+            return _with_session_lifecycle(result, identity)
         if request.action == "cancel":
             result = await backend.cancel(
                 request.cmd_hash,
@@ -111,7 +127,7 @@ class CommandApplication(ApplicationCapability):
                 access_code=request.code,
             )
             result.update(message_state)
-            return result
+            return _with_session_lifecycle(result, identity)
         result = await backend.recovery(
             request.command,
             logical_agent_id=identity["logical_agent_id"],
@@ -122,4 +138,4 @@ class CommandApplication(ApplicationCapability):
         result["public_name"] = identity["public_name"]
         result["session_ref"] = identity["session_ref"]
         result.update(message_state)
-        return result
+        return _with_session_lifecycle(result, identity)

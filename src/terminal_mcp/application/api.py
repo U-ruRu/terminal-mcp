@@ -37,13 +37,17 @@ class TerminalApplication:
         fleet_projection=None,
         projection_service=None,
         fleet_control=None,
+        managed_identity=None,
+        managed_sessions=None,
     ):
         self.service = service
         self.auth_mode = auth_mode
         self.policy_controller = policy_controller
         self.unit_of_work = unit_of_work
         self.policy = CapabilityPolicy()
-        self.session_gate = SessionGate(service)
+        self.session_gate = SessionGate(
+            service, managed_identity=managed_identity, managed_sessions=managed_sessions
+        )
         options = {"auth_mode": auth_mode, "policy": self.policy, "unit_of_work": unit_of_work}
         self.sessions = SessionApplication(service, self.session_gate, **options)
         self.observations = ObservationApplication(service, self.session_gate, **options)
@@ -62,6 +66,10 @@ class TerminalApplication:
             else None
         )
         self.fleet_control = FleetControlApplication(fleet_control) if fleet_control else None
+        # Managed identity/session capabilities are composed by the host but stay
+        # transport-inactive until the explicit endpoint cutover.
+        self.managed_identity = managed_identity
+        self.managed_sessions = managed_sessions
         self._operator = None
         self._mesh = None
 
@@ -70,7 +78,9 @@ class TerminalApplication:
         if self._operator is None:
             from terminal_mcp.application.operator import OperatorApplication
 
-            self._operator = OperatorApplication(self.service, self.policy_controller)
+            self._operator = OperatorApplication(
+                self.service, self.policy_controller, self.managed_sessions
+            )
         return self._operator
 
     @property

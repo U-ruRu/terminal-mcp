@@ -93,7 +93,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             slot_not_found recipient_not_active no_active_recipients unknown_source
         """,
         ),
-        ("policy", "repair", "policy_incompatible"),
+        ("policy", "repair", "policy_incompatible managed_session_required"),
         (
             "internal",
             "reconcile",
@@ -114,6 +114,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             invalid_message invalid_task_context review_task_required
+            identity_metadata_invalid
             control_mutation_invalid control_operation_invalid control_snapshot_invalid
             invalid_transfer_transition managed_snapshot_required
             managed_snapshot_revision_invalid mesh_id_required
@@ -199,6 +200,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "Read and acknowledge the pending message before running work."
         ),
         "policy_incompatible": "The requested operation is incompatible with the active policy.",
+        "managed_session_required": "Use the managed session path for this slot.",
     }
     result = {}
     for kind, recovery, codes in groups:

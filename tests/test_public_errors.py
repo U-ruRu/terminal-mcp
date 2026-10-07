@@ -305,6 +305,16 @@ def test_cancellation_and_process_control_are_not_swallowed(exc):
     assert caught.value is exc
 
 
+def test_managed_session_legacy_guard_has_explicit_repair_policy():
+    spec = ERROR_SPECS["managed_session_required"]
+    assert spec.kind == "policy"
+    assert spec.recovery == "repair"
+    assert (
+        public_error("managed_session_required").error
+        == "Use the managed session path for this slot."
+    )
+
+
 def test_execution_request_timeout_requires_reconciliation_before_retry():
     value = public_error("execution_request_timeout")
     assert ERROR_SPECS["execution_request_timeout"].recovery == "reconcile"

@@ -30,6 +30,10 @@ PAIRED_CONSOLE_PERSISTENT_MUTATIONS = frozenset(
         "/actions/persistent/slots/delete",
         "/actions/persistent/claims/release",
         "/actions/persistent/claims/reassign",
+        "/actions/persistent/managed/status",
+        "/actions/persistent/managed/policy",
+        "/actions/persistent/managed/window",
+        "/actions/persistent/managed/sessions/end",
     }
 )
 

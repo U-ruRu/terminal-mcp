@@ -47,7 +47,7 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/meshes/:meshId/agents" element={<ServerChooser model={model} section="agents" />} />
         <Route path="/meshes/:meshId/persistent" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/meshes/:meshId/tasks" element={<ServerChooser model={model} section="tasks" />} />
-        <Route path="/meshes/:meshId/activity" element={<Activity instances={instances} loadActivity={loadActivity} />} />
+        <Route path="/meshes/:meshId/activity" element={<Activity instances={instances} loadActivity={loadActivity} mutatePersistent={mutatePersistent} />} />
         <Route path="/meshes/:meshId/persistent/:logicalAgentId" element={<ServerSlots instances={instances} mutatePersistent={mutatePersistent} loadSlotAudit={loadSlotAudit} loadFleetControl={loadFleetControl} mutateFleetControl={mutateFleetControl} />} />
         <Route path="/ui-kit" element={<UiKitShowcase />} />
         <Route path="/connect" element={<Connections />} />
@@ -59,7 +59,7 @@ export function App({ model, instances, loadActivity, loadTask, loadContexts, lo
         <Route path="/servers/:instanceId/context" element={<ServerSection model={model} section="context" diagnostics={diagnostics} loadContexts={loadContexts} />} />
         <Route path="/servers/:instanceId/tasks" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
         <Route path="/servers/:instanceId/tasks/:namespace/:taskId" element={<ServerTasks instances={instances} loadTask={loadTask} />} />
-        <Route path="/activity" element={<Activity instances={instances} loadActivity={loadActivity} />} />
+        <Route path="/activity" element={<Activity instances={instances} loadActivity={loadActivity} mutatePersistent={mutatePersistent} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppShell>

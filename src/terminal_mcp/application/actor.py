@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 
 from terminal_mcp.core.persistent_admission import (
     VerifiedAdmissionContext,
@@ -27,6 +28,7 @@ class ActorContext:
     auth_generation: int = 0
     auth_mode: str = "none"
     provider: str | None = None
+    provider_metadata: Mapping[str, object] = field(default_factory=dict, repr=False, compare=False)
     transport: str = "internal"
     request_id: str | None = None
     node_id: str = ""
@@ -42,16 +44,30 @@ class ActorContext:
         # Copy any caller-owned mutable scope collection; frozen must be deep
         # enough for the security-relevant attributes, not merely cosmetic.
         object.__setattr__(self, "scopes", frozenset(self.scopes))
-        if self.contract_version < 1:
+        if not isinstance(self.provider_metadata, Mapping):
+            raise ValueError("provider_metadata must be a mapping")
+        provider_metadata = dict(self.provider_metadata)
+        if provider_metadata and self.provider is None:
+            raise ValueError("provider required for provider_metadata")
+        if any(not isinstance(key, str) or not key for key in provider_metadata):
+            raise ValueError("provider_metadata keys must be nonempty strings")
+        object.__setattr__(self, "provider_metadata", MappingProxyType(provider_metadata))
+        if type(self.contract_version) is not int or self.contract_version < 1:
             raise ValueError("contract_version must be positive")
         if self.auth_mode != "none":
             self.admission()  # Reuse the established verified-identity invariant.
-        identity = (self.logical_agent_id, self.work_session_id, self.session_epoch)
-        if any(value is not None for value in identity) and not all(
-            value is not None for value in identity
+        # A resolved LogicalAgent exists before/after a WorkSession. Session
+        # identity, when present, is still an indivisible (agent, session, epoch).
+        if self.logical_agent_id is not None and not self.logical_agent_id:
+            raise ValueError("logical_agent_id must be nonempty")
+        session = (self.work_session_id, self.session_epoch)
+        if any(value is not None for value in session) and (
+            not all(value is not None for value in session) or self.logical_agent_id is None
         ):
             raise ValueError("resolved session identity must be complete")
-        if self.session_epoch is not None and self.session_epoch < 1:
+        if self.session_epoch is not None and (
+            type(self.session_epoch) is not int or self.session_epoch < 1
+        ):
             raise ValueError("session_epoch must be positive")
 
     @classmethod
@@ -101,4 +117,14 @@ class ActorContext:
                 if identity.get("authority_node_id") is not None
                 else self.authority_node_id
             ),
+        )
+
+    def with_agent(self, logical_agent_id: str, authority_node_id: str) -> ActorContext:
+        """Attach a server-resolved agent without inventing an active session."""
+        return replace(
+            self,
+            logical_agent_id=logical_agent_id,
+            authority_node_id=authority_node_id,
+            work_session_id=None,
+            session_epoch=None,
         )

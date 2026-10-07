@@ -184,6 +184,70 @@ class PersistentFleetBridge:
             raise PersistentStoreError(str(data.get("code") or "authority_unavailable"))
         return data
 
+    async def resolve_provider_binding(self, provider: str, binding_key: str) -> str | None:
+        control_id = self._access_control_node_id()
+        if control_id == self.config.instance_id:
+            if self.access_authority is None:
+                raise PersistentStoreError("authority_unavailable")
+            try:
+                return await self.access_authority.resolve_provider_binding(provider, binding_key)
+            except ValueError as exc:
+                raise PersistentStoreError("identity_metadata_invalid") from exc
+        data = await self._remote_access_call(
+            "provider-resolve",
+            {"provider": provider, "binding_key": binding_key},
+        )
+        value = data.get("logical_agent_id")
+        return str(value) if value is not None else None
+
+    async def bind_provider_binding(
+        self,
+        provider: str,
+        binding_key: str,
+        logical_agent_id: str,
+        *,
+        access_code: str,
+        principal_id: str | None = None,
+    ) -> str:
+        control_id = self._access_control_node_id()
+        payload = {
+            "provider": provider,
+            "binding_key": binding_key,
+            "logical_agent_id": logical_agent_id,
+            "access_code": access_code,
+            "principal_id": principal_id,
+        }
+        if control_id != self.config.instance_id:
+            data = await self._remote_access_call("provider-bind", payload)
+            return str(data["logical_agent_id"])
+        if self.access_authority is None:
+            raise PersistentStoreError("authority_unavailable")
+        try:
+            access = await self.access_authority.resolve_access_code(access_code)
+            if (
+                access is None
+                or access.get("logical_agent_id") != logical_agent_id
+                or access.get("status") != "active"
+            ):
+                raise PersistentStoreError("access_denied")
+            return await self.access_authority.bind_provider_binding(
+                provider,
+                binding_key,
+                logical_agent_id,
+                principal_id=principal_id,
+            )
+        except PersistentStoreError:
+            raise
+        except ValueError as exc:
+            raise PersistentStoreError("identity_metadata_invalid") from exc
+        except Exception as exc:
+            code = (
+                "identity_binding_conflict"
+                if type(exc).__name__ == "AuthConflictError"
+                else "authority_unavailable"
+            )
+            raise PersistentStoreError(code) from exc
+
     async def resolve_access_code(self, access_code: str) -> dict:
         control_id = self._access_control_node_id()
         if control_id == self.config.instance_id:

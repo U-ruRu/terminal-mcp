@@ -13,7 +13,7 @@ from terminal_mcp.fleet.identity import (
     sign_identity_record,
 )
 from terminal_mcp.fleet.storage import FleetIdentityStore
-from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 
 
 def encoded(value: bytes) -> str:
@@ -121,7 +121,7 @@ async def test_identity_store_deduplicates_and_rejects_stale_or_conflicting_revi
     assert loaded == newer
 
     with sqlite3.connect(repo.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 @pytest.mark.asyncio

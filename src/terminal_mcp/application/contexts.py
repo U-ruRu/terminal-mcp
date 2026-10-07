@@ -4,6 +4,7 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _read_error
 from terminal_mcp.application.requests import ContextRequest
+from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.read_contract import (
     InvalidCursor,
@@ -62,10 +63,16 @@ class ContextApplication(ApplicationCapability):
                 "next_cursor": next_cursor,
             }
         data = request.model_dump(exclude={"action", "code"}, exclude_none=True)
-        resolution = await self.gate.resolve(actor, request.code)
+        resolution = await self.gate.resolve(
+            actor, request.code, ManagedOperation.CONTEXT_WRITE
+        )
         if resolution.failure is not None:
             return resolution.failure
-        return await self.mutate(resolution.actor, request.action, **data)
+        result = await self.mutate(resolution.actor, request.action, **data)
+        lifecycle = (resolution.identity or {}).get("session_lifecycle")
+        if result.get("ok") and isinstance(lifecycle, dict):
+            result["session_lifecycle"] = lifecycle
+        return result
 
     @application_operation("contexts")
     async def mutate(
