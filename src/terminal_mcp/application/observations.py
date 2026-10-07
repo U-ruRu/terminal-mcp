@@ -23,6 +23,12 @@ from terminal_mcp.core.read_contract import (
 
 class ObservationApplication(ApplicationCapability):
     @application_operation("observations")
+    async def agent_observe(self, actor: ActorContext) -> dict:
+        if actor.endpoint_role != "coordinator":
+            return public_error("capability_not_allowed").as_dict()
+        return await self.gate.current_state(actor)
+
+    @application_operation("observations")
     async def observe(
         self,
         actor: ActorContext,
@@ -42,7 +48,7 @@ class ObservationApplication(ApplicationCapability):
         if actor.endpoint_role == "executor":
             if subject != "tasks" or task_id is not None or detail != "summary":
                 return public_error("capability_not_allowed").as_dict()
-        elif actor.endpoint_role == "coordinator" and subject not in {"tasks", "sessions"}:
+        elif actor.endpoint_role == "coordinator" and subject != "tasks":
             return public_error("capability_not_allowed").as_dict()
         if actor.endpoint_role in {"executor", "coordinator"}:
             operation = (

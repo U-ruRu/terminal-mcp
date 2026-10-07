@@ -26,7 +26,7 @@ def _tool_map(role):
 def test_role_catalogs_are_exact_and_identity_free():
     for role, expected in (("executor", EXECUTOR_TOOLS), ("coordinator", COORDINATOR_TOOLS)):
         tools = _tool_map(role)
-        assert set(tools) == set(expected)
+        assert list(tools) == list(expected)
         assert len(tools) == len(expected)
         for _name, tool in tools.items():
             schema = tool.parameters

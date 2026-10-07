@@ -49,8 +49,6 @@ def settings(tmp_path, **overrides):
     return Settings(**data)
 
 
-
-
 @pytest.fixture
 def file_oauth_credentials(monkeypatch):
     values = {
@@ -71,13 +69,17 @@ def file_oauth_credentials(monkeypatch):
 
 
 def test_oauth_access_ttl_default_is_30_days():
-    assert Settings(
-        _env_file=None,
-        fleet_v1_source_enabled=False,
-        fleet_v1_authority_enabled=False,
-        fleet_v1_projection_enabled=False,
-        fleet_v1_public_enabled=False,
-    ).oauth_access_ttl_sec == 30 * 24 * 60 * 60
+    assert (
+        Settings(
+            _env_file=None,
+            fleet_v1_source_enabled=False,
+            fleet_v1_authority_enabled=False,
+            fleet_v1_projection_enabled=False,
+            fleet_v1_public_enabled=False,
+        ).oauth_access_ttl_sec
+        == 30 * 24 * 60 * 60
+    )
+
 
 def start_agent(client, headers):
     plan = {
@@ -147,12 +149,8 @@ def test_bearer_actions_and_openapi(tmp_path):
         compact_context = client.post(
             "/actions/context", json={"action": "list"}, headers=headers
         ).json()
-        assert compact_context["primary"] == [
-            {"id": primary_id, "summary": "Git workflow"}
-        ]
-        assert compact_context["additional"] == [
-            {"id": additional_id, "summary": "Docs"}
-        ]
+        assert compact_context["primary"] == [{"id": primary_id, "summary": "Git workflow"}]
+        assert compact_context["additional"] == [{"id": additional_id, "summary": "Docs"}]
         detailed_context = client.post(
             "/actions/context",
             json={"action": "list", "show_details": True},
@@ -641,6 +639,19 @@ def test_same_oauth_user_can_authorize_multiple_clients(tmp_path, file_oauth_cre
             )
 
 
+def test_role_mcp_paths_use_mcp_auth_interface():
+    for path in (
+        "/mcp",
+        "/mcp/",
+        "/terminal-mcp/executor/v1/mcp",
+        "/terminal-mcp/executor/v1/mcp/",
+        "/terminal-mcp/coordinator/v1/mcp",
+        "/terminal-mcp/coordinator/v1/mcp/",
+    ):
+        assert AuthMiddleware._interface(path) == "mcp"
+    assert AuthMiddleware._interface("/terminal-mcp/executor/v1/mcpx") is None
+
+
 def test_agent_facing_oauth_uses_one_read_scope():
     for path in (
         "/actions/run",
@@ -658,12 +669,10 @@ def test_agent_facing_oauth_uses_one_read_scope():
 def test_paired_console_fleet_enrollment_requires_execute_scope():
     from terminal_mcp.auth.middleware import AuthMiddleware
 
-    assert (
-        AuthMiddleware._paired_console_scopes(
-            "/actions/fleet/control/enrollment", "GET"
-        )
-        == ["terminal:read", "terminal:execute"]
-    )
+    assert AuthMiddleware._paired_console_scopes("/actions/fleet/control/enrollment", "GET") == [
+        "terminal:read",
+        "terminal:execute",
+    ]
 
 
 def test_refresh_rotation_is_single_use_under_concurrency(tmp_path):
@@ -686,9 +695,7 @@ def test_paired_console_access_code_handoff_routes_require_execute_scope():
 
     expected = ["terminal:read", "terminal:execute"]
     assert (
-        AuthMiddleware._paired_console_scopes(
-            "/actions/persistent/slots/migrate-access", "POST"
-        )
+        AuthMiddleware._paired_console_scopes("/actions/persistent/slots/migrate-access", "POST")
         == expected
     )
     assert (
@@ -698,8 +705,6 @@ def test_paired_console_access_code_handoff_routes_require_execute_scope():
         == expected
     )
     assert (
-        AuthMiddleware._paired_console_scopes(
-            "/actions/persistent/slots/migrate-access", "GET"
-        )
+        AuthMiddleware._paired_console_scopes("/actions/persistent/slots/migrate-access", "GET")
         is None
     )

@@ -29,9 +29,9 @@
       {
         "contract_version": 1,
         "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 3690,
-        "planning_input_schema_digest": "0e740fe70f6a9c756ef2f2e66f96b54b5f98daffa80ab479cd5ba96705097312",
-        "runtime_input_schema_digest": "c80c78b8a87fdfba69d7658dc134afc96848a8a3a7b796b959ad8e3e166b5c81",
+        "planning_input_schema_bytes": 3859,
+        "planning_input_schema_digest": "c2e87492947cf2f27fffea9e35992c2c7c26029063fa73be218e1e4a8673f520",
+        "runtime_input_schema_digest": "1b43137271f46377ca6f3b0dd183f5f566b9647be51c386bc2b67ff5929603eb",
         "tool_name": "task_manage"
       },
       {

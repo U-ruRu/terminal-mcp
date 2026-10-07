@@ -47,7 +47,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "validation",
             "repair",
             """
-            validation_error invalid_request invalid_command invalid_queue invalid_mode
+            validation_error input_validation_failed invalid_request invalid_command invalid_queue
+            invalid_mode
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
             mode_required access_code_required legacy_code_not_allowed invalid_connect_url
             output_item_too_large execution_argument_invalid
@@ -126,7 +127,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "access",
             "reauthenticate",
             """
-            access_identity_not_found permit_expired persistent_auth_required
+            access_identity_not_found identity_not_bound permit_expired persistent_auth_required
             persistent_scope_required selector_not_found session_not_found
             control_rejoin_credential_required invalid_pairing
         """,
@@ -183,6 +184,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "Execution failed internally. Check current command state before retrying."
         ),
         "validation_error": "Correct the indicated request fields.",
+        "input_validation_failed": "Correct the indicated request field.",
+        "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
         "fleet_control_invalid_header": (

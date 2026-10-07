@@ -34,6 +34,7 @@ from terminal_mcp.application.task_requests import (
     TaskUpdateRequest,
 )
 from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.core.read_contract import InvalidCursor, decode_cursor, encode_cursor
 from terminal_mcp.core.task_projections import (
     TaskHistory,
@@ -212,7 +213,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
     identity = resolution.identity or {}
     sender = str(identity.get("public_name") or "")
     if not sender:
-        return {"ok": False, "code": "identity_not_bound", "error": "identity_not_bound"}
+        return public_error("identity_not_bound").as_dict()
 
     history = request.action == "history"
     raw = await application.message(
@@ -257,7 +258,7 @@ def _task_record_from_observe(raw: dict) -> tuple[TaskRecord | None, dict | None
     try:
         return TaskRecord.model_validate(task), None
     except ValidationError:
-        return None, {"ok": False, "code": "projection_invalid", "error": "projection_invalid"}
+        return None, public_error("internal_error").as_dict()
 
 
 async def _task_get(application, actor, request: TaskGetInput) -> dict:
@@ -699,7 +700,7 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             AgentObserveInput.model_validate(request)
-            return await application.session_gate.current_state(_actor(application, role))
+            return await application.agent_observe(_actor(application, role))
 
         @mcp.tool(
             name="health",
@@ -718,5 +719,7 @@ def build_role_mcp(
             return _structured(health_result(raw)) if request.extended else _compact_health(raw)
 
     install_role_input_contract(mcp, role)
+    registered = mcp._tool_manager._tools
+    mcp._tool_manager._tools = {name: registered[name] for name in ROLE_TOOLS[role]}
     mcp.role_schema_contract = role_schema_contract(role)
     return mcp

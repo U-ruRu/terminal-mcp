@@ -99,6 +99,9 @@ class TerminalApplication:
     async def observe(self, actor: ActorContext, **kwargs) -> dict:
         return await self.observations.observe(actor, **kwargs)
 
+    async def agent_observe(self, actor: ActorContext) -> dict:
+        return await self.observations.agent_observe(actor)
+
     async def message(self, actor: ActorContext, **kwargs) -> dict:
         return await self.messages.message(actor, **kwargs)
 

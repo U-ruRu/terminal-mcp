@@ -4,6 +4,12 @@ from starlette.responses import JSONResponse
 from terminal_mcp.auth.admission import verified_admission_context
 from terminal_mcp.core.persistent_admission import bind_admission_context, reset_admission_context
 
+MCP_PREFIXES = (
+    "/mcp",
+    "/terminal-mcp/executor/v1/mcp",
+    "/terminal-mcp/coordinator/v1/mcp",
+)
+
 PUBLIC_PREFIXES = (
     "/.well-known/",
     "/mcp/.well-known/",
@@ -49,9 +55,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if path == "/health/live" or path.startswith(PUBLIC_PREFIXES):
             return await call_next(request)
-        interface = (
-            "mcp" if path.startswith("/mcp") else "actions" if path.startswith("/actions") else None
-        )
+        interface = self._interface(path)
         if not interface:
             return await call_next(request)
         mode = self.s.mode_for(interface)
@@ -105,6 +109,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         finally:
             reset_admission_context(context_token)
+
+    @staticmethod
+    def _interface(path: str) -> str | None:
+        if any(path == prefix or path.startswith(f"{prefix}/") for prefix in MCP_PREFIXES):
+            return "mcp"
+        if path == "/actions" or path.startswith("/actions/"):
+            return "actions"
+        return None
 
     @staticmethod
     def _paired_console_scopes(path, method):

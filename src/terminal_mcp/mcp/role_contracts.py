@@ -200,11 +200,16 @@ class TaskManageInput(StrictRoleInput):
     related_namespace: Namespace | None = None
     related_task_id: TaskId | None = None
     archive_note: Annotated[str | None, Field(min_length=1, max_length=4000)] = None
-    note: Annotated[str | None, Field(min_length=1, max_length=4000)] = None
-    dimensions: Annotated[list[ReviewDimension] | None, Field(min_length=1, max_length=3)] = None
+    note: Annotated[str | None, Field(min_length=1, max_length=2000)] = None
+    dimensions: Annotated[
+        list[ReviewDimension] | None,
+        Field(min_length=1, max_length=3, json_schema_extra={"uniqueItems": True}),
+    ] = None
     verdict: ReviewVerdict | None = None
     evidence: ReviewEvidence | None = None
     comment_text: Annotated[str | None, Field(min_length=1, max_length=4000)] = None
+    force: bool = False
+    force_reason: Annotated[str | None, Field(min_length=1, max_length=2000)] = None
 
 
 class TaskGraphInput(StrictRoleInput):
