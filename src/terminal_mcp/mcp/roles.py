@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import logging
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -34,6 +37,7 @@ from terminal_mcp.application.task_requests import (
     TaskUpdateRequest,
 )
 from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
 from terminal_mcp.core.public_errors import public_error
 from terminal_mcp.core.read_contract import (
     InvalidCursor,
@@ -49,7 +53,6 @@ from terminal_mcp.core.task_projections import (
 )
 from terminal_mcp.mcp.output_contracts import (
     cmd_result,
-    health_result,
     message_result,
     observe_result,
     session_result,
@@ -419,9 +422,7 @@ async def _task_graph(application, actor, request: TaskGraphInput) -> dict:
         if key in seen:
             continue
         seen.add(key)
-        node = {"namespace": key[0], "task_id": key[1]}
-        if "state" in edge:
-            node["state"] = edge["state"]
+        node = {"namespace": key[0], "task_id": key[1], "state": edge.get("state")}
         nodes.append(node)
     return {"ok": True, "nodes": nodes, "edges": page, "next_cursor": next_cursor}
 
@@ -430,8 +431,10 @@ def _compact_health(raw: dict) -> dict:
     terminal = raw.get("terminal") if isinstance(raw.get("terminal"), dict) else {}
     workflow = raw.get("workflow") if isinstance(raw.get("workflow"), dict) else {}
     return {
-        "ok": bool(raw.get("ok")),
+        "ok": True,
+        "healthy": bool(raw.get("ok")),
         "application": raw.get("application"),
+        "agent_name": raw.get("agent_name"),
         "version": raw.get("version"),
         "storage": raw.get("storage"),
         "status": raw.get("status"),
@@ -447,6 +450,56 @@ def _compact_health(raw: dict) -> dict:
             if key in workflow
         },
     }
+
+
+async def _health_identity(application, actor) -> dict:
+    """Report bounded identity evidence without publishing provider identifiers."""
+    fields = sorted(
+        key
+        for key in actor.provider_metadata
+        if key in {"openai/subject", "openai/session", "openai/organization"}
+    )
+    diagnostic = {"provider": actor.provider, "metadata_fields": fields, "status": "missing"}
+    if actor.provider is None or not actor.provider_metadata:
+        return diagnostic
+    try:
+        evidence = ProviderIdentityRegistry().resolve(actor.provider, actor.provider_metadata)
+        diagnostic["binding_key"] = evidence.binding_key
+        diagnostic["subject_fingerprint"] = hashlib.sha256(
+            ("subject:" + evidence.subject).encode()
+        ).hexdigest()
+        diagnostic["session_fingerprint"] = hashlib.sha256(
+            ("session:" + evidence.conversation).encode()
+        ).hexdigest()
+    except ProviderIdentityError as exc:
+        return {**diagnostic, "status": "invalid", "code": exc.code}
+    try:
+        async with asyncio.timeout(2):
+            resolution = await application.session_gate.provider_identity(
+                actor, ManagedOperation.OBSERVE
+            )
+        if resolution.failure:
+            code = resolution.failure.get("code", "authority_unavailable")
+            return {
+                **diagnostic,
+                "status": "unbound"
+                if code in {"identity_not_bound", "session_required"}
+                else "unavailable",
+                "code": code,
+            }
+        identity = resolution.identity or {}
+        return {
+            **diagnostic,
+            "status": "resolved",
+            **{
+                key: identity[key]
+                for key in ("logical_agent_id", "public_name", "authority_node_id")
+                if key in identity
+            },
+        }
+    except Exception:
+        logging.getLogger(__name__).exception("health_identity_unavailable")
+        return {**diagnostic, "status": "unavailable", "code": "authority_unavailable"}
 
 
 def role_schema_contract(role: RoleName) -> dict[str, object]:
@@ -730,10 +783,16 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             request = HealthInput.model_validate(request)
-            raw = await application.health(_actor(application, role))
-            if not raw.get("ok"):
+            actor = _actor(application, role)
+            raw = await application.health(actor)
+            if not raw.get("ok") and "status" not in raw:
                 return raw
-            return _structured(health_result(raw)) if request.extended else _compact_health(raw)
+            identity = await _health_identity(application, actor)
+            result = _compact_health(raw)
+            result["agent_name"] = identity.get("public_name")
+            if request.extended:
+                result.update(auth_mode=raw.get("auth_mode"), identity=identity)
+            return result
 
     install_role_input_contract(mcp, role)
     install_role_output_contract(mcp, role)
@@ -753,7 +812,13 @@ def build_role_mcp(
                     else False
                 )
                 if succeeded:
-                    await application.session_gate.touch_provider(_actor(application, role))
+                    try:
+                        async with asyncio.timeout(0.25):
+                            await application.session_gate.touch_provider(_actor(application, role))
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "provider_activity_touch_failed role=%s", role
+                        )
                 return result
 
             tool.fn = touched

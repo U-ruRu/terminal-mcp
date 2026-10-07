@@ -304,3 +304,83 @@ async def test_valid_access_code_stop_bypasses_unrelated_provider_resolution():
             {"authority_node_id": "node-b", "logical_agent_id": "legacy-agent"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_unbound_provider_on_session_bound_tool_requires_session_start():
+    gate = SessionGate(
+        backend=LegacyBackend(),
+        managed_identity=ProviderResolver(),
+        managed_sessions=ManagedSessions("identity_not_bound", window_exists=False),
+    )
+
+    resolution = await gate.resolve(provider_actor(), None, ManagedOperation.TASK_LIST)
+
+    assert resolution.failure == {
+        "ok": False,
+        "code": "session_required",
+        "error": "session_required",
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_required_preserves_unbound_legacy_binding_path():
+    class UnboundResolver:
+        async def resolve(self, actor, provider, metadata):
+            raise ManagedSessionError("identity_not_bound")
+
+    class LegacyBackend:
+        async def _resolve_access(self, code):
+            assert code == "0042"
+            return {"slot_kind": "legacy"}
+
+        async def access_identity(self, code):
+            return {
+                "ok": True,
+                "logical_agent_id": "legacy-agent",
+                "work_session_id": "legacy-session",
+                "session_epoch": 1,
+            }
+
+    gate = SessionGate(
+        backend=LegacyBackend(),
+        managed_identity=UnboundResolver(),
+        managed_sessions=object(),
+    )
+    resolution = await gate.resolve(provider_actor(), "0042", ManagedOperation.COMMAND_RUN)
+    assert resolution.failure is None
+    assert resolution.identity["logical_agent_id"] == "legacy-agent"
+
+
+@pytest.mark.asyncio
+async def test_bound_session_required_does_not_fall_back_to_legacy_code():
+    class BoundResolver:
+        async def resolve(self, actor, provider, metadata):
+            return actor.with_agent("bound-agent", "test")
+
+    class Sessions:
+        async def authorize_operation(self, *args):
+            raise ManagedSessionError("session_required")
+
+    class ForbiddenLegacy:
+        async def access_identity(self, code):
+            raise AssertionError("A bound managed identity retains managed lifecycle fencing")
+
+    gate = SessionGate(
+        backend=ForbiddenLegacy(),
+        managed_identity=BoundResolver(),
+        managed_sessions=Sessions(),
+    )
+    resolution = await gate.resolve(provider_actor(), "0042", ManagedOperation.COMMAND_RUN)
+    assert resolution.failure["code"] == "session_required"
+    assert resolution.identity_unbound is False
+
+
+@pytest.mark.asyncio
+async def test_role_without_metadata_reports_connector_prerequisite():
+    gate = SessionGate(backend=object())
+    actor = ActorContext(endpoint_role="executor")
+    result = await gate.start(actor, mode=None)
+    assert result["code"] == "identity_metadata_missing"
+    resolved = await gate.resolve(actor, None, ManagedOperation.COMMAND_RUN)
+    assert resolved.failure["code"] == "identity_metadata_missing"

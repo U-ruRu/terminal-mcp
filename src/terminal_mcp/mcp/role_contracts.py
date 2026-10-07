@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 from typing import Annotated, Literal
@@ -38,7 +37,14 @@ from terminal_mcp.application.task_requests import (
     ReviewEvidence,
     TaskDependencies,
 )
-from terminal_mcp.core.public_errors import public_error
+from terminal_mcp.core.public_errors import (
+    PUBLIC_FIELDS,
+    ValidationRepair,
+    public_error,
+)
+from terminal_mcp.core.public_errors import (
+    validation_error as bounded_validation_error,
+)
 from terminal_mcp.core.read_contract import (
     DEFAULT_CMD_READ_LINES,
     DEFAULT_PAGE_LIMIT,
@@ -95,6 +101,19 @@ class CommandRecoveryInput(StrictRoleInput):
 
 
 class TaskClaimInput(StrictRoleInput):
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "claim"}}, "required": ["action"]},
+                    "then": {"required": ["claim_intent"]},
+                }
+            ]
+        },
+    )
+
     action: Literal["claim", "release"]
     namespace: Namespace
     task_id: TaskId
@@ -119,6 +138,27 @@ class TaskCommentInput(StrictRoleInput):
 
 
 class MessageInput(StrictRoleInput):
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "send"}}, "required": ["action"]},
+                    "then": {"required": ["text"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "ack"}}, "required": ["action"]},
+                    "then": {"required": ["message_hash"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "reply"}}, "required": ["action"]},
+                    "then": {"required": ["message_hash", "text"]},
+                },
+            ]
+        },
+    )
+
     action: Literal["send", "read", "ack", "reply", "history", "recipients"]
     text: Annotated[str | None, Field(max_length=MAX_MESSAGE_TEXT_CHARS)] = None
     target: Identifier | None = None
@@ -167,6 +207,75 @@ class TaskGetInput(StrictRoleInput):
 
 
 class TaskManageInput(StrictRoleInput):
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "create"}}, "required": ["action"]},
+                    "then": {"required": ["isolation_hint"]},
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "action": {
+                                "enum": [
+                                    "update",
+                                    "checkpoint",
+                                    "done",
+                                    "archive",
+                                    "review",
+                                    "relate",
+                                    "unrelate",
+                                    "state",
+                                    "comment",
+                                ]
+                            }
+                        },
+                        "required": ["action"],
+                    },
+                    "then": {"required": ["task_id"]},
+                },
+                {
+                    "if": {
+                        "properties": {"action": {"const": "checkpoint"}},
+                        "required": ["action"],
+                    },
+                    "then": {"required": ["checkpoint"]},
+                },
+                {
+                    "if": {
+                        "properties": {"action": {"enum": ["relate", "unrelate"]}},
+                        "required": ["action"],
+                    },
+                    "then": {"required": ["relation_kind", "related_task_id"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "state"}}, "required": ["action"]},
+                    "then": {"required": ["state"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "review"}}, "required": ["action"]},
+                    "then": {"required": ["dimensions", "verdict"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "comment"}}, "required": ["action"]},
+                    "then": {"required": ["comment_text"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "archive"}}, "required": ["action"]},
+                    "then": {
+                        "anyOf": [
+                            {"required": ["archive_note"]},
+                            {"required": ["note"]},
+                        ]
+                    },
+                },
+            ]
+        },
+    )
+
     action: Literal[
         "create",
         "update",
@@ -319,7 +428,10 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     (
         "coordinator",
         "task_manage",
-    ): "Apply one coordinator mutation; canonical action-specific validation is authoritative.",
+    ): "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. "
+    "checkpoint needs checkpoint; state needs state; comment needs comment_text; "
+    "review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; "
+    "archive needs archive_note.",
     ("coordinator", "task_graph"): "Read a bounded dependency/relation graph rooted at one task.",
     (
         "coordinator",
@@ -333,31 +445,60 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
 }
 
 
-def _relax_schema(value):
-    if isinstance(value, list):
-        return [_relax_schema(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    result = {}
-    for key, item in value.items():
-        if key in {"required", "additionalProperties", "unevaluatedProperties", "title"}:
-            continue
-        if key in {"if", "then", "else", "dependentRequired", "dependentSchemas"}:
-            continue
-        if key == "properties" and isinstance(item, dict):
-            result[key] = {name: _relax_schema(schema) for name, schema in item.items()}
-        else:
-            result[key] = _relax_schema(item)
-    return result
+_SESSION_BOUND_ROLE_TOOLS = frozenset(
+    {
+        ("executor", "task_list"),
+        ("executor", "command_run"),
+        ("executor", "command_cancel"),
+        ("executor", "command_recovery"),
+        ("executor", "task_claim"),
+        ("executor", "task_state"),
+        ("executor", "task_comment"),
+        ("executor", "message"),
+        ("coordinator", "task_get"),
+        ("coordinator", "task_list"),
+        ("coordinator", "task_manage"),
+        ("coordinator", "task_graph"),
+        ("coordinator", "agent_observe"),
+        ("coordinator", "message"),
+    }
+)
+for _key in _SESSION_BOUND_ROLE_TOOLS:
+    ROLE_TOOL_DESCRIPTIONS[_key] += (
+        " Requires an active managed session; call session(action='start') first."
+    )
+
+
+def _planning_hint(schema: dict, definitions: dict) -> str:
+    if "$ref" in schema:
+        return _planning_hint(definitions.get(schema["$ref"].rsplit("/", 1)[-1], {}), definitions)
+    if "enum" in schema:
+        return " | ".join(map(str, schema["enum"]))
+    if "const" in schema:
+        return str(schema["const"])
+    if "anyOf" in schema:
+        return " | ".join(
+            dict.fromkeys(
+                _planning_hint(item, definitions)
+                for item in schema["anyOf"]
+                if item.get("type") != "null"
+            )
+        )
+    return schema.get("type", "JSON value")
 
 
 def planning_schema(model: type[StrictRoleInput]) -> dict:
-    """Return a connector-safe typed superset of the strict runtime contract."""
-
-    schema = _relax_schema(copy.deepcopy(model.model_json_schema()))
-    schema["type"] = "object"
-    schema.setdefault("properties", {})
-    return schema
+    """Publish argument names and hints; runtime owns all value validation."""
+    runtime = model.model_json_schema()
+    definitions = runtime.get("$defs", {})
+    properties = {}
+    for name, field in runtime.get("properties", {}).items():
+        hint = field.get("description") or _planning_hint(field, definitions)
+        entry = {"description": hint} if hint else {}
+        if "default" in field:
+            entry["default"] = field["default"]
+        properties[name] = entry
+    return {"type": "object", "properties": properties}
 
 
 def serialized_schema(schema: dict) -> bytes:
@@ -392,7 +533,7 @@ def install_role_input_contract(mcp, role: str) -> None:
         tool.parameters = planning_schema(model)
 
 
-def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, str]:
+def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, object]:
     issue = exc.errors(include_url=False, include_input=False)[0]
     error_type = str(issue.get("type") or "")
     location = tuple(issue.get("loc") or ())
@@ -410,7 +551,9 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
         reason = "constraint_violation"
 
     if location:
-        path = ".".join(str(part) for part in location)
+        path = ".".join(
+            str(part) if part in PUBLIC_FIELDS or type(part) is int else "*" for part in location
+        )
     else:
         path = "$"
         for candidate in (
@@ -432,7 +575,16 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
             if candidate in message:
                 path = candidate
                 break
-    return public_error("input_validation_failed", reason=reason, path=path).as_dict()
+    repair = bounded_validation_error(exc).details
+    if isinstance(repair, ValidationRepair) and not location and path != "$":
+        issues = list(repair.validation_errors)
+        issues[0] = issues[0].model_copy(
+            update={"path": path, "description": f"Provide {path} for this action."}
+        )
+        repair = ValidationRepair(validation_errors=tuple(issues))
+    return public_error(
+        "input_validation_failed", reason=reason, path=path, details=repair
+    ).as_dict()
 
 
 def validate_boundary(boundary: RuntimeBoundary, model: type[StrictRoleInput]):

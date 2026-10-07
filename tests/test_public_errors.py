@@ -536,3 +536,13 @@ def test_coordination_error_keeps_only_bounded_next_action_messages():
     assert result["details"]["pending_messages"][0]["message_hash"] == "p-0"
     assert "diagnostics" not in repr(result)
     assert "secret" not in repr(result)
+
+
+def test_session_lifecycle_errors_direct_agent_to_start_session():
+    required = public_error("session_required")
+    expired = public_error("session_expired")
+
+    assert required.retry == "start_session"
+    assert expired.retry == "start_session"
+    assert "session.start" in required.message
+    assert "session.start" in expired.message

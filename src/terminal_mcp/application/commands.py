@@ -146,6 +146,6 @@ class CommandApplication(ApplicationCapability):
             access_code=request.code,
         )
         result["public_name"] = identity["public_name"]
-        result["session_ref"] = identity["session_ref"]
+        result["session_ref"] = identity["work_session_id"]
         result.update(message_state)
         return _with_session_lifecycle(result, identity)

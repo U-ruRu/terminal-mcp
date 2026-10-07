@@ -31,14 +31,14 @@ SNAPSHOT = {
 EVENT = {
     "id": 1,
     "event_type": "comment",
-    "payload": {"serialized": "{}"},
+    "payload": {},
     "created_at": "2026-10-06T00:00:00Z",
 }
 REVIEW = {
     "dimension": "C",
     "verdict": "NON_BLOCKING",
-    "evidence": {"serialized": "{}"},
-    "warnings": {"serialized": "[]"},
+    "evidence": {},
+    "warnings": [],
     "reviewed_at": "2026-10-06T00:00:00Z",
 }
 OUTPUT = {"output_state_id": 1, "created_at": "2026-10-06T00:00:00Z"}

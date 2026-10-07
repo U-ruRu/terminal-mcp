@@ -69,6 +69,22 @@ class TaskStore:
             yield db
 
     @staticmethod
+    async def _assert_task_revision(db, namespace, task_id, expected_revision):
+        """Check the task-record precondition inside the caller's write transaction."""
+        if expected_revision is None:
+            return
+        current = await (
+            await db.execute(
+                "SELECT revision FROM work_items WHERE namespace=? AND task_id=?",
+                (namespace, task_id),
+            )
+        ).fetchone()
+        if current is None:
+            raise KeyError(f"unknown task: {namespace}/{task_id}")
+        if int(current[0]) != int(expected_revision):
+            raise TaskRevisionConflict(namespace, task_id, int(expected_revision), int(current[0]))
+
+    @staticmethod
     def _json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -1000,6 +1016,7 @@ class TaskStore:
         event_payload: Any = None,
         dependency_override: Any = None,
         now: str | None = None,
+        expected_revision: int | None = None,
     ):
         return await self.claim_owner(
             namespace,
@@ -1010,6 +1027,7 @@ class TaskStore:
             event_payload=event_payload,
             dependency_override=dependency_override,
             now=now,
+            expected_revision=expected_revision,
         )
 
     async def claim_owner(
@@ -1023,11 +1041,13 @@ class TaskStore:
         event_payload: Any = None,
         dependency_override: Any = None,
         now: str | None = None,
+        expected_revision: int | None = None,
     ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 existing = await (
                     await db.execute(
                         "SELECT id,claimed_at FROM work_claims WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
@@ -1169,10 +1189,22 @@ class TaskStore:
         return cur.rowcount > 0
 
     async def release_claim_mutation(
-        self, namespace: str, task_id: str, agent_id: str, *, reason: str, now: str | None = None
+        self,
+        namespace: str,
+        task_id: str,
+        agent_id: str,
+        *,
+        reason: str,
+        now: str | None = None,
+        expected_revision: int | None = None,
     ) -> bool:
         return await self.release_owner_claim_mutation(
-            namespace, task_id, ClaimOwner.legacy_session(agent_id), reason=reason, now=now
+            namespace,
+            task_id,
+            ClaimOwner.legacy_session(agent_id),
+            reason=reason,
+            now=now,
+            expected_revision=expected_revision,
         )
 
     async def release_owner_claim_mutation(
@@ -1183,11 +1215,13 @@ class TaskStore:
         *,
         reason: str,
         now: str | None = None,
+        expected_revision: int | None = None,
     ) -> bool:
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 cur = await db.execute(
                     "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
                     (now, namespace, task_id, owner.kind, owner.owner_id),
@@ -1388,11 +1422,13 @@ class TaskStore:
         relation_kind: str,
         agent_id: str,
         now: str | None = None,
+        expected_revision: int | None = None,
     ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 source = await (
                     await db.execute(
                         "SELECT lane,candidate_ref FROM work_items WHERE namespace=? AND task_id=?",
@@ -1518,11 +1554,13 @@ class TaskStore:
         relation_kind: str,
         agent_id: str,
         now: str | None = None,
+        expected_revision: int | None = None,
     ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 cur = await db.execute(
                     "DELETE FROM work_relations WHERE namespace=? AND task_id=? AND related_namespace=? AND related_task_id=? AND relation_kind=?",
                     (namespace, task_id, related_namespace, related_task_id, relation_kind),
@@ -1626,6 +1664,7 @@ class TaskStore:
         evidence: Any = None,
         warnings: Any = None,
         now: str | None = None,
+        expected_revision: int | None = None,
     ):
         dimensions = list(dict.fromkeys(dimensions or []))
         if not dimensions:
@@ -1638,6 +1677,7 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 current = await (
                     await db.execute(
                         "SELECT output_state_id,output_refs_json FROM work_items "

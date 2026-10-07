@@ -12,6 +12,7 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
+from terminal_mcp.core.public_errors import ValidationIssue, ValidationRepair, public_error
 from terminal_mcp.storage.tasks import (
     TaskAgentBusy,
     TaskClaimConflict,
@@ -385,9 +386,7 @@ class TaskCoordinator:
             "lane": external["lane"],
             "priority": external["priority"],
             "state": external["state"],
-            "operational_status": self._operational_status(
-                external, claims, blocking_dependencies
-            ),
+            "operational_status": self._operational_status(external, claims, blocking_dependencies),
             "revision": external["revision"],
             "claim": claim,
             "next_action": external.get("next_action") or "",
@@ -499,6 +498,25 @@ class TaskCoordinator:
                 "warnings": [],
             }
         return None
+
+    @staticmethod
+    def _text_input_failure(field, *, max_length=4000, missing=False):
+        return public_error(
+            "input_validation_failed",
+            reason="missing_required" if missing else "constraint_violation",
+            path=field,
+            details=ValidationRepair(
+                validation_errors=(
+                    ValidationIssue(
+                        error_class="missing" if missing else "invalid_value",
+                        path=field,
+                        description=(
+                            f"Provide non-whitespace text of at most {max_length} characters."
+                        ),
+                    ),
+                )
+            ),
+        ).as_dict()
 
     @staticmethod
     def _clean_reason(value, field, *, max_length=4000):
@@ -653,6 +671,7 @@ class TaskCoordinator:
                     else None
                 ),
                 "error": None if task else "task not found",
+                **({"code": "task_not_found"} if task is None else {}),
             }
 
         raw_cursor = max(0, int(cursor or 0))
@@ -716,9 +735,7 @@ class TaskCoordinator:
                 state_counts[item["state"]] += 1
                 operational_status_counts[item["operational_status"]] += 1
                 blocking = item["blocking_dependencies"]
-                missing_dependency_count += sum(
-                    dep["state"] == "missing" for dep in blocking
-                )
+                missing_dependency_count += sum(dep["state"] == "missing" for dep in blocking)
                 eligible, _, _ = await self._claimability(
                     item, claims=item["claims"], dependencies=blocking
                 )
@@ -822,7 +839,33 @@ class TaskCoordinator:
                 "error": "task.isolation_hint: set only when creating the task",
                 "warnings": [],
             }
-        return await handler(agent_id, namespace, task_id, **kwargs)
+        try:
+            # Reject stale no-op calls before action-specific early returns.
+            # Storage repeats this check inside each write transaction.
+            expected = kwargs.get("expected_revision")
+            if expected is not None and action in {
+                "claim",
+                "release",
+                "review",
+                "relate",
+                "unrelate",
+            }:
+                current = await self.store.get_task(namespace, task_id)
+                if current is not None and int(current["revision"]) != int(expected):
+                    raise TaskRevisionConflict(
+                        namespace, task_id, int(expected), current["revision"]
+                    )
+            return await handler(agent_id, namespace, task_id, **kwargs)
+        except TaskRevisionConflict as exc:
+            return await self._result(
+                namespace,
+                task_id,
+                [],
+                ok=False,
+                error=str(exc),
+                code="revision_conflict",
+                details={"current_revision": exc.actual},
+            )
 
     async def _action_create(self, agent_id, namespace, task_id, **kwargs):
         dependency_error = self._validate_dependencies(kwargs.get("dependencies"))
@@ -859,7 +902,11 @@ class TaskCoordinator:
             kwargs.get("isolation_hint"), "isolation_hint", max_length=160
         )
         if isolation_error:
-            return {"ok": False, "error": isolation_error, "warnings": []}
+            return self._text_input_failure(
+                "isolation_hint",
+                max_length=160,
+                missing=kwargs.get("isolation_hint") is None,
+            )
 
         warnings = []
         dependency_override = None
@@ -933,7 +980,11 @@ class TaskCoordinator:
             kwargs.get("claim_intent"), "claim_intent", max_length=160
         )
         if error:
-            return {"ok": False, "error": error, "warnings": []}
+            return self._text_input_failure(
+                "claim_intent",
+                max_length=160,
+                missing=kwargs.get("claim_intent") is None,
+            )
         warnings = []
         live_claims = await self._cleanup_stale_claims(namespace, task_id)
         others = [item for item in live_claims if item["agent_id"] != agent_id]
@@ -993,6 +1044,7 @@ class TaskCoordinator:
                 event_payload={"warnings": [item["code"] for item in warnings]},
                 dependency_override=dependency_override,
                 now=now,
+                expected_revision=kwargs.get("expected_revision"),
             )
         except TaskAgentBusy as exc:
             warning = _warning(
@@ -1050,15 +1102,29 @@ class TaskCoordinator:
             )
         reason, error = self._clean_reason(kwargs.get("release_reason"), "release_reason")
         if error:
-            return {"ok": False, "error": error, "warnings": []}
+            return self._text_input_failure(
+                "release_reason",
+                max_length=4000,
+                missing=kwargs.get("release_reason") is None,
+            )
         owner = kwargs.get("_claim_owner")
         if owner is None:
             await self.store.release_claim_mutation(
-                namespace, task_id, agent_id, reason=reason, now=utc_text()
+                namespace,
+                task_id,
+                agent_id,
+                reason=reason,
+                now=utc_text(),
+                expected_revision=kwargs.get("expected_revision"),
             )
         else:
             await self.store.release_owner_claim_mutation(
-                namespace, task_id, owner, reason=reason, now=utc_text()
+                namespace,
+                task_id,
+                owner,
+                reason=reason,
+                now=utc_text(),
+                expected_revision=kwargs.get("expected_revision"),
             )
         return await self._result(namespace, task_id, [])
 
@@ -1084,7 +1150,11 @@ class TaskCoordinator:
             return self._missing()
         text, error = self._clean_reason(kwargs.get("comment_text"), "comment_text")
         if error:
-            return {"ok": False, "error": error, "warnings": []}
+            return self._text_input_failure(
+                "comment_text",
+                max_length=4000,
+                missing=kwargs.get("comment_text") is None,
+            )
         await self.store.add_event(
             namespace,
             task_id,
@@ -1124,6 +1194,7 @@ class TaskCoordinator:
                 related_task_id=related_task_id,
                 relation_kind=kind,
                 agent_id=agent_id,
+                expected_revision=kwargs.get("expected_revision"),
             )
         except TaskRelationConflict as exc:
             return {
@@ -1158,6 +1229,7 @@ class TaskCoordinator:
             related_task_id=related_task_id,
             relation_kind=kind,
             agent_id=agent_id,
+            expected_revision=kwargs.get("expected_revision"),
         )
         return await self._result(namespace, task_id, [])
 
@@ -1465,7 +1537,13 @@ class TaskCoordinator:
                 )
             )
             return await self._result(
-                namespace, task_id, warnings, ok=False, error="revision conflict"
+                namespace,
+                task_id,
+                warnings,
+                ok=False,
+                error="revision conflict",
+                code="revision_conflict",
+                details={"current_revision": exc.actual},
             )
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.update: {exc}", "warnings": warnings}
@@ -1531,6 +1609,7 @@ class TaskCoordinator:
                 evidence=kwargs.get("evidence") or {},
                 warnings=warnings,
                 now=now,
+                expected_revision=kwargs.get("expected_revision"),
             )
         except ValueError as exc:
             if "changed before review" in str(exc):
@@ -1564,7 +1643,7 @@ class TaskCoordinator:
 
     @staticmethod
     def _missing():
-        return {"ok": False, "error": "task not found", "warnings": []}
+        return {"ok": False, "code": "task_not_found", "error": "task not found", "warnings": []}
 
     @staticmethod
     def _validate_dependencies(dependencies):
@@ -1700,13 +1779,20 @@ class TaskCoordinator:
                 session_epoch=session_epoch,
             )
 
-    async def _result(self, namespace, task_id, warnings, *, ok=True, error=None):
+    async def _result(
+        self, namespace, task_id, warnings, *, ok=True, error=None, code=None, details=None
+    ):
         task = await self.store.get_task(namespace, task_id)
         for warning in warnings:
             self._inc("terminal_mcp_task_warnings_total", (("code", warning["code"]),))
-        return {
+        result = {
             "ok": ok,
             "task": await self._decorate(task, details=False) if task else None,
             "warnings": warnings,
             "error": error,
         }
+        if code is not None:
+            result["code"] = code
+        if details is not None:
+            result["details"] = details
+        return result

@@ -8,7 +8,7 @@ import pytest
 import terminal_mcp.core.persistent_backend as persistent_backend_module
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.commands import CommandApplication
-from terminal_mcp.application.requests import CmdReadRequest, CmdRunRequest
+from terminal_mcp.application.requests import CmdReadRequest, CmdRecoveryRequest, CmdRunRequest
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.mcp.output_contracts import cmd_result
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -362,3 +362,44 @@ async def test_same_agent_second_run_enqueues_during_first_inline_poll(monkeypat
     first_result, second_result = await asyncio.gather(first, second)
     assert first_result["status"] == "running"
     assert second_result["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_command_recovery_uses_work_session_id_as_public_session_ref():
+    class RecoveryBackend:
+        async def recovery(self, command, **kwargs):
+            assert command == "printf recovery"
+            assert kwargs["work_session_id"] == "ws-1"
+            return {
+                "ok": True,
+                "cmd_hash": "cafebabe",
+                "status": "completed",
+                "exit_code": 0,
+                "lines": ["recovered"],
+                "overall_lines_count": 1,
+                "displayed_lines_count": 1,
+                "output_truncated": False,
+                "output_retained": True,
+            }
+
+    class RecoveryService:
+        persistent = RecoveryBackend()
+
+    class RecoveryGate(_Gate):
+        async def identity(self, actor, code, operation=None):
+            return {
+                "logical_agent_id": "logical-1",
+                "work_session_id": "ws-1",
+                "session_epoch": 1,
+                "public_name": "Alpha-1",
+            }, None
+
+    app = CommandApplication(RecoveryService(), RecoveryGate())
+    result = await app.cmd(
+        ActorContext(endpoint_role="executor"),
+        CmdRecoveryRequest(action="recovery", command="printf recovery"),
+    )
+
+    assert result["ok"] is True
+    assert result["session_ref"] == "ws-1"
+    assert result["public_name"] == "Alpha-1"

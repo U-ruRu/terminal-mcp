@@ -67,7 +67,8 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
 
         missing_intent = await service.task(owner, action="claim", namespace="wf", task_id="COOP")
         assert missing_intent["ok"] is False
-        assert "claim_intent" in missing_intent["error"]
+        assert missing_intent["code"] == "input_validation_failed"
+        assert missing_intent["path"] == "claim_intent"
 
         first = await service.task(
             owner,
@@ -190,7 +191,8 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
             owner, action="release", namespace="wf", task_id="COOP"
         )
         assert missing_release_reason["ok"] is False
-        assert "release_reason" in missing_release_reason["error"]
+        assert missing_release_reason["code"] == "input_validation_failed"
+        assert missing_release_reason["path"] == "release_reason"
 
         released = await service.task(
             owner,

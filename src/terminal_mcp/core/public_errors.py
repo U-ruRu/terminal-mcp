@@ -30,7 +30,7 @@ MAX_REVISION = (1 << 63) - 1
 ErrorKind = Literal[
     "validation", "access", "conflict", "transient", "missing", "policy", "internal"
 ]
-RecoveryAction = Literal["repair", "reauthenticate", "reconcile", "retry", "stop"]
+RecoveryAction = Literal["repair", "reauthenticate", "reconcile", "retry", "start_session", "stop"]
 ErrorOutcome = Literal["not_committed", "committed", "unknown"]
 
 
@@ -60,10 +60,17 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "reauthenticate",
             """
             unauthorized invalid_access_code invalid_code access_denied access_code_invalid
-            access_code_expired session_expired session_inactive session_not_active
-            work_session_expired stale_session stale_session_epoch session_epoch_mismatch
-            sender_not_authorized message_forbidden capability_not_allowed
+            access_code_expired sender_not_authorized message_forbidden capability_not_allowed
             legacy_admission_disabled
+        """,
+        ),
+        (
+            "access",
+            "start_session",
+            """
+            session_required session_expired session_inactive session_not_active
+            work_session_expired
+            stale_session stale_session_epoch session_epoch_mismatch session_not_found
         """,
         ),
         (
@@ -116,7 +123,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             invalid_message invalid_task_context review_task_required
-            identity_metadata_invalid
+            identity_metadata_invalid identity_metadata_missing
             control_mutation_invalid control_operation_invalid control_snapshot_invalid
             invalid_transfer_transition managed_snapshot_required
             managed_snapshot_revision_invalid mesh_id_required
@@ -129,7 +136,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "reauthenticate",
             """
             access_identity_not_found identity_not_bound permit_expired persistent_auth_required
-            persistent_scope_required selector_not_found session_not_found
+            persistent_scope_required selector_not_found
             control_rejoin_credential_required invalid_pairing
         """,
         ),
@@ -186,7 +193,13 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "validation_error": "Correct the indicated request fields.",
         "input_validation_failed": "Correct the indicated request field.",
+        "identity_metadata_missing": (
+            "The connector must supply openai/subject and openai/session in MCP request metadata."
+        ),
+        "identity_metadata_invalid": "The connector supplied invalid provider identity metadata.",
         "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
+        "session_required": "Start a managed session with session.start before using this tool.",
+        "session_expired": "The managed session expired. Start a new session with session.start.",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
         "fleet_control_invalid_header": (
@@ -337,7 +350,7 @@ PUBLIC_FIELDS = frozenset(
     resource_context cooperative candidate_ref input_refs output_refs checkpoint result
     blocker_reason force force_reason release_reason claim_intent comment_text relation_kind
     related_namespace related_task_id expected_revision dimensions verdict
-    evidence note archive_note
+    evidence note archive_note isolation_hint history_kind extended
 """.split()
 )
 
@@ -551,6 +564,10 @@ def error_from_exception(exc: BaseException) -> PublicError:
     """Map known exception classes without inspecting their text; propagate cancellation."""
     if not isinstance(exc, Exception):
         raise exc
+    from terminal_mcp.core.provider_identity import ProviderIdentityError
+
+    if isinstance(exc, ProviderIdentityError):
+        return public_error(exc.code)
     if isinstance(exc, PublicFailure):
         return exc.public
     if isinstance(exc, ValidationError):

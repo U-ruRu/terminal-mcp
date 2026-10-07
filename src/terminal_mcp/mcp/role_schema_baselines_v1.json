@@ -1,152 +1,152 @@
 {
   "contract_version": 1,
   "roles": {
-    "coordinator": [
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 94,
-        "planning_input_schema_digest": "194630aba2013e8e3245ae4729abc091428ee1f0874e3b54436a0a2899987fd0",
-        "runtime_input_schema_digest": "46c2ae5719f2718adc82cb09077c0f076ff33513f77930e34a09bc8a39c4be0b",
-        "tool_name": "session"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 496,
-        "planning_input_schema_digest": "31d179fec1589210c8e8b89eb3b9849cdb5f099ad3dc7b8f4ba23cee24d5a840",
-        "runtime_input_schema_digest": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
-        "tool_name": "task_get"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 688,
-        "planning_input_schema_digest": "99108bff534761cd8f496ce57fb90be456e3a573a68ffbec4ea811b6b73c432a",
-        "runtime_input_schema_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
-        "tool_name": "task_list"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 3859,
-        "planning_input_schema_digest": "c2e87492947cf2f27fffea9e35992c2c7c26029063fa73be218e1e4a8673f520",
-        "runtime_input_schema_digest": "1b43137271f46377ca6f3b0dd183f5f566b9647be51c386bc2b67ff5929603eb",
-        "tool_name": "task_manage"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 524,
-        "planning_input_schema_digest": "fda1fcbb085b7685d611703f5be055bf72ef8b88fe3b4c2530401fc8c8c94262",
-        "runtime_input_schema_digest": "809e8474ffcd4d62a05127feb7e46a4150668886bd382cd9a68ac6171c511fb6",
-        "tool_name": "task_graph"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 33,
-        "planning_input_schema_digest": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49",
-        "runtime_input_schema_digest": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
-        "tool_name": "agent_observe"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 1034,
-        "planning_input_schema_digest": "c0166e4b7baad378873e28d4d9d4983e99fc58c76e11717750f3f62516aa3bf9",
-        "runtime_input_schema_digest": "b11746e9f2d97658baf8547c388120895833b82e925c25ccc2520e88424d944a",
-        "tool_name": "message"
-      },
-      {
-        "contract_version": 1,
-        "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 78,
-        "planning_input_schema_digest": "562735dea8dc470fee75f031eba980d4de4b4031923577a89963813e5a6f8791",
-        "runtime_input_schema_digest": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
-        "tool_name": "health"
-      }
-    ],
     "executor": [
       {
-        "contract_version": 1,
+        "tool_name": "session",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 94,
-        "planning_input_schema_digest": "194630aba2013e8e3245ae4729abc091428ee1f0874e3b54436a0a2899987fd0",
+        "contract_version": 1,
         "runtime_input_schema_digest": "46c2ae5719f2718adc82cb09077c0f076ff33513f77930e34a09bc8a39c4be0b",
-        "tool_name": "session"
+        "planning_input_schema_digest": "ce9dd2922ffb3c1c7cbf24bcd69ba673d1d51874b5f93de3914223e7fa665785",
+        "planning_input_schema_bytes": 83
       },
       {
-        "contract_version": 1,
+        "tool_name": "task_list",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 688,
-        "planning_input_schema_digest": "99108bff534761cd8f496ce57fb90be456e3a573a68ffbec4ea811b6b73c432a",
+        "contract_version": 1,
         "runtime_input_schema_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
-        "tool_name": "task_list"
+        "planning_input_schema_digest": "25af1e574dfa15f7479f9ab5124e3296dcbc9d751845f60e6ff03a0fe96e8865",
+        "planning_input_schema_bytes": 413
       },
       {
-        "contract_version": 1,
+        "tool_name": "command_run",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 271,
-        "planning_input_schema_digest": "dcfecaf955f05cd0d6561ea8797498b758e5f501719072fca936579b602d5a74",
+        "contract_version": 1,
         "runtime_input_schema_digest": "390368c4b1e019241027cc9e6f81be36a7d8bc0f1a681d91a9a148ac2a917f34",
-        "tool_name": "command_run"
+        "planning_input_schema_digest": "56dbb1c92fbfecd1abf78272517cb79f6b81373852d5bf28e89395854a4bb1bf",
+        "planning_input_schema_bytes": 174
       },
       {
-        "contract_version": 1,
+        "tool_name": "command_read",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 244,
-        "planning_input_schema_digest": "1246aa3e7a1484c977c2d897530f52e52944199db212d7f7e9ea6da69b15fefc",
+        "contract_version": 1,
         "runtime_input_schema_digest": "d7dd609b24b5069f7601b205e8255e4c89d03117776b79574e31c80d2c50b184",
-        "tool_name": "command_read"
+        "planning_input_schema_digest": "c578216ea87822e1a165af23584dea2e0dda85b2077480c04a92d1b0c73da435",
+        "planning_input_schema_bytes": 165
       },
       {
-        "contract_version": 1,
+        "tool_name": "command_cancel",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 91,
-        "planning_input_schema_digest": "7d73a7d6d5a1f85837e9b848e067ba8a562343f1262976a9e1f2ff62994e2108",
+        "contract_version": 1,
         "runtime_input_schema_digest": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
-        "tool_name": "command_cancel"
+        "planning_input_schema_digest": "fb77c2ee6b90ca0ccf63ad730a31ac5ced5aa1c484b39b57b4f43b0544d406c9",
+        "planning_input_schema_bytes": 68
       },
       {
-        "contract_version": 1,
+        "tool_name": "command_recovery",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 92,
-        "planning_input_schema_digest": "ad20166eb3ac0a94aaf9406f1a16d8291459c5c56cd03c03b4140351ca9a07bf",
+        "contract_version": 1,
         "runtime_input_schema_digest": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
-        "tool_name": "command_recovery"
+        "planning_input_schema_digest": "4ad34627eb131b10a729339f7e3e42c33e8d710b69b86606df3f23a8f5c1ecfe",
+        "planning_input_schema_bytes": 67
       },
       {
-        "contract_version": 1,
+        "tool_name": "task_claim",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 543,
-        "planning_input_schema_digest": "32af0941483cef65ed324ef075a024332ca9415aa901478b7f1dee205e6c9189",
-        "runtime_input_schema_digest": "d2e9526b4086b33f23e8dd11df14eeddd1995818df21cc2877a80a885766d6fb",
-        "tool_name": "task_claim"
+        "contract_version": 1,
+        "runtime_input_schema_digest": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
+        "planning_input_schema_digest": "69e929311b2510a47b13c10c5b645fc2f91388c4cc13fe412ce1be3cc2a8e36d",
+        "planning_input_schema_bytes": 320
       },
       {
-        "contract_version": 1,
+        "tool_name": "task_state",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 632,
-        "planning_input_schema_digest": "522dc2bbc763cf2cc2636dd192df758a6d7e2485a528e3e752dab217cd9716b6",
+        "contract_version": 1,
         "runtime_input_schema_digest": "7ce9cc81891989724481105b3fa1b6982a615acd3652e8a65f869b644a38fe79",
-        "tool_name": "task_state"
+        "planning_input_schema_digest": "4677e2ce889f31924aac944ed5dfd246fcc45cd4f852ebc522cdb19b68ff6e21",
+        "planning_input_schema_bytes": 349
       },
       {
-        "contract_version": 1,
+        "tool_name": "task_comment",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 214,
-        "planning_input_schema_digest": "a56616bbc50001f7397a08e64a5f82949b15defd37d9da1dfb88de0e7fad0438",
+        "contract_version": 1,
         "runtime_input_schema_digest": "341bf7077a77575d9af316eae255551ec1af21f2ea0b454e1e0618fd1a5526f6",
-        "tool_name": "task_comment"
+        "planning_input_schema_digest": "33bc9ed71563e19b2d488168dac6bd9cf34f96f4b7e4e44d82aa5c150bb9dab0",
+        "planning_input_schema_bytes": 144
       },
       {
-        "contract_version": 1,
+        "tool_name": "message",
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 1034,
-        "planning_input_schema_digest": "c0166e4b7baad378873e28d4d9d4983e99fc58c76e11717750f3f62516aa3bf9",
-        "runtime_input_schema_digest": "b11746e9f2d97658baf8547c388120895833b82e925c25ccc2520e88424d944a",
-        "tool_name": "message"
+        "contract_version": 1,
+        "runtime_input_schema_digest": "50d5af58efc64a9cc6f2b7672198389ff7857551a447a7cfae26d5ba0e65a6ea",
+        "planning_input_schema_digest": "537e6f77b24e7eab45597067afe50ff0ac67405bcf750b63e7826e8e9aae7840",
+        "planning_input_schema_bytes": 688
+      }
+    ],
+    "coordinator": [
+      {
+        "tool_name": "session",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "46c2ae5719f2718adc82cb09077c0f076ff33513f77930e34a09bc8a39c4be0b",
+        "planning_input_schema_digest": "ce9dd2922ffb3c1c7cbf24bcd69ba673d1d51874b5f93de3914223e7fa665785",
+        "planning_input_schema_bytes": 83
+      },
+      {
+        "tool_name": "task_get",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
+        "planning_input_schema_digest": "7d36674ac71f5ce6f6c312c3893a4bd2e3e37c721cb9d8bc61c0d5f7d4a4dffe",
+        "planning_input_schema_bytes": 372
+      },
+      {
+        "tool_name": "task_list",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
+        "planning_input_schema_digest": "25af1e574dfa15f7479f9ab5124e3296dcbc9d751845f60e6ff03a0fe96e8865",
+        "planning_input_schema_bytes": 413
+      },
+      {
+        "tool_name": "task_manage",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "6232410f5645f99e3e052331d84c1bfb42a3718eccfb93ad1dbf1c56e37f58a0",
+        "planning_input_schema_digest": "30de8d508c7194b562eb57a5dab0f34e036b5c10e4fde67d7875ff03d9b51e2e",
+        "planning_input_schema_bytes": 1910
+      },
+      {
+        "tool_name": "task_graph",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "809e8474ffcd4d62a05127feb7e46a4150668886bd382cd9a68ac6171c511fb6",
+        "planning_input_schema_digest": "033df3b6274083f7ccf1d159ec1b09ac1ad8181726a0958b098832a69af52987",
+        "planning_input_schema_bytes": 321
+      },
+      {
+        "tool_name": "agent_observe",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
+        "planning_input_schema_digest": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49",
+        "planning_input_schema_bytes": 33
+      },
+      {
+        "tool_name": "message",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "50d5af58efc64a9cc6f2b7672198389ff7857551a447a7cfae26d5ba0e65a6ea",
+        "planning_input_schema_digest": "537e6f77b24e7eab45597067afe50ff0ac67405bcf750b63e7826e8e9aae7840",
+        "planning_input_schema_bytes": 688
+      },
+      {
+        "tool_name": "health",
+        "endpoint_role": "coordinator",
+        "contract_version": 1,
+        "runtime_input_schema_digest": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
+        "planning_input_schema_digest": "eddeeeba865da2aeaed47e388696ed28d9bddeef6bb53b1adfde5b9510d1604f",
+        "planning_input_schema_bytes": 85
       }
     ]
   }

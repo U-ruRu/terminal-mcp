@@ -12,7 +12,7 @@ from enum import StrEnum
 from itertools import islice
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, model_validator
 
 
 class _Strict(BaseModel):
@@ -76,10 +76,8 @@ class TaskPriority(StrEnum):
     P3 = "P3"
 
 
-class JsonPayload(_Strict):
-    """Explicit extension boundary for backend/domain JSON payloads."""
-
-    serialized: str
+class JsonPayload(RootModel[JsonValue]):
+    """Native JSON extension value, bounded by its enclosing public projection."""
 
 
 class TaskResourceContext(_Strict):
@@ -176,7 +174,7 @@ class TaskSnapshot(_Strict):
     next_action: str
     description_preview: Annotated[str, Field(max_length=1500)]
     description_truncated: bool
-    latest_checkpoint: TaskCheckpointSnapshot | None
+    latest_checkpoint: TaskCheckpointSnapshot | None = None
     blocking_dependencies: list[TaskDependency] = Field(default_factory=list)
 
 

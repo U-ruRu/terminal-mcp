@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter
+from mcp.types import CallToolResult, TextContent
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, model_serializer
 
+from terminal_mcp.adapters.mcp_identity import current_provider_evidence
+from terminal_mcp.core.provider_identity import ProviderIdentityRegistry
+from terminal_mcp.core.public_errors import (
+    ErrorOutcome,
+    ErrorRepair,
+    RecoveryAction,
+    error_from_exception,
+    normalize_public_error,
+)
 from terminal_mcp.core.task_projections import (
     Cursor,
     TaskDetail,
@@ -21,9 +34,11 @@ from terminal_mcp.core.task_projections import (
 from terminal_mcp.mcp.output_contracts import (
     AccessError,
     CmdOutput,
-    HealthResult,
     MessageOutput,
-    SessionOutput,
+    SessionEndResult,
+    SessionInterruptResult,
+    SessionLifecycleInfo,
+    SessionStartResult,
     TaskOutput,
     projected_result,
 )
@@ -47,6 +62,48 @@ class _RoleOutput:
         return _schema(cls.__success_type__)
 
 
+class ProviderFingerprint(_Strict):
+    provider: str
+    binding_key: str
+    subject_fingerprint: str
+    session_fingerprint: str
+
+
+def session_provider_fingerprint() -> dict | None:
+    evidence = current_provider_evidence()
+    if evidence is None:
+        return None
+    try:
+        identity = ProviderIdentityRegistry().resolve(evidence.provider, evidence.metadata)
+        return {
+            "provider": identity.provider,
+            "binding_key": identity.binding_key,
+            "subject_fingerprint": hashlib.sha256(
+                ("subject:" + identity.subject).encode()
+            ).hexdigest(),
+            "session_fingerprint": hashlib.sha256(
+                ("session:" + identity.conversation).encode()
+            ).hexdigest(),
+        }
+    except Exception:
+        logging.getLogger(__name__).exception("session_provider_diagnostic_unavailable")
+        return None
+
+
+class RoleSessionStartResult(SessionStartResult):
+    provider_identity: ProviderFingerprint | None = None
+
+
+RoleSessionSuccess = Annotated[
+    RoleSessionStartResult | SessionEndResult | SessionInterruptResult,
+    Field(discriminator="action"),
+]
+
+
+class RoleSessionOutput(_RoleOutput, RootModel[RoleSessionSuccess | AccessError]):
+    __success_type__ = RoleSessionSuccess
+
+
 class TaskListSuccess(_Strict):
     ok: Literal[True]
     tasks: list[TaskListItem]
@@ -65,6 +122,7 @@ class TaskClaimSuccess(_Strict):
     action: Literal["claim"]
     task: TaskWorkingSet
     warnings: list[WorkflowWarning] = Field(default_factory=list)
+    session_lifecycle: SessionLifecycleInfo | None = None
 
 
 class TaskReleaseSuccess(_Strict):
@@ -72,6 +130,7 @@ class TaskReleaseSuccess(_Strict):
     action: Literal["release"]
     task: TaskReceipt
     warnings: list[WorkflowWarning] = Field(default_factory=list)
+    session_lifecycle: SessionLifecycleInfo | None = None
 
 
 TaskClaimSuccessWire = Annotated[
@@ -118,6 +177,12 @@ class TaskGraphNode(_Strict):
     namespace: str
     task_id: str
     state: str | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_node_shape(self, handler):
+        data = handler(self)
+        data["state"] = self.state
+        return data
 
 
 class TaskGraphEdge(_Strict):
@@ -197,9 +262,24 @@ class CompactHealthComponent(_Strict):
     reason: str | None = None
 
 
+class HealthIdentityDiagnostic(_Strict):
+    provider: str | None = None
+    metadata_fields: list[str] = Field(default_factory=list)
+    binding_key: str | None = None
+    subject_fingerprint: str | None = None
+    session_fingerprint: str | None = None
+    status: Literal["resolved", "unbound", "missing", "unavailable", "invalid"]
+    code: str | None = None
+    logical_agent_id: str | None = None
+    public_name: str | None = None
+    authority_node_id: str | None = None
+
+
 class CompactHealthSuccess(_Strict):
     ok: bool
+    healthy: bool | None = None
     application: str | None = None
+    agent_name: str | None = None
     version: str | None = None
     storage: str | None = None
     status: Literal["healthy", "degraded", "failed"] | None = None
@@ -208,7 +288,12 @@ class CompactHealthSuccess(_Strict):
     workflow: CompactHealthWorkflow = Field(default_factory=CompactHealthWorkflow)
 
 
-RoleHealthSuccess = CompactHealthSuccess | HealthResult
+class ExtendedHealthSuccess(CompactHealthSuccess):
+    auth_mode: str | None = None
+    identity: HealthIdentityDiagnostic
+
+
+RoleHealthSuccess = ExtendedHealthSuccess | CompactHealthSuccess
 
 
 class RoleHealthOutput(_RoleOutput, RootModel[RoleHealthSuccess | AccessError]):
@@ -216,7 +301,7 @@ class RoleHealthOutput(_RoleOutput, RootModel[RoleHealthSuccess | AccessError]):
 
 
 ROLE_OUTPUT_MODELS = {
-    ("executor", "session"): SessionOutput,
+    ("executor", "session"): RoleSessionOutput,
     ("executor", "task_list"): TaskListOutput,
     ("executor", "command_run"): CmdOutput,
     ("executor", "command_read"): CmdOutput,
@@ -226,7 +311,7 @@ ROLE_OUTPUT_MODELS = {
     ("executor", "task_state"): TaskOutput,
     ("executor", "task_comment"): TaskOutput,
     ("executor", "message"): MessageOutput,
-    ("coordinator", "session"): SessionOutput,
+    ("coordinator", "session"): RoleSessionOutput,
     ("coordinator", "task_get"): TaskGetOutput,
     ("coordinator", "task_list"): TaskListOutput,
     ("coordinator", "task_manage"): TaskOutput,
@@ -235,6 +320,42 @@ ROLE_OUTPUT_MODELS = {
     ("coordinator", "message"): MessageOutput,
     ("coordinator", "health"): RoleHealthOutput,
 }
+
+
+logger = logging.getLogger(__name__)
+
+
+class RoleErrorBody(_Strict):
+    code: str
+    message: str
+    details: ErrorRepair | None = None
+    outcome: ErrorOutcome
+    retry: RecoveryAction
+    reason: str | None = None
+    path: str | None = None
+
+
+class RoleFailure(_Strict):
+    ok: Literal[False]
+    error: RoleErrorBody
+
+
+def role_error_result(raw: dict) -> CallToolResult:
+    """Return a handled application failure as transport-successful structured data."""
+    canonical = normalize_public_error(raw).as_dict()
+    body = {key: value for key, value in canonical.items() if key not in {"ok", "error"}}
+    data = RoleFailure(ok=False, error=RoleErrorBody.model_validate(body)).model_dump(
+        mode="json", exclude_none=True
+    )
+    return CallToolResult(
+        isError=False,
+        structuredContent=data,
+        content=[
+            TextContent(
+                type="text", text=json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            )
+        ],
+    )
 
 
 def install_role_output_contract(mcp, role: str) -> None:
@@ -246,10 +367,25 @@ def install_role_output_contract(mcp, role: str) -> None:
         raw_fn = tool.fn
 
         async def contracted(*, _raw_fn=raw_fn, _model=output_model, _name=tool_name, **kwargs):
-            raw = await _raw_fn(**kwargs)
-            return projected_result(raw, _model, tool=_name, variant=role)
+            try:
+                raw = await _raw_fn(**kwargs)
+                if raw.get("ok") is False:
+                    return role_error_result(raw)
+                if _name == "session" and raw.get("action") == "start":
+                    diagnostic = session_provider_fingerprint()
+                    if diagnostic is not None:
+                        raw = {**raw, "provider_identity": diagnostic}
+                result = projected_result(raw, _model, tool=_name, variant=role)
+                if result.structuredContent.get("ok") is False:
+                    return role_error_result(result.structuredContent)
+                return result
+            except Exception as exc:
+                logger.exception("role_tool_failure role=%s tool=%s", role, _name)
+                return role_error_result(error_from_exception(exc).as_dict())
 
         tool.fn = contracted
-        tool.fn_metadata.output_model = output_model
-        tool.fn_metadata.output_schema = output_model.success_schema()
+        wire_model = RootModel[output_model.__success_type__ | RoleFailure]
+        tool.fn_metadata.output_model = wire_model
+        tool.fn_metadata.output_schema = wire_model.model_json_schema()
+        tool.fn_metadata.output_schema.setdefault("type", "object")
         tool.fn_metadata.wrap_output = False

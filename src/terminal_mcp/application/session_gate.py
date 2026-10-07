@@ -25,6 +25,7 @@ class SessionResolution:
     identity: dict | None = None
     failure: dict | None = None
     managed: bool = False
+    identity_unbound: bool = False
 
 
 class SessionGate:
@@ -42,7 +43,8 @@ class SessionGate:
 
     @staticmethod
     def _managed_failure(exc: ManagedSessionError) -> dict:
-        result = {"ok": False, "code": exc.code, "error": exc.code}
+        code = "session_required" if exc.code == "identity_not_bound" else exc.code
+        result = {"ok": False, "code": code, "error": code}
         if exc.return_to_chat:
             result["return_to_chat"] = True
         return result
@@ -81,7 +83,7 @@ class SessionGate:
     ) -> bool:
         failure_payload = managed.failure or {}
         code = failure_payload.get("code")
-        if code == "identity_not_bound":
+        if managed.identity_unbound or code == "identity_not_bound":
             return True
         if code not in {"access_denied", "persistent_auth_required"}:
             return False
@@ -98,12 +100,24 @@ class SessionGate:
         self, actor: ActorContext, operation: ManagedOperation
     ) -> SessionResolution | None:
         if not self._has_provider_identity(actor):
+            if actor.endpoint_role in {"executor", "coordinator"}:
+                code = (
+                    "identity_metadata_missing"
+                    if not actor.provider or not actor.provider_metadata
+                    else "policy_incompatible"
+                )
+                return SessionResolution(actor, failure=failure(code), managed=True)
             return None
         try:
             resolved = await self._resolve_provider_actor(actor)
             admitted = await self.managed_sessions.authorize_operation(resolved, operation)
         except ManagedSessionError as exc:
-            return SessionResolution(actor, failure=self._managed_failure(exc), managed=True)
+            return SessionResolution(
+                actor,
+                failure=self._managed_failure(exc),
+                managed=True,
+                identity_unbound=exc.code == "identity_not_bound",
+            )
         session = admitted.snapshot.session
         return SessionResolution(
             admitted.actor,
@@ -134,7 +148,9 @@ class SessionGate:
                 managed is not None
                 and managed.failure is not None
                 and code
-                and (managed.failure.get("code") == "identity_not_bound")
+                and (
+                    managed.identity_unbound or managed.failure.get("code") == "identity_not_bound"
+                )
             ):
                 try:
                     bound = await self._bind_provider_from_access_code(actor, code)
@@ -181,7 +197,12 @@ class SessionGate:
             resolved = await self._resolve_provider_actor(actor)
             grant = await self.managed_sessions._authorize(resolved, operation)
         except ManagedSessionError as exc:
-            return SessionResolution(actor, failure=self._managed_failure(exc), managed=True)
+            return SessionResolution(
+                actor,
+                failure=self._managed_failure(exc),
+                managed=True,
+                identity_unbound=exc.code == "identity_not_bound",
+            )
         identity = {
             "ok": True,
             "logical_agent_id": grant.logical_agent_id,
@@ -280,7 +301,9 @@ class SessionGate:
                 managed is not None
                 and managed.failure is not None
                 and code
-                and (managed.failure.get("code") == "identity_not_bound")
+                and (
+                    managed.identity_unbound or managed.failure.get("code") == "identity_not_bound"
+                )
             ):
                 try:
                     bound = await self._bind_provider_from_access_code(actor, code)
@@ -386,6 +409,14 @@ class SessionGate:
         backend = self.backend
         if backend is None:
             return failure("policy_incompatible")
+        if actor.endpoint_role in {"executor", "coordinator"} and not self._has_provider_identity(
+            actor
+        ):
+            return failure(
+                "identity_metadata_missing"
+                if not actor.provider or not actor.provider_metadata
+                else "policy_incompatible"
+            )
         if self._has_provider_identity(actor):
             bootstrapped = False
             try:

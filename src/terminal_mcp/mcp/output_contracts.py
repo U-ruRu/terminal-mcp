@@ -681,15 +681,8 @@ def _known(model: type[BaseModel], raw: dict[str, Any], **overrides: Any) -> Bas
     return model.model_validate(payload)
 
 
-def _json_payload(value: Any) -> dict[str, str]:
-    return {
-        "serialized": json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    }
+def _json_payload(value: Any) -> Any:
+    return JsonPayload.model_validate(value).model_dump(mode="json")
 
 
 def _task_dependency(raw: dict[str, Any]) -> dict[str, Any]:

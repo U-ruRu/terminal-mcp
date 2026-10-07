@@ -601,14 +601,8 @@ def test_task_nested_backend_fields_are_projected_out_and_schema_is_closed():
         assert key not in structured_task
 
     # Arbitrary domain payloads remain explicit and schema-stable JSON payloads.
-    assert (
-        json.loads(structured_task["checkpoint"]["serialized"])["backend_only_new_field"]
-        == "inside-explicit-payload"
-    )
-    assert (
-        json.loads(structured_task["result"]["serialized"])["backend_only_new_field"]
-        == "inside-explicit-payload"
-    )
+    assert structured_task["checkpoint"]["backend_only_new_field"] == "inside-explicit-payload"
+    assert structured_task["result"]["backend_only_new_field"] == "inside-explicit-payload"
 
     schema = TaskOutput.success_schema()
     assert not _has_unbounded_object(schema)
