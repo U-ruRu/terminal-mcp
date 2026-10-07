@@ -206,8 +206,10 @@ class PersistentFleetBridge:
         binding_key: str,
         logical_agent_id: str,
         *,
-        access_code: str,
+        access_code: str | None = None,
         principal_id: str | None = None,
+        bootstrap: bool = False,
+        bootstrap_authority_node_id: str | None = None,
     ) -> str:
         control_id = self._access_control_node_id()
         payload = {
@@ -216,6 +218,7 @@ class PersistentFleetBridge:
             "logical_agent_id": logical_agent_id,
             "access_code": access_code,
             "principal_id": principal_id,
+            "bootstrap": bootstrap,
         }
         if control_id != self.config.instance_id:
             data = await self._remote_access_call("provider-bind", payload)
@@ -223,13 +226,27 @@ class PersistentFleetBridge:
         if self.access_authority is None:
             raise PersistentStoreError("authority_unavailable")
         try:
-            access = await self.access_authority.resolve_access_code(access_code)
-            if (
-                access is None
-                or access.get("logical_agent_id") != logical_agent_id
-                or access.get("status") != "active"
-            ):
-                raise PersistentStoreError("access_denied")
+            if bootstrap:
+                expected_authority = bootstrap_authority_node_id or self.config.instance_id
+                access = await self.access_authority.access_slot(logical_agent_id)
+                if (
+                    access is None
+                    or access.get("logical_agent_id") != logical_agent_id
+                    or access.get("status") != "active"
+                    or access.get("slot_kind") != "persistent"
+                    or access.get("authority_node_id") != expected_authority
+                ):
+                    raise PersistentStoreError("access_denied")
+            else:
+                if not access_code:
+                    raise PersistentStoreError("access_denied")
+                access = await self.access_authority.resolve_access_code(access_code)
+                if (
+                    access is None
+                    or access.get("logical_agent_id") != logical_agent_id
+                    or access.get("status") != "active"
+                ):
+                    raise PersistentStoreError("access_denied")
             return await self.access_authority.bind_provider_binding(
                 provider,
                 binding_key,

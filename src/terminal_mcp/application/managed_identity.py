@@ -51,8 +51,9 @@ class ManagedFleetRoutes(Protocol):
         binding_key: str,
         logical_agent_id: str,
         *,
-        access_code: str,
+        access_code: str | None = None,
         principal_id: str | None = None,
+        bootstrap: bool = False,
     ) -> str: ...
 
 
@@ -178,6 +179,7 @@ class ManagedProviderResolver:
         logical_agent_id: str,
         *,
         access_code: str | None = None,
+        bootstrap: bool = False,
     ) -> ActorContext:
         """Bind provider evidence after a separate compatibility proof of slot access.
 
@@ -202,15 +204,20 @@ class ManagedProviderResolver:
             else None
         )
         if callable(route_binder):
-            if not access_code:
+            if not access_code and not bootstrap:
                 raise ManagedSessionError("access_code_required")
             try:
+                kwargs = {
+                    "access_code": access_code,
+                    "principal_id": actor.principal_id,
+                }
+                if bootstrap:
+                    kwargs["bootstrap"] = True
                 bound = await route_binder(
                     identity.provider,
                     identity.binding_key,
                     logical_agent_id,
-                    access_code=access_code,
-                    principal_id=actor.principal_id,
+                    **kwargs,
                 )
             except Exception as exc:
                 code = getattr(exc, "code", "authority_unavailable")

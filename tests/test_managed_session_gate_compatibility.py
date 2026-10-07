@@ -141,12 +141,20 @@ async def test_role_session_bootstrap_binds_provider_once_without_public_access_
             return actor.with_agent("la_bootstrap", "node-a")
 
         async def bind_existing(
-            self, actor, provider, metadata, logical_agent_id, *, access_code=None
+            self,
+            actor,
+            provider,
+            metadata,
+            logical_agent_id,
+            *,
+            access_code=None,
+            bootstrap=False,
         ):
             assert provider == "openai"
             assert metadata["openai/session"] == "conversation-1"
             assert logical_agent_id == "la_bootstrap"
-            assert access_code == "0042"
+            assert access_code is None
+            assert bootstrap is True
             self.bound = True
             self.bind_calls.append(logical_agent_id)
             return actor.with_agent(logical_agent_id, "node-a")

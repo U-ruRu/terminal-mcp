@@ -362,17 +362,15 @@ class SessionGate:
         if not created.get("ok"):
             raise ManagedSessionError(str(created.get("code") or "identity_binding_failed"))
         slot = created.get("slot") or {}
-        access = created.get("access") or {}
         logical_agent_id = str(slot.get("logical_agent_id") or "")
-        access_code = access.get("access_code")
-        if not logical_agent_id or not isinstance(access_code, str):
+        if not logical_agent_id:
             raise ManagedSessionError("identity_binding_failed")
         bound = await self.managed_identity.bind_existing(
             actor,
             actor.provider or "",
             actor.provider_metadata,
             logical_agent_id,
-            access_code=access_code,
+            bootstrap=True,
         )
         await self.managed_sessions.ensure_agent_grant(bound, logical_agent_id)
         return bound

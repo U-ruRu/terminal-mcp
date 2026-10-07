@@ -757,3 +757,100 @@ async def test_provider_identity_registry_is_shared_by_all_fleet_callers():
     bind_body = next(body for url, _headers, body in requests if url.endswith('/provider-bind'))
     assert bind_body['requesting_instance_id'] == 'secondary'
     assert bind_body['binding_key'] == key
+
+
+class ProviderBindingAuthority:
+    def __init__(self, access, *, resolved=None):
+        self.access = access
+        self.resolved = resolved
+        self.bind_calls = []
+        self.resolve_calls = []
+
+    async def access_slot(self, logical_agent_id):
+        if self.access and self.access.get("logical_agent_id") == logical_agent_id:
+            return dict(self.access)
+        return None
+
+    async def resolve_access_code(self, access_code):
+        self.resolve_calls.append(access_code)
+        return dict(self.resolved) if self.resolved is not None else None
+
+    async def bind_provider_binding(
+        self, provider, binding_key, logical_agent_id, *, principal_id=None
+    ):
+        self.bind_calls.append((provider, binding_key, logical_agent_id, principal_id))
+        return logical_agent_id
+
+
+def provider_binding_bridge(private_key, authority):
+    return PersistentFleetBridge(
+        FleetConfig("main", private_key, (), 1.0, 1.0),
+        object(),
+        object(),
+        object(),
+        object(),
+        access_authority=authority,
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_bootstrap_requires_matching_active_persistent_authority_slot():
+    private_key, _ = keypair()
+    authority = ProviderBindingAuthority(
+        {
+            "logical_agent_id": "la_fresh",
+            "authority_node_id": "secondary",
+            "slot_kind": "persistent",
+            "status": "active",
+        }
+    )
+    bridge = provider_binding_bridge(private_key, authority)
+
+    assert await bridge.bind_provider_binding(
+        "openai",
+        "a" * 64,
+        "la_fresh",
+        principal_id="oauth-client",
+        bootstrap=True,
+        bootstrap_authority_node_id="secondary",
+    ) == "la_fresh"
+    assert authority.resolve_calls == []
+    assert authority.bind_calls == [("openai", "a" * 64, "la_fresh", "oauth-client")]
+
+    for invalid in (
+        {**authority.access, "authority_node_id": "firstbyte"},
+        {**authority.access, "slot_kind": "legacy"},
+        {**authority.access, "status": "retired"},
+    ):
+        authority.access = invalid
+        with pytest.raises(PersistentStoreError, match="access_denied"):
+            await bridge.bind_provider_binding(
+                "openai",
+                "b" * 64,
+                "la_fresh",
+                principal_id="other-client",
+                bootstrap=True,
+                bootstrap_authority_node_id="secondary",
+            )
+
+
+@pytest.mark.asyncio
+async def test_provider_manual_bind_still_requires_valid_access_code():
+    private_key, _ = keypair()
+    access = {
+        "logical_agent_id": "la_existing",
+        "authority_node_id": "main",
+        "slot_kind": "persistent",
+        "status": "active",
+    }
+    authority = ProviderBindingAuthority(access, resolved=access)
+    bridge = provider_binding_bridge(private_key, authority)
+
+    with pytest.raises(PersistentStoreError, match="access_denied"):
+        await bridge.bind_provider_binding("openai", "c" * 64, "la_existing")
+    assert authority.resolve_calls == []
+
+    assert await bridge.bind_provider_binding(
+        "openai", "c" * 64, "la_existing", access_code="0042", principal_id="oauth-client"
+    ) == "la_existing"
+    assert authority.resolve_calls == ["0042"]

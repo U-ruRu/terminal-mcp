@@ -317,6 +317,31 @@ async def test_mesh_provider_registry_resolve_and_bind_are_peer_authenticated():
         "la_one",
         access_code="1234",
         principal_id="usr_one",
+        bootstrap=False,
+        bootstrap_authority_node_id=None,
+    )
+
+    binder.reset_mock()
+    bootstrapped = await app.provider_bind(
+        mesh_actor(),
+        {
+            "requesting_instance_id": "peer",
+            "provider": "openai",
+            "binding_key": key,
+            "logical_agent_id": "la_two",
+            "principal_id": "usr_two",
+            "bootstrap": True,
+        },
+    )
+    assert bootstrapped == {"ok": True, "logical_agent_id": "la_one"}
+    binder.assert_awaited_once_with(
+        "openai",
+        key,
+        "la_two",
+        access_code=None,
+        principal_id="usr_two",
+        bootstrap=True,
+        bootstrap_authority_node_id="peer",
     )
 
 

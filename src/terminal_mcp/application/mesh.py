@@ -164,16 +164,23 @@ class MeshApplication:
             if payload.get("requesting_instance_id") != actor.peer_node_id:
                 raise MeshApplicationError("invalid_request", "requesting instance mismatch")
             try:
+                bootstrap = payload.get("bootstrap") is True
                 logical_agent_id = await self._bridge.bind_provider_binding(
                     str(payload.get("provider") or ""),
                     str(payload.get("binding_key") or ""),
                     str(payload.get("logical_agent_id") or ""),
-                    access_code=str(payload.get("access_code") or ""),
+                    access_code=(
+                        str(payload.get("access_code"))
+                        if payload.get("access_code") is not None
+                        else None
+                    ),
                     principal_id=(
                         str(payload.get("principal_id"))
                         if payload.get("principal_id") is not None
                         else None
                     ),
+                    bootstrap=bootstrap,
+                    bootstrap_authority_node_id=actor.peer_node_id if bootstrap else None,
                 )
             except (PersistentStoreError, ValueError) as exc:
                 code = (

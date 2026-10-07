@@ -294,11 +294,12 @@ class FleetIdentityRoutes(Routes):
         binding_key,
         logical_agent_id,
         *,
-        access_code,
+        access_code=None,
         principal_id=None,
+        bootstrap=False,
     ):
         self.provider_bind_calls.append(
-            (provider, binding_key, logical_agent_id, access_code, principal_id)
+            (provider, binding_key, logical_agent_id, access_code, principal_id, bootstrap)
         )
         self.provider_bound = logical_agent_id
         return logical_agent_id
@@ -331,7 +332,23 @@ async def test_fleet_provider_bind_requires_access_code_proof():
         actor(), "openai", metadata(), "la_one", access_code="1234"
     )
     assert resolved.logical_agent_id == "la_one"
-    assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one")
+    assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one", False)
+
+
+@pytest.mark.asyncio
+async def test_fleet_provider_bootstrap_is_server_authorized_without_access_code():
+    repository = Repository()
+    repository.bound = None
+    routes = FleetIdentityRoutes()
+    resolver = ManagedProviderResolver(repository, routes=routes)
+
+    resolved = await resolver.bind_existing(
+        actor(), "openai", metadata(), "la_one", bootstrap=True
+    )
+
+    assert resolved.logical_agent_id == "la_one"
+    assert routes.provider_bind_calls[0][2:] == ("la_one", None, "usr_one", True)
+
 
 
 class RemoteRepository(Repository):
@@ -373,5 +390,5 @@ async def test_remote_provider_binding_uses_control_authority_without_local_repl
 
     assert resolved.logical_agent_id == "la_one"
     assert resolved.authority_node_id == "home"
-    assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one")
+    assert routes.provider_bind_calls[0][2:] == ("la_one", "1234", "usr_one", False)
     assert repository.bind_calls == []
