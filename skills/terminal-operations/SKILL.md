@@ -1,177 +1,124 @@
 ---
 name: terminal-operations
-description: Управляет и диагностирует Linux-сервер через подключённый терминальный инструмент. Используй для проверки здоровья и ресурсов, чтения журналов и документации, работы с репозиториями, изменения конфигурации, деплоя, перезапуска сервисов, отмены зависших команд и аварийного доступа вне numbered execution queues.
-compatibility: Требуется Terminal MCP с agent_start, coordinate, message, agents, agent_finish, context, tasks, task, health, run, read, cancel и recovery.
+description: Управляет и диагностирует Linux-сервер через Terminal MCP: health, sessions, managed tasks, messaging, commands, context и recovery.
+compatibility: Terminal MCP 0.13.1; MCP tools session, observe, message, task, cmd, context, health.
 metadata:
   author: U-ruRu
-  version: "1.5.1"
+  version: "2.0.0"
   language: ru
 ---
 
-# Работа с сервером через терминал
+# Terminal operations
 
 ## Цель
 
-Выполняй серверные задачи предсказуемо и безопасно. Перед работой внимательно изучай контекст сервера, доступные инструменты, их контракты, доступные терминальные команды и ограничения окружения. Учитывай numbered execution queues, Agent Session lifecycle и coordination obligations; доводи каждое изменение до проверенного результата.
+Выполняй серверные задачи через текущий семиинструментный Terminal MCP контракт и фактический контекст сервера.
 
-## Контекст сервера
+## Базовый цикл
 
-Перед диагностикой или изменением:
+1. Вызови `health`.
+2. Открой WorkSession через `session(action="start", ...)`.
+3. Прочитай релевантный instance context через `context(action="list")`.
+4. Прочитай managed work через `observe(subject="tasks", ...)`.
+5. Возьми карточку через `task(request={action:"claim", ...})` при managed workflow.
+6. Выполняй команды через `cmd(request={action:"run", ...})`.
+7. Дочитывай queued/running command через `cmd(request={action:"read", ...})`.
+8. Фиксируй findings через `task(... action="comment" ...)` или checkpoint/state mutation.
+9. Обрабатывай inbox через `message`.
+10. Заверши WorkSession через `session(action="end", ...)`.
 
-1. Определи целевой сервер и доступный терминальный инструмент из текущего контекста задачи.
-2. Изучи описание инструмента, его методы, аргументы, ограничения и семантику ответов.
-3. Вызови `health` и изучи фактическую application version, состояние хранилища, пользователя, рабочей директории, очереди и выполняющихся команд.
-4. Изучи доступный контекст сервера: MOTD, документацию, сведения о сервисах, путях, deployment и эксплуатационных правилах.
-5. Определи доступные терминальные команды и штатные способы работы с Git, конфигурацией, сервисами, логами и deployment.
-6. Используй фактический контекст сервера как источник истины для путей, сервисов и настроек.
+## Session
 
-Полный контракт методов приведён в [references/tool-contract.md](references/tool-contract.md).
+Provider-managed connector использует server-resolved provider identity. Persistent Access slot поддерживает initial compatibility binding. `mode="legacy"` создаёт временный Access slot.
 
-## Базовые правила
+Следи за `hard_expires_at`, session warnings, alerts и текущим `session_epoch`. Завершай рабочий этап в безопасной точке до hard expiry.
 
-1. Для каждой новой серверной задачи сначала вызови `health`.
-2. Считай вывод `health.custom_command`, MOTD и серверную документацию актуальным источником роли сервера, состояния ресурсов и эксплуатационного контекста.
-3. Перед изменением инфраструктуры или проекта внимательно изучи относящийся к задаче контекст сервера и доступные инструменты.
-4. Проверяй пути, сервисы, пользователей и настройки по фактическому окружению.
-5. Для простой проверки состояния используй `health` и точечные диагностические команды.
-6. Защищай секреты: проверяй наличие, права, владельца, заполненность и структуру без вывода значений токенов, паролей, приватных ключей и credential-файлов.
-7. Используй неинтерактивные команды, ограниченный вывод и предсказуемые флаги.
-8. Сохраняй пользовательские и чужие незакоммиченные изменения. Перед правкой репозитория проверяй статус и ветку.
-9. Выполняй разрушительные действия только при явной необходимости в задаче. Для удаления данных, сброса состояния и перезаписи Git-истории должна существовать прямая цель.
-10. После изменения проводи проверку, соответствующую риску: тесты, configuration check, статус сервиса, журналы и прикладной health-check.
-11. Считай явно поручённые пользователем операции внутри указанного сервера предварительно авторизованными, пока действие остаётся в пределах поставленной задачи.
+## Observe
 
-## Выбор метода
+`observe` читает:
 
-### `health`
+- `sessions`;
+- `tasks`;
+- `namespaces`.
 
-Используй первым. Проверяй:
+Используй `detail="summary"` для ориентации. Используй `detail="full"` для точечного текущего состояния. Коллекции читай через `limit` и opaque `cursor`.
 
-- доступность приложения и хранилища;
-- пользователя, рабочую директорию и привилегии;
-- состояние numbered queues и их workers;
-- состояние output-cache, retention ceilings и признаки truncation/pruning;
-- выполняющиеся команды;
-- доступный эксплуатационный контекст.
+## Managed tasks
 
-### Coordination + `run` + `read`
+Task actions:
 
-Новая рабочая сессия начинается с `agent_start` с коротким `intent` и обязательным `details`-планом. Полный `agent_id` является credential текущей регистрации; public name используется для наблюдения и адресации сообщений.
+- `create`;
+- `claim`;
+- `release`;
+- `update`;
+- `checkpoint`;
+- `comment`;
+- `relate`;
+- `unrelate`;
+- `state`;
+- `done`;
+- `archive`;
+- `review`.
 
-Сразу прочитай `primary_context` из успешного `agent_start`: это обязательный instance-local контекст именно этого Terminal MCP. Дополнительные локальные записи просматривай через `context(action="list")`; полный content запрашивай `show_details=true`.
+Состояния: `ready`, `in_progress`, `blocked`, `deferred`, `done`.
 
-1. Перед этапом вызывай `coordinate(agent_id, step, intent)`. Intent lease по умолчанию 180 секунд.
-2. Просматривай session timing и `session_warning` в каждом agent-bound ответе. Абсолютный lifetime по умолчанию 25 минут и активностью не продлевается; warning начинается на 20-й минуте.
-3. На warning дойди до безопасной точки и подготовь промежуточный отчёт. По умолчанию на 23-й минуте появляется blocking session `ALERT`, который после reply может повториться через 60 секунд, если сессия продолжается.
-4. Если `ALERT` явно требует остановиться и вернуться к пользователю, прекрати дальнейшую работу на ближайшей безопасной точке, ответь на ALERT, заверши Agent Session через `agent_finish` и вернись в пользовательский чат. Не продолжай реализацию и не веди дополнительную coordination-переписку вместо возврата.
-5. Просматривай `pending_messages`, `reply_required_messages` и `alert_messages`. Показ сообщения означает `seen`; осознанное прочтение подтверждай `message(agent_id, message_hash=...)`.
-6. Сообщение с required reply закрывай через `message(agent_id, message_hash=..., text=...)`. `ALERT` требует ответа и блокирует normal work surface.
-7. Для отправки используй direct `message(agent_id, text, target=...)`, broadcast без target или явный `target="broadcast"`, или task target `message(agent_id, text, namespace=..., task_id=...)`. Task target snapshot-доставляется текущим live claimants и сохраняется в durable task history. `require_reply=true` требует ответа, `alert=true` создаёт срочное обязательство.
-8. `run(agent_id, cmd, task_scope, queue_id?)` запускает работу в numbered FIFO lane. `task_scope` обязателен для каждой normal run: без live task claims используй `none`; при live claims выбери `none`, `all` или конкретную live claimed `namespace/task_id`. Текущие legal values доступны в `task_scope_options`. `none` не создаёт task command event, `all` пишет event во все свои live claims, конкретный scope — только в выбранную task. Ошибка scope возвращается до enqueue. Первый вызов без queue выбирает least-loaded lane, последующие используют `preferred_queue_id`.
-9. `read(agent_id?, cmd_hash?, ...)` позволяет независимо выбрать command scope и agent context. Обычное unread message не мешает read; ALERT блокирует его до reply.
-10. `agents()` используй как anonymous observer. По умолчанию он возвращает compact fleet state; `target`, `show_details`, `show_intents`, `show_commands`, `command_hash`, `since_minutes` раскрывают нужный контекст по запросу.
-11. Managed work веди через `tasks()` и `task(...)`: namespace обязателен, fixed lanes едины для всех сценариев, review — обычная `lane=review` task. При create всегда указывай `isolation_hint` до 160 символов; используй `none`, если изоляция не требуется, и следуй тексту hint как инструкции создателя. Terminal MCP сам hint не интерпретирует. Первичный claim делай с непустым `claim_intent`. Самый ранний live claim — owner, остальные cooperative claims — participants; workflow-changing mutations выполняет owner.
-12. `done` используй только когда цель task и acceptance criteria реально достигнуты, всегда с meaningful `result`. При найденном препятствии переводи claimed task в `blocked` с `blocker_reason`. Освобождая active claim, оставляй `release_reason`; подробные findings сохраняй через `action=comment` + `comment_text`. Description описывает текущую работу, comments/history — её хронологию.
-13. Open или missing dependency блокирует claim и переход в `done`. Self-dependency и dependency cycle недопустимы. Emergency `force=true` + содержательный `force_reason` используй как сознательное исключение только dependency gate для claim или terminal completion; force не обходит ownership. Archived done dependency остаётся satisfied, archived unfinished — blocking.
-14. Relations создавай через `action=relate` с `relation_kind`, `related_namespace`, `related_task_id`; review использует `relation_kind=review_of`. Review success — `done(result=...)`, blocking findings — comments + `blocked(blocker_reason=...)`. Linked feedback остаётся в history reviewed task.
-15. Archive — lifecycle/visibility, а не workflow state. Архивируй с непустым `archive_note`; archive сохраняет state/history и освобождает claims. `tasks()` recommendation/pressure учитывает только claimable active READY work и показывает raw claimable/missing-dependency/oldest-ready observability; tags и `tag_counts` используй для discovery/filtering. Для ad-hoc server work managed task не требуется.
-16. Завершай собственную сессию через `agent_finish`, когда рабочий цикл закончен. После normal finish прежний exact `agent_id` ещё 300 секунд пригоден только для ACK/reply уже delivered message hash; это не продолжение Agent Session. Уже запущенные terminal commands продолжают жить в своих queues.
+Primary claim создаёт ownership и атомарно переводит claimable ready work в `in_progress`. `claim_intent`, `result`, `blocker_reason`, `release_reason` и review evidence сохраняют durable handoff context.
 
-Agent statuses: `started`, `active`, `idle`, `finished`, `forced`. Источник истины для command queue — SQLite; queue state сохраняется отдельно от Agent Session.
+Dependency override использует `force=true` вместе с содержательным `force_reason` и создаёт audit evidence.
 
-### `cancel`
+Командную provenance связывай через `task_scope`: `none`, `all` или конкретный `namespace/task_id` из текущих `task_scope_options`.
 
-Используй для конкретной команды в статусе `queued` или `running`. После вызова `cancel` обязательно проверь итоговый статус через `read` и подтверди `cancelled`.
+## Commands
 
-### `recovery`
+`cmd` actions:
 
-`recovery(cmd)` — независимый аварийный запуск вне numbered queues с сохранением команды и bounded output в отдельном output-cache. Метод создаёт `cmd_hash`, выполняет команду параллельно numbered workers и ждёт завершения или фиксированного таймаута.
+- `run` — numbered FIFO execution;
+- `read` — bounded output page и command status;
+- `cancel` — cancellation конкретной команды;
+- `recovery` — emergency execution path.
 
-Допустимые задачи:
+`run` может вернуть завершённый результат вместе с первой bounded output page. Queued/running результат продолжай через `read`.
 
-- проверить зависший процесс и дерево процессов;
-- остановить конкретный процесс или сервис;
-- освободить ресурс, блокировку или очередь;
-- проверить состояние terminal gateway во время зависшей команды;
-- выполнить короткое аварийное исправление.
+Используй ограниченный вывод и точечные команды. Проверяй итоговый status и exit code.
 
-Правила recovery:
+## Messaging
 
-- учитывай жёсткий лимит времени инструмента;
-- полный вывод дочитывай через `read(cmd_hash)`;
-- помни, что команда и вывод сохраняются в общем журнале;
-- используй recovery для аварийного восстановления, а штатную работу проводи через numbered queues;
-- воздействуй точечно: сначала идентифицируй процесс, затем заверши именно его;
-- после восстановления снова проверь `health`, состояние очереди и затронутый сервис штатными методами.
+`message` поддерживает inbox, history, send, ACK, reply и alert.
 
-## Работа с репозиторием
+Recipient lifecycle: `delivered → seen → read → replied`.
 
-1. Найди документированный путь к репозиторию через контекст сервера, документацию или файловую систему.
-2. Используй штатный Git-инструмент или обёртку, принятую на сервере.
-3. Проверь ветку, upstream и незакоммиченные изменения.
-4. Изучи локальные `AGENTS.md`, `.agent/README.md` и проектные инструкции, когда они существуют.
-5. Вноси минимальное связное изменение без временных дубликатов и обходных сущностей.
-6. Запусти форматирование, статический анализ и тесты, принятые в репозитории.
-7. Проверь diff перед фиксацией результата.
-8. Коммить и отправляй изменения, когда пользователь поручил реализовать и завершить работу и серверный процесс разработки допускает этот поток.
-9. После push проверь синхронизацию локальной ветки с remote.
+Task-addressed message использует `namespace + task_id` и сохраняет durable task history reference.
 
-## Изменение конфигурации и сервисов
+## Context
 
-1. Зафиксируй текущее состояние: путь, права, владелец, активный release и статус сервиса.
-2. Перед редактированием конфигурации создай резервную копию, если штатный механизм rollback не делает её автоматически.
-3. Проверь конфигурацию штатной командой до reload или restart.
-4. Используй `reload`, когда он полностью применяет изменение; применяй `restart`, когда этого требует сервис.
-5. После перезапуска проверь `is-active`, последние ошибки журнала и прикладной endpoint.
-6. При неуспешном обновлении используй штатный rollback и цельный предыдущий release.
+`context` actions: `list`, `create`, `update`, `delete`.
 
-## Deployment
+Primary entries содержат основной instance context. Additional entries содержат вспомогательный operational context.
 
-1. Определи источник истины: репозиторий, ветку, target host и документированный способ установки.
-2. Убедись, что рабочее дерево чистое или все локальные изменения относятся к текущей задаче.
-3. Запусти тесты до deployment.
-4. Используй штатный install/update script, systemd unit, container runtime или другой документированный механизм.
-5. Проверь активный release, состояние сервиса, health endpoint и ключевой пользовательский сценарий.
-6. Зафиксируй commit hash и фактически развёрнутую версию.
+## Health
 
-## Проверка терминального инструмента
+`health` показывает application version, storage, auth mode, terminal runtime, scheduler, queues, command activity, output-cache и workflow summary.
 
-Для функциональной проверки:
+Используй `health` как первый и финальный operational check.
 
-1. Выполни `health`.
-2. Запусти через `run` короткую команду с уникальной меткой, `pwd`, `id` и контролируемым `exit_code`.
-3. Дочитай результат через `read` до конечного статуса; отдельно проверь чтение последних строк.
-4. Проверь последовательное чтение команды, которая выдаёт несколько строк с паузой.
-5. Проверь `cancel` на отдельной длительной команде и подтверди `cancelled`.
-6. Проверяй `recovery` при занятых очередях только по прямой необходимости задачи или при разработке самого terminal gateway.
-7. Сопоставь структуру ответов, статусы, timestamps, `next_offset`, время выполнения и ошибки с контрактом инструмента.
-8. Заверши тестовые процессы и освободи временные ресурсы.
+## Repository work
 
-## Формат отчёта
+1. Проверь `git status` и worktrees.
+2. Определи canonical branch из project context.
+3. Создай отдельную task branch и worktree.
+4. Сохрани чужие рабочие изменения.
+5. Выполни focused tests и lint.
+6. Подлей свежий canonical в task branch.
+7. Реши конфликты в task branch.
+8. Повтори проверки.
+9. Интегрируй reviewed candidate в canonical.
 
-В финальном ответе укажи:
+## Safety
 
-- какой сервер затронут;
-- что обнаружено до изменений;
-- какие действия выполнены;
-- что изменено в файлах, Git и deployment;
-- какие проверки прошли и их результат;
-- commit hash и состояние push, когда был код;
-- оставшиеся ограничения или риск.
+- Сохраняй секреты вне вывода команд и отчётов.
+- Используй штатные service/deployment entry points.
+- Сохраняй durable state при rollout/rollback.
+- Проверяй права, владельцев, health и журналы после инфраструктурных изменений.
+- Ограничивай destructive operations прямой целью текущей задачи.
 
-Формулируй вывод о работоспособности по фактической проверке сервиса и пользовательского сценария.
-
-## Завершающая проверка
-
-Перед ответом убедись:
-
-- выбран правильный сервер;
-- изучен актуальный контекст сервера;
-- изучены доступные инструменты и терминальные команды;
-- использован подходящий метод терминала;
-- длительная команда дочитана до конечного статуса;
-- состояние затронутых queues проверено;
-- секреты защищены от вывода;
-- изменения проверены после применения;
-- commit, push и deployment описаны раздельно;
-- вывод основан на фактических результатах инструментов.
+Полный контракт: [references/tool-contract.md](references/tool-contract.md).

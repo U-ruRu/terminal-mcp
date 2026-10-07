@@ -1,133 +1,170 @@
-# Контракт терминального инструмента
+# Terminal MCP tool contract
 
-## Интерфейс
+Version: **0.13.1**.
 
-Terminal MCP 0.10.0 предоставляет тринадцать методов: `agent_start`, `coordinate`, `message`, `agents`, `agent_finish`, `context`, `tasks`, `task`, `health`, `run`, `read`, `cancel`, `recovery`. MCP и REST Actions используют общий service layer и одинаковую доменную семантику.
+Endpoint: `/mcp`.
 
-## Agent Session
+Канонический MCP-каталог: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
-По умолчанию idle TTL равен 300 секундам, task-context TTL — 180 секундам, абсолютная длительность регистрации — 1500 секундам. Канонические поля — `task_context_ttl_seconds` и `task_context_age_seconds`; `task_lease_seconds`, `task_age_seconds` и `max_task_age_seconds` остаются compatibility aliases. Non-blocking warning начинается после 1200 секунд. На 1380-й секунде появляется blocking session ALERT; после reply он снимается и при продолжающейся сессии может появиться снова через 60 секунд. Пороги, repeat interval, флаг включения и текст ALERT задаются конфигурацией сервера.
+## `session`
 
-Agent-bound operational success по умолчанию возвращает только результат операции. Session/message context добавляется, когда он меняет следующее действие: warning, unread/reply-required message, ALERT, expiry или registration requirement. Полный session/fleet context читается через observation tools.
+Actions: `start`, `end`, `interrupt`.
 
-Статусы агента: `started`, `active`, `idle`, `finished`, `forced`. `finished` означает явный `agent_finish`; `forced` имеет persisted reason.
+Managed provider identity приходит из server request context. Persistent Access code поддерживает compatibility binding. `mode=legacy` создаёт временный slot.
 
-## `agent_start(...)`
+Session result публикует lifecycle state, public name, WorkSession reference, epoch и hard-expiry metadata.
 
-Новая регистрация требует `task_summary`, `intent` и `details`. Она единственный раз возвращает полный credential-like `agent_id`. `work_scope` остаётся optional cooperative metadata. Вызов с существующим полным `agent_id` обновляет план текущей живой сессии.
+## `observe`
 
-## `context(action, id?, summary?, content?, primary?, show_details=false)`
+Subjects: `sessions`, `tasks`, `namespaces`.
 
-Instance-local durable Context конкретного deployment. Запись состоит только из stable integer `id`, `summary` (до 100 символов), `content`, `primary`. Actions: `list`, `create`, `update`, `delete`; delete физический. `list` без details возвращает две группы `primary` и `additional` только с `id + summary`; `show_details=true` добавляет полный content. `create` требует summary/content/primary; `update` — id и хотя бы одно изменяемое поле; `delete` — id. Каждый успешный `agent_start` включает все текущие primary entries полностью в `primary_context`; additional туда не попадают. Health Context не возвращает.
+Filters:
 
-## `coordinate(agent_id, step?, intent?, show_details=false)`
+- `namespace`;
+- `task_id`;
+- `lane`;
+- `state`;
+- `operational_status`;
+- `tags`;
+- `show_done`;
+- `show_archived`.
 
-Читает текущий step/intent/detail. `step + intent` фиксирует новый intent event и обновляет task-context freshness. `show_details=true` сохраняется для compact peer coordination; историческое наблюдение выполняется через `agents`.
+Detail: `summary`, `full`.
 
-## `message(...)`
+Collections: `limit` + opaque `cursor`.
 
-Send mode:
+## `message`
 
-`message(agent_id, text, target?, namespace?, task_id?, require_reply=false, alert=false)`
+Capabilities:
 
-`target` адресует active agent, отсутствие target или `target="broadcast"` создаёт broadcast active peers snapshot, а `namespace + task_id` адресуют managed task: сообщение snapshot-доставляется текущим live claimants и одновременно сохраняется в durable task history. Agent target и task target взаимоисключающие. `alert=true` автоматически требует reply.
+- active inbox read;
+- history read;
+- direct send;
+- broadcast send;
+- task-addressed send;
+- ACK;
+- reply;
+- alert.
 
-Read acknowledgement:
+Modes: `notify`, `ack`, `alert`.
 
-`message(agent_id, message_hash)`
+Recipient lifecycle: `delivered → seen → read → replied`.
 
-Получатель явно подтверждает, что сообщение прочитано. Сам показ сообщения выставляет только `seen` и не является acknowledgement. До явного `message(agent_id, message_hash=...)` состояние помечается `ACK REQUIRED`; обычное сообщение блокирует новую `run` и повторно показывается. Полный текст гарантирован минимум 180 секунд и минимум пять surfaced responses, затем остаётся compact reminder.
+Reads use bounded pagination and `summary|full` detail.
 
-Reply:
+## `task`
 
-`message(agent_id, message_hash, text)`
+Request actions:
 
-Создаёт связанный ответ исходному отправителю и закрывает reply obligation. `require_reply` блокирует `run` до reply. `ALERT` блокирует normal work surface до reply; `message`, `health`, `cancel`, `recovery` и `agent_finish` сохраняют доступ. Late-session ALERT создаётся системным sender и после снятия повторяется по configured interval, пока та же сессия продолжает использоваться.
+- `create`;
+- `claim`;
+- `release`;
+- `update`;
+- `checkpoint`;
+- `comment`;
+- `relate`;
+- `unrelate`;
+- `state`;
+- `done`;
+- `archive`;
+- `review`.
 
-После normal `agent_finish` exact old `agent_id` в течение 300 секунд может только ACK/reply уже delivered ему message hash; grace не разрешает новые sends или другие agent tools.
+Task lanes: `implementation`, `review`, `release`, `integration`, `general`.
 
-Sender inspection через `message(sender_id, message_hash)` возвращает `delivered_to`, `seen_by`, `read_by`, `replied_by` и отдельно `inactive_recipients`. Receipt state не меняется от завершения recipient session. `agent_finish` разрешён при pending communication и может вернуть `pending_communication {unacknowledged, reply_required, alerts}`; post-finish grace действует только для exact old `agent_id` и только для ACK/reply ранее доставленного hash.
+Task states: `ready`, `in_progress`, `blocked`, `deferred`, `done`.
 
-## `agents(...)`
+Priorities: `P0`, `P1`, `P2`, `P3`.
 
-`agents()` без параметров — read-only fleet observer, регистрация для просмотра не требуется.
+Claim ownership belongs to `LogicalAgent` and survives WorkSession rotation. Claiming claimable ready work transitions it to `in_progress` atomically.
 
-Параметры:
+Canonical task outputs use `TaskReceipt`, `TaskSnapshot`, `TaskDetail`, `TaskWorkingSet`, `TaskHistory` and collection projections.
 
-- `agent_id?` — контекст вызывающей Agent Session;
-- `target?` — public agent name;
-- `show_details` — план, scope и lifecycle details;
-- `show_intents` — intent journal;
-- `show_commands` — command journal с preview до configured limit;
-- `command_hash?` — полная исходная команда и metadata;
-- `since_minutes?` — относительное окно истории.
+## `cmd`
 
-По умолчанию overview компактный: status, activity age, intent/step и managed-task refs. `show_details` раскрывает plan/scope, `show_commands` — command data, `target` — выбранную session и message journal с persisted receipt state `delivered|seen|read|replied`.
+Request actions:
 
+### `run`
 
-## `tasks(namespace?, task_id?, lane?, state?, tags?, show_details=false, show_done=false, show_archived=false, limit=50, cursor?)`
+Inputs: `command`, optional `queue_id`, `task_scope`.
 
-Read-only backlog observer. `tags` uses AND semantics; `tag_counts` exposes vocabulary. Default response returns active backlog, `claimable_count`, weighted pressure and recommended task; priority sorts first, equal priority uses oldest `ready_since`. Persisted `state=ready` with open/missing dependencies is projected as `operational_status=blocked`, includes `blocking_dependencies`, and is excluded from ordinary claimability; a live forced claim remains `in_progress`. Summary includes `oldest_claimable_ready_since` / age and `missing_dependency_count`. Detailed lookup exposes dependencies, relations, claims, comments/history, archive lifecycle metadata and legacy reviews. `show_archived=true` selects archived lifecycle records; archive is not a workflow state.
+Execution uses numbered FIFO queues. A fast completion can return terminal status and the first bounded output page inline. Queued/running execution returns `cmd_hash` for continuation.
 
-## `task(agent_id, action, namespace, ...)`
+### `read`
 
-Workflow states are `ready|blocked|deferred|done`. `done` means goal reached and requires meaningful `result`. Claimed blocked requires `blocker_reason`; release live claim requires `release_reason`, который сохраняется как durable handoff history entry. `action=comment` with `comment_text` appends durable history distinct from mutable description.
+Inputs: `cmd_hash`, optional session code, `limit`, `cursor`.
 
-Create requires explicit `isolation_hint` (max 160); use `none` when no isolation is required. The value is persisted and projected into task cards and live claimant task context without Git/worktree inference, recommendations or blocking behavior. It is creator-supplied at create time. Primary claim requires `claim_intent` (max 160); repeating own claim updates intent. `cooperative` управляет concurrent participation, а не visibility. Earliest live claim is `owner`; later cooperative claims are `participants`. Claim view exposes `claimed_at`, `claim_age_seconds`, `claim_intent` and `role`. Owner-only mutations require a current live owner; unclaimed task must be claimed first. They include checkpoint, state/done/blocked, dependencies and ownership-affecting cooperative changes. Participant may comment, run commands using its task_scope and change only safe metadata. `cooperative=true -> false` rejects while multiple live claims exist.
+Result includes status, bounded lines, terminal outcome fields and next cursor.
 
-Dependencies are a validated directed graph: self edge and cycle reject before persistence. Missing target is allowed, represented as `missing` and remains blocking. Completion satisfies prerequisite independently of archive visibility: archived done satisfied; archived unfinished blocking. `force=true` + `force_reason` is a durable conscious override only for the dependency gate on claim or terminal completion.
+### `cancel`
 
-Generic relation mutations are `action=relate` / `unrelate` with `relation_kind`, `related_namespace`, `related_task_id`. Relation view entries expose direction/kind/namespace/task_id/created_at. Review uses relation kind `review_of`; success is ordinary done(result), blocking findings are comment + blocked. Reviewed task receives linked `review_feedback` event with review reference, `outcome=done|blocked`, candidate_ref and result or findings/blocker_reason.
+Cancels one queued/running command by `cmd_hash`.
 
-`archive` requires `archive_note`, preserves workflow state, stores `archived_at` / archive evidence, releases live claims and removes task from active backlog/pressure/recommendation. Schema v10 adds `isolation_hint` and migrates legacy rows to `none`; legacy v8 archived-state rows migrate deterministically into the v9 lifecycle representation. Ad-hoc terminal work still requires no managed task.
+### `recovery`
 
-## `run(agent_id, cmd, task_scope, queue_id?)`
+Executes the recovery command path for operational repair.
 
-Сохраняет команду в SQLite и помещает её в numbered FIFO lane. Первый вызов без `queue_id` выбирает least-loaded lane и сохраняет affinity. Следующие вызовы используют preferred queue. Явный `queue_id` меняет affinity.
+## `context`
 
-`task_scope` обязателен для каждой normal run до enqueue. Без live claims допустим только `none`; при live claims — `none`, `all` или одна собственная live claimed `namespace/task_id`. Текущие legal values возвращаются в `task_scope_options`. Scope управляет только task command events. Успешный ответ содержит `cmd_hash`, `queue_id` и `queue_position` (position может стать `null`, если worker уже atomically claimed команду).
+Actions: `list`, `create`, `update`, `delete`.
 
-`run` требует live session, fresh intent, read acknowledgement всех unread messages и replies для обязательных сообщений.
+Context entry fields: `id`, `summary`, `content`, `primary`.
 
-## `read(agent_id?, cmd_hash?, lines_count=500, offset?)`
+Summary reads return compact records. Full reads return content.
 
-`agent_id` и `cmd_hash` независимы. `cmd_hash` выбирает scoped command output; отсутствие hash читает global stream. Обычный successful read остаётся компактным; agent context добавляется при actionable coordination state. Обычное unread message отображается и не блокирует read. `ALERT` блокирует read до reply.
+## `health`
 
-Scoped response содержит `status`, `exit_code`, `queue_id`, `queue_position`, line counters, `output_truncated`, `output_retained`, `output_pruned_at`, `output_bytes` и `error`. Persisted output ограничен 4 MiB на логическую строку и 8 MiB на команду. Global lines имеют форму:
+Health publishes:
 
-`HH:MM:SS <public-name|anonymous> <cmd_hash> qN <output>`
+- application/version;
+- storage;
+- auth mode;
+- terminal user, cwd and privilege;
+- scheduler and numbered queues;
+- running/finalizing commands;
+- worker health;
+- output-cache metrics;
+- workflow state summary.
 
-Recovery-команды без numbered lane могут не иметь `qN`.
+## Identity model
 
-## `cancel(cmd_hash, agent_id?)`
+```text
+provider request identity
+        ↓
+    ActorContext
+        ↓
+   LogicalAgent
+        ↓
+    WorkWindow
+        ↓
+    WorkSession
+```
 
-Работает для команды любой очереди и любого агента. Queued cancellation atomically выполняет `queued -> cancelled`. Running cancellation останавливает process group и фиксирует `running -> cancelled`. Итог проверяется через `read`.
+Application services resolve managed identity and Session Gate state on the server.
 
-## `recovery(cmd, agent_id?)`
+## Output model
 
-Persisted emergency execution вне numbered queues. Выполняется независимо от занятых lanes и остаётся доступным при ALERT. Вывод сохраняется в общем bounded output-cache и читается через `read`.
+- current state uses bounded canonical projections;
+- collections use opaque cursor pagination;
+- mutations use compact receipts;
+- command output uses bounded pages;
+- public errors use stable machine-readable codes.
 
-## `health(agent_id?)`
+## Planned public contracts
 
-Anonymous health показывает фактическую application version, storage, terminal scheduler и компактный `workflow` aggregate: counts по state/lane, canonical `live_claims` / `unreleased_claims` / `stale_claims` и reviews; legacy `active_claims` — compatibility alias для unreleased rows без backlog payload. `terminal.scheduler` — `numbered-fifo`; `terminal.queues` содержит состояние каждой execution lane, `parallelism` — число workers, `worker_health` — их состояние. `terminal.output_cache` содержит logical/allocated bytes, target/max, строки, retained/truncated commands и `last_prune_at`. С `agent_id` actionable session/message context добавляется при необходимости.
+### Role v1
 
-## Command status
+Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
-`queued`, `running`, `completed`, `failed`, `cancelled`, `not_found`.
+Executor catalog: `session`, `task_list`, `command_run`, `command_read`, `command_cancel`, `command_recovery`, `task_claim`, `task_state`, `task_comment`, `message`.
 
-Queue lifecycle использует guarded transitions: `queued -> running|cancelled`, затем `running -> completed|failed|cancelled`.
+Coordinator endpoint: `/terminal-mcp/coordinator/v1/mcp`.
 
-## REST Actions
+Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
 
-- `POST /actions/agent/start`
-- `POST /actions/coordinate`
-- `POST /actions/message`
-- `POST /actions/agents`
-- `POST /actions/agent/finish`
-- `POST /actions/tasks`
-- `POST /actions/task`
-- `POST /actions/run`
-- `POST /actions/read`
-- `POST /actions/cancel`
-- `POST /actions/recovery`
-- `GET /actions/health`
+Both role catalogs use the shared Application API, ActorContext, Session Gate, task state machine, messaging state and persisted stores.
+
+### Operation metadata
+
+Task: `TMCP-PUBLIC-METADATA-001`.
+
+MCP annotations and OpenAPI `x-openai-isConsequential` use operation-level classification for read-only, mutating, destructive and idempotent semantics.
