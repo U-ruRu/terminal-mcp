@@ -137,3 +137,42 @@ async def test_backend_slot_list_drains_siblings_when_access_lookup_fails():
 
     assert active == set()
     assert cancelled
+
+
+@pytest.mark.asyncio
+async def test_access_observe_slots_paginates_after_filtering_inactive_slots():
+    backend = object.__new__(PersistentBackend)
+    slots = [{"public_name": f"Agent-{index:03d}"} for index in range(70)]
+    calls = []
+
+    class Fleet:
+        async def list_access_slots(self, *, limit=None, offset=0):
+            calls.append((limit, offset))
+            end = None if limit is None else offset + limit
+            return slots[offset:end]
+
+    backend.fleet_bridge = Fleet()
+    backend.access_authority = None
+    active = {"Agent-065", "Agent-067", "Agent-069"}
+
+    async def sender_identity(public_name):
+        if public_name not in active:
+            return {"ok": False, "code": "session_not_found"}
+        return {
+            "ok": True,
+            "session_state": "active",
+            "session_started_at": "2026-10-07T00:00:00Z",
+            "hard_expires_at": "2026-10-07T01:00:00Z",
+            "remaining_seconds": 1200,
+            "last_active_at": "2026-10-07T00:10:00Z",
+        }
+
+    backend.access_sender_identity = sender_identity
+
+    first = await backend.access_observe_slots(limit=2, offset=0)
+    second = await backend.access_observe_slots(limit=2, offset=1)
+
+    assert [row["public_name"] for row in first["sessions"]] == ["Agent-065", "Agent-067"]
+    assert [row["public_name"] for row in second["sessions"]] == ["Agent-067", "Agent-069"]
+    assert (64, 0) in calls
+    assert (64, 64) in calls

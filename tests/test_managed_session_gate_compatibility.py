@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -225,6 +226,46 @@ async def test_role_session_bootstrap_binds_provider_once_without_public_access_
     assert resolver.bind_calls == ["la_bootstrap"]
     assert sessions.grants == ["la_bootstrap", "la_bootstrap"]
     assert sessions.starts == 2
+
+
+@pytest.mark.asyncio
+async def test_current_state_serializes_persisted_string_session_state():
+    class Sessions:
+        async def authorize_operation(self, actor, operation):
+            assert operation is ManagedOperation.OBSERVE
+            now = datetime(2026, 10, 7, tzinfo=UTC)
+            return SimpleNamespace(
+                public_name="Alpha-1",
+                lifecycle=SimpleNamespace(
+                    phase=SimpleNamespace(value="active"), remaining_seconds=1200
+                ),
+                snapshot=SimpleNamespace(
+                    window=SimpleNamespace(
+                        work_window_id="ww-1",
+                        opened_at=now,
+                        hard_expires_at=now,
+                        window_revision=3,
+                    ),
+                    session=SimpleNamespace(
+                        logical_agent_id="la_one",
+                        authority_node_id="node-a",
+                        work_session_id="ws-1",
+                        session_epoch=2,
+                        state="active",
+                        started_at="2026-10-07T00:00:00Z",
+                        hard_expires_at="2026-10-07T00:23:00Z",
+                    ),
+                    binding=SimpleNamespace(role="coordinator", contract_version=1),
+                ),
+            )
+
+    gate = SessionGate(managed_identity=ProviderResolver(), managed_sessions=Sessions())
+    result = await gate.current_state(provider_actor())
+
+    assert result["ok"] is True
+    assert result["logical_agent"]["public_name"] == "Alpha-1"
+    assert result["work_session"]["state"] == "active"
+    assert result["work_session"]["work_session_id"] == "ws-1"
 
 
 @pytest.mark.asyncio

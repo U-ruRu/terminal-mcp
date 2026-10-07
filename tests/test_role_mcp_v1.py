@@ -7,9 +7,11 @@ import pytest
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import CapabilityPolicy
 from terminal_mcp.mcp.role_contracts import ROLE_TOOL_MODELS, planning_schema
+from terminal_mcp.mcp.role_outputs import RoleHealthOutput
 from terminal_mcp.mcp.roles import (
     COORDINATOR_TOOLS,
     EXECUTOR_TOOLS,
+    _compact_health,
     build_role_mcp,
     role_schema_contract,
 )
@@ -85,6 +87,42 @@ async def test_structural_errors_reach_authoritative_validator():
             "path": path,
         }
         assert len(json.dumps(payload, separators=(",", ":")).encode()) < 512
+
+
+def test_compact_health_matches_closed_role_output_contract():
+    raw = {
+        "ok": True,
+        "application": "terminal-mcp",
+        "version": "0.13.1",
+        "storage": "ok",
+        "status": "healthy",
+        "components": [{"id": "storage", "status": "healthy", "reason": None}],
+        "terminal": {
+            "ok": True,
+            "scheduler": "numbered-fifo",
+            "parallelism": 4,
+            "queue_size": 0,
+            "degraded": False,
+        },
+        "workflow": {
+            "ok": True,
+            "by_state": {"ready": 10},
+            "active_claims": 2,
+            "unreleased_claims": 1,
+            "live_claims": 2,
+            "stale_claims": 0,
+        },
+    }
+
+    compact = _compact_health(raw)
+
+    assert compact["workflow"] == {
+        "ok": True,
+        "active_claims": 2,
+        "unreleased_claims": 1,
+        "stale_claims": 0,
+    }
+    RoleHealthOutput.model_validate(compact)
 
 
 def test_application_role_authorization_sets():

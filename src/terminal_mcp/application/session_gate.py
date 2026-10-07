@@ -232,7 +232,7 @@ class SessionGate:
             "work_session": {
                 "work_session_id": session.work_session_id,
                 "session_epoch": session.session_epoch,
-                "state": session.state.value,
+                "state": session.state,
                 "started_at": session.started_at,
                 "hard_expires_at": session.hard_expires_at,
                 "role": binding.role,

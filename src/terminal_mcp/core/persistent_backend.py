@@ -1225,12 +1225,12 @@ class PersistentBackend:
         offset: int = 0,
     ) -> dict:
         try:
-            if self.fleet_bridge is not None:
-                slots = await self.fleet_bridge.list_access_slots(limit=limit, offset=offset)
-            elif self.access_authority is not None:
-                slots = await self.access_authority.access_slots(limit=limit, offset=offset)
-            else:
-                raise PersistentStoreError("authority_unavailable")
+            page_limit = None if limit is None else max(1, int(limit))
+            active_offset = max(0, int(offset))
+            raw_offset = 0
+            matched = 0
+            sessions: list[dict] = []
+            batch_size = 64
             semaphore = asyncio.Semaphore(8)
 
             async def project(item):
@@ -1247,8 +1247,34 @@ class PersistentBackend:
                     "last_active_at": status.get("last_active_at"),
                 }
 
-            projected = await asyncio.gather(*(project(item) for item in slots))
-            return {"ok": True, "sessions": [item for item in projected if item is not None]}
+            while page_limit is None or len(sessions) < page_limit:
+                if self.fleet_bridge is not None:
+                    slots = await self.fleet_bridge.list_access_slots(
+                        limit=batch_size, offset=raw_offset
+                    )
+                elif self.access_authority is not None:
+                    slots = await self.access_authority.access_slots(
+                        limit=batch_size, offset=raw_offset
+                    )
+                else:
+                    raise PersistentStoreError("authority_unavailable")
+                if not slots:
+                    break
+                projected = await asyncio.gather(*(project(item) for item in slots))
+                for item in projected:
+                    if item is None:
+                        continue
+                    if matched < active_offset:
+                        matched += 1
+                        continue
+                    sessions.append(item)
+                    matched += 1
+                    if page_limit is not None and len(sessions) >= page_limit:
+                        break
+                raw_offset += len(slots)
+                if len(slots) < batch_size:
+                    break
+            return {"ok": True, "sessions": sessions}
         except PersistentStoreError as exc:
             return {"ok": False, "code": exc.code, "error": exc.code}
 

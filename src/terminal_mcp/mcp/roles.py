@@ -443,7 +443,7 @@ def _compact_health(raw: dict) -> dict:
         },
         "workflow": {
             key: workflow.get(key)
-            for key in ("ok", "by_state", "active_claims", "live_claims", "stale_claims")
+            for key in ("ok", "active_claims", "unreleased_claims", "stale_claims")
             if key in workflow
         },
     }
