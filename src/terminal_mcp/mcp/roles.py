@@ -52,6 +52,9 @@ from terminal_mcp.core.task_projections import (
     project_task_working_set,
 )
 from terminal_mcp.mcp.output_contracts import (
+    _task_record as _normalize_task_record,
+)
+from terminal_mcp.mcp.output_contracts import (
     cmd_result,
     message_result,
     observe_result,
@@ -265,12 +268,13 @@ async def _message(application, actor, request: MessageInput) -> dict:
 def _task_record_from_observe(raw: dict) -> tuple[TaskRecord | None, dict | None]:
     if not raw.get("ok"):
         return None, raw
-    projected = _structured(observe_result(raw, "tasks", detail="full", task_id="selected"))
-    task = projected.get("task")
+    task = raw.get("task")
     if not isinstance(task, dict):
         return None, {"ok": False, "code": "resource_not_found", "error": "resource_not_found"}
     try:
-        return TaskRecord.model_validate(task), None
+        # Normalize the internal record without serializing an oversized MCP
+        # response; _task_get budgets the selected projection afterwards.
+        return TaskRecord.model_validate(_normalize_task_record(task)), None
     except ValidationError:
         return None, public_error("internal_error").as_dict()
 
@@ -304,6 +308,7 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
         show_done=True,
         show_archived=True,
         limit=1,
+        _defer_full_task_budget=True,
     )
     record, failure = _task_record_from_observe(raw)
     if failure is not None:
@@ -313,7 +318,17 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
     if request.detail == "detail":
         try:
             detail = project_task_detail(record).model_dump(mode="json", exclude_none=True)
-        except ValidationError:
+            bounded_page(
+                [detail],
+                limit=1,
+                cursor=None,
+                scope={
+                    "kind": "task-detail",
+                    "namespace": request.namespace,
+                    "task_id": request.task_id,
+                },
+            )
+        except (ValidationError, OutputItemTooLarge):
             return public_error("output_item_too_large").as_dict()
         return {"ok": True, "detail": "detail", "task": detail}
 
@@ -366,6 +381,7 @@ async def _task_graph(application, actor, request: TaskGraphInput) -> dict:
         show_done=True,
         show_archived=True,
         limit=1,
+        _defer_full_task_budget=True,
     )
     record, failure = _task_record_from_observe(raw)
     if failure is not None:
