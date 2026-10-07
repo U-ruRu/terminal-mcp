@@ -42,7 +42,10 @@ cancellation explicitly cancels and joins that operation, rather than abandoning
 A reconnectable adapter advertises optional `recover`, `input_written` and
 `output_truncated` capabilities; the core ExecutionPort remains unchanged.
 The scheduler detaches from remote processes on API shutdown instead of killing
-them. At startup/reconciliation it looks up each durable running command by identity.
+them. In reconnectable Unix mode, durable store initialization preserves queued and
+running command rows until scheduler reconciliation; the compatibility in-process
+mode retains startup terminalization of pre-restart active rows. At startup/reconciliation
+it looks up each durable running command by identity.
 A matching existing execution is reattached, not spawned again. Already-admitted
 stdin is not reissued. A never-admitted shell must pass the durable PID/input fence
 before receiving input. Queue authority remains held throughout reattachment.
