@@ -2175,7 +2175,7 @@ class PersistentBackend:
                     self.fleet_bridge.ensure_permit_valid(permit)
 
                 claim_lease = None
-                if action == "claim":
+                if action == "claim" and getattr(self.service, "access_mesh", None) is None:
                     managed = await self.lifecycle.store.has_managed_window(logical_agent_id)
                     access = await self._access_get(logical_agent_id)
                     if (
@@ -2223,17 +2223,9 @@ class PersistentBackend:
                                     action=action,
                                     error=exc.__class__.__name__,
                                 )
-                        if action == "claim":
-                            try:
-                                snapshot = await self.task_coordinator.list(
-                                    namespace=actual_task["namespace"],
-                                    task_id=actual_task["task_id"],
-                                    snapshot=True,
-                                )
-                                if snapshot.get("ok") and snapshot.get("task") is not None:
-                                    result["task"] = snapshot["task"]
-                            except Exception:
-                                pass
+                        # The coordinator captured this receipt in its write
+                        # transaction. A later list snapshot may have a newer
+                        # revision and must not replace the committed result.
                     return result
 
                 if idempotency_key:
