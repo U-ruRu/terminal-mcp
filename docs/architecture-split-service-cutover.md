@@ -1,6 +1,6 @@
 # Split-service deployment
 
-Status: implemented in canonical `0.14.1` architecture.
+Status: implemented in canonical `0.14.2` architecture.
 
 For Access Mesh V2 configuration, security-state recovery and the FirstByte/BacLOUD
 six-connector release gate, use [Access Mesh deployment](access-mesh-deployment.md).

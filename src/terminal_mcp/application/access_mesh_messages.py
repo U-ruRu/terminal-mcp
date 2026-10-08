@@ -175,8 +175,17 @@ class AccessMeshMessaging:
             recipients = [item for item in recipients if item["logical_agent_id"] in owners]
         if wire["target"] != "broadcast":
             recipients = [item for item in recipients if item["public_name"] == wire["target"]]
-        excluded = set(excluded) | {wire["sender_id"]}
-        return [item for item in recipients if item["logical_agent_id"] not in excluded]
+        # A directed message must be available in the target agent's inbox
+        # on each node where that agent has an active local attachment.
+        # Excluded agents represent already-delivered *broadcast* recipients;
+        # applying that list to a directed message silently drops a legitimate
+        # receiver when the same LogicalAgent is attached on both nodes.
+        # A recipient is still deduplicated transactionally by message_hash
+        # within each node, and a sender never receives its own message.
+        excluded_ids = {wire["sender_id"]}
+        if wire["target"] == "broadcast":
+            excluded_ids.update(excluded)
+        return [item for item in recipients if item["logical_agent_id"] not in excluded_ids]
 
     async def recipients(self, identity, *, scope, limit, cursor):
         query = {

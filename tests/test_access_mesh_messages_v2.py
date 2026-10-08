@@ -221,6 +221,52 @@ async def test_fleet_commits_local_first_deduplicates_and_preserves_identity(mes
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "source,destination,sender,recipient",
+    [
+        ("firstbyte", "bacloud", "alice", "bob"),
+        ("bacloud", "firstbyte", "bob", "alice"),
+    ],
+)
+async def test_directed_agent_attached_on_both_nodes_gets_each_local_inbox(
+    mesh_pair, source, destination, sender, recipient
+):
+    """Peer excluded=broadcast dedup must not suppress directed delivery."""
+    net = mesh_pair
+    origin, remote = net.nodes[source], net.nodes[destination]
+    # Bob is normally attached only on BacLOUD. Simulate dual attachment,
+    # just as both production role consumers attach the same issuer slot.
+    origin.mesh.store.attached.add(recipient)
+    assert recipient in remote.mesh.store.attached
+    target = _public_name(origin.mesh.store.slots[recipient])
+
+    receipt = await origin.message(
+        actor(sender, role="executor"),
+        text="deliver to both local inboxes",
+        target=target,
+        scope="fleet",
+    )
+    assert receipt["ok"] is True, receipt
+    assert receipt["state"] == "delivered"
+    # The delivery receipt counts distinct LogicalAgents globally (one),
+    # while both node-local inboxes must persist the directed message.
+    assert receipt["recipient_count"] == 1
+    msg_hash = receipt["message_hash"]
+    assert count(origin, "coordination_message_recipients") == 1
+    assert count(remote, "coordination_message_recipients") == 1
+    local = await origin.message(actor(recipient, role="coordinator"))
+    on_remote = await remote.message(actor(recipient, role="coordinator"))
+    assert any(row["message_hash"] == msg_hash for row in local["messages"])
+    assert any(row["message_hash"] == msg_hash for row in on_remote["messages"])
+
+    # Lost-ACK retry must not insert duplicates into either local inbox.
+    response = await origin.flush(message_hash=msg_hash)
+    assert response is None
+    assert count(origin, "coordination_message_recipients") == 1
+    assert count(remote, "coordination_message_recipients") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "source,destination,sender,recipient,role",
     [
         ("firstbyte", "bacloud", "alice", "bob", "executor"),

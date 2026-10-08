@@ -1,8 +1,8 @@
 # Connector runtime contract
 
-Release: **0.14.1**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
+Release: **0.14.2**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
 
-In 0.14.1 both Executor and Coordinator publish `session` with required `access_code` and attach-only `action`. Only Access MCP issues or ends a session. The optional `issuer_node_id` is required for unqualified four-digit access codes.
+In 0.14.2 both Executor and Coordinator publish `session` with required `access_code` and attach-only `action`. Only Access MCP issues or ends a session. The optional `issuer_node_id` is required for unqualified four-digit access codes.
 
 ## Published surfaces
 
@@ -91,3 +91,5 @@ OpenAPI operations publish corresponding `x-openai-isConsequential` classificati
 ## Release verification
 
 Run focused/runtime/discovery/documentation tests, the complete regression suite, and live FirstByte/BacLOUD checks on the exact release SHA. Required boundaries are six primary connectors, both directions of messaging, task ownership lifecycle, issuer-partition local operations, code-free cross-agent command reads and mobile revocation/deadline controls. See [deployment and acceptance](access-mesh-deployment.md). Legacy `/mcp` checks complement this matrix; they do not substitute for it.
+
+In 0.14.2 directed Fleet messages addressed by public_name are delivered to each active node attachment of the recipient LogicalAgent; local-first broadcast still deduplicates the recipient globally across nodes. Each local inbox deduplicates delivery by message_hash.
