@@ -22,3 +22,9 @@ Scope: separate QA only, 23-minute session, Secondary source and tests; test dep
 - `/workspace/terminal-mcp-qa-oscar/scripts/qa_release_gate.sh` supports `TMCP_QA_EXPECT_VERSION` and `TMCP_QA_REQUIRE_CLEAN`; produces metadata/ruff/privacy/pytest logs and refuses red gate.
 - `/workspace/terminal-mcp-qa-oscar/scripts/qa_compare_pytest_failures.py` diffs full pytest failure lists.
 - Historical QA notes in `/workspace/terminal-mcp-qa-oscar/QA_ACCEPTANCE_20261009.md`.
+
+## Later QA final full-suite finding (same source 2cd9770, QA-only tests 7636319)
+- Full regression completed: **1,879 PASS / 5 FAIL / 1 warning** in 378.88s, log `/tmp/oscar_0143_qa_full_7636319.log`. This is intentional RED evidence, not a releasable build.
+- Remaining five at that old SHA: explicit HTTP operator-key retry play/delete (2), own cooperative claim-release no-op (1), linked review `review_feedback` blocked propagation and stale review linked feedback (2). These are confirmed runtime regressions, not tests to suppress.
+- Exactly SHA `1d02022` with runtime fixes independently passed **25/25 cross-feature QA regression matrix** in modified-test read-only worktree and **16/16 focused clean-source QA gate** (Ruff/privacy and version 0.14.3 passed). Full-source official gate on that SHA still needs completion and canonical merge verification.
+- Live target terminal preflight blocked: FirstByte returned `access_denied`, BacLOUD `authority_unavailable`; no deploy attempts, and both temporary test Access sessions ended. Confirm legitimate connector binding before attempting any install.
