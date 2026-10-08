@@ -197,3 +197,95 @@ async def test_altered_event_replay_is_rejected(fixture):
     with pytest.raises(AccessMeshError, match="access_mesh_event_conflict"):
         f.store.apply_event(AccessSlotEvent.from_wire(wire), authenticated_peer_id="firstbyte")
     assert f.store.slot("firstbyte", grant["slot_id"]).revision == 1
+
+
+@pytest.mark.asyncio
+async def test_deadline_override_changes_current_cycle_only_and_native_fence(fixture):
+    f = fixture
+    grant = await issued(f)
+    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    result = await f.app.change(
+        actor("access"),
+        slot_id=grant["slot_id"],
+        kind="SessionUpdated",
+        expected_revision=1,
+        effective_at=T0,
+        deadline_at=T0 + timedelta(seconds=20),
+    )
+    assert result["revision"] == 2
+    native = await f.native.get_work_session(attached["work_session_id"])
+    assert datetime.fromisoformat(native.hard_expires_at) == T0 + timedelta(seconds=20)
+    f.clock[0] = T0 + timedelta(seconds=16)
+    current = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+    assert current["work_session_id"] == attached["work_session_id"]
+    f.clock[0] = T0 + timedelta(seconds=22)
+    with pytest.raises(AccessMeshError, match="window_cooldown"):
+        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+    f.clock[0] = T0 + timedelta(seconds=25)
+    following = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+    assert following["work_session_id"] != attached["work_session_id"]
+    assert following["hard_expires_at"] == (T0 + timedelta(seconds=35)).isoformat(
+        timespec="microseconds"
+    )
+    assert f.store.slot("firstbyte", grant["slot_id"]).policy.duration_seconds == 10
+
+
+@pytest.mark.asyncio
+async def test_status_read_does_not_release_claims_or_materialize_next_cycle(fixture):
+    f = fixture
+    await issued(f)
+    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    f.clock[0] = T0 + timedelta(seconds=16)
+    status = await f.app.observe(actor("executor"))
+    assert status["session_lifecycle"]["state"] == "active"
+    assert "work_session_id" not in status
+    assert not f.store.pending_cleanup()
+    old = await f.native.get_work_session(attached["work_session_id"])
+    assert old.state == "active"
+    await f.app.tick()
+    current = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+    assert current["session_epoch"] == attached["session_epoch"] + 1
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rotation_preserves_session_but_missed_stop_fences(fixture, tmp_path):
+    f = fixture
+    grant = await issued(f)
+    path = tmp_path / "snapshot-consumer.db"
+    await SqliteRepository(path, tmp_path / "snapshot-out.db").initialize()
+    store = AccessMeshStore(
+        path,
+        local_node_id="bacloud",
+        trusted_issuers=frozenset({"firstbyte", "bacloud"}),
+        proof_key=KEY,
+    )
+    consumer = AccessMeshApplication(
+        store, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0
+    )
+    store.apply_snapshot(
+        f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
+    )
+    initial = await consumer.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    await f.app.change(
+        actor("access"), slot_id=grant["slot_id"], kind="AccessCodeRotated", expected_revision=1
+    )
+    store.apply_snapshot(
+        f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
+    )
+    assert not store.pending_cleanup()
+    assert (await consumer.resolve(actor(), ManagedOperation.COMMAND_RUN))[
+        "work_session_id"
+    ] == initial["work_session_id"]
+    await f.app.change(
+        actor("access"), slot_id=grant["slot_id"], kind="SlotSuspended", expected_revision=2
+    )
+    await f.app.change(
+        actor("access"), slot_id=grant["slot_id"], kind="SlotResumed", expected_revision=3
+    )
+    store.apply_snapshot(
+        f.store.snapshot_page(issuer_id="firstbyte")[0], authenticated_peer_id="firstbyte"
+    )
+    assert store.pending_cleanup()
+    assert (await consumer.resolve(actor(), ManagedOperation.COMMAND_RUN))[
+        "session_epoch"
+    ] == initial["session_epoch"] + 1

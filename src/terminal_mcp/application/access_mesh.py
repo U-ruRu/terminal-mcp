@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import secrets
-import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
@@ -43,6 +42,11 @@ class AccessMeshApplication:
         self.legacy_enabled = legacy_enabled
         self.defaults = defaults or SlotPolicy(1200, 60, True, 120, 30)
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.store.clock = self.clock
+        stored_defaults = self.store.defaults()
+        if stored_defaults is not None:
+            self.defaults = SlotPolicy(**stored_defaults["policy"])
+            self.legacy_enabled = stored_defaults["legacy_enabled"]
         self.registry = ProviderIdentityRegistry()
         self._cleanup_lock = asyncio.Lock()
         self._issuer_lock = asyncio.Lock()
@@ -208,6 +212,27 @@ class AccessMeshApplication:
         self._scan_after = slots[-1].logical_agent_id if len(slots) == 50 else ""
         await self.cleanup()
 
+    async def health_components(self) -> dict:
+        pending = await asyncio.to_thread(self.store.pending_cleanup, limit=1)
+        running = self._task is not None and not self._task.done()
+        status = (
+            "failed" if not running else "degraded" if pending or self.last_error else "healthy"
+        )
+        reason = (
+            "lifecycle_worker_stopped"
+            if not running
+            else "cleanup_pending"
+            if pending
+            else self.last_error
+        )
+        return {
+            "access_mesh": {
+                "status": status,
+                "ok": status == "healthy",
+                **({"reason": reason} if reason else {}),
+            }
+        }
+
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
@@ -318,11 +343,8 @@ class AccessMeshApplication:
                         mutation_receipt=receipt,
                     )
                     return result
-                except sqlite3.IntegrityError:
-                    collision = await asyncio.to_thread(
-                        self.store.code_slot, self.store.local_node_id, allocated
-                    )
-                    if collision is None:
+                except AccessMeshError as exc:
+                    if exc.code != "access_mesh_code_in_use":
                         raise
                     if code is not None:
                         raise AccessMeshError("access_mesh_code_in_use") from None
@@ -337,6 +359,7 @@ class AccessMeshApplication:
         expected_revision: int,
         policy: SlotPolicy | None = None,
         effective_at: datetime | None = None,
+        deadline_at: datetime | None = None,
         receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
@@ -368,6 +391,7 @@ class AccessMeshApplication:
                 policy=policy,
                 code_tag=self.store.code_tag(slot.issuer_id, code) if code else None,
                 effective_at=effective_at or (self.clock() if kind.startswith("Session") else None),
+                deadline_at=deadline_at,
             )
             action = {
                 "SessionStarted": "start",
@@ -395,13 +419,8 @@ class AccessMeshApplication:
                     ),
                     mutation_receipt=receipt,
                 )
-            except sqlite3.IntegrityError:
-                if (
-                    code is None
-                    or await asyncio.to_thread(self.store.code_slot, slot.issuer_id, code) is None
-                ):
-                    raise
-                raise AccessMeshError("access_mesh_code_in_use") from None
+            except AccessMeshError:
+                raise
         # Cleanup is resumable after commit. Its failures cannot turn a durable
         # issuer event into an apparent pre-commit failure or permit duplicate events.
         try:
@@ -453,6 +472,11 @@ class AccessMeshApplication:
                 if cycle["state"] == "cooldown":
                     raise AccessMeshError("window_cooldown")
                 if cycle["state"] in {"idle", "expired"}:
+                    last_end = await asyncio.to_thread(self.store.last_session_end, slot.slot_id)
+                    if last_end is not None and self.clock() < last_end + timedelta(
+                        seconds=slot.policy.cooldown_seconds
+                    ):
+                        raise AccessMeshError("window_cooldown")
                     # Manual activation also respects the preceding fixed window's cooldown.
                     if slot.anchor is not None and self.clock() < slot.anchor + timedelta(
                         seconds=slot.policy.duration_seconds + slot.policy.cooldown_seconds

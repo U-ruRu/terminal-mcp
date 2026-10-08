@@ -124,6 +124,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _paired_console_scopes(path, method):
+        if method.upper() == "GET" and (
+            path in {"/actions/access/slots", "/actions/access/defaults"}
+            or path.startswith("/actions/access/slots/")
+        ):
+            return ["terminal:read"]
+        if method.upper() == "POST" and path == "/actions/access/mutate":
+            return ["terminal:read", "terminal:execute"]
         if method.upper() == "GET" and path == "/actions/console/snapshot":
             return ["terminal:read"]
         if method.upper() == "POST" and path in PAIRED_CONSOLE_PERSISTENT_MUTATIONS:

@@ -106,17 +106,27 @@ class SlotPolicy:
         ):
             raise AccessMeshError("access_mesh_invalid_policy")
 
-    def active_at(self, started_at: datetime | None, now: datetime) -> bool:
+    def active_at(
+        self, started_at: datetime | None, now: datetime, deadline_at: datetime | None = None
+    ) -> bool:
         """Compute the local WorkSession cycle without contacting the issuer."""
         if started_at is None:
             return False
         elapsed = (_utc(now) - _utc(started_at)).total_seconds()
         if elapsed < 0:
             return False
+        first_duration = (
+            (_utc(deadline_at) - _utc(started_at)).total_seconds()
+            if deadline_at is not None
+            else self.duration_seconds
+        )
+        if elapsed < first_duration:
+            return True
         if not self.rearm_enabled:
-            return elapsed < self.duration_seconds
+            return False
+        after_first = elapsed - first_duration - self.cooldown_seconds
         cycle = self.duration_seconds + self.cooldown_seconds
-        return elapsed % cycle < self.duration_seconds
+        return after_first >= 0 and after_first % cycle < self.duration_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +140,7 @@ class AccessSlotEvent:
     policy: SlotPolicy | None = None
     code_tag: str | None = None
     effective_at: datetime | None = None
+    deadline_at: datetime | None = None
 
     def __post_init__(self) -> None:
         for value in (self.issuer_id, self.slot_id, self.logical_agent_id, self.event_id):
@@ -142,6 +153,13 @@ class AccessSlotEvent:
             raise AccessMeshError("access_mesh_invalid_code_tag")
         if self.effective_at is not None:
             _utc(self.effective_at)
+        if self.deadline_at is not None:
+            if (
+                self.kind != "SessionUpdated"
+                or self.effective_at is None
+                or _utc(self.deadline_at) <= _utc(self.effective_at)
+            ):
+                raise AccessMeshError("access_mesh_invalid_time")
         if self.kind == "SlotIssued" and (self.policy is None or self.code_tag is None):
             raise AccessMeshError("access_mesh_incomplete_issue")
         if self.kind == "SlotPolicyChanged" and self.policy is None:
@@ -164,6 +182,7 @@ class AccessSlotEvent:
             "policy": asdict(self.policy) if self.policy is not None else None,
             "code_tag": self.code_tag,
             "effective_at": _text(self.effective_at) if self.effective_at else None,
+            **({"deadline_at": _text(self.deadline_at)} if self.deadline_at else {}),
         }
 
     @classmethod
@@ -179,12 +198,15 @@ class AccessSlotEvent:
             "code_tag",
             "effective_at",
         }
-        if not isinstance(data, dict) or set(data) != allowed:
+        if not isinstance(data, dict) or set(data) not in (allowed, allowed | {"deadline_at"}):
             raise AccessMeshError("access_mesh_invalid_wire_event")
         try:
             raw_policy = data["policy"]
             if raw_policy is not None and type(raw_policy) is not dict:
                 raise ValueError("policy must be an object")
+            raw_deadline = data.get("deadline_at")
+            if raw_deadline is not None and type(raw_deadline) is not str:
+                raise ValueError("deadline_at must be a string")
             raw_time = data["effective_at"]
             if raw_time is not None and type(raw_time) is not str:
                 raise ValueError("effective_at must be a string")
@@ -198,6 +220,9 @@ class AccessSlotEvent:
                 policy=SlotPolicy(**raw_policy) if raw_policy is not None else None,
                 code_tag=data["code_tag"],
                 effective_at=datetime.fromisoformat(raw_time) if raw_time is not None else None,
+                deadline_at=datetime.fromisoformat(raw_deadline)
+                if raw_deadline is not None
+                else None,
             )
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise AccessMeshError("access_mesh_invalid_wire_event") from exc
@@ -228,9 +253,11 @@ class SlotSnapshot:
     policy: SlotPolicy
     anchor: datetime | None
     code_tag: str
+    deadline_at: datetime | None = None
+    fence_revision: int = 1
 
     def writable_at(self, now: datetime) -> bool:
-        return self.state == "active" and self.policy.active_at(self.anchor, now)
+        return self.state == "active" and self.policy.active_at(self.anchor, now, self.deadline_at)
 
 
 class LocalAccessMesh:
@@ -331,6 +358,19 @@ class LocalAccessMesh:
                 ) WITHOUT ROWID
             """)
 
+            columns = {row[1] for row in db.execute("PRAGMA table_info(access_mesh_slot_replicas)")}
+            if "deadline_at" not in columns:
+                db.execute("ALTER TABLE access_mesh_slot_replicas ADD COLUMN deadline_at TEXT")
+            if "fence_revision" not in columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_slot_replicas "
+                    "ADD COLUMN fence_revision INTEGER NOT NULL DEFAULT 1"
+                )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS access_mesh_slots_agent "
+                "ON access_mesh_slot_replicas(logical_agent_id)"
+            )
+
     def _after_apply(self, db, event: AccessSlotEvent, *, release_claims: bool = False) -> None:
         """Runtime stores extend this transactional hook; domain replicas stay standalone."""
 
@@ -357,6 +397,8 @@ class LocalAccessMesh:
             policy=SlotPolicy(**json.loads(row["policy_json"])),
             anchor=_parse(row["anchor"]),
             code_tag=row["code_tag"],
+            deadline_at=_parse(row["deadline_at"]) if "deadline_at" in row.keys() else None,
+            fence_revision=row["fence_revision"] if "fence_revision" in row.keys() else 1,
         )
 
     def slot(self, issuer_id: str, slot_id: str) -> SlotSnapshot | None:
@@ -534,6 +576,10 @@ class LocalAccessMesh:
             policy = SlotPolicy(**json.loads(old["policy_json"]))
             tag = old["code_tag"]
             anchor = old["anchor"]
+            deadline = old["deadline_at"]
+            fence_revision = old["fence_revision"]
+            if event.kind in {"SlotSuspended", "SlotDeleted", "SessionStarted", "SessionEnded"}:
+                fence_revision = event.revision
             if event.kind == "SlotIssued":
                 raise AccessMeshError("access_mesh_issue_replayed")
             if event.kind == "SlotPolicyChanged":
@@ -548,9 +594,11 @@ class LocalAccessMesh:
                 tag = event.code_tag
             elif event.kind in {"SessionStarted", "SessionUpdated"}:
                 anchor = _text(event.effective_at)
+                deadline = _text(event.deadline_at) if event.deadline_at else None
                 if event.policy is not None:
                     policy = event.policy
             elif event.kind == "SessionEnded":
+                deadline = None
                 anchor = (
                     _text(event.effective_at + timedelta(seconds=policy.cooldown_seconds))
                     if policy.rearm_enabled
@@ -566,7 +614,8 @@ class LocalAccessMesh:
             )
             db.execute(
                 """UPDATE access_mesh_slot_replicas
-                   SET state=?,revision=?,event_id=?,policy_json=?,code_tag=?,anchor=?
+                   SET state=?,revision=?,event_id=?,policy_json=?,code_tag=?,anchor=?,
+                       deadline_at=?,fence_revision=?
                    WHERE issuer_id=? AND slot_id=?""",
                 (
                     state,
@@ -575,6 +624,8 @@ class LocalAccessMesh:
                     json.dumps(asdict(policy), sort_keys=True),
                     tag,
                     anchor,
+                    deadline,
+                    fence_revision,
                     event.issuer_id,
                     event.slot_id,
                 ),

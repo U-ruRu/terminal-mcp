@@ -51,7 +51,10 @@ class ObservationApplication(ApplicationCapability):
                 return public_error("capability_not_allowed").as_dict()
         elif actor.endpoint_role == "coordinator" and subject != "tasks":
             return public_error("capability_not_allowed").as_dict()
-        if actor.endpoint_role in {"executor", "coordinator"} and self.gate.access_mesh is None:
+        if (
+            actor.endpoint_role in {"executor", "coordinator"}
+            and getattr(self.gate, "access_mesh", None) is None
+        ):
             operation = (
                 ManagedOperation.TASK_LIST if subject == "tasks" else ManagedOperation.OBSERVE
             )

@@ -247,6 +247,51 @@ async def _message(application, actor, request: MessageInput) -> dict:
         return public_error("identity_not_bound").as_dict()
 
     history = request.action == "history"
+    mesh_messages = getattr(application.service, "access_mesh_messages", None)
+    if mesh_messages is not None:
+
+        def project(raw):
+            return _structured(
+                message_result(
+                    raw,
+                    sender=sender,
+                    text=request.text,
+                    target=request.target,
+                    message_hash=request.message_hash,
+                    mode=request.mode,
+                    require_reply=request.require_reply,
+                    alert=request.alert,
+                    show_all=history,
+                    recipients=request.action == "recipients",
+                )
+            )
+
+        def preflight(raw):
+            projected = project(raw)
+            return projected if projected.get("ok") is not True else None
+
+        with actor.bind():
+            raw = await mesh_messages.message(
+                actor,
+                text=request.text,
+                target=request.target,
+                message_hash=request.message_hash,
+                mode=request.mode,
+                require_reply=request.require_reply,
+                alert=request.alert,
+                scope=request.scope,
+                history=history,
+                recipients=request.action == "recipients",
+                limit=request.limit,
+                cursor=request.cursor,
+                detail=request.detail,
+                namespace=request.namespace,
+                task_id=request.task_id,
+                response_preflight=preflight,
+            )
+        if raw.get("ok"):
+            await application.session_gate.touch_provider(actor)
+        return project(raw)
     raw = await application.message(
         resolution.actor,
         sender=sender,

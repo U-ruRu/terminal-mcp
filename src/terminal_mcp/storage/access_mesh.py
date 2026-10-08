@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 
@@ -50,16 +51,40 @@ def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     if now < anchor:
         return {**base, "state": "cooldown", "rearm_at": _text(anchor)}
     policy = slot.policy
-    elapsed = (now - anchor).total_seconds()
-    if not policy.rearm_enabled and elapsed >= policy.duration_seconds:
-        return {**base, "state": "expired"}
-    period = policy.duration_seconds + policy.cooldown_seconds
-    index = int(elapsed // period) if policy.rearm_enabled else 0
-    start = anchor + timedelta(seconds=index * period)
-    end = start + timedelta(seconds=policy.duration_seconds)
+    start = anchor
+    end = (
+        _utc(slot.deadline_at)
+        if slot.deadline_at
+        else anchor + timedelta(seconds=policy.duration_seconds)
+    )
+    if now >= end:
+        if not policy.rearm_enabled:
+            return {
+                **base,
+                "state": "expired",
+                "started_at": _text(start),
+                "hard_expires_at": _text(end),
+            }
+        next_start = end + timedelta(seconds=policy.cooldown_seconds)
+        if now < next_start:
+            return {
+                **base,
+                "state": "cooldown",
+                "started_at": _text(start),
+                "hard_expires_at": _text(end),
+                "rearm_at": _text(next_start),
+            }
+        period = policy.duration_seconds + policy.cooldown_seconds
+        index = int((now - next_start).total_seconds() // period)
+        start = next_start + timedelta(seconds=index * period)
+        end = start + timedelta(seconds=policy.duration_seconds)
     base.update(started_at=_text(start), hard_expires_at=_text(end))
     if now >= end:
-        return {**base, "state": "cooldown", "rearm_at": _text(start + timedelta(seconds=period))}
+        return {
+            **base,
+            "state": "cooldown",
+            "rearm_at": _text(end + timedelta(seconds=policy.cooldown_seconds)),
+        }
     remaining = (end - now).total_seconds()
     phase = "active"
     if policy.draining_seconds and remaining <= policy.draining_seconds:
@@ -71,6 +96,10 @@ def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
 
 class AccessMeshStore(LocalAccessMesh):
     """Native storage adapter; construct after the parent directory exists."""
+
+    def __init__(self, *args, clock=None, **kwargs):
+        self.clock = clock or (lambda: datetime.now(UTC))
+        super().__init__(*args, **kwargs)
 
     def _initialize(self) -> None:
         super()._initialize()
@@ -104,6 +133,22 @@ class AccessMeshStore(LocalAccessMesh):
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_native_owners (
                 logical_agent_id TEXT PRIMARY KEY, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL
             ) WITHOUT ROWID""")
+            db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_operator_defaults (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL,
+                policy_json TEXT NOT NULL, legacy_enabled INTEGER NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_slot_catalog (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, issuer_id TEXT NOT NULL,
+                slot_id TEXT NOT NULL, UNIQUE(issuer_id,slot_id)
+            )""")
+            db.execute(
+                "INSERT OR IGNORE INTO access_mesh_slot_catalog(issuer_id,slot_id) "
+                "SELECT issuer_id,slot_id FROM access_mesh_slot_replicas ORDER BY issuer_id,slot_id"
+            )
+            db.execute("""CREATE TRIGGER IF NOT EXISTS access_mesh_slot_catalog_insert
+                AFTER INSERT ON access_mesh_slot_replicas BEGIN
+                INSERT OR IGNORE INTO access_mesh_slot_catalog(issuer_id,slot_id)
+                VALUES(NEW.issuer_id,NEW.slot_id); END""")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS access_mesh_live_code_unique
                 ON access_mesh_slot_replicas(issuer_id,code_tag) WHERE state!='deleted'""")
 
@@ -201,11 +246,15 @@ class AccessMeshStore(LocalAccessMesh):
             (event.issuer_id, event.slot_id),
         ).fetchone()
         slot = self._snapshot(row)
-        stamp = _text(datetime.now(UTC))
+        stamp = _text(self.clock())
         self._native_slot(db, slot, stamp)
         receipt = _mutation_receipt.get()
         if receipt is not None and receipt["event_id"] == event.event_id:
             self._save_receipt_tx(db, receipt)
+        if event.kind in {"SessionStarted", "SessionUpdated", "SlotPolicyChanged"}:
+            self._reconcile_local_tx(
+                db, slot, stamp=stamp, job_id=f"event:{event.issuer_id}:{event.event_id}"
+            )
         if event.kind in {"SessionEnded", "SlotSuspended", "SlotDeleted"}:
             self._queue_cleanup(
                 db,
@@ -216,10 +265,52 @@ class AccessMeshStore(LocalAccessMesh):
                 release_claims=release_claims,
             )
 
+    def _reconcile_local_tx(self, db, slot, *, stamp, job_id, force_fence=False):
+        current = db.execute(
+            "SELECT l.*,s.state FROM access_mesh_local_sessions l "
+            "JOIN logical_agent_work_sessions s USING(work_session_id) "
+            "WHERE l.issuer_id=? AND l.slot_id=?",
+            (slot.issuer_id, slot.slot_id),
+        ).fetchone()
+        if current is None or current["state"] != "active":
+            return
+        cycle = local_cycle(slot, _parse(stamp))
+        same = (
+            not force_fence
+            and cycle["state"] in {"active", "warning", "draining"}
+            and current["cycle_started_at"] == cycle["started_at"]
+        )
+        if same:
+            db.execute(
+                "UPDATE logical_agent_work_sessions SET hard_expires_at=? WHERE work_session_id=?",
+                (cycle["hard_expires_at"], current["work_session_id"]),
+            )
+        else:
+            self._queue_cleanup(
+                db,
+                slot,
+                job_id=job_id,
+                reason="replicated_cycle_fence",
+                stamp=stamp,
+                release_claims=slot.state == "deleted" or self._release_at_end(slot),
+            )
+
     def apply_event(self, event, *, mutation_receipt=None, **kwargs):
         token = _mutation_receipt.set(mutation_receipt)
         try:
-            return super().apply_event(event, **kwargs)
+            try:
+                return super().apply_event(event, **kwargs)
+            except sqlite3.IntegrityError as exc:
+                if event.code_tag is not None:
+                    with self._connect() as db:
+                        duplicate = db.execute(
+                            "SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? "
+                            "AND code_tag=? AND state!='deleted'",
+                            (event.issuer_id, event.code_tag),
+                        ).fetchone()
+                    if duplicate is not None:
+                        raise AccessMeshError("access_mesh_code_in_use") from exc
+                raise
         finally:
             _mutation_receipt.reset(token)
 
@@ -501,6 +592,58 @@ class AccessMeshStore(LocalAccessMesh):
             )
             return {**identity, "work_session_id": session_id, "session_epoch": epoch}
 
+    def issuer_slots(self, *, after: int = 0, limit: int = 21) -> list[tuple[int, SlotSnapshot]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT c.sequence,s.* FROM access_mesh_slot_catalog c "
+                "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) "
+                "WHERE c.issuer_id=? AND c.sequence>? ORDER BY c.sequence LIMIT ?",
+                (self.local_node_id, after, limit),
+            ).fetchall()
+        return [(row["sequence"], self._snapshot(row)) for row in rows]
+
+    def defaults(self) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM access_mesh_operator_defaults WHERE singleton=1"
+            ).fetchone()
+        return (
+            {
+                "revision": row["revision"],
+                "policy": json.loads(row["policy_json"]),
+                "legacy_enabled": bool(row["legacy_enabled"]),
+            }
+            if row
+            else None
+        )
+
+    def change_defaults(self, *, expected_revision, policy, legacy_enabled, receipt):
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT revision FROM access_mesh_operator_defaults WHERE singleton=1"
+            ).fetchone()
+            revision = row[0] if row else 1
+            if expected_revision != revision:
+                raise AccessMeshError("revision_conflict")
+            db.execute(
+                "INSERT INTO access_mesh_operator_defaults VALUES(1,?,?,?) "
+                "ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,"
+                "policy_json=excluded.policy_json,legacy_enabled=excluded.legacy_enabled",
+                (revision + 1, json.dumps(policy, sort_keys=True), int(legacy_enabled)),
+            )
+            self._save_receipt_tx(db, receipt)
+
+    def last_session_end(self, slot_id: str) -> datetime | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT event_json FROM access_mesh_event_log WHERE issuer_id=? "
+                "AND slot_id=? AND json_extract(event_json,'$.kind')='SessionEnded' "
+                "ORDER BY revision DESC LIMIT 1",
+                (self.local_node_id, slot_id),
+            ).fetchone()
+        return _parse(json.loads(row[0])["effective_at"]) if row else None
+
     def initialize_command_journal(self) -> None:
         # A monotonic side index gives stable local cursors across VACUUM and
         # command retention. The command hash is the durable journal identity.
@@ -588,8 +731,13 @@ class AccessMeshStore(LocalAccessMesh):
             "code_tag",
             "anchor",
         }
-        if not isinstance(raw, dict) or set(raw) != fields:
+        if not isinstance(raw, dict) or set(raw) not in (
+            fields,
+            fields | {"deadline_at", "fence_revision"},
+        ):
             raise AccessMeshError("access_mesh_invalid_snapshot")
+        raw = {"deadline_at": None, "fence_revision": raw["revision"], **raw}
+        fields |= {"deadline_at", "fence_revision"}
         if (
             authenticated_peer_id != raw["issuer_id"]
             or authenticated_peer_id not in self.trusted_issuers
@@ -599,6 +747,16 @@ class AccessMeshStore(LocalAccessMesh):
             from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
             policy = SlotPolicy(**json.loads(raw["policy_json"]))
+            if (
+                type(raw["fence_revision"]) is not int
+                or not 1 <= raw["fence_revision"] <= raw["revision"]
+            ):
+                raise ValueError("invalid fence revision")
+            if raw["deadline_at"] is not None and (
+                raw["anchor"] is None
+                or _utc(_parse(raw["deadline_at"])) <= _utc(_parse(raw["anchor"]))
+            ):
+                raise ValueError("invalid deadline override")
             event = AccessSlotEvent(
                 issuer_id=raw["issuer_id"],
                 slot_id=raw["slot_id"],
@@ -647,11 +805,17 @@ class AccessMeshStore(LocalAccessMesh):
                 tuple(raw[key] for key in columns),
             )
             slot = self._snapshot(raw)
-            stamp = _text(datetime.now(UTC))
+            stamp = _text(self.clock())
             self._native_slot(db, slot, stamp)
-            # Missing intermediate events can include a stop/restart. Fence an old
-            # local cycle before accepting a newer snapshot, including active ones.
-            if old or slot.state != "active":
+            if old:
+                self._reconcile_local_tx(
+                    db,
+                    slot,
+                    stamp=stamp,
+                    job_id=f"snapshot:{slot.issuer_id}:{slot.slot_id}:{slot.revision}",
+                    force_fence=old["fence_revision"] != slot.fence_revision,
+                )
+            if slot.state != "active":
                 self._queue_cleanup(
                     db,
                     slot,

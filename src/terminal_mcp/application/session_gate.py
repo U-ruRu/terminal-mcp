@@ -7,6 +7,8 @@ This gate is independent of MCP/HTTP and can be called by future role adapters.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 
 from terminal_mcp.application.actor import ActorContext
@@ -285,9 +287,12 @@ class SessionGate:
         """Best-effort activity touch after a successful public MCP call."""
         if self.access_mesh is not None and actor.endpoint_role in {"executor", "coordinator"}:
             try:
-                self.access_mesh.store.touch(self.access_mesh.connection_key(actor))
-            except AccessMeshError:
-                pass
+                async with asyncio.timeout(0.5):
+                    await asyncio.to_thread(
+                        self.access_mesh.store.touch, self.access_mesh.connection_key(actor)
+                    )
+            except Exception:
+                logging.getLogger(__name__).warning("Access Mesh activity refresh deferred")
             return
         if not self._has_provider_identity(actor):
             return

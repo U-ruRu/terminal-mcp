@@ -161,3 +161,194 @@ def test_access_outputs_validate_as_advertised(tmp_path):
         for args in ({}, {"action": "start", "mode": "legacy"}, {"action": "status"}):
             result = call(client, "access", "session", args)
             validator.validate(result)
+
+
+def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        sender = call(
+            client,
+            "access",
+            "session",
+            {"action": "start", "mode": "legacy"},
+            request_id=100,
+            conversation="sender-access",
+        )
+        receiver = call(
+            client,
+            "access",
+            "session",
+            {"action": "start", "mode": "legacy"},
+            request_id=200,
+            conversation="receiver-access",
+        )
+        for role, conversation, slot in (
+            ("executor", "sender-exec", sender),
+            ("executor", "receiver-exec", receiver),
+            ("coordinator", "receiver-coord", receiver),
+        ):
+            value = call(
+                client,
+                role,
+                "session",
+                {"issuer_node_id": "firstbyte", "access_code": slot["access_code"]},
+                conversation=conversation,
+            )
+            assert value["ok"], value
+        sent = call(
+            client,
+            "executor",
+            "message",
+            {
+                "action": "send",
+                "text": "ack before next command",
+                "target": receiver["public_name"],
+                "mode": "ack",
+                "scope": "local",
+            },
+            request_id=300,
+            conversation="sender-exec",
+        )
+        assert sent["ok"], sent
+        assert sent["message"]["state"] == "delivered" and sent["message"]["outcome"] == "committed"
+        message_hash = sent["message"]["message_hash"]
+        blocked = call(
+            client,
+            "executor",
+            "command_run",
+            {"command": "true"},
+            request_id=301,
+            conversation="receiver-exec",
+        )
+        assert blocked["ok"] is False, blocked
+        inbox = call(
+            client, "coordinator", "message", {"action": "read"}, conversation="receiver-coord"
+        )
+        assert any(item["message_hash"] == message_hash for item in inbox["messages"]), inbox
+        ack = call(
+            client,
+            "coordinator",
+            "message",
+            {"action": "ack", "message_hash": message_hash},
+            request_id=302,
+            conversation="receiver-coord",
+        )
+        assert ack["ok"], ack
+        assert call(
+            client,
+            "executor",
+            "command_run",
+            {"command": "true"},
+            request_id=303,
+            conversation="receiver-exec",
+        )["ok"]
+        alert = call(
+            client,
+            "executor",
+            "message",
+            {
+                "action": "send",
+                "text": "reply required",
+                "target": receiver["public_name"],
+                "mode": "alert",
+                "scope": "local",
+            },
+            request_id=304,
+            conversation="sender-exec",
+        )
+        alert_hash = alert["message"]["message_hash"]
+        assert (
+            call(
+                client,
+                "executor",
+                "command_run",
+                {"command": "true"},
+                request_id=305,
+                conversation="receiver-exec",
+            )["ok"]
+            is False
+        )
+        ack = call(
+            client,
+            "coordinator",
+            "message",
+            {"action": "ack", "message_hash": alert_hash},
+            request_id=306,
+            conversation="receiver-coord",
+        )
+        assert ack["ok"]
+        assert (
+            call(
+                client,
+                "executor",
+                "command_run",
+                {"command": "true"},
+                request_id=307,
+                conversation="receiver-exec",
+            )["ok"]
+            is False
+        )
+        reply = call(
+            client,
+            "coordinator",
+            "message",
+            {"action": "reply", "message_hash": alert_hash, "text": "resolved"},
+            request_id=308,
+            conversation="receiver-coord",
+        )
+        assert reply["ok"], reply
+        assert call(
+            client,
+            "executor",
+            "command_run",
+            {"command": "true"},
+            request_id=309,
+            conversation="receiver-exec",
+        )["ok"]
+        recipients = call(
+            client,
+            "executor",
+            "message",
+            {"action": "recipients", "scope": "local"},
+            conversation="sender-exec",
+        )
+        assert recipients["recipients"][0]["public_name"] == receiver["public_name"]
+        assert recipients["recipients"][0]["last_active_at"]
+        health = call(client, "coordinator", "health", {}, meta=False)
+        assert health["status"] == "healthy", health
+
+
+def test_message_projection_does_not_hide_queued_remote_delivery():
+    from terminal_mcp.mcp.output_contracts import message_result
+
+    raw = {
+        "ok": True,
+        "action": "send",
+        "message_hash": "firstbyte:meshmsg:fixture",
+        "sender": "firstbyte-fixture",
+        "target": "bacloud-fixture",
+        "scope": "fleet",
+        "mode": "notify",
+        "state": "queued",
+        "outcome": "committed",
+        "delivered_to": [],
+        "pending_peers": ["bacloud"],
+        "delivery_errors": [
+            {"server_id": "bacloud", "code": "message_unavailable", "retry": "retry"}
+        ],
+    }
+    result = message_result(
+        raw,
+        sender=raw["sender"],
+        text="hello",
+        target=raw["target"],
+        message_hash=None,
+        mode="notify",
+        require_reply=False,
+        alert=False,
+        show_all=False,
+    )
+    assert result.isError is False
+    assert result.structuredContent["message"]["state"] == "queued"
+    assert result.structuredContent["message"]["pending_peers"] == ["bacloud"]
+    assert result.structuredContent["message"]["outcome"] == "committed"

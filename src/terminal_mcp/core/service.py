@@ -771,21 +771,6 @@ class TerminalService:
                     if any(item["status"] == "failed" for item in components)
                     else "degraded"
                 )
-                if self.event_store:
-                    signature = {
-                        "ok": bool(result["ok"]),
-                        "storage": result["storage"],
-                        "terminal_ok": bool(terminal.get("ok", False)),
-                        "worker_health": terminal.get("worker_health") or {},
-                    }
-                    if signature != self._last_health_signature:
-                        await self.event_store.append(
-                            "health.changed",
-                            "health",
-                            "terminal-mcp",
-                            payload=signature,
-                        )
-                        self._last_health_signature = signature
                 if self.health_command:
                     custom = await self.terminal.capture(
                         self.health_command,
@@ -806,6 +791,57 @@ class TerminalService:
                     )
                     if not custom["ok"] and result["status"] == "healthy":
                         result["status"] = "degraded"
+                mesh = getattr(self, "access_mesh", None)
+                if mesh is not None:
+                    mesh_components = await mesh.health_components()
+                    messaging = getattr(self, "access_mesh_messages", None)
+                    if messaging is not None:
+                        running = messaging._task is not None and not messaging._task.done()
+                        state = (
+                            "failed"
+                            if not running
+                            else "degraded"
+                            if messaging.last_error
+                            else "healthy"
+                        )
+                        mesh_components["access_mesh_messages"] = {
+                            "status": state,
+                            "ok": state == "healthy",
+                        }
+                    replication = getattr(self, "access_mesh_replication", None)
+                    if replication is not None:
+                        for peer, state in replication.peer_health.items():
+                            mesh_components[f"access_mesh_peer:{peer}"] = {
+                                **state,
+                                "ok": state["status"] == "healthy",
+                            }
+                    components.extend(
+                        {"id": name, "status": item["status"], "reason": item.get("reason")}
+                        for name, item in mesh_components.items()
+                    )
+                    severity = {"healthy": 0, "degraded": 1, "failed": 2}
+                    result["status"] = max(
+                        [result["status"], *(c["status"] for c in components)],
+                        key=severity.__getitem__,
+                    )
+                    result["ok"] = result["status"] == "healthy"
+                if self.event_store:
+                    signature = {
+                        "ok": bool(result["ok"]),
+                        "status": result["status"],
+                        "components": components,
+                        "storage": result["storage"],
+                        "terminal_ok": bool(terminal.get("ok", False)),
+                        "worker_health": terminal.get("worker_health") or {},
+                    }
+                    if signature != self._last_health_signature:
+                        await self.event_store.append(
+                            "health.changed",
+                            "health",
+                            "terminal-mcp",
+                            payload=signature,
+                        )
+                        self._last_health_signature = signature
                 return result
         except asyncio.CancelledError:
             if self.events:
@@ -1003,9 +1039,11 @@ class TerminalService:
                     "intent_journal": detail.get("intent_journal") or [],
                 }
 
-            communications = list(await asyncio.gather(
-                *(read_communication(session) for session in (agents.get("sessions") or []))
-            ))
+            communications = list(
+                await asyncio.gather(
+                    *(read_communication(session) for session in (agents.get("sessions") or []))
+                )
+            )
             instance = {
                 "application": "terminal-mcp",
                 "version": __version__,

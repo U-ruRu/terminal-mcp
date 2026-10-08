@@ -225,6 +225,20 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         """,
         ),
     )
+    groups += (
+        (
+            "validation",
+            "repair",
+            """
+            access_mesh_incomplete_issue access_mesh_invalid_code_tag access_mesh_invalid_identifier
+            access_mesh_invalid_issuers access_mesh_invalid_proof_key access_mesh_invalid_revision
+            access_mesh_missing_code_tag access_mesh_missing_policy access_mesh_missing_time
+        """,
+        ),
+        ("conflict", "reconcile", "access_mesh_issue_replayed"),
+        ("access", "stop", "session_draining"),
+        ("transient", "retry", "claim_release_failed"),
+    )
     messages = {
         "session_attach_required": (
             "Attach this connector with issuer_node_id and access_code before writing."

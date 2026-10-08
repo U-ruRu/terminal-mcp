@@ -152,6 +152,8 @@ class MessageMode(StrEnum):
 
 
 class MessageState(StrEnum):
+    queued = "queued"
+    partial = "partial"
     delivered = "delivered"
     seen = "seen"
     read = "read"
@@ -286,6 +288,12 @@ class ObserveOutput(RootModel[ObserveSuccess | AccessError]):
         return _success_schema(cls.__success_type__)
 
 
+class MessageDeliveryError(_Strict):
+    server_id: str
+    code: Literal["message_unavailable"]
+    retry: Literal["retry"]
+
+
 class MessageRecord(_Strict):
     message_hash: MessageId | None = None
     message_id: MessageId | None = None
@@ -311,6 +319,9 @@ class MessageRecord(_Strict):
     scope: str | None = None
     delivered_to: list[str] | None = None
     message_hashes: dict[str, str] | None = None
+    pending_peers: list[str] | None = None
+    delivery_errors: list[MessageDeliveryError] | None = None
+    outcome: Literal["committed"] | None = None
 
 
 class MessageListResult(_SessionAware):
@@ -350,6 +361,7 @@ class RecipientRecord(_Strict):
 
 
 class MessageRecipientsResult(_SessionAware):
+    unavailable_peers: list[str] = Field(default_factory=list)
     ok: Literal[True]
     action: Literal["recipients"]
     sender: str | None = None
@@ -433,6 +445,8 @@ class CoordinationState(_Strict):
 
 
 class ExecutionIdentity(_Strict):
+    issuer_node_id: str | None = None
+    slot_id: str | None = None
     logical_agent_id: str | None = None
     work_session_id: str | None = None
     session_epoch: int | None = None
@@ -1076,6 +1090,7 @@ def message_result(
             "action": "recipients",
             "sender": raw.get("sender") or sender,
             "recipients": raw.get("recipients") or [],
+            "unavailable_peers": raw.get("unavailable_peers") or [],
             "next_cursor": raw.get("next_cursor"),
         }
         return _result("message", "recipients", MessageOutput, raw, structured)
@@ -1085,7 +1100,12 @@ def message_result(
             "message_hash": raw.get("message_hash") or message_hash,
             "reply_to": raw.get("reply_to") or message_hash,
             "sender": raw.get("sender") or sender,
-            "state": "replied",
+            "state": raw.get("state") or "replied",
+            **{
+                key: raw[key]
+                for key in ("pending_peers", "delivery_errors", "outcome", "delivered_to", "scope")
+                if key in raw
+            },
         }
         structured = {"ok": True, "action": action, "message": record}
     elif message_hash is not None:
@@ -1103,9 +1123,12 @@ def message_result(
             "message_hash": raw.get("message_hash"),
             "message_hashes": raw.get("message_hashes"),
             "sender": raw.get("sender") or sender,
-            "target": target,
-            "mode": normalized_mode,
-            "state": "delivered",
+            "target": raw.get("target") or target,
+            "mode": raw.get("mode") or normalized_mode,
+            "state": raw.get("state") or "delivered",
+            "pending_peers": raw.get("pending_peers"),
+            "delivery_errors": raw.get("delivery_errors"),
+            "outcome": raw.get("outcome"),
             "scope": raw.get("scope"),
             "delivered_to": raw.get("delivered_to"),
             "namespace": raw.get("namespace"),

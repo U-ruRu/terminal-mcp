@@ -35,7 +35,7 @@ class CommandApplication(ApplicationCapability):
     async def journal(
         self, actor: ActorContext, *, limit: int = 20, cursor: str | None = None
     ) -> dict:
-        mesh = self.gate.access_mesh
+        mesh = getattr(self.gate, "access_mesh", None)
         if mesh is None:
             return _read_error("capability_not_allowed", "Local mesh journal is disabled")
         scope = {"kind": "command.journal", "node_id": mesh.store.local_node_id}
@@ -86,7 +86,7 @@ class CommandApplication(ApplicationCapability):
             request.action == "read"
             and request.code is None
             and (
-                self.gate.access_mesh is not None
+                getattr(self.gate, "access_mesh", None) is not None
                 or (not actor.provider_metadata and actor.endpoint_role in {"legacy", "internal"})
             )
         ):
@@ -95,8 +95,8 @@ class CommandApplication(ApplicationCapability):
                 "cmd_hash": request.cmd_hash,
                 "authorization": "anonymous",
             }
-            if self.gate.access_mesh is not None:
-                scope["node_id"] = self.gate.access_mesh.store.local_node_id
+            if getattr(self.gate, "access_mesh", None) is not None:
+                scope["node_id"] = getattr(self.gate, "access_mesh", None).store.local_node_id
             try:
                 start = decode_cursor(request.cursor, scope)
             except InvalidCursor as exc:
@@ -160,11 +160,11 @@ class CommandApplication(ApplicationCapability):
                     "kind": "cmd.read",
                     "cmd_hash": result["cmd_hash"],
                     "authorization": "anonymous"
-                    if self.gate.access_mesh is not None
+                    if getattr(self.gate, "access_mesh", None) is not None
                     else identity["logical_agent_id"],
                 }
-                if self.gate.access_mesh is not None:
-                    scope["node_id"] = self.gate.access_mesh.store.local_node_id
+                if getattr(self.gate, "access_mesh", None) is not None:
+                    scope["node_id"] = getattr(self.gate, "access_mesh", None).store.local_node_id
                 output = await self.service.read(
                     cmd_hash=result["cmd_hash"],
                     lines_count=DEFAULT_CMD_READ_LINES,

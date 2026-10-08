@@ -8,6 +8,7 @@ from starlette.routing import Mount
 
 from terminal_mcp.application import TerminalApplication
 from terminal_mcp.application.access_mesh import AccessMeshApplication
+from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
 from terminal_mcp.application.command_scheduler import CommandScheduler
 from terminal_mcp.application.managed_identity import (
     ManagedGrantAuthorizer,
@@ -46,6 +47,8 @@ from terminal_mcp.fleet.replication import FleetReplicationService
 from terminal_mcp.fleet.source import FleetSourceService
 from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
 from terminal_mcp.fleet.storage import FleetIdentityStore
+from terminal_mcp.http.access_mesh import build_access_mesh_operator_router
+from terminal_mcp.http.access_mesh_messages import build_access_mesh_message_router
 from terminal_mcp.http.actions import build_actions_router
 from terminal_mcp.http.admin import build_admin_router
 from terminal_mcp.http.browser_security import BrowserSecurityMiddleware
@@ -307,6 +310,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     access_mesh = None
     access_mesh_replication = None
+    access_mesh_messages = None
     if settings.access_mesh_enabled:
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
         mesh_store = AccessMeshStore(
@@ -335,6 +339,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if fleet_config and fleet_replication:
             access_mesh_replication = AccessMeshReplication(access_mesh, fleet_config)
             service.access_mesh_replication = access_mesh_replication
+        access_mesh_messages = AccessMeshMessaging(
+            access_mesh,
+            agent_store=service.agent_coordinator.store,
+            replication=access_mesh_replication,
+        )
+        service.access_mesh_messages = access_mesh_messages
 
     application = TerminalApplication(
         service,
@@ -422,6 +432,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await managed_runtime.start()
         if access_mesh:
             await access_mesh.start()
+        if access_mesh_messages:
+            await access_mesh_messages.start()
         if access_mesh_replication:
             await access_mesh_replication.start()
         try:
@@ -433,6 +445,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     await stack.enter_async_context(access_mcp.session_manager.run())
                 yield
         finally:
+            if access_mesh_messages:
+                await access_mesh_messages.stop()
             if access_mesh_replication:
                 await access_mesh_replication.stop()
             if access_mesh:
@@ -455,6 +469,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="terminal-mcp", version=__version__, lifespan=lifespan)
     app.state.access_mesh = access_mesh
+    app.state.access_mesh_messages = access_mesh_messages
     app.state.access_mesh_replication = access_mesh_replication
     app.state.access_mcp = access_mcp
     app.state.executor_mcp = executor_mcp
@@ -489,8 +504,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.persistent_policy_controller = persistent_policy_controller
     app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
+    if access_mesh:
+        app.include_router(build_access_mesh_operator_router(application))
     if access_mesh and fleet_replication:
         app.include_router(build_access_mesh_router(access_mesh, fleet_replication))
+        app.include_router(
+            build_access_mesh_message_router(access_mesh_messages, fleet_replication)
+        )
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:
             app.include_router(
