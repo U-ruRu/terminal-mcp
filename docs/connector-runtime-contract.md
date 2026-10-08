@@ -1,66 +1,91 @@
 # Connector runtime contract
 
-Executor and Coordinator publish argument names, defaults and compact usage hints. Their input schemas accept argument values and extra fields. Runtime models validate types, bounds, supported fields and action prerequisites before invoking application mutations.
+Release: **0.14.0**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
 
-Handled application failures use MCP `isError: false` and a structured result:
+## Published surfaces
 
-```json
-{"ok":false,"error":{"code":"input_validation_failed","message":"Correct the indicated request field.","details":{"validation_errors":[{"error_class":"missing","path":"command","description":"Provide this required field."}]},"outcome":"not_committed","retry":"repair","reason":"missing_required","path":"command"}}
-```
+Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
-`structuredContent` contains the object. The text fallback contains the same object encoded once as JSON. Output planning schemas are flat top-level objects covering success fields, `ok` and `error`. Nested records are coarse; strict success/error models still validate runtime responses. The published planning projection has no schema references or composition; each tool has a tested byte baseline. The legacy adapter retains its flat error envelope.
+Access catalog: `session`.
 
-`error.code`, `error.outcome` and `error.retry` describe the result and recovery. Session lifecycle failures select `start_session`; optimistic concurrency failures expose `revision_conflict` and `error.details.current_revision`. Uncertain failures select reconciliation. Validation issues contain bounded schema-owned paths and corrective descriptions. Private exception diagnostics remain in service logs.
+Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
-Task record revisions track field, checkpoint and output-state changes. Claim, release, review and relation operations enforce a supplied `expected_revision` inside their write transaction. Their side-stream records retain independent event identities. Comments append to history and accept the comment text without a revision argument. A `review_of` relation may update the associated candidate and task revision.
+Executor catalog: `session`, `task_list`, `command_run`, `command_read`, `command_cancel`, `command_recovery`, `task_claim`, `task_state`, `task_comment`, `message`.
 
-Task checkpoint, result, history payload, review evidence and warning extensions contain native JSON values. Graph nodes share `namespace`, `task_id` and nullable `state`.
+Coordinator endpoint: `/terminal-mcp/coordinator/v1/mcp`.
 
-Infrastructure health is available before session creation. Its `ok` field confirms collection of the diagnostic result; `healthy`, `status` and component states describe infrastructure health. Extended role health includes bounded provider field names, identity fingerprints and resolution status. Successful resolution supplies the public agent name. Host paths, privilege details and custom health-command output remain outside the role health projection.
+Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
 
-Provider bindings use the provider, subject and conversation identity. Identical evidence resolves consistently across endpoint roles and nodes. Distinct provider evidence remains distinct; verified authorization and ownership checks apply independently. Role session-start receipts include the same safe provider fingerprints. Extended health fingerprints support comparison through connected clients without publishing raw provider identifiers.
+Both FirstByte and BacLOUD publish all three surfaces. Legacy compatibility endpoint `/mcp` retains its own behavior:
 
-An active WorkSession retains the role, contract version and authenticated principal that opened it. Another role uses its own provider identity or starts after the original session ends. `session_contract_conflict` describes a role/version mismatch; `session_principal_mismatch` describes another connection's session. Claims record LogicalAgent attribution and the ownership lifetime of the slot/session. Coordinator mutations respect another agent's live claim. Public failure receipts include safe provider fingerprints when request metadata is present.
+Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
-Explicit role handoff uses `session.end` on the original endpoint followed by `session.start` on the next endpoint with the same provider evidence and authorized principal. The LogicalAgent survives the handoff. Bootstrap-managed and temporary-session claims are released when the original session ends; the new session claims available work again. Explicitly provisioned persistent slots follow their durable ownership policy. The next WorkSession records the new role within the current work-window budget.
+The effective V2 discovery authority is `src/terminal_mcp/mcp/access_mesh_schema_baselines_v2.json`, generated from mesh-enabled tools rather than old bootstrap models.
 
-Task mutations and command launches derive replay keys from the server-observed MCP request ID and WorkSession. `run` and `recovery` return their stored command receipt on replay after rechecking the session and execution fence. A payload mismatch reports `idempotency_conflict`. An uncertain launch retains its reservation and reports an in-progress/reconciliation state on retry, preserving at-most-once launch behavior. A confirmed pre-commit rejection releases its reservation.
+## Issuer session versus role attach
 
-Observed stateless ChatGPT connector calls reuse JSON-RPC ID `0`. Task replay keys for this client include the normalized mutation fingerprint, so distinct mutations remain distinct and an exact task retry reuses its receipt. Command calls with this non-unique ID execute as fresh requests; command replay protection applies to non-zero per-operation request IDs. A constant transport ID alone cannot distinguish an intentional repeated command from a delivery retry. The client supplies no additional public tool argument.
+Only Access `session` accepts `start`, `end`, `status`. `start` requires `mode`; legacy issuance rejects a supplied code, and persistent activation requires an existing persistent slot's four-digit code. The issuer namespace scopes the code. Slot kind is immutable and has exactly two values: `legacy`, `persistent`.
 
-## Fleet session authority and claim leases (runtime schema 21)
+Executor/Coordinator `session` is attach-only and accepts `attach`, an Access Code and its issuer. The qualification can be `issuer_node_id` plus `access_code`, or an `issuer:dddd` code. The same slot can attach to multiple role/node connectors. The trusted provider/principal/role context identifies each binding; an existing binding cannot switch slots. Subsequent domain writes omit codes and client-asserted identity/epoch fields. Ending a session is an Access/issuer operation, not a detach message to each node.
 
-A provider-bound identity is resolved once and routed to its home authority for
-managed session start, admission, end and interrupt. Authenticated Fleet forwarding
-preserves the original OAuth principal, provider evidence and endpoint role. A first-contact peer obtains the authority name from the trusted Access registry,
-then verifies the home node’s route, epoch and migration state before caching it. The
-home authority rechecks the binding. A conflicting active principal or role keeps
-its typed runtime error. Execution on another node uses a short-lived authority
-permit; the execution node stores receipts and audit records for the global
-identity without creating a local authority slot.
+Local grant/policy replicas provide admission. Reads use a pure observation path. Writes materialize the local WorkSession and check its local deadline, epoch and cleanup fence. Local operations do not call an issuer RPC for each permit. A partition does not suspend already-replicated deadlines; unseen issuer changes become enforceable after delivery/catchup. Binding an unknown grant requires local replication first.
 
-Claims acquired by automatic managed sessions and temporary compatibility slots
-carry an exact `(LogicalAgent, WorkSession, session_epoch)` lease. A leased claim
-moves a ready task to `in_progress` atomically. End, interrupt and hard expiry first
-fence command execution, then release that session's claims. Releasing the last
-leased owner returns a task to `ready` only when the lease automatically advanced
-its activity state. Explicit state assignments, including a same-state manual
-override, clear that provenance. Checkpoint, result, history and other owners survive. Explicit durable ownership
-retains its separately controlled workflow state and lifetime.
+## Workflow-state and ownership contract
 
-Remote revocation writes a durable session fence even when no claim exists yet.
-This serializes against late claim admission. Pending execution blockers retain
-ownership until drainage succeeds. The Fleet recovery sweep also considers
-expired task-only leases and persisted revoke fences, so restart and a missed peer
-notification cannot leave the claim permanently assigned. A cleanup retry for an
-old epoch leaves successor-session claims intact. Health reports stale leases
-while recovery is pending.
+Task state is one of `ready`, `in_progress`, `blocked`, `deferred`, `done`. Create sets initial state; subsequent workflow transitions use `state` or `done`. `update` rejects a state field. Claim/release/expiry/end/suspend/delete preserve explicit task state, checkpoint and result.
 
-Schema 21 retains pending and completed execution receipts, audit records, indexes
-and audit sequence numbers while removing their inappropriate local-slot foreign
-key. Authority-owned tables keep their foreign keys. Existing managed claims are
-leased only when exact claim-event and WorkSession evidence exists; completed old
-sessions then release those claims transactionally. Upgrade from schema 20 needs
-a runtime database backup. A binary-only rollback to schema 20 is blocked after
-the durable schema upgrade; recovery uses a compatible binary or the coordinated
-database restore procedure.
+Legacy claims release on end/expiry. Persistent claims release on end/expiry when their policy says `release_on_end=true`; otherwise ownership remains durable. Suspend/delete triggers cleanup. Local cleanup fences execution before releasing ownership and retains a pending fence on failure. Each release targets its exact old claim/session identity and is idempotent; a successor claim survives delayed cleanup.
+
+Owner-sensitive task writes validate ownership in their write transaction, independently of revision checking. Revision checks protect policy/dependency/output preconditions. Executor task_comment accepts comment (default) and checkpoint; checkpoint retains canonical owner/revision guards. Comments retain independent append semantics. Review and its audit commit together. All successful mutation receipts are derived from the transaction's committed snapshot, including state, revision and requested description/checkpoint/result; post-commit readback does not decide whether the mutation succeeded.
+
+## Planning and runtime validation
+
+Planning inputs are **permissive planning schemas**: a flat callable surface, meaningful descriptions, action-field visibility and constraint annotations. The original strict request schema is retained under `x-runtime-schema` or equivalent per-field/action annotations. Unknown arguments, wrong types, missing required fields and cross-field violations reach runtime validation and return structured errors before mutation.
+
+Task create and archive preserve both their ordinary fields and formal conditions. Create requires `namespace` and `isolation_hint`; `state=done` also requires a non-null result. Archive requires `namespace`, `task_id` and `archive_note` or `note`. Disallowed state/property combinations are not made valid by permissive planning.
+
+Effective role inputs have schema-size tests. Most inputs are below 8 KiB. Coordinator task_manage retains the complete action schema under an explicit 40 KiB ceiling. Output planning is a flat/coarse object below 2 KiB; the authoritative output model remains strict. Contract baselines record planning/runtime digests, byte sizes and annotations.
+
+## Wire errors, outcomes and replay
+
+Handled application failure has MCP `isError:false`, JSON `ok:false`, and an `error` object. `structuredContent` and text fallback represent the same result. Recovery uses the actual `code`, `details`, `outcome`, `retry`, `reason` and `path` returned by the server.
+
+A validation or fenced-owner failure has no mutation effect. A network delivery failure after local message acceptance can have `outcome=committed`: retain the message hash and let its outbox retry. A successfully committed task returns the receipt captured inside its transaction even if a subsequent reader/projection fails. Unknown outcomes require persisted-state reconciliation before another mutation.
+
+Automatic task replay includes normalized payload, trusted principal/role, LogicalAgent, WorkSession/epoch and server-observed MCP request ID. A reused zero, empty or nonzero ID does not collapse different task requests. An exact retry returns its durable original result; a successor session or different payload has a distinct identity. The current gate is evaluated before serving a task replay. No public role-tool idempotency argument is added.
+
+Shell launch requires stronger care: constant JSON-RPC ID `0` is treated as a fresh launch, while unique server-observed operation IDs support durable reservation/replay. Do not infer exactly-once shell effects from a constant ID. Read `cmd_hash` or the local journal after an uncertain launch.
+
+## Read paths and paging
+
+`command_read(cmd_hash=...)` reads retained local output for any LogicalAgent without Access Code or prior attach. `command_read` with no hash returns a bounded all-agent local journal with command and identity metadata. Transport authentication still applies. Coordinator health also works before attach; health collection success and actual component health are separate fields.
+
+Task reads and message reads use their declared scope and canonical projections. Message inbox/history/ACK are local to the attached connector's execution node; they do not query the issuer for read permission. Opaque cursors bind the original query/caller where required. Reuse them unchanged, with the same filters/detail mode. Message paging uses durable keyset sequences and is safe while prior inbox rows are consumed or retained data is pruned.
+
+Output budgets apply to encoded bytes, not just text length. Oversized full messages remain unacknowledged; summary mode provides a bounded alternative. Response preflight succeeds before notify surfacing changes read state.
+
+## Message delivery and obligations
+
+Both roles support recipients/send/read/ack/reply/history with `scope=local|fleet`; default is fleet. Sender identity is resolved from local trusted binding. Broadcast omits target or uses `broadcast`; a task recipient set uses namespace plus task_id. Discovery exposes active unique public names and safe lifecycle/activity metadata. Sender, duplicate LogicalAgent and expired local recipients are excluded.
+
+Local recipients, message metadata, obligations and pending peer jobs commit together before network forwarding. Local-only delivery sends no peer request. Fleet forwarding uses authenticated peers and an idempotent durable outbox; total synchronous forwarding wait is bounded, including lock wait. States `queued` and `partial` preserve the true local acceptance outcome rather than claiming remote delivery.
+
+Notify read acknowledges only successfully surfaced rows. Mode ack requires ACK; alert/require_reply requires a reply and remains an obligation after ACK. Reply creation, local obligation release and pending receipt/delivery jobs are atomic. Parent-message routing brings replies to the original sender's execution node. Restart/lost-ACK retries preserve one accepted message effect.
+
+The full peer payload, including broadcast exclusions, and the full acceptance proof must fit the 64 KiB Fleet message budget before commit. A payload that cannot ever be acknowledged is rejected transactionally.
+
+## Operator and mobile contract
+
+Mobile/Console calls the operator API for the same two immutable slot kinds. Read endpoints are `/actions/access/slots`, `/actions/access/slots/{slot_id}`, `/actions/access/defaults`. `POST /actions/access/mutate` supports create/defaults/policy/deadline/end/suspend/resume/rotate/delete. This operator HTTP surface uses explicit idempotency keys and revision guards; it exposes no command execution.
+
+Duration, cooldown, rearm, warning/draining and release-on-end are per-slot policy. Warning/draining thresholds must be nonnegative and smaller than duration. Policy defaults persist separately and affect subsequent issuance defaults. A deadline mutation applies to an active cycle and requires a timezone-aware time later than its start. Slot list views exclude Access Codes; code issuance/rotation receipts are sensitive.
+
+## Effect metadata
+
+MCP annotations describe the most consequential allowed action; `x-terminal-mcp-action-matrix` details individual actions. Role attach is non-destructive and idempotent. Access combines issuance/status/end; aggregate issuance is not idempotent. Task create with generated identity is not generally idempotent. Command run/recovery is destructive, open-world and non-idempotent; cancel is destructive/idempotent. Inbox read has surfacing effects, unlike pure history or command output reads.
+
+OpenAPI operations publish corresponding `x-openai-isConsequential` classification. Metadata never grants authorization and cannot replace runtime capability checks.
+
+## Release verification
+
+Run focused/runtime/discovery/documentation tests, the complete regression suite, and live FirstByte/BacLOUD checks on the exact release SHA. Required boundaries are six primary connectors, both directions of messaging, task ownership lifecycle, issuer-partition local operations, code-free cross-agent command reads and mobile revocation/deadline controls. See [deployment and acceptance](access-mesh-deployment.md). Legacy `/mcp` checks complement this matrix; they do not substitute for it.

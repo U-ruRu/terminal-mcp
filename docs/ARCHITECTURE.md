@@ -1,26 +1,12 @@
 # Terminal MCP architecture
 
-Current application version: **0.13.1**. Durable runtime schema: **21**.
+Current application version: **0.14.0**. Durable runtime schema: **21**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
 
-## System boundary
+## Public boundary
 
-```text
-MCP / HTTP Actions / Console / Fleet
-                ↓
-          Transport adapters
-                ↓
-            ActorContext
-                ↓
-          Application API
-                ↓
- SessionGate · Tasks · Messages · Commands · Context · Health
-                ↓
- Repositories · Scheduler · Fleet authority · ExecutionPort
-                ↓
-       SQLite state · output cache · shell executor
-```
+Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
-## Public MCP
+Access catalog: `session`.
 
 Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
@@ -30,200 +16,110 @@ Coordinator endpoint: `/terminal-mcp/coordinator/v1/mcp`.
 
 Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
 
-Role v1 uses server-resolved identity and the shared Application API. Inputs are permissive planning schemas; authoritative runtime validation precedes every operation. Output planning is a flat object with named success fields, `ok` and `error`; strict wire models remain server-side.
+FirstByte and BacLOUD each host all three roles: six primary connectors. The Access catalog performs issuer issuance/lifecycle only. Executor and Coordinator use the same application model with distinct capabilities. Their `session` is attach-only in Access Mesh mode.
 
-Handled application errors use MCP `isError: false` with `structuredContent.ok: false` and a machine-readable `error` object. Bounded collections use opaque `next_cursor` values.
-
-Bootstrap-created managed sessions and temporary legacy sessions release task claims on end, interrupt and expiry. Explicitly provisioned persistent slots retain their separate ownership policy. Checkpoints and task history survive session cleanup.
-
-### Legacy compatibility
-
-Endpoint: `/mcp`.
+Legacy compatibility endpoint: `/mcp`.
 
 Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
-Public inputs use bounded Pydantic schemas. Public collections use bounded pages and opaque cursors. Public outputs use compact canonical projections from application/core modules.
+Legacy provider bootstrap/session-start behavior belongs to that compatibility surface. It is not the V2 role-admission path.
 
-## ActorContext and identity
-
-`ActorContext` carries:
-
-- authenticated principal;
-- provider request identity;
-- node/server identity;
-- `LogicalAgent`;
-- `WorkWindow`;
-- `WorkSession` and `session_epoch`;
-- endpoint role;
-- contract version.
-
-Provider-bound ChatGPT sessions derive identity from server request metadata. Managed identity maps provider bindings to fleet-authoritative logical agents. `SessionGate` resolves active work-session state for agent-bound operations.
-
-For first contact on another execution node, the trusted Access registry identifies the home authority. The authenticated home supplies its route epoch and migration state; the peer caches that verified route. Managed lifecycle admission is performed at home, while commands and their replay receipts remain on the execution node.
-
-Temporary claims are leased to the exact `(LogicalAgent, WorkSession, session_epoch)`. Session drainage fences execution before releasing claims. Automatic `ready` → `in_progress` claim transitions are reversed when the last leased owner leaves; explicit state assignments and durable ownership retain their independent workflow semantics. Remote claim-only leases recover after missed revocation, deadline expiry or process restart.
-
-## Application API
-
-`src/terminal_mcp/application/` is the transport-independent application boundary.
-
-Capabilities:
-
-- sessions and managed identity;
-- observations;
-- tasks and task graph mutations;
-- messaging;
-- command orchestration;
-- instance context;
-- health;
-- fleet authority and replication;
-- operator controls.
-
-MCP, HTTP, Console and Fleet adapters call the same application semantics.
-
-## Managed work model
-
-Identity hierarchy:
+## Identity and ownership of authority
 
 ```text
-Provider identity → LogicalAgent → WorkWindow → WorkSession
+trusted ProviderMetadata + authenticated principal + endpoint role
+                         ↓ ConnectorBinding
+             (issuer_node_id, AccessSlot, LogicalAgent)
+                         ↓ replicated grant and policy
+       execution node A                  execution node B
+       local WorkSession/epoch           local WorkSession/epoch
+       local clock/write gate            local clock/write gate
+       native commands/tasks/messages    native commands/tasks/messages
 ```
 
-Task state:
+`ActorContext` carries authenticated transport identity, supported provider metadata, endpoint role and contract version. Provider/principal fields are trusted adapter inputs; tool arguments never choose their own LogicalAgent or session epoch. A four-digit Access Code is resolved in its issuer namespace. Initial attach binds a connector identity to one slot; another slot requires a distinct valid binding context rather than rebinding the existing row.
+
+Each issuer independently creates its own LogicalAgent and immutable slot kind (`legacy` or `persistent`). A stable issuer-qualified `public_name` identifies that LogicalAgent on both nodes and across roles. Working role bindings are distinct, while the underlying LogicalAgent is shared. There is no fixed single-role WorkSession handoff requirement in V2.
+
+The issuer authors signed grant events. An authenticated, explicitly configured peer validates issuer/event provenance and applies an idempotent local replica. Slot revisions, event identity, durable outbox/inbox acknowledgements and catchup handle reordered/duplicate delivery and missed network notifications. Native ownership records protect against identity collisions. Slot suspension/deletion and code rotation retain durable revocation/security history.
+
+## Local session gate
+
+`AccessMeshApplication` resolves an attached grant locally. Writes consult the local policy, slot state, fixed cycle anchor/deadline and cleanup state. Reads use `observed_identity` and do not create WorkSession rows, renew deadlines or mutate epochs. Attach/write admission materializes a local WorkSession only when the replicated policy allows it.
+
+A cycle contains active, optional warning/draining, then expired or cooldown. With rearm enabled, the next cycle follows the replicated anchor, duration and cooldown. Repeated operations do not extend the deadline. The first explicitly changed deadline is honored; subsequent rearm cycles use the slot policy. `SessionUpdated`, `SessionEnded` and per-slot policy controls are issuer events, not calls that each execution connector must relay synchronously.
+
+The ordinary gate performs no issuer RPC per operation. During a partition, a node enforces already-replicated deadlines and policies; it learns newer issuer events when communication/catchup resumes. Local code-free command reads, inbox, history and ACK do not depend on issuer availability. Attach to a previously unseen grant requires that grant to have reached the local replica.
+
+Local expiry/revocation persists cleanup work. Execution is fenced/drained before the relevant claims are released. A failed claim cleanup is isolated and retryable; a late cleanup carries exact claim/session identity and cannot remove a successor claim. Pending execution cleanup retains the admission fence. Read diagnostics expose `cleanup_pending`; new mutable work waits for safe completion.
+
+Legacy ownership releases on end/expiry. Persistent ownership is retained by default and releases on end/expiry when `release_on_end=true`. Suspension and deletion revoke the slot and trigger cleanup independently. Both kinds use the same local deadline/rearm machinery; Mobile/Console is an operator interface, not another kind.
+
+## Application and storage layers
 
 ```text
-ready → in_progress → done
-            ↓
-         blocked
-
-deferred → ready
+MCP / HTTP Actions / Console / Fleet adapters
+                   ↓ ActorContext
+              Application API
+                   ↓
+SessionGate · Tasks · Messages · Commands · Health · Operator
+                   ↓
+Repositories · Scheduler · Replication · ExecutionPort
+                   ↓
+SQLite durable state · bounded output cache · shell executor
 ```
 
-Task ownership is derived from live claims. Cooperative tasks support one owner and additional participants. Dependencies, relations, comments, checkpoints, reviews and output states are durable.
-
-Canonical task projections:
-
-- `TaskListItem` — collection item;
-- `TaskSnapshot` — compact current state;
-- `TaskDetail` — bounded materialized state;
-- `TaskWorkingSet` — executor-oriented claimed context;
-- `TaskReceipt` — mutation receipt;
-- `TaskHistory` — paginated history.
-
-## Messaging
-
-Messages and receipts are durable application state.
-
-Recipient lifecycle:
-
-```text
-delivered → seen → read → replied
-```
-
-Messaging supports direct recipients, task recipients, inbox/history reads, acknowledgements, replies and alerts.
-
-## Command orchestration
-
-Application service owns:
-
-- command admission;
-- numbered FIFO queue selection;
-- queue authority;
-- durable command state;
-- task attribution;
-- bounded output projection;
-- cancellation and recovery orchestration.
-
-`command_run` semantics support a bounded inline-completion path and queued/running continuation through read operations.
-
-## ExecutionPort
-
-`ExecutionPort` separates application command semantics from process execution.
-
-Implementations:
-
-- in-process executor;
-- Unix-socket executor.
-
-Unix topology:
-
-- API unit: `terminal-mcp.service`;
-- executor unit: `terminal-mcp-executor.service`;
-- socket: `/run/terminal-mcp/executor.sock`;
-- executor peer authorization: Unix peer credentials with API UID allowlist.
-
-API restart preserves application command state. Executor restart converges process execution state through the IPC/execution contract.
-
-## Storage boundaries
+`application/` contains transport-independent use cases. HTTP routers belong in `http/`; SQL and transaction helpers belong in `storage/`. Blocking SQLite work is offloaded from the event loop. Public metadata is attached at the transport adapter; authorization remains an application boundary.
 
 | Store | Responsibility |
 | --- | --- |
-| `terminal-mcp.sqlite3` | application state, tasks, sessions, messages, command metadata, context |
-| `auth.sqlite3` | auth principals, clients, grants, Access security state |
-| `fleet-control.sqlite3` | fleet authority and topology control |
-| `output.sqlite3` | bounded disposable command output |
+| `terminal-mcp.sqlite3` | native tasks, claims, messages, command metadata, sessions and context; mesh grant replicas, attachment/activity, cleanup, event/message outbox and replay receipts |
+| `auth.sqlite3` | principals, clients and credential/security state |
+| `fleet-control.sqlite3` | configured Fleet topology and control |
+| `output.sqlite3` | bounded command output with independent retention |
 
-Durable stores use SQLite transactions for state plus audit evidence. Output retention operates independently from durable application state.
+Durable stores keep audit and mutation effects in the appropriate SQLite transaction. Access security/revocation records are not treated as disposable caches. Output pruning does not erase command metadata, tasks or message receipt history.
 
-## Deployment model
+## Tasks: state, ownership and committed receipts
 
-Installer: `deploy/install.sh`.
+Task states are `ready`, `in_progress`, `blocked`, `deferred`, `done`. Initial state is assigned by create. Subsequent state changes require `state` or `done`; property `update` rejects a state argument. Claim and release preserve the explicit state. Session expiry, end, suspension and deletion preserve state, checkpoint and result while changing ownership according to slot policy.
 
-Split render/check: `terminal_mcp.deployment.split`.
+Owner-sensitive writes validate the exact claim-id snapshot in their write transaction. Revision checks also guard policy/output changes between preflight and commit. Executor task_comment supports comment (default) and checkpoint without expanding the ten-tool catalog. Safe participant property changes retain their established permissions; comments remain independent append operations. `review` and its audit event commit together. Relations, checkpoint, archive, state and dependency changes follow their ownership and dependency guards.
 
-Split activation/rollback: `terminal_mcp.deployment.driver`.
+Every successful mutation family captures the resulting task, ownership, dependency and relevant legacy-session liveness snapshot inside the transaction. The returned `TaskReceipt`/`TaskWorkingSet` reflects that commit, even if another writer later advances the task or a post-commit read fails. Revisions identify the captured record, not an arbitrary newer readback. Canonical projections remain `TaskListItem`, `TaskSnapshot`, `TaskDetail`, `TaskWorkingSet`, `TaskReceipt`, `TaskHistory`.
 
-Activation selects `TERMINAL_MCP_EXECUTION_MODE=unix` and the canonical executor socket. Rollback restores service topology/configuration while durable application databases keep their current state.
+Automatic task replay keys hash normalized domain fields with trusted caller, role, LogicalAgent, WorkSession, epoch and observed MCP request ID. Reused zero or nonzero IDs with different domain requests produce different mutations. Exact retries return the durable original receipt after the current session gate is checked.
 
-## Role contract implementation
+## Commands and ExecutionPort
 
-Task: `MCP-ROLE-ENDPOINTS-V1-001`.
+The API/application service owns admission, numbered FIFO queues, task attribution, command metadata, cancellation/recovery and output pagination. `ExecutionPort` implements process execution: `in_process` or Unix IPC. Split services are `terminal-mcp.service` and `terminal-mcp-executor.service`; socket `/run/terminal-mcp/executor.sock`; Unix peer credentials and an API UID allowlist authorize executor requests.
 
-### Executor v1
+`command_run` has a bounded inline-completion path; longer execution returns a `cmd_hash` for continuation. Code-free `command_read(cmd_hash=...)` can read retained local output belonging to any LogicalAgent. Omitting `cmd_hash` selects a bounded local command journal across agents, including identity metadata. This does not add a new tool to the Executor catalog or bypass configured transport authentication. Command cancel/recovery retain their write/session/ownership gates.
 
-Endpoint: `/terminal-mcp/executor/v1/mcp`.
+Command launch replay uses durable reservations where a unique server-observed operation ID is available. A reused constant ID alone cannot distinguish intentional repeated shell execution from a transport retry. After uncertain launch, reconcile persisted command state before another side-effecting launch.
 
-Catalog:
+## Native local-first messaging
 
-1. `session`
-2. `task_list`
-3. `command_run`
-4. `command_read`
-5. `command_cancel`
-6. `command_recovery`
-7. `task_claim`
-8. `task_state`
-9. `task_comment`
-10. `message`
+Local acceptance writes `coordination_messages`, recipients, mesh metadata and required outgoing jobs atomically. Native message obligations are the same rows consulted by the command gate. `scope=local` performs local delivery only; `scope=fleet` commits local delivery first and uses a durable authenticated peer outbox. Global sender identity and exclusion metadata prevent duplicate broadcast delivery to the same LogicalAgent. Active local observations filter expired recipients.
 
-### Coordinator v1
+Sending reports actual delivery state: `delivered`, `queued`, `partial` or a structured no-recipient error with its real outcome. Public forwarding waits have a bounded total budget, including waiting for the outbox lock; remaining jobs survive restart. Idempotent delivery/receipt processing recovers lost acknowledgements. Complete Fleet envelopes and acceptance proofs are size-checked before commit, preventing permanently unacknowledgeable local obligations.
 
-Endpoint: `/terminal-mcp/coordinator/v1/mcp`.
+Inbox/history/ACK are local. Successful notify-page surfacing marks those messages read; oversized output or failed response preflight leaves them unacknowledged. Keyset pagination uses a durable sequence and remains stable while earlier messages are consumed or removed. Alert requires reply; ACK alone preserves that obligation. Reply acceptance and obligation release are atomic. Reply routing returns to the originating node of the parent message, even when the sender has another attachment elsewhere.
 
-Catalog:
+## Operator controls
 
-1. `session`
-2. `task_get`
-3. `task_list`
-4. `task_manage`
-5. `task_graph`
-6. `agent_observe`
-7. `message`
-8. `health`
+Authenticated operator reads: `GET /actions/access/slots`, `GET /actions/access/slots/{slot_id}`, `GET /actions/access/defaults`. `POST /actions/access/mutate` supports create, defaults, policy, deadline, end, suspend, resume, rotate and delete. It requires an explicit `idempotency_key`; existing-slot/default updates require `expected_revision`. Mode is chosen only at create. The operator API exposes no shell execution.
 
-Role endpoints share `ActorContext`, Session Gate, Application API, task projections, messaging state and persisted storage.
+Per-slot policy controls duration/cooldown/rearm/warning/draining/release-on-end. Deadline changes update the selected active cycle. Defaults apply to issuance defaults; existing slots retain their snapshots until explicitly updated. Slot lists show safe identity/policy/lifecycle metadata; issue/rotate receipts handle the sensitive code.
 
-### Operation metadata
+## Planning, outputs and effect metadata
 
-Task: `TMCP-PUBLIC-METADATA-001`.
+Inputs use **permissive planning schemas**, with strict runtime validation before mutation. Task planning exposes all action fields, including create/archive conditional requirements, while keeping exact formal constraints in annotations. Output planning is flat/coarse; strict success/error models remain server-side. Handled failures use `isError:false`, `ok:false`, structured `error` and an equivalent JSON text fallback.
 
-MCP tool annotations and OpenAPI `x-openai-isConsequential` use operation-level side-effect classification. Contract tests map read-only, mutating, destructive and idempotent behavior to the final public catalogs.
+`access_mesh_schema_baselines_v2.json` freezes effective catalogs, schema hashes/byte counts and tool annotations. Most role planning inputs are below 8 KiB; the complete task_manage action schema has an explicit 40 KiB ceiling. Output planning is below 2 KiB. Action metadata describes actual read/mutate/destructive/idempotent effects: attach is idempotent and non-destructive; shell/recovery is open-world and non-idempotent; task create with generated identity is not broadly idempotent. Mixed tools publish their most consequential action plus the action matrix. OpenAPI `x-openai-isConsequential` follows the same operation-level semantics.
 
-## Detailed design records
+## Deployment and historical design records
 
-- [`architecture/application-core.md`](architecture/application-core.md)
-- [`architecture/execution-port.md`](architecture/execution-port.md)
-- [`architecture/executor-service.md`](architecture/executor-service.md)
-- [`architecture/managed-work-windows.md`](architecture/managed-work-windows.md)
-- [`architecture/public-input-bounds.md`](architecture/public-input-bounds.md)
-- [`architecture-split-service-cutover.md`](architecture-split-service-cutover.md)
+Use [Access Mesh deployment and acceptance](access-mesh-deployment.md) for the current FirstByte/BacLOUD release. The [split-service guide](architecture-split-service-cutover.md) governs execution topology changes. Topology rollback restores units/configuration; binary/database/security-state rollback requires the installer's compatibility gate and an approved recovery plan.
+
+Older design records under `docs/architecture/` explain implementation history. Current public Access Mesh lifecycle, contracts and release boundaries are defined by this document, [connector runtime contract](connector-runtime-contract.md), the effective schema manifest and runtime tests.
