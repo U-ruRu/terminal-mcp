@@ -745,6 +745,7 @@ class TaskStore:
     async def set_workflow_state(
         self, namespace: str, task_id: str, state: str, *,
         agent_id: str, now: str | None = None,
+        blocker_reason: str | None = None, result: Any = None,
     ) -> TaskCommittedRecord:
         """Atomically change only workflow state; content CAS revision is independent.
 
@@ -758,7 +759,7 @@ class TaskStore:
             try:
                 row = await (
                     await db.execute(
-                        "SELECT state,cooperative,archived_at FROM work_items "
+                        "SELECT state,cooperative,archived_at,lane,candidate_ref FROM work_items "
                         "WHERE namespace=? AND task_id=?", (namespace, task_id)
                     )
                 ).fetchone()
@@ -791,6 +792,33 @@ class TaskStore:
                         (namespace, task_id, "updated", agent_id,
                          self._json({"fields": ["state"], "state": state}), now),
                     )
+                    if row[3] == "review" and state in {"done", "blocked"}:
+                        # Atomic event fanout: the state change and the review
+                        # feedback must commit together, with no CAS content bump.
+                        parents = await (
+                            await db.execute(
+                                "SELECT related_namespace,related_task_id FROM work_relations "
+                                "WHERE namespace=? AND task_id=? AND relation_kind='review_of' "
+                                "ORDER BY related_namespace,related_task_id",
+                                (namespace, task_id),
+                            )
+                        ).fetchall()
+                        payload = {
+                            "review_namespace": namespace, "review_task_id": task_id,
+                            "outcome": state, "candidate_ref": row[4],
+                        }
+                        if state == "blocked":
+                            payload["findings"] = blocker_reason
+                            payload["blocker_reason"] = blocker_reason
+                        else:
+                            payload["result"] = result
+                        for parent_namespace, parent_task_id in parents:
+                            await db.execute(
+                                "INSERT INTO work_events(namespace,task_id,event_type,agent_id,"
+                                "payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                                (parent_namespace, parent_task_id, "review_feedback",
+                                 agent_id, self._json(payload), now),
+                            )
                 committed = await self._committed_record_tx(db, namespace, task_id)
                 await db.commit()
                 return committed

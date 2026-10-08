@@ -1144,6 +1144,22 @@ class TaskCoordinator:
         claims = await self._live_claims(namespace, task_id)
         own = next((item for item in claims if item["agent_id"] == agent_id), None)
         if not own and claims:
+            # An already-released owner's retry is idempotent even while
+            # cooperative co-owners retain their own live claims.
+            owner = kwargs.get("_claim_owner")
+            history = await self.store.claims(namespace, task_id, active_only=False)
+            previously_released = any(
+                claim.get("released_at") is not None
+                and (
+                    claim["owner_kind"] == owner.kind
+                    and claim["owner_id"] == owner.owner_id
+                    if owner is not None
+                    else claim["agent_id"] == agent_id
+                )
+                for claim in history
+            )
+            if previously_released:
+                return await self._result(namespace, task_id, [])
             return {"ok": False, "code": "not_owner",
                     "error": "task.release: not_owner", "warnings": []}
         if not own:
@@ -1341,6 +1357,8 @@ class TaskCoordinator:
         try:
             committed = await self.store.set_workflow_state(
                 namespace, task_id, state, agent_id=acting_id,
+                blocker_reason=kwargs.get("blocker_reason"),
+                result=kwargs.get("result"),
             )
         except TaskOwnershipConflict:
             return self._ownership_conflict_result()

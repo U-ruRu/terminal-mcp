@@ -13,6 +13,7 @@ from terminal_mcp.core.persistent_lifecycle import (
     PersistentLifecycleCoordinator,
     PersistentLifecycleError,
 )
+from terminal_mcp.core.public_errors import normalize_public_error
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
 COMMAND_RUN_INLINE_BUDGET_SECONDS = 5.0
@@ -79,25 +80,67 @@ class PersistentBackend:
         return result
 
     async def _idempotent(
-        self, logical_agent_id: str, operation: str, idempotency_key: str,
-        request: dict, action, *, preserve_uncertain: bool = False,
+        self,
+        logical_agent_id: str,
+        operation: str,
+        idempotency_key: str,
+        request: dict,
+        action,
+        *,
+        preserve_uncertain: bool = False,
     ):
-        """Perform every authorized business operation independently.
-
-        Legacy idempotency receipts and JSON-RPC ids never control the mutation.
-        Best-effort post-commit audit must not turn success into a false failure.
-        """
-        result = await action()
-        if result.get("ok"):
+        fingerprint = self.lifecycle.store.idempotency_fingerprint(request)
+        try:
+            replay = await self.lifecycle.store.idempotency_reserve(
+                logical_agent_id, operation, idempotency_key, fingerprint
+            )
+            if replay is not None:
+                return replay
             try:
-                await self._audit(logical_agent_id, operation, payload={"request": request})
-            except Exception:
-                if self.service.events:
-                    self.service.events.emit(
-                        "postcommit_audit_failed", level="ERROR", outcome="error",
-                        logical_agent_id=logical_agent_id, operation=operation,
+                result = await action()
+            except (PersistentLifecycleError, ValueError):
+                if not preserve_uncertain:
+                    await self.lifecycle.store.idempotency_abort(
+                        logical_agent_id, operation, idempotency_key, fingerprint
                     )
-        return result
+                raise
+            if not result.get("ok"):
+                if (
+                    not preserve_uncertain
+                    or normalize_public_error(result).outcome == "not_committed"
+                ):
+                    await self.lifecycle.store.idempotency_abort(
+                        logical_agent_id, operation, idempotency_key, fingerprint
+                    )
+                return result
+            result = await self.lifecycle.store.idempotency_complete(
+                logical_agent_id,
+                operation,
+                idempotency_key,
+                fingerprint,
+                result,
+            )
+            # A committed receipt is authoritative even if the optional audit
+            # sink fails afterwards.
+            try:
+                await self._audit(
+                    logical_agent_id, operation, payload={"request": request},
+                )
+            except Exception:
+                # Never lose the committed receipt due to a failed secondary
+                # diagnostics sink (including the diagnostics emitter itself).
+                try:
+                    events = getattr(getattr(self, "service", None), "events", None)
+                    if events is not None:
+                        events.emit(
+                            "postcommit_audit_failed", level="ERROR", outcome="error",
+                            logical_agent_id=logical_agent_id, operation=operation,
+                        )
+                except Exception:
+                    pass
+            return result
+        except PersistentStoreError as exc:
+            return self._error(PersistentLifecycleError(exc.code, blockers=exc.blockers))
 
     async def _execution_authority(
         self,
@@ -1808,20 +1851,7 @@ class PersistentBackend:
                 return await self.run(cmd, queue_id=queue_id, task_scope=task_scope, **identity)
             return await self.recovery(cmd, **identity)
 
-        return await self._idempotent(
-            logical_agent_id,
-            f"command.{action}",
-            idempotency_key,
-            {
-                "command": cmd,
-                "queue_id": queue_id,
-                "task_scope": task_scope,
-                "work_session_id": work_session_id,
-                "session_epoch": session_epoch,
-            },
-            launch_once,
-            preserve_uncertain=True,
-        )
+        return await launch_once()
 
     async def run(
         self,
