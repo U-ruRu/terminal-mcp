@@ -1,5 +1,7 @@
 """Two independent local databases; no route cache or issuer read service."""
 
+import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -11,11 +13,11 @@ from fastapi.testclient import TestClient
 from terminal_mcp.application.access_mesh_messages import (
     AccessMeshMessaging,
     _public_name,
-    build_access_mesh_message_router,
 )
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.http.access_mesh_messages import build_access_mesh_message_router
 from terminal_mcp.storage.access_mesh_messages import MeshMessagingError
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -60,6 +62,8 @@ class LocalSlots:
                 work_session_id=f"ws-{self.local_node_id}-{slot.logical_agent_id}", session_epoch=1
             )
         return result
+
+    observed_identity = local_identity
 
 
 class Runtime:
@@ -490,3 +494,48 @@ async def test_history_cursor_is_stable_after_retention_and_vacuum(mesh_pair):
     second = await fb.message(actor("carol"), history=True, limit=2, cursor=first["next_cursor"])
     assert second["ok"]
     assert {row["message_hash"] for row in first["messages"] + second["messages"]} == set(sent[1:])
+
+
+@pytest.mark.asyncio
+async def test_recipient_read_never_materializes_or_updates_work_session(mesh_pair, monkeypatch):
+    fb = mesh_pair.nodes["firstbyte"]
+    identity = fb.mesh.store.observed_identity(fb.mesh.store.slots["alice"], now=fb.mesh.clock())
+
+    def reject_write(*args, **kwargs):
+        raise AssertionError("A recipient read attempted lifecycle materialization")
+
+    monkeypatch.setattr(fb.mesh.store, "local_identity", reject_write)
+    result = await fb.recipients(identity, scope="local", limit=20, cursor=None)
+    assert result["ok"] and len(result["recipients"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("occupied_lock", [False, True])
+async def test_public_send_returns_durable_receipt_within_total_peer_budget(
+    mesh_pair, monkeypatch, occupied_lock
+):
+    fb = mesh_pair.nodes["firstbyte"]
+    monkeypatch.setattr(
+        "terminal_mcp.application.access_mesh_messages.PUBLIC_DELIVERY_BUDGET_SECONDS", 0.05
+    )
+
+    async def offline(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(fb.replication, "request", offline)
+    if occupied_lock:
+        await fb._flush_lock.acquire()
+    started = time.monotonic()
+    try:
+        result = await asyncio.wait_for(
+            fb.message(actor("alice"), text="accepted while peer is stalled"), timeout=0.8
+        )
+    finally:
+        if occupied_lock:
+            fb._flush_lock.release()
+    assert time.monotonic() - started < 0.8
+    assert result["ok"] and result["outcome"] == "committed"
+    assert result["state"] == "partial" and result["pending_peers"] == ["bacloud"]
+    assert fb.store.wire(result["message_hash"])
+    assert len(fb.store.pending()) == 1
+    assert count(fb, "coordination_message_recipients") == 1
