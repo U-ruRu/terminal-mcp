@@ -32,7 +32,8 @@ Observed stateless ChatGPT connector calls reuse JSON-RPC ID `0`. Task replay ke
 
 A provider-bound identity is resolved once and routed to its home authority for
 managed session start, admission, end and interrupt. Authenticated Fleet forwarding
-preserves the original OAuth principal, provider evidence and endpoint role. The
+preserves the original OAuth principal, provider evidence and endpoint role. A first-contact peer obtains the authority name from the trusted Access registry,
+then verifies the home node’s route, epoch and migration state before caching it. The
 home authority rechecks the binding. A conflicting active principal or role keeps
 its typed runtime error. Execution on another node uses a short-lived authority
 permit; the execution node stores receipts and audit records for the global

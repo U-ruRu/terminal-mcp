@@ -1,6 +1,6 @@
 # Terminal MCP architecture
 
-Current application version: **0.13.1**.
+Current application version: **0.13.1**. Durable runtime schema: **21**.
 
 ## System boundary
 
@@ -58,6 +58,10 @@ Public inputs use bounded Pydantic schemas. Public collections use bounded pages
 - contract version.
 
 Provider-bound ChatGPT sessions derive identity from server request metadata. Managed identity maps provider bindings to fleet-authoritative logical agents. `SessionGate` resolves active work-session state for agent-bound operations.
+
+For first contact on another execution node, the trusted Access registry identifies the home authority. The authenticated home supplies its route epoch and migration state; the peer caches that verified route. Managed lifecycle admission is performed at home, while commands and their replay receipts remain on the execution node.
+
+Temporary claims are leased to the exact `(LogicalAgent, WorkSession, session_epoch)`. Session drainage fences execution before releasing claims. Automatic `ready` → `in_progress` claim transitions are reversed when the last leased owner leaves; explicit state assignments and durable ownership retain their independent workflow semantics. Remote claim-only leases recover after missed revocation, deadline expiry or process restart.
 
 ## Application API
 

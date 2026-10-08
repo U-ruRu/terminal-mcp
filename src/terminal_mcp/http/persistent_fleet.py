@@ -12,6 +12,9 @@ _ERROR_STATUS = {
     "not_found": 404,
     "conflict": 409,
     "unavailable": 503,
+    "authority_unavailable": 503,
+    "wrong_authority": 409,
+    "recovery_required": 409,
 }
 
 
@@ -145,9 +148,7 @@ def build_persistent_fleet_router(
         except MeshApplicationError as exc:
             raise HTTPException(status_code=_ERROR_STATUS[exc.kind], detail=exc.detail) from exc
 
-    @router.post(
-        "/internal/fleet/persistent/unified-session/status-batch", include_in_schema=False
-    )
+    @router.post("/internal/fleet/persistent/unified-session/status-batch", include_in_schema=False)
     async def unified_session_status_batch(
         payload: dict,
         x_terminal_mcp_peer: str = Header(default=""),

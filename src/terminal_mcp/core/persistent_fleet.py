@@ -458,7 +458,56 @@ class PersistentFleetBridge:
     async def route_info(self, logical_agent_id: str) -> dict | None:
         if self.control_store is None:
             return None
-        return await self.control_store.route(logical_agent_id)
+        known = await self.control_store.route(logical_agent_id)
+        if known is not None or not self.control_node_id:
+            return known
+        # Provider bindings are globally known before a peer has any route cache.
+        # The trusted registry names the home; that authenticated home supplies
+        # its exact epoch and migration state. Never ask arbitrary peers to own it.
+        access = await self.get_access_slot(logical_agent_id)
+        if access is None:
+            return None
+        if access.get("logical_agent_id") != logical_agent_id:
+            raise PersistentStoreError("authority_unavailable")
+        home = access.get("authority_node_id")
+        if home == self.config.instance_id:
+            return None  # A local authority must publish its own route explicitly.
+        peer = self.config.peers_by_id.get(home)
+        if peer is None:
+            raise PersistentStoreError("authority_unavailable")
+        from urllib.parse import quote
+
+        try:
+            async with self.client_factory() as client:
+                response = await client.get(
+                    f"{peer.origin}/internal/fleet/persistent/route/"
+                    f"{quote(logical_agent_id, safe='')}",
+                    headers=self._headers(peer),
+                )
+            response.raise_for_status()
+            data = response.json()
+            route = data.get("route")
+            if not data.get("ok") or not isinstance(route, dict):
+                raise ValueError("missing authoritative route")
+            epoch = route.get("authority_epoch")
+            if (
+                route.get("logical_agent_id") != logical_agent_id
+                or route.get("authority_node_id") != home
+                or type(epoch) is not int
+                or epoch < 1
+                or route.get("state")
+                not in {"active", "prepare", "imported", "committed", "recovery_required"}
+            ):
+                raise ValueError("invalid authoritative route")
+            return await self.control_store.publish_route(
+                logical_agent_id,
+                home,
+                epoch,
+                state=route["state"],
+                target_node_id=route.get("target_node_id"),
+            )
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            raise PersistentStoreError("authority_unavailable") from exc
 
     async def publish_authority(
         self,
