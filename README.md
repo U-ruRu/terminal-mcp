@@ -2,7 +2,7 @@
 
 `terminal-mcp` — Python-сервис управляемого доступа к Linux-терминалу через MCP, HTTP Actions и Console.
 
-Текущая версия приложения: **0.14.2**. В публичных контрактах Executor и Coordinator операция `session` поддерживает только `attach` с обязательным `access_code`. Основной контракт: **Distributed Multi-Issuer Access Mesh V2**.
+Текущая версия приложения: **0.14.3**. В публичных контрактах Executor и Coordinator операция `session` поддерживает только `attach` с обязательным `access_code`. Основной контракт: **Distributed Multi-Issuer Access Mesh V2**.
 
 ## Репозиторий и область релиза
 

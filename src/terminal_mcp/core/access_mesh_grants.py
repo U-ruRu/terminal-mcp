@@ -155,7 +155,7 @@ class AccessSlotEvent:
             _utc(self.effective_at)
         if self.deadline_at is not None:
             if (
-                self.kind != "SessionUpdated"
+                self.kind not in {"SessionStarted", "SessionUpdated"}
                 or self.effective_at is None
                 or _utc(self.deadline_at) <= _utc(self.effective_at)
             ):

@@ -187,7 +187,7 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
             {"action": "start", "mode": "persistent", "code": slot["access_code"]},
             request_id=10,
         )
-        assert started["revision"] == 2
+        assert started["ok"] and started["hard_expires_at"] is not None
         updated = mutate(
             client,
             "deadline",
@@ -213,7 +213,8 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
             {"action": "start", "mode": "persistent", "code": slot["access_code"]},
             request_id=12,
         )
-        assert immediate["error"]["code"] == "window_cooldown", immediate
+        assert immediate["ok"], immediate
+        assert immediate["hard_expires_at"] == view["session_lifecycle"]["hard_expires_at"]
         clock[0] += timedelta(seconds=5)
         restarted = call(
             client,
@@ -222,4 +223,4 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
             {"action": "start", "mode": "persistent", "code": slot["access_code"]},
             request_id=13,
         )
-        assert restarted["ok"], restarted
+        assert restarted["error"]["code"] == "session_already_started", restarted

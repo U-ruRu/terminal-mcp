@@ -82,7 +82,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             owner_required claim_conflict task_claim_conflict wip_limit_exceeded
             archived_task command_not_owned command_not_persistent command_not_running
             review_requirements_unsatisfied coordination_alert coordination_ack_required
-            session_already_active policy_in_use dependency_open
+            session_already_active session_already_started policy_in_use dependency_open
+            not_owner task_already_exists command_already_finished
         """,
         ),
         (
@@ -266,7 +267,11 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "identity_metadata_invalid": "The connector supplied invalid provider identity metadata.",
         "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
         "session_required": "Start a managed session with session.start before using this tool.",
-        "session_expired": "The managed session expired. Start a new session with session.start.",
+        "session_expired": "Сессия закончилась, возвращайся в чат.",
+        "session_already_started": "Сессия уже началась.",
+        "task_already_exists": "Task with this namespace and task_id already exists.",
+        "not_owner": "Only the current owner can release this claim.",
+        "command_already_finished": "The command finished before cancellation was accepted.",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
         "fleet_control_invalid_header": (
@@ -281,7 +286,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "capability_not_allowed": "This endpoint does not allow the operation.",
         "coordination_alert": "Read and reply to the pending alert before continuing.",
         "coordination_ack_required": (
-            "Read and acknowledge the pending message before running work."
+            "Acknowledge the pending message before continuing."
         ),
         "session_contract_conflict": (
             "Use the role and contract version that opened the active session. "
@@ -303,8 +308,12 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             result[code] = ErrorSpec(
                 kind, recovery, messages.get(code, code.replace("_", " ").capitalize() + ".")
             )
-    for code in ("capability_not_allowed", "legacy_admission_disabled", "access_denied"):
-        result[code] = ErrorSpec("access", "stop", result[code].message)
+    for code in (
+        "capability_not_allowed", "legacy_admission_disabled", "access_denied",
+        "session_expired",
+    ):
+        spec = result[code]
+        result[code] = ErrorSpec(spec.kind, "stop", spec.message)
     return MappingProxyType(result)
 
 
@@ -368,6 +377,7 @@ class CoordinationRepair(_BoundedValue):
     )
     ack_required_pending: bool = False
     alert_pending: bool = False
+    required_action: Literal["ack", "reply"] | None = None
 
 
 ErrorRepair = ValidationRepair | ConflictRepair | RetryRepair | CoordinationRepair
@@ -388,6 +398,7 @@ class PublicError(_BoundedValue):
     retry: RecoveryAction
     reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     path: str | None = Field(default=None, max_length=MAX_ERROR_PATH)
+    return_to_chat: bool | None = None
 
     @model_validator(mode="after")
     def canonical(self):
@@ -551,6 +562,8 @@ def _repair(code: str, kind: ErrorKind, raw: object) -> ErrorRepair | None:
             pending_messages=tuple(messages),
             ack_required_pending=bool(raw.get("ack_required_pending")),
             alert_pending=bool(raw.get("alert_pending")),
+            required_action=raw.get("required_action")
+            if raw.get("required_action") in {"ack", "reply"} else None,
         )
     expected_type = _REPAIR_TYPES.get(kind)
     if expected_type and isinstance(raw, expected_type):
@@ -602,6 +615,7 @@ def public_error(
         retry=spec.recovery,
         reason=reason,
         path=path,
+        return_to_chat=True if canonical_code == "session_expired" else None,
     )
 
 

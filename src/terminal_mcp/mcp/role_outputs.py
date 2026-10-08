@@ -334,22 +334,40 @@ class RoleErrorBody(_Strict):
     retry: RecoveryAction
     reason: str | None = None
     path: str | None = None
+    return_to_chat: bool | None = None
 
 
 class RoleFailure(_Strict):
     ok: Literal[False]
     provider_identity: ProviderFingerprint | None = None
     error: RoleErrorBody
+    required_action: Literal["ack", "reply"] | None = None
+    message_hash: str | None = None
+    text: str | None = None
+    return_to_chat: bool | None = None
 
 
 def role_error_result(raw: dict) -> CallToolResult:
     """Return a handled application failure as transport-successful structured data."""
     canonical = normalize_public_error(raw).as_dict()
     body = {key: value for key, value in canonical.items() if key not in {"ok", "error"}}
+    pending = (
+        canonical.get("details", {}).get("pending_messages", [])
+        if isinstance(canonical.get("details"), dict) else []
+    )
+    first = pending[0] if pending else {}
+    action = (
+        canonical["details"].get("required_action")
+        if isinstance(canonical.get("details"), dict) else None
+    )
     data = RoleFailure(
         ok=False,
         error=RoleErrorBody.model_validate(body),
         provider_identity=session_provider_fingerprint(),
+        required_action=action if action in {"ack", "reply"} else None,
+        message_hash=first.get("message_hash"),
+        text=first.get("text"),
+        return_to_chat=canonical.get("return_to_chat"),
     ).model_dump(mode="json", exclude_none=True)
     return CallToolResult(
         isError=False,

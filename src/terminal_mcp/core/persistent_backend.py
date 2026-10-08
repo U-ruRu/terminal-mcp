@@ -741,11 +741,10 @@ class PersistentBackend:
                 "messages": messages,
                 "pending_messages": messages,
                 "ack_required_pending": any(
-                    item["read_at"] is None
+                    item.get("delivery_mode") == "ack" and item["read_at"] is None
                     or (
-                        item.get("delivery_mode") == "legacy"
-                        and item["require_reply"]
-                        and item["replied_at"] is None
+                        item.get("delivery_mode") == "legacy" and item["require_reply"]
+                        and not item["alert"] and item["read_at"] is None
                     )
                     for item in refreshed
                 ),

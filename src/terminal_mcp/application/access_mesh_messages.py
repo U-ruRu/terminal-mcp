@@ -493,9 +493,20 @@ class AccessMeshMessaging:
                 if message_hash
                 else ManagedOperation.MESSAGE_SEND
             )
-            identity = await self.mesh.resolve(actor, operation)
             if recipients:
-                return await self.recipients(identity, scope=scope, limit=limit, cursor=cursor)
+                # Discovery works for anonymous callers, but a known caller is
+                # excluded from its own recipient list.
+                public_caller = {"logical_agent_id": "", "public_name": "anonymous"}
+                try:
+                    public_caller = await self.mesh.resolve(
+                        actor, ManagedOperation.MESSAGE_READ
+                    )
+                except Exception:
+                    pass
+                return await self.recipients(
+                    public_caller, scope=scope, limit=limit, cursor=cursor
+                )
+            identity = await self.mesh.resolve(actor, operation)
             if is_read:
                 return await self.read(
                     identity,

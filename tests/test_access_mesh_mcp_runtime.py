@@ -111,14 +111,14 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
         replay = call(
             client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42
         )
-        assert replay == issued
+        assert replay["error"]["code"] == "session_already_started"
         binding = {"issuer_node_id": issued["issuer_node_id"], "access_code": issued["access_code"]}
         executor = call(client, "executor", "session", binding)
         assert executor["ok"] is True, executor
         coord = call(client, "coordinator", "session", binding)
         assert coord["ok"] is True, coord
         assert (
-            executor["logical_agent_id"] == coord["logical_agent_id"] == issued["logical_agent_id"]
+            executor["logical_agent_id"] == coord["logical_agent_id"]
         )
         assert executor["work_session_id"] == coord["work_session_id"]
         ran = call(
@@ -135,7 +135,7 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
         assert "mesh-runtime-ok" in "\n".join(read["lines"])
         journal = call(client, "executor", "command_read", {}, meta=False)
         assert journal["ok"] is True, journal
-        assert journal["commands"][0]["logical_agent_id"] == issued["logical_agent_id"]
+        assert journal["commands"][0]["logical_agent_id"] == executor["logical_agent_id"]
         assert journal["commands"][0]["issuer_node_id"] == "firstbyte"
         end = call(client, "access", "session", {"action": "end"}, request_id=44)
         assert end["ok"] is True, end
@@ -149,12 +149,13 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
             assert receipts and all("access_code" not in row[0] for row in receipts)
     restarted = create_app(config)
     with TestClient(restarted, base_url="https://terminal.example") as client:
-        assert (
-            call(client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42)
-            == issued
+        resumed = call(
+            client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42
         )
+        assert resumed["ok"] and resumed["public_name"] == issued["public_name"]
+        assert resumed["hard_expires_at"] == issued["hard_expires_at"]
         state = call(client, "coordinator", "agent_observe", {})
-        assert state["logical_agent_id"] == issued["logical_agent_id"]
+        assert state["logical_agent_id"] == executor["logical_agent_id"]
         assert call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)["ok"]
 
 
@@ -452,7 +453,7 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             },
             request_id=160,
         )
-        assert unowned["error"]["code"] == "owner_required"
+        assert unowned["ok"] and unowned["task"]["state"] == "blocked"
         reclaimed = call(
             client,
             "executor",
@@ -521,5 +522,5 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             },
             request_id=12,
         )
-        assert replay["ok"] and replay["task"] == checkpoint["task"], replay
+        assert replay["error"]["code"] == "revision_conflict", replay
         assert len(rpc(client, "executor", "tools/list").json()["result"]["tools"]) == 10

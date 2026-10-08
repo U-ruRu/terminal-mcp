@@ -171,6 +171,7 @@ class AccessError(_Strict):
     retry: RecoveryAction
     reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     path: str | None = Field(default=None, max_length=MAX_ERROR_PATH)
+    return_to_chat: bool | None = None
 
 
 def _success_schema(annotation: Any) -> dict[str, Any]:

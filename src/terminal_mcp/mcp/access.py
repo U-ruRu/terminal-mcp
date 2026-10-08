@@ -1,5 +1,6 @@
 """Dedicated issuer MCP. It manages issuance; execution roles attach separately."""
 
+import asyncio
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
@@ -15,6 +16,7 @@ from terminal_mcp.mcp.role_contracts import (
     validate_boundary,
 )
 from terminal_mcp.mcp.role_outputs import install_role_output_contract
+from terminal_mcp.storage.access_mesh import local_cycle
 
 
 def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:8080"):
@@ -57,9 +59,31 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
             request_id=current_mcp_request_id(),
         )
         with actor.bind():
-            return await application.service.access_mesh.issuer_session(
+            raw = await application.service.access_mesh.issuer_session(
                 actor, action=request.action, mode=request.mode, code=request.code
             )
+        if not raw.get("ok"):
+            return raw
+        mesh = application.service.access_mesh
+        slot = await asyncio.to_thread(
+            mesh.store.slot, raw["issuer_node_id"], raw["slot_id"]
+        )
+        cycle = local_cycle(slot, mesh.clock()) if slot is not None else {}
+        # The Access connector exposes a session, not its authorization slot,
+        # provider binding or internal revision/epoch machinery.
+        result = {
+            "ok": True,
+            "action": raw["action"],
+            "issuer_node_id": raw["issuer_node_id"],
+            "public_name": raw["public_name"],
+            "mode": raw["mode"],
+            "session_state": "ended" if request.action == "end" else cycle.get("state"),
+            "hard_expires_at": cycle.get("hard_expires_at"),
+            "remaining_seconds": cycle.get("remaining_seconds", 0),
+        }
+        if request.action == "start" and raw.get("access_code"):
+            result["access_code"] = raw["access_code"]
+        return result
 
     install_role_input_contract(
         mcp, "access", overrides={("access", "session"): IssuerSessionInput}

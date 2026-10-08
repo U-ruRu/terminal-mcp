@@ -151,15 +151,14 @@ class IssuerReceipt(_Strict):
         "update",
     ]
     issuer_node_id: str
-    slot_id: str
-    logical_agent_id: str
+    # Internal slot, logical-agent and revision identifiers are deliberately
+    # absent from Access session responses.
     public_name: str
     mode: Literal["legacy", "persistent"]
-    revision: int
+    session_state: str | None = None
+    hard_expires_at: str | None = None
+    remaining_seconds: int | None = None
     access_code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
-    slot_state: Literal["active", "suspended", "deleted"] | None = None
-    session_lifecycle: MeshCycle | None = None
-    policy: MeshPolicy | None = None
 
 
 class IssuerOutput(RootModel[IssuerReceipt | AccessError]):

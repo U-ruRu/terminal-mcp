@@ -239,13 +239,17 @@ async def _message(application, actor, request: MessageInput) -> dict:
         "ack": ManagedOperation.MESSAGE_ACK,
         "reply": ManagedOperation.MESSAGE_REPLY,
     }[request.action]
-    resolution = await application.session_gate.resolve(actor, None, operation)
-    if resolution.failure is not None:
-        return resolution.failure
-    identity = resolution.identity or {}
-    sender = str(identity.get("public_name") or "")
-    if not sender:
-        return public_error("identity_not_bound").as_dict()
+    if request.action == "recipients":
+        # Public discovery is intentionally available before Access attach.
+        sender = "anonymous"
+    else:
+        resolution = await application.session_gate.resolve(actor, None, operation)
+        if resolution.failure is not None:
+            return resolution.failure
+        identity = resolution.identity or {}
+        sender = str(identity.get("public_name") or "")
+        if not sender:
+            return public_error("identity_not_bound").as_dict()
 
     history = request.action == "history"
     mesh_messages = getattr(application.service, "access_mesh_messages", None)

@@ -91,23 +91,20 @@ class MessagingApplication(ApplicationCapability):
             if message_hash is not None
             else ManagedOperation.MESSAGE_SEND
         )
-        resolution = await self.gate.resolve_message_actor(actor, sender, code, operation)
-        if resolution.failure is not None:
-            return resolution.failure
         if recipients:
             raw = await backend.access_observe_slots(limit=limit + 1, offset=offset)
             if not raw.get("ok"):
                 return raw
             rows = list(raw.get("sessions") or [])
-            page = rows[:limit]
+            page = [{"public_name": item["public_name"]} for item in rows[:limit]]
             next_cursor = encode_cursor(offset + len(page), scope) if len(rows) > limit else None
             return {
-                "ok": True,
-                "action": "recipients",
-                "sender": str((resolution.identity or {}).get("public_name") or sender),
-                "recipients": page,
-                "next_cursor": next_cursor,
+                "ok": True, "action": "recipients", "sender": sender or "anonymous",
+                "recipients": page, "next_cursor": next_cursor,
             }
+        resolution = await self.gate.resolve_message_actor(actor, sender, code, operation)
+        if resolution.failure is not None:
+            return resolution.failure
         result = await self.gate.message(
             resolution,
             sender,

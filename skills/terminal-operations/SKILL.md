@@ -1,7 +1,7 @@
 ---
 name: terminal-operations
 description: Работает с Linux-серверами через Terminal MCP Access Mesh V2: выдача доступа на Access, однократный attach к Executor/Coordinator, задачи, команды, сообщения и проверка результата.
-compatibility: Terminal MCP 0.14.2; Access v1, Executor v1, Coordinator v1; Python runtime server-side.
+compatibility: Terminal MCP 0.14.3; Access v1, Executor v1, Coordinator v1; Python runtime server-side.
 metadata:
   author: U-ruRu
   version: "3.0.0"

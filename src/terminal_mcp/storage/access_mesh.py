@@ -634,6 +634,44 @@ class AccessMeshStore(LocalAccessMesh):
             )
             self._save_receipt_tx(db, receipt)
 
+    def latest_session_window(self, slot_id: str):
+        """Return the latest explicit window anchor/deadline and its event revision.
+
+        Consult the append-only event log: SessionEnded changes the slot anchor
+        to a cooldown marker, so the original hard deadline is no longer on the
+        live slot projection.
+        """
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT revision,event_json FROM access_mesh_event_log "
+                "WHERE issuer_id=? AND slot_id=? AND "
+                "json_extract(event_json,'$.kind') IN "
+                "('SlotIssued','SessionStarted','SessionUpdated') "
+                "ORDER BY revision DESC LIMIT 1",
+                (self.local_node_id, slot_id),
+            ).fetchone()
+        if row is None:
+            return None
+        event = json.loads(row[1])
+        start = _parse(event.get("effective_at"))
+        if start is None:
+            return None
+        end = _parse(event.get("deadline_at"))
+        return {"revision": int(row[0]), "start": start, "deadline": end}
+
+    def latest_session_end(self, slot_id: str):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT revision,event_json FROM access_mesh_event_log "
+                "WHERE issuer_id=? AND slot_id=? AND "
+                "json_extract(event_json,'$.kind')='SessionEnded' "
+                "ORDER BY revision DESC LIMIT 1",
+                (self.local_node_id, slot_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"revision": int(row[0]), "ended_at": _parse(json.loads(row[1])["effective_at"])}
+
     def last_session_end(self, slot_id: str) -> datetime | None:
         with self._connect() as db:
             row = db.execute(

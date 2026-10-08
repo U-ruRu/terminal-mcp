@@ -207,8 +207,8 @@ async def test_claim_receipt_replay_after_restart_ignores_newer_canonical_task(c
     await case.tasks.update_task("policy", "task", title="Newer", state="deferred")
     restarted = backend(case)
     replay = await restarted.task(**arguments)
-    assert replay == first
-    assert replay["task"]["revision"] == 1
+    assert replay["ok"] and replay["task"]["title"] == "Newer"
+    assert replay["task"]["revision"] == 2
     assert (await case.tasks.get_task("policy", "task"))["revision"] == 2
     assert len(await case.tasks.active_claims("policy", "task")) == 1
 

@@ -1,6 +1,6 @@
 # Terminal MCP tool contract
 
-Version: **0.14.2**. Access Mesh V2. Both Executor and Coordinator `session` tools require `access_code` and permit only `action=attach`. The examples use synthetic code `0427`; substitute the code issued privately by Access.
+Version: **0.14.3**. Access Mesh V2. Both Executor and Coordinator `session` tools require `access_code` and permit only `action=attach`. The examples use synthetic code `0427`; substitute the code issued privately by Access.
 
 Access endpoint: `/terminal-mcp/access/v1/mcp`.
 

@@ -15,10 +15,10 @@
           "name": "session",
           "planning_input_bytes": 612,
           "planning_input_digest": "35fe93c0ef89d5b79c9169c1ec2de987c2af783ae98eda3e920c216a5812a7b5",
-          "planning_output_bytes": 525,
-          "planning_output_digest": "081e5708fc3a88a6f32f64c449d90411de48a2d3d619ef35c1513c21844e0b7b",
+          "planning_output_bytes": 609,
+          "planning_output_digest": "adb4a842b4c3da9204898736580970149dd1cd5c857369ac1eda6a0fe335c300",
           "runtime_input_digest": "5ac8d3584197f1491944e45d237cc23292e1648988d7233f830c527fba4942fd",
-          "runtime_output_digest": "b70a0d6d579e848f6ec5730754b7e2e2ec3347898c2345a65654c7a7c75b79f9"
+          "runtime_output_digest": "3df5c6c628c8d65640ad80fe287385a36ed5fb54a2b95c1beee623b107a3553f"
         }
       ]
     },
@@ -35,10 +35,10 @@
           "name": "session",
           "planning_input_bytes": 811,
           "planning_input_digest": "a191ff1cbbd64dc4beaf2ba61b4c9d5f0171ea6f8edfb253d4ab3067c3180127",
-          "planning_output_bytes": 732,
-          "planning_output_digest": "9309e044cdc81d98e9867f561e7658e818d3d53425f7ba80401760d29db9450b",
+          "planning_output_bytes": 898,
+          "planning_output_digest": "2a50efb5e4bdc0defa2d19693e647dda4758e3121e93323b75eeb671350ee9cd",
           "runtime_input_digest": "3d5b83ff905928a7b7920c421978ca00970ac554cd835cf7fbc635a8f81101d0",
-          "runtime_output_digest": "9ec073e7c374c600936d004c76e6f01a2e7bcde5b2222c794cbf3985a9bd7c1c"
+          "runtime_output_digest": "e6c8a3b719e49ea712c071a8ab2eab5796dc698916c0b3bbcbd5aeea731a12f3"
         },
         {
           "annotations": {
@@ -50,10 +50,10 @@
           "name": "task_get",
           "planning_input_bytes": 535,
           "planning_input_digest": "dedf678d0b19248e5ba5acf83062c625a4be74d74560f1c0f3ef6b170704a065",
-          "planning_output_bytes": 199,
-          "planning_output_digest": "1ddd2bfce4ac23d3fe5dd1a5709d0cf4c4eead7b243f0eb5c8241a9be4f24bcc",
+          "planning_output_bytes": 365,
+          "planning_output_digest": "f9d407b35a2df5e5d44aee953699da04ab2875e740826970da3eae0d89e81758",
           "runtime_input_digest": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
-          "runtime_output_digest": "77240da1bcd55827b9c3c8a7a463baa985bdc718d90ebdeb97a2b1f15ad54363"
+          "runtime_output_digest": "809d1230f238bd694b15aa289cb2189a17095571295e201d7060cd40996e07b3"
         },
         {
           "annotations": {
@@ -65,10 +65,10 @@
           "name": "task_list",
           "planning_input_bytes": 576,
           "planning_input_digest": "2ca9723b907ef17489f04200e1ff4a9310d02aebcd6b5690a8fc822361e44b58",
-          "planning_output_bytes": 213,
-          "planning_output_digest": "fc59551a16939a35bbd40a4bfa8eca5df82092aa7273efe45a8f9a1401c7ac25",
+          "planning_output_bytes": 379,
+          "planning_output_digest": "4a3dcb3a38c724e0963c51e182a53d58c3c873f9e5feb4c33d77964bf4dcc228",
           "runtime_input_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
-          "runtime_output_digest": "8136d66dff275c9f74a7360e8eb7551d2cd9f7218a6a28076ac59af91db98f8d"
+          "runtime_output_digest": "1790d1f8f2909cfaf4c38eeb04543519cd77eb6b7d17c06a08da1e01d2a09534"
         },
         {
           "annotations": {
@@ -78,12 +78,12 @@
             "readOnlyHint": false
           },
           "name": "task_manage",
-          "planning_input_bytes": 34456,
-          "planning_input_digest": "0a756b533ebb166c13fb91f3201f785648845c9ea8c6d80e2da465f288f7e280",
-          "planning_output_bytes": 274,
-          "planning_output_digest": "6bd2fb2c32e13eec7fad52e5d7c17a1a733e950e964e016a80fabf5736d9069e",
+          "planning_input_bytes": 34127,
+          "planning_input_digest": "4b3bcf25ea01e162d56278fe98b69e8558a8caccbaa943ba4fbacb522e7ab6bd",
+          "planning_output_bytes": 440,
+          "planning_output_digest": "f2abd1f73ab1ae6bad029a2aee3d6439b55c44ac83ef4a338e8d7a4b510a207e",
           "runtime_input_digest": "6232410f5645f99e3e052331d84c1bfb42a3718eccfb93ad1dbf1c56e37f58a0",
-          "runtime_output_digest": "b7bb4701ce88922871792a76be5e63e531bd2264f40d75a066c87fe2356755fe"
+          "runtime_output_digest": "9ef7a8d112d2bd7c7c2c10eab5ad434f75bc1222c572633b124222c444bd5f2f"
         },
         {
           "annotations": {
@@ -95,10 +95,10 @@
           "name": "task_graph",
           "planning_input_bytes": 484,
           "planning_input_digest": "2125746e0f58c9d76099072f576a37990f8f59722ad9acf8a92617d9946013c8",
-          "planning_output_bytes": 238,
-          "planning_output_digest": "cc0225df4c982f5a5e65751f3fbce3496f5f1b89ce9ce8124fb1daf6e94e3e2b",
+          "planning_output_bytes": 404,
+          "planning_output_digest": "29a8bc5289a78db90dac34fd5a5541790299b8366afde56041e44a3952756401",
           "runtime_input_digest": "809e8474ffcd4d62a05127feb7e46a4150668886bd382cd9a68ac6171c511fb6",
-          "runtime_output_digest": "e2105040a4508c34e7f595b4f79f141fc57e1bac0da6eb22e9c20266ef9e42c1"
+          "runtime_output_digest": "e11db212fdea27d928ba2380c796d12c2e88461a87b4b2fd233cbb11d340faa7"
         },
         {
           "annotations": {
@@ -110,10 +110,10 @@
           "name": "agent_observe",
           "planning_input_bytes": 196,
           "planning_input_digest": "f561792fa84836dd7d44e67b4e136a95fad65b1af935384950c26e2ae99cbcec",
-          "planning_output_bytes": 732,
-          "planning_output_digest": "9309e044cdc81d98e9867f561e7658e818d3d53425f7ba80401760d29db9450b",
+          "planning_output_bytes": 898,
+          "planning_output_digest": "2a50efb5e4bdc0defa2d19693e647dda4758e3121e93323b75eeb671350ee9cd",
           "runtime_input_digest": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
-          "runtime_output_digest": "0f85ff80247db90d4c9228fe24832f728bba6aaf2eb59c0a86a51d149294f056"
+          "runtime_output_digest": "6a5f311ceea044c5a5052e1dd0456c8c957a5c410e182b57472973256a29d6cb"
         },
         {
           "annotations": {
@@ -125,10 +125,10 @@
           "name": "message",
           "planning_input_bytes": 1568,
           "planning_input_digest": "6d715edcacf4aedfedd1e1af581d4ccfb8b32f3135a3ca4d3cdb21e53b698793",
-          "planning_output_bytes": 489,
-          "planning_output_digest": "a1cd207b2e3edd4d64ded632f750091f701cbcd9946e18303d80a0f6c98b02ef",
+          "planning_output_bytes": 613,
+          "planning_output_digest": "be75f47f00504d4a616ec5dfff148be398ce2bd82ec7995423fd6024f6eb9eee",
           "runtime_input_digest": "54e1c4027f87026518c77e58442468507d7c431d1f4d691f19f66dfa5908a315",
-          "runtime_output_digest": "b2f24593bd4a1ce2991dbf06672231937849bd3fb8cd1f30727516d9076b99a3"
+          "runtime_output_digest": "15331bf0cbd6e570e8e64b1900ef6087db448af6bbb0ad1e72bc0e927910709a"
         },
         {
           "annotations": {
@@ -140,10 +140,10 @@
           "name": "health",
           "planning_input_bytes": 248,
           "planning_input_digest": "37c0f193733e5693d0eb16c44aa7ec6001e5a785534f77cc317e88090fa45265",
-          "planning_output_bytes": 532,
-          "planning_output_digest": "7bcf7b78ed233e74574f81fa459a074c866c49e0abde5aafaf0bce79378b44bd",
+          "planning_output_bytes": 698,
+          "planning_output_digest": "e28db2011fe3ad7967daafcb90c4b79c51dbfe29557a66d1bfccea364ab7cbc5",
           "runtime_input_digest": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
-          "runtime_output_digest": "87ef958e769a7f31c8ed9d851df1ddcbf727c5b93ec2c92eeb83cfff9cb00c51"
+          "runtime_output_digest": "aa10cf23dff8b424b4c9b322ea1ee71ed87d323519d4f177866ca5573ff01ab2"
         }
       ]
     },
@@ -160,10 +160,10 @@
           "name": "session",
           "planning_input_bytes": 811,
           "planning_input_digest": "a191ff1cbbd64dc4beaf2ba61b4c9d5f0171ea6f8edfb253d4ab3067c3180127",
-          "planning_output_bytes": 732,
-          "planning_output_digest": "9309e044cdc81d98e9867f561e7658e818d3d53425f7ba80401760d29db9450b",
+          "planning_output_bytes": 898,
+          "planning_output_digest": "2a50efb5e4bdc0defa2d19693e647dda4758e3121e93323b75eeb671350ee9cd",
           "runtime_input_digest": "3d5b83ff905928a7b7920c421978ca00970ac554cd835cf7fbc635a8f81101d0",
-          "runtime_output_digest": "9ec073e7c374c600936d004c76e6f01a2e7bcde5b2222c794cbf3985a9bd7c1c"
+          "runtime_output_digest": "e6c8a3b719e49ea712c071a8ab2eab5796dc698916c0b3bbcbd5aeea731a12f3"
         },
         {
           "annotations": {
@@ -175,10 +175,10 @@
           "name": "task_list",
           "planning_input_bytes": 576,
           "planning_input_digest": "2ca9723b907ef17489f04200e1ff4a9310d02aebcd6b5690a8fc822361e44b58",
-          "planning_output_bytes": 213,
-          "planning_output_digest": "fc59551a16939a35bbd40a4bfa8eca5df82092aa7273efe45a8f9a1401c7ac25",
+          "planning_output_bytes": 379,
+          "planning_output_digest": "4a3dcb3a38c724e0963c51e182a53d58c3c873f9e5feb4c33d77964bf4dcc228",
           "runtime_input_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
-          "runtime_output_digest": "8136d66dff275c9f74a7360e8eb7551d2cd9f7218a6a28076ac59af91db98f8d"
+          "runtime_output_digest": "1790d1f8f2909cfaf4c38eeb04543519cd77eb6b7d17c06a08da1e01d2a09534"
         },
         {
           "annotations": {
@@ -190,10 +190,10 @@
           "name": "command_run",
           "planning_input_bytes": 335,
           "planning_input_digest": "d136dfe1f3b4d7fb7c27097d7521d889f8dfb3da10395d3ec8bb294576c29c93",
-          "planning_output_bytes": 966,
-          "planning_output_digest": "0b4c8ceed92a5715b9628d46f8fb9e9faf5652bb153efcddf71dc71279d0d72a",
+          "planning_output_bytes": 1132,
+          "planning_output_digest": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
           "runtime_input_digest": "390368c4b1e019241027cc9e6f81be36a7d8bc0f1a681d91a9a148ac2a917f34",
-          "runtime_output_digest": "f7d9f1c8b3d3a5bf62203a0ab8984d42894e5f44a25bf1e8803fd20fc4ba0755"
+          "runtime_output_digest": "24504a625755f8f1f7402ae09d6a9e53a69a600babf0be9db5496631f18a3427"
         },
         {
           "annotations": {
@@ -205,10 +205,10 @@
           "name": "command_read",
           "planning_input_bytes": 478,
           "planning_input_digest": "1d8b89bd32ec259489452201d429073bda3dc15a7811e7c45479e2d939f3c10a",
-          "planning_output_bytes": 861,
-          "planning_output_digest": "f61c5ce93007a0469f596f3b43b3386324e309e605a0488e756ed3a79863eca0",
+          "planning_output_bytes": 1027,
+          "planning_output_digest": "41b4302fee5cc10a7e3eb51bd2f39bdfd47472c55bd0f949239b97cb10da416b",
           "runtime_input_digest": "6caae35abafd494d83e6ac8491a7018504df059cad5539697582a8f95c236693",
-          "runtime_output_digest": "434e0de4deb2e03173391dbecb1aed8ab06ae731ba1c0972e4ae33df215701a9"
+          "runtime_output_digest": "478af2c8085b1b407d5e1737baf050a623c18c9fc8d41ff02eb87db9cb108c56"
         },
         {
           "annotations": {
@@ -220,10 +220,10 @@
           "name": "command_cancel",
           "planning_input_bytes": 232,
           "planning_input_digest": "a3072d79370d65d9411e57c03f7e19eb64d035bfb5002c6b8d10a07164da265c",
-          "planning_output_bytes": 966,
-          "planning_output_digest": "0b4c8ceed92a5715b9628d46f8fb9e9faf5652bb153efcddf71dc71279d0d72a",
+          "planning_output_bytes": 1132,
+          "planning_output_digest": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
           "runtime_input_digest": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
-          "runtime_output_digest": "f7d9f1c8b3d3a5bf62203a0ab8984d42894e5f44a25bf1e8803fd20fc4ba0755"
+          "runtime_output_digest": "24504a625755f8f1f7402ae09d6a9e53a69a600babf0be9db5496631f18a3427"
         },
         {
           "annotations": {
@@ -235,10 +235,10 @@
           "name": "command_recovery",
           "planning_input_bytes": 233,
           "planning_input_digest": "a873115277224bb617adde3c180d83e08731637831c7086b59a65a2299bc9b88",
-          "planning_output_bytes": 966,
-          "planning_output_digest": "0b4c8ceed92a5715b9628d46f8fb9e9faf5652bb153efcddf71dc71279d0d72a",
+          "planning_output_bytes": 1132,
+          "planning_output_digest": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
           "runtime_input_digest": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
-          "runtime_output_digest": "f7d9f1c8b3d3a5bf62203a0ab8984d42894e5f44a25bf1e8803fd20fc4ba0755"
+          "runtime_output_digest": "24504a625755f8f1f7402ae09d6a9e53a69a600babf0be9db5496631f18a3427"
         },
         {
           "annotations": {
@@ -250,10 +250,10 @@
           "name": "task_claim",
           "planning_input_bytes": 616,
           "planning_input_digest": "8f37e0a473bd48790f62ac42280388c1be57cdfc7f4c446e4c40a11b0b663845",
-          "planning_output_bytes": 274,
-          "planning_output_digest": "6bd2fb2c32e13eec7fad52e5d7c17a1a733e950e964e016a80fabf5736d9069e",
+          "planning_output_bytes": 440,
+          "planning_output_digest": "f2abd1f73ab1ae6bad029a2aee3d6439b55c44ac83ef4a338e8d7a4b510a207e",
           "runtime_input_digest": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
-          "runtime_output_digest": "0253e01cc395aa2cbded0ee2dc8e9506aa6bea4c6f6e30372f332940256dd29f"
+          "runtime_output_digest": "49007d8755ab48e8f9b122745f091e5db9059dc2328e560b6376394f963aad05"
         },
         {
           "annotations": {
@@ -265,10 +265,10 @@
           "name": "task_state",
           "planning_input_bytes": 513,
           "planning_input_digest": "4e8003dccc62e3b17c3c13801b8f4d65861e40804470a693b8665b0f8bce6221",
-          "planning_output_bytes": 274,
-          "planning_output_digest": "6bd2fb2c32e13eec7fad52e5d7c17a1a733e950e964e016a80fabf5736d9069e",
+          "planning_output_bytes": 440,
+          "planning_output_digest": "f2abd1f73ab1ae6bad029a2aee3d6439b55c44ac83ef4a338e8d7a4b510a207e",
           "runtime_input_digest": "7ce9cc81891989724481105b3fa1b6982a615acd3652e8a65f869b644a38fe79",
-          "runtime_output_digest": "b7bb4701ce88922871792a76be5e63e531bd2264f40d75a066c87fe2356755fe"
+          "runtime_output_digest": "9ef7a8d112d2bd7c7c2c10eab5ad434f75bc1222c572633b124222c444bd5f2f"
         },
         {
           "annotations": {
@@ -280,10 +280,10 @@
           "name": "task_comment",
           "planning_input_bytes": 732,
           "planning_input_digest": "5ab356d1dd753f1760b341b612ff13e91f4a3c67d44eb26ba509bb69680c086c",
-          "planning_output_bytes": 274,
-          "planning_output_digest": "6bd2fb2c32e13eec7fad52e5d7c17a1a733e950e964e016a80fabf5736d9069e",
+          "planning_output_bytes": 440,
+          "planning_output_digest": "f2abd1f73ab1ae6bad029a2aee3d6439b55c44ac83ef4a338e8d7a4b510a207e",
           "runtime_input_digest": "606c2a3eda929738d7c1275fac1c09bf4466e6509d2e949895f77c8327fa6668",
-          "runtime_output_digest": "b7bb4701ce88922871792a76be5e63e531bd2264f40d75a066c87fe2356755fe"
+          "runtime_output_digest": "9ef7a8d112d2bd7c7c2c10eab5ad434f75bc1222c572633b124222c444bd5f2f"
         },
         {
           "annotations": {
@@ -295,10 +295,10 @@
           "name": "message",
           "planning_input_bytes": 1568,
           "planning_input_digest": "6d715edcacf4aedfedd1e1af581d4ccfb8b32f3135a3ca4d3cdb21e53b698793",
-          "planning_output_bytes": 489,
-          "planning_output_digest": "a1cd207b2e3edd4d64ded632f750091f701cbcd9946e18303d80a0f6c98b02ef",
+          "planning_output_bytes": 613,
+          "planning_output_digest": "be75f47f00504d4a616ec5dfff148be398ce2bd82ec7995423fd6024f6eb9eee",
           "runtime_input_digest": "54e1c4027f87026518c77e58442468507d7c431d1f4d691f19f66dfa5908a315",
-          "runtime_output_digest": "b2f24593bd4a1ce2991dbf06672231937849bd3fb8cd1f30727516d9076b99a3"
+          "runtime_output_digest": "15331bf0cbd6e570e8e64b1900ef6087db448af6bbb0ad1e72bc0e927910709a"
         }
       ]
     }
