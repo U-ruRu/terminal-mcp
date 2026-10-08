@@ -102,12 +102,50 @@ class Settings(BaseSettings):
     fleet_permit_ttl_ms: int = 10_000
     queue_workers: int = 4
     queue_reconcile_sec: float = 1.0
+    access_mesh_enabled: bool = False
+    access_mesh_proof_key: str = ""
+    access_mesh_peers_json: str = "[]"
+    access_mesh_legacy_enabled: bool = True
+    access_mesh_duration_sec: int = 1200
+    access_mesh_cooldown_sec: int = 60
+    access_mesh_warning_sec: int = 120
+    access_mesh_draining_sec: int = 30
+
     persistent_agents_enabled: bool = False
     persistent_session_duration_sec: int = 23 * 60
     persistent_session_warning_after_sec: int = 20 * 60
     persistent_session_alert_after_sec: int = 22 * 60
     persistent_session_rearm_after_sec: int = 3 * 60
     legacy_agent_admission_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_access_mesh(self):
+        if not self.access_mesh_enabled:
+            return self
+        from terminal_mcp.core.access_mesh_grants import SlotPolicy
+
+        if not self.persistent_agents_enabled or not self.fleet_instance_id:
+            raise ValueError("access_mesh requires persistent storage and a configured node id")
+        if len(self.access_mesh_proof_key.encode()) < 32:
+            raise ValueError("access_mesh_proof_key must contain at least 32 bytes")
+        peers = json.loads(self.access_mesh_peers_json)
+        if not isinstance(peers, list) or any(
+            not isinstance(peer, str) or not peer for peer in peers
+        ):
+            raise ValueError("access_mesh_peers_json must be an explicit peer id array")
+        if self.fleet_instance_id in peers or len(set(peers)) != len(peers):
+            raise ValueError("access_mesh peers must be distinct remote nodes")
+        configured = {peer.get("instance_id") for peer in json.loads(self.fleet_peers_json)}
+        if not set(peers).issubset(configured):
+            raise ValueError("access_mesh peers require authenticated Fleet configuration")
+        SlotPolicy(
+            self.access_mesh_duration_sec,
+            self.access_mesh_cooldown_sec,
+            True,
+            self.access_mesh_warning_sec,
+            self.access_mesh_draining_sec,
+        )
+        return self
 
     @model_validator(mode="after")
     def validate_execution_topology(self):
@@ -201,9 +239,7 @@ class Settings(BaseSettings):
         if follower == owner:
             raise ValueError("projection owner and follower must differ")
         if local not in {owner, follower}:
-            raise ValueError(
-                "local fleet node must be configured projection owner or follower"
-            )
+            raise ValueError("local fleet node must be configured projection owner or follower")
         return self
 
     def effective_fleet_node_id(self) -> str:

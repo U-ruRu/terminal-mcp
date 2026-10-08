@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
@@ -99,11 +100,13 @@ class ActorContext:
 
     @contextmanager
     def bind(self) -> Iterator[ActorContext]:
+        actor_token = _current_actor.set(self)
         token = bind_admission_context(self.admission())
         try:
             yield self
         finally:
             reset_admission_context(token)
+            _current_actor.reset(actor_token)
 
     def with_identity(self, identity: Mapping[str, object]) -> ActorContext:
         """Enrich from a successful authority response, not agent arguments."""
@@ -128,3 +131,11 @@ class ActorContext:
             work_session_id=None,
             session_epoch=None,
         )
+
+
+_current_actor: ContextVar[ActorContext | None] = ContextVar("terminal_mcp_actor", default=None)
+
+
+def current_actor() -> ActorContext | None:
+    """Server-owned caller context for nested legacy execution adapters."""
+    return _current_actor.get()

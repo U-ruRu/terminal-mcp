@@ -47,8 +47,10 @@ class CommandApplication(ApplicationCapability):
         if (
             request.action == "read"
             and request.code is None
-            and not actor.provider_metadata
-            and actor.endpoint_role in {"legacy", "internal"}
+            and (
+                self.gate.access_mesh is not None
+                or (not actor.provider_metadata and actor.endpoint_role in {"legacy", "internal"})
+            )
         ):
             scope = {
                 "kind": "cmd.read",

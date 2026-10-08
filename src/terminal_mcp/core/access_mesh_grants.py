@@ -16,6 +16,7 @@ import hmac
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,8 +36,14 @@ EventKind = Literal[
 
 _EVENT_KINDS = frozenset(
     {
-        "SlotIssued", "SlotPolicyChanged", "SlotSuspended", "SlotResumed",
-        "SlotDeleted", "AccessCodeRotated", "SessionStarted", "SessionUpdated",
+        "SlotIssued",
+        "SlotPolicyChanged",
+        "SlotSuspended",
+        "SlotResumed",
+        "SlotDeleted",
+        "AccessCodeRotated",
+        "SessionStarted",
+        "SessionUpdated",
         "SessionEnded",
     }
 )
@@ -80,6 +87,7 @@ class SlotPolicy:
     rearm_enabled: bool = True
     warning_seconds: int = 0
     draining_seconds: int = 0
+    release_on_end: bool | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -94,6 +102,7 @@ class SlotPolicy:
             or type(self.draining_seconds) is not int
             or self.draining_seconds < 0
             or self.draining_seconds >= self.duration_seconds
+            or (self.release_on_end is not None and type(self.release_on_end) is not bool)
         ):
             raise AccessMeshError("access_mesh_invalid_policy")
 
@@ -143,7 +152,6 @@ class AccessSlotEvent:
             if self.effective_at is None:
                 raise AccessMeshError("access_mesh_missing_time")
 
-
     def to_wire(self) -> dict:
         """Bounded transport representation; never includes the raw Access Code."""
         return {
@@ -161,8 +169,15 @@ class AccessSlotEvent:
     @classmethod
     def from_wire(cls, data: dict) -> AccessSlotEvent:
         allowed = {
-            "issuer_id", "slot_id", "logical_agent_id", "revision",
-            "event_id", "kind", "policy", "code_tag", "effective_at",
+            "issuer_id",
+            "slot_id",
+            "logical_agent_id",
+            "revision",
+            "event_id",
+            "kind",
+            "policy",
+            "code_tag",
+            "effective_at",
         }
         if not isinstance(data, dict) or set(data) != allowed:
             raise AccessMeshError("access_mesh_invalid_wire_event")
@@ -193,7 +208,6 @@ class PendingDelivery:
     peer_node_id: str
     event: AccessSlotEvent
     issued_kind: Literal["legacy", "persistent"] | None
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,11 +261,16 @@ class LocalAccessMesh:
         self._proof_key = proof_key
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path)
+    @contextmanager
+    def _connect(self):
+        db = sqlite3.connect(self.path, timeout=5.0)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys = ON")
-        return db
+        try:
+            db.execute("PRAGMA foreign_keys = ON")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _initialize(self) -> None:
         with self._connect() as db:
@@ -302,13 +321,27 @@ class LocalAccessMesh:
                 ON access_mesh_event_outbox(peer_node_id,acked_at,issuer_id,slot_id,revision)
             """)
 
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS access_mesh_event_log (
+                  issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL,
+                  revision INTEGER NOT NULL, event_id TEXT NOT NULL,
+                  event_json TEXT NOT NULL,
+                  PRIMARY KEY(issuer_id,slot_id,revision),
+                  UNIQUE(issuer_id,event_id)
+                ) WITHOUT ROWID
+            """)
+
+    def _after_apply(self, db, event: AccessSlotEvent, *, release_claims: bool = False) -> None:
+        """Runtime stores extend this transactional hook; domain replicas stay standalone."""
+
     def code_tag(self, issuer_id: str, code: str) -> str:
         """A mesh-keyed verifier, not the plaintext four-digit AC."""
         _required_identifier(issuer_id)
         if not isinstance(code, str) or not re.fullmatch(r"[0-9]{4}", code):
             raise AccessMeshError("access_mesh_invalid_code")
         return hmac.new(
-            self._proof_key, f"terminal-mcp-ac-v1:{issuer_id}:{code}".encode(),
+            self._proof_key,
+            f"terminal-mcp-ac-v1:{issuer_id}:{code}".encode(),
             hashlib.sha256,
         ).hexdigest()
 
@@ -334,16 +367,24 @@ class LocalAccessMesh:
             ).fetchone()
         return self._snapshot(row) if row is not None else None
 
-    @staticmethod
     def _queue_event(
+        self,
         db: sqlite3.Connection,
         event: AccessSlotEvent,
         issued_kind: Literal["legacy", "persistent"] | None,
         recipients: tuple[str, ...],
     ) -> None:
         """Durably queue all peer deliveries in the same transaction as the event."""
+        wire = json.dumps(event.to_wire(), sort_keys=True, separators=(",", ":"))
+        db.execute(
+            """INSERT INTO access_mesh_event_log
+               (issuer_id,slot_id,revision,event_id,event_json)
+               VALUES(?,?,?,?,?)""",
+            (event.issuer_id, event.slot_id, event.revision, event.event_id, wire),
+        )
         payload = json.dumps(
-            {"event": event.to_wire(), "issued_kind": issued_kind}, sort_keys=True,
+            {"event": event.to_wire(), "issued_kind": issued_kind},
+            sort_keys=True,
         )
         for peer in recipients:
             db.execute(
@@ -351,16 +392,22 @@ class LocalAccessMesh:
                    (peer_node_id,event_id,issuer_id,slot_id,revision,payload_json)
                    VALUES(?,?,?,?,?,?)""",
                 (
-                    peer, event.event_id, event.issuer_id, event.slot_id,
-                    event.revision, payload,
+                    peer,
+                    event.event_id,
+                    event.issuer_id,
+                    event.slot_id,
+                    event.revision,
+                    payload,
                 ),
             )
 
     def pending_outbox(self, *, peer_node_id: str, limit: int = 50) -> tuple[PendingDelivery, ...]:
         """Fetch bounded durable deliveries for an authenticated peer transport."""
         if (
-            peer_node_id not in self.trusted_issuers or peer_node_id == self.local_node_id
-            or type(limit) is not int or not 1 <= limit <= 100
+            peer_node_id not in self.trusted_issuers
+            or peer_node_id == self.local_node_id
+            or type(limit) is not int
+            or not 1 <= limit <= 100
         ):
             raise AccessMeshError("access_mesh_invalid_peer")
         with self._connect() as db:
@@ -374,15 +421,21 @@ class LocalAccessMesh:
         values: list[PendingDelivery] = []
         for row in rows:
             content = json.loads(row["payload_json"])
-            values.append(PendingDelivery(
-                peer_node_id=peer_node_id,
-                event=AccessSlotEvent.from_wire(content["event"]),
-                issued_kind=content["issued_kind"],
-            ))
+            values.append(
+                PendingDelivery(
+                    peer_node_id=peer_node_id,
+                    event=AccessSlotEvent.from_wire(content["event"]),
+                    issued_kind=content["issued_kind"],
+                )
+            )
         return tuple(values)
 
     def acknowledge_delivery(
-        self, *, peer_node_id: str, event_id: str, authenticated_peer_id: str,
+        self,
+        *,
+        peer_node_id: str,
+        event_id: str,
+        authenticated_peer_id: str,
     ) -> bool:
         """ACK only after a receiving peer durably commits its event."""
         if (
@@ -414,10 +467,7 @@ class LocalAccessMesh:
         Transport must first authenticate the sending peer. An event claiming to
         come from another issuer cannot change this issuer's local replica.
         """
-        if (
-            authenticated_peer_id != event.issuer_id
-            or event.issuer_id not in self.trusted_issuers
-        ):
+        if authenticated_peer_id != event.issuer_id or event.issuer_id not in self.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_issuer")
         recipients = tuple(dict.fromkeys(broadcast_to))
         if recipients and (
@@ -431,6 +481,17 @@ class LocalAccessMesh:
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),
             ).fetchone()
+            recorded = db.execute(
+                "SELECT event_id,event_json FROM access_mesh_event_log "
+                "WHERE issuer_id=? AND slot_id=? AND revision=?",
+                (event.issuer_id, event.slot_id, event.revision),
+            ).fetchone()
+            if recorded is not None and (
+                recorded["event_id"] != event.event_id
+                or recorded["event_json"]
+                != json.dumps(event.to_wire(), sort_keys=True, separators=(",", ":"))
+            ):
+                raise AccessMeshError("access_mesh_event_conflict")
             if old is None:
                 if event.kind != "SlotIssued" or issued_kind not in {"legacy", "persistent"}:
                     raise AccessMeshError("access_mesh_unknown_slot")
@@ -442,14 +503,19 @@ class LocalAccessMesh:
                         event_id,policy_json,code_tag,anchor)
                        VALUES(?,?,?,?,'active',?,?,?,?,?)""",
                     (
-                        event.issuer_id, event.slot_id, event.logical_agent_id,
-                        issued_kind, event.revision, event.event_id,
+                        event.issuer_id,
+                        event.slot_id,
+                        event.logical_agent_id,
+                        issued_kind,
+                        event.revision,
+                        event.event_id,
                         json.dumps(asdict(event.policy), sort_keys=True),
                         event.code_tag,
                         _text(event.effective_at) if event.effective_at else None,
                     ),
                 )
                 self._queue_event(db, event, issued_kind, recipients)
+                self._after_apply(db, event)
                 return ApplyResult("applied")
             if event.logical_agent_id != old["logical_agent_id"]:
                 raise AccessMeshError("access_mesh_identity_conflict")
@@ -482,6 +548,8 @@ class LocalAccessMesh:
                 tag = event.code_tag
             elif event.kind in {"SessionStarted", "SessionUpdated"}:
                 anchor = _text(event.effective_at)
+                if event.policy is not None:
+                    policy = event.policy
             elif event.kind == "SessionEnded":
                 anchor = (
                     _text(event.effective_at + timedelta(seconds=policy.cooldown_seconds))
@@ -490,18 +558,25 @@ class LocalAccessMesh:
                 )
             release_claims = (
                 event.kind == "SlotDeleted"
-                or (old["kind"] == "legacy" and event.kind in {
-                    "SlotSuspended", "SessionEnded",
-                })
+                or (old["kind"] == "legacy" and event.kind == "SlotSuspended")
+                or (
+                    event.kind == "SessionEnded"
+                    and (old["kind"] == "legacy" or policy.release_on_end is True)
+                )
             )
             db.execute(
                 """UPDATE access_mesh_slot_replicas
                    SET state=?,revision=?,event_id=?,policy_json=?,code_tag=?,anchor=?
                    WHERE issuer_id=? AND slot_id=?""",
                 (
-                    state, event.revision, event.event_id,
-                    json.dumps(asdict(policy), sort_keys=True), tag, anchor,
-                    event.issuer_id, event.slot_id,
+                    state,
+                    event.revision,
+                    event.event_id,
+                    json.dumps(asdict(policy), sort_keys=True),
+                    tag,
+                    anchor,
+                    event.issuer_id,
+                    event.slot_id,
                 ),
             )
             if event.kind == "SlotDeleted":
@@ -510,8 +585,10 @@ class LocalAccessMesh:
                     (event.issuer_id, event.slot_id),
                 )
             self._queue_event(db, event, issued_kind, recipients)
+            self._after_apply(db, event, release_claims=release_claims)
         return ApplyResult(
-            "applied", release_claims=release_claims,
+            "applied",
+            release_claims=release_claims,
             logical_agent_id=event.logical_agent_id if release_claims else None,
         )
 
@@ -554,7 +631,7 @@ class LocalAccessMesh:
                     """INSERT INTO access_mesh_attachments
                        (connection_key,issuer_id,slot_id,logical_agent_id)
                        VALUES(?,?,?,?)""",
-                    (connection_key,issuer_id,slot.slot_id,slot.logical_agent_id),
+                    (connection_key, issuer_id, slot.slot_id, slot.logical_agent_id),
                 )
         return slot
 

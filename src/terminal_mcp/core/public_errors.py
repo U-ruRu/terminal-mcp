@@ -186,7 +186,55 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ("access", "stop", "cors_preflight_rejected origin_not_allowed"),
         ("internal", "reconcile", "access_issue_failed policy_persist_failed"),
     )
+    groups += (
+        (
+            "validation",
+            "repair",
+            """
+            access_mesh_invalid_code access_mesh_issuer_required access_mesh_issuer_mismatch
+            access_mesh_invalid_policy access_mesh_invalid_time access_mesh_invalid_event
+            access_mesh_invalid_wire_event access_mesh_invalid_snapshot access_mesh_invalid_limit
+            access_mesh_invalid_snapshot_request access_mesh_invalid_peer
+            access_mesh_invalid_identity
+        """,
+        ),
+        ("access", "repair", "session_attach_required"),
+        (
+            "access",
+            "stop",
+            """
+            access_mesh_untrusted_issuer access_mesh_untrusted_peer access_mesh_deleted_slot
+            legacy_disabled
+        """,
+        ),
+        (
+            "conflict",
+            "reconcile",
+            """
+            access_mesh_identity_conflict access_mesh_binding_conflict access_mesh_event_conflict
+            access_mesh_code_in_use access_mesh_code_capacity
+        """,
+        ),
+        ("missing", "repair", "access_mesh_slot_not_found access_mesh_unknown_slot"),
+        (
+            "transient",
+            "retry",
+            """
+            access_mesh_event_gap access_mesh_cleanup_pending access_mesh_claim_cleanup_pending
+            access_mesh_execution_cleanup_pending access_mesh_delivery_failed
+        """,
+        ),
+    )
     messages = {
+        "session_attach_required": (
+            "Attach this connector with issuer_node_id and access_code before writing."
+        ),
+        "access_mesh_issuer_required": (
+            "Provide issuer_node_id or an issuer:1234 qualified access code."
+        ),
+        "access_mesh_cleanup_pending": (
+            "Local cleanup is pending. Retry after lifecycle reconciliation."
+        ),
         "internal_error": "The operation failed internally. Check current state before retrying.",
         "operation_failed": "The operation did not complete. Check current state before retrying.",
         "execution_argument_invalid": "The execution request is invalid.",
@@ -359,6 +407,8 @@ class PublicError(_BoundedValue):
 # Schema-owned paths only. Unknown extra-field names may themselves be secrets.
 PUBLIC_FIELDS = frozenset(
     """
+    issuer_node_id access_code slot_id policy duration_seconds cooldown_seconds
+    rearm_enabled release_on_end warning_seconds draining_seconds scope
     request action mode code display_name subject namespace task_id lane state
     operational_status tags detail show_done show_archived limit cursor sender text
     target message_hash require_reply alert history command cmd_hash queue_id task_scope

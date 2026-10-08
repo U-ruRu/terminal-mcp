@@ -138,6 +138,33 @@ class PersistentBackend:
         scope: str,
         access_code: str | None = None,
     ):
+        mesh = getattr(self.service, "access_mesh", None)
+        if mesh is not None and mesh.store.slot_for_agent(logical_agent_id) is not None:
+            from terminal_mcp.application.actor import current_actor
+            from terminal_mcp.core.access_mesh_grants import AccessMeshError
+            from terminal_mcp.core.managed_sessions import ManagedOperation
+
+            actor = current_actor()
+            if actor is None:
+                raise PersistentLifecycleError("session_attach_required")
+            operation = {
+                "run": ManagedOperation.COMMAND_RUN,
+                "recovery": ManagedOperation.COMMAND_RECOVERY,
+                "cancel": ManagedOperation.COMMAND_CANCEL,
+                "message": ManagedOperation.MESSAGE_SEND,
+                "task": ManagedOperation.TASK_COMMENT,
+            }.get(scope, ManagedOperation.COMMAND_RUN)
+            try:
+                identity = await mesh.resolve(actor, operation)
+            except AccessMeshError as exc:
+                raise PersistentLifecycleError(exc.code) from exc
+            if (
+                identity["logical_agent_id"],
+                identity.get("work_session_id"),
+                identity.get("session_epoch"),
+            ) != (logical_agent_id, work_session_id, session_epoch):
+                raise PersistentLifecycleError("stale_session_epoch")
+            return await self.lifecycle.store.get_work_session(work_session_id), None
         try:
             session = await self.lifecycle.authorize_session(
                 logical_agent_id,
@@ -1473,6 +1500,20 @@ class PersistentBackend:
             return {"ok": False, "code": code, "error": code}
 
     async def _access_get(self, logical_agent_id: str):
+        mesh = getattr(self.service, "access_mesh", None)
+        slot = mesh.store.slot_for_agent(logical_agent_id) if mesh is not None else None
+        if slot is not None:
+            from terminal_mcp.storage.access_mesh import public_name
+
+            return {
+                "logical_agent_id": slot.logical_agent_id,
+                "slot_kind": slot.kind,
+                "authority_node_id": mesh.store.local_node_id,
+                "issuer_node_id": slot.issuer_id,
+                "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+                "status": slot.state,
+            }
+
         try:
             if self.fleet_bridge is not None:
                 return await self.fleet_bridge.get_access_slot(logical_agent_id)

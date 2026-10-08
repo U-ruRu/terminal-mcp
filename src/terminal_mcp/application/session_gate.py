@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.core.managed_sessions import ManagedOperation, ManagedSessionError
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleError
 from terminal_mcp.core.work_windows import WorkWindowError
@@ -35,6 +36,22 @@ class SessionGate:
         self._explicit_backend = backend
         self.managed_identity = managed_identity
         self.managed_sessions = managed_sessions
+
+    @property
+    def access_mesh(self):
+        return getattr(self.service, "access_mesh", None)
+
+    async def _mesh_resolution(self, actor, operation):
+        try:
+            identity = await self.access_mesh.resolve(actor, operation)
+        except AccessMeshError as exc:
+            return SessionResolution(actor, failure=failure(exc.code), managed=True)
+        resolved = (
+            actor.with_identity(identity)
+            if identity.get("work_session_id")
+            else actor.with_agent(identity["logical_agent_id"], identity["authority_node_id"])
+        )
+        return SessionResolution(resolved, identity=identity, managed=True)
 
     @property
     def backend(self):
@@ -191,6 +208,8 @@ class SessionGate:
     async def resolve(
         self, actor: ActorContext, code: str | None, operation: ManagedOperation | None = None
     ) -> SessionResolution:
+        if self.access_mesh is not None and actor.endpoint_role in {"executor", "coordinator"}:
+            return await self._mesh_resolution(actor, operation or ManagedOperation.SESSION_STATUS)
         if operation is not None:
             managed = await self._managed_resolution(actor, operation)
             if (
@@ -240,6 +259,8 @@ class SessionGate:
         self, actor: ActorContext, operation: ManagedOperation
     ) -> SessionResolution:
         """Resolve provider-bound identity for reads that do not require a live WorkSession."""
+        if self.access_mesh is not None and actor.endpoint_role in {"executor", "coordinator"}:
+            return await self._mesh_resolution(actor, operation)
         if not self._has_provider_identity(actor):
             return SessionResolution(actor, failure=failure("identity_not_bound"), managed=True)
         try:
@@ -262,6 +283,12 @@ class SessionGate:
 
     async def touch_provider(self, actor: ActorContext) -> None:
         """Best-effort activity touch after a successful public MCP call."""
+        if self.access_mesh is not None and actor.endpoint_role in {"executor", "coordinator"}:
+            try:
+                self.access_mesh.store.touch(self.access_mesh.connection_key(actor))
+            except AccessMeshError:
+                pass
+            return
         if not self._has_provider_identity(actor):
             return
         try:

@@ -455,9 +455,7 @@ class PersistentLifecycleCoordinator:
             int((parse_utc(ended.hard_expires_at) - parse_utc(response_now)).total_seconds()),
         )
         roaming_available = (
-            reason == "session_end"
-            and terminal_state == "ended"
-            and remaining_d_seconds > 0
+            reason == "session_end" and terminal_state == "ended" and remaining_d_seconds > 0
         )
         result = {
             "ok": True,
@@ -711,6 +709,9 @@ class PersistentLifecycleCoordinator:
         current = now or utc_now()
         reconciled = []
         for slot in await self.store.list_slots():
+            mesh = getattr(self, "access_mesh", None)
+            if mesh is not None and mesh.store.slot_for_agent(slot.logical_agent_id) is not None:
+                continue
             if slot.authority_node_id != self.authority_node_id:
                 continue
             if await self.store.has_managed_window(slot.logical_agent_id):
