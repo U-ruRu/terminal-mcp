@@ -7,7 +7,7 @@
 ## Canonical
 
 - Репозиторий: `https://github.com/U-ruRu/terminal-mcp.git`.
-- Development checkout: `/workspace/terminal-mcp`.
+- Development repository: `/workspace/terminal-mcp`; canonical worktree: `/workspace/terminal-mcp-integration`.
 - Каноническая ветка разработки: `integration/M3-functional-candidate`.
 - Python: `>=3.11`.
 - Runtime stack: FastAPI, Uvicorn, MCP SDK, Pydantic, SQLite/aiosqlite.
@@ -15,9 +15,25 @@
 
 ## Public MCP
 
+Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
+
+Executor catalog: `session`, `task_list`, `command_run`, `command_read`, `command_cancel`, `command_recovery`, `task_claim`, `task_state`, `task_comment`, `message`.
+
+Coordinator endpoint: `/terminal-mcp/coordinator/v1/mcp`.
+
+Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
+
+Role v1 uses server-resolved identity and the shared Application API. Inputs are permissive planning schemas; authoritative runtime validation precedes every operation. Output planning is a flat object with named success fields, `ok` and `error`; strict wire models remain server-side.
+
+Handled application errors use MCP `isError: false` with `structuredContent.ok: false` and a machine-readable `error` object. Bounded collections use opaque `next_cursor` values.
+
+Bootstrap-created managed sessions and temporary legacy sessions release task claims on end, interrupt and expiry. Explicitly provisioned persistent slots retain their separate ownership policy. Checkpoints and task history survive session cleanup.
+
+### Legacy compatibility
+
 Endpoint: `/mcp`.
 
-Канонический MCP-каталог: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
+Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
 | Tool | Назначение |
 | --- | --- |
@@ -147,7 +163,7 @@ python -m terminal_mcp.deployment.driver activate --env-file /etc/terminal-mcp/t
 python -m terminal_mcp.deployment.driver rollback --env-file /etc/terminal-mcp/terminal-mcp.env --api-user terminal-mcp --approved-gates
 ```
 
-## Planned public contracts
+## Role contract implementation
 
 Task: `MCP-ROLE-ENDPOINTS-V1-001`.
 
@@ -186,3 +202,7 @@ python3 scripts/check_repository_privacy.py
 - Local operator context: `PROJECT_CONTEXT.md` (git-excluded).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`skills/terminal-operations/references/tool-contract.md`](skills/terminal-operations/references/tool-contract.md)
+
+## Current release scope
+
+Develop and integrate on Secondary in `integration/M3-functional-candidate`. Release acceptance targets FirstByte and BacLOUD. Secondary, Main and Tokyo retain their deployed runtimes. Reuse the canonical worktree and coordinate concurrent changes by file ownership.

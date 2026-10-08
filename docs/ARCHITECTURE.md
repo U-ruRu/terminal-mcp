@@ -22,9 +22,25 @@ MCP / HTTP Actions / Console / Fleet
 
 ## Public MCP
 
+Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
+
+Executor catalog: `session`, `task_list`, `command_run`, `command_read`, `command_cancel`, `command_recovery`, `task_claim`, `task_state`, `task_comment`, `message`.
+
+Coordinator endpoint: `/terminal-mcp/coordinator/v1/mcp`.
+
+Coordinator catalog: `session`, `task_get`, `task_list`, `task_manage`, `task_graph`, `agent_observe`, `message`, `health`.
+
+Role v1 uses server-resolved identity and the shared Application API. Inputs are permissive planning schemas; authoritative runtime validation precedes every operation. Output planning is a flat object with named success fields, `ok` and `error`; strict wire models remain server-side.
+
+Handled application errors use MCP `isError: false` with `structuredContent.ok: false` and a machine-readable `error` object. Bounded collections use opaque `next_cursor` values.
+
+Bootstrap-created managed sessions and temporary legacy sessions release task claims on end, interrupt and expiry. Explicitly provisioned persistent slots retain their separate ownership policy. Checkpoints and task history survive session cleanup.
+
+### Legacy compatibility
+
 Endpoint: `/mcp`.
 
-Канонический MCP-каталог: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
+Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
 Public inputs use bounded Pydantic schemas. Public collections use bounded pages and opaque cursors. Public outputs use compact canonical projections from application/core modules.
 
@@ -155,7 +171,7 @@ Split activation/rollback: `terminal_mcp.deployment.driver`.
 
 Activation selects `TERMINAL_MCP_EXECUTION_MODE=unix` and the canonical executor socket. Rollback restores service topology/configuration while durable application databases keep their current state.
 
-## Planned public contracts
+## Role contract implementation
 
 Task: `MCP-ROLE-ENDPOINTS-V1-001`.
 

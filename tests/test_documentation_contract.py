@@ -13,7 +13,7 @@ CURRENT_DOCS = (
     ROOT / "docs" / "ARCHITECTURE.md",
     ROOT / "skills" / "terminal-operations" / "references" / "tool-contract.md",
 )
-CATALOG_PREFIX = "Канонический MCP-каталог:"
+CATALOG_PREFIX = "Legacy compatibility catalog:"
 
 
 def _mcp_tool_names() -> tuple[str, ...]:
@@ -72,9 +72,29 @@ def test_current_docs_exclude_retired_public_tool_catalog() -> None:
 def test_packaged_terminal_operations_skill_matches_sources() -> None:
     archive = ROOT / "dist" / "terminal-operations.skill"
     with ZipFile(archive) as zf:
-        assert zf.read("terminal-operations/SKILL.md") == (
-            ROOT / "skills" / "terminal-operations" / "SKILL.md"
-        ).read_bytes()
-        assert zf.read("terminal-operations/references/tool-contract.md") == (
-            ROOT / "skills" / "terminal-operations" / "references" / "tool-contract.md"
-        ).read_bytes()
+        assert (
+            zf.read("terminal-operations/SKILL.md")
+            == (ROOT / "skills" / "terminal-operations" / "SKILL.md").read_bytes()
+        )
+        assert (
+            zf.read("terminal-operations/references/tool-contract.md")
+            == (
+                ROOT / "skills" / "terminal-operations" / "references" / "tool-contract.md"
+            ).read_bytes()
+        )
+
+
+def test_current_docs_track_exact_role_catalogs() -> None:
+    from terminal_mcp.mcp.roles import COORDINATOR_TOOLS, EXECUTOR_TOOLS
+
+    for path in CURRENT_DOCS:
+        text = path.read_text()
+        for prefix, actual in (
+            ("Executor catalog:", EXECUTOR_TOOLS),
+            ("Coordinator catalog:", COORDINATOR_TOOLS),
+        ):
+            line = next(line for line in text.splitlines() if line.startswith(prefix))
+            assert tuple(re.findall(r"`([^`]+)`", line)) == actual, path
+        assert "/terminal-mcp/executor/v1/mcp" in text
+        assert "/terminal-mcp/coordinator/v1/mcp" in text
+        assert "Planned public contracts" not in text

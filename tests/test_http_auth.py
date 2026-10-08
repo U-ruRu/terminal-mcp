@@ -12,6 +12,7 @@ from terminal_mcp.app import create_app
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
+from terminal_mcp.operation_metadata import READ_ONLY_ACTIONS
 from terminal_mcp.version import __version__
 
 
@@ -476,7 +477,9 @@ def test_bearer_actions_and_openapi(tmp_path):
         for item in schema["paths"].values():
             for method, operation in item.items():
                 if method in {"get", "post"}:
-                    assert operation["x-openai-isConsequential"] is False
+                    assert operation["x-openai-isConsequential"] is (
+                        operation["operationId"] not in READ_ONLY_ACTIONS
+                    )
 
 
 def test_oauth_pkce_refresh_and_protected_action(tmp_path, file_oauth_credentials):

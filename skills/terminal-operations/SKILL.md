@@ -1,124 +1,62 @@
 ---
 name: terminal-operations
-description: Управляет и диагностирует Linux-сервер через Terminal MCP: health, sessions, managed tasks, messaging, commands, context и recovery.
-compatibility: Terminal MCP 0.13.1; MCP tools session, observe, message, task, cmd, context, health.
+description: Выполняет серверные задачи через Terminal MCP Executor и Coordinator: sessions, tasks, messaging, commands, health и recovery.
+compatibility: Terminal MCP 0.13.1; Executor v1 and Coordinator v1 role endpoints.
 metadata:
   author: U-ruRu
-  version: "2.0.0"
+  version: "2.1.0"
   language: ru
 ---
 
 # Terminal operations
 
-## Цель
+## Выбор роли
 
-Выполняй серверные задачи через текущий семиинструментный Terminal MCP контракт и фактический контекст сервера.
+Executor: `/terminal-mcp/executor/v1/mcp` — команды, чтение задач, claim/state/comment, сообщения.
+Coordinator: `/terminal-mcp/coordinator/v1/mcp` — управление задачами, граф, наблюдение агента, сообщения и health.
 
-## Базовый цикл
+Используй инструменты выбранной роли из текущего discovery. Сервер получает identity и роль из доверенного контекста вызова.
 
-1. Вызови `health`.
-2. Открой WorkSession через `session(action="start", ...)`.
-3. Прочитай релевантный instance context через `context(action="list")`.
-4. Прочитай managed work через `observe(subject="tasks", ...)`.
-5. Возьми карточку через `task(request={action:"claim", ...})` при managed workflow.
-6. Выполняй команды через `cmd(request={action:"run", ...})`.
-7. Дочитывай queued/running command через `cmd(request={action:"read", ...})`.
-8. Фиксируй findings через `task(... action="comment" ...)` или checkpoint/state mutation.
-9. Обрабатывай inbox через `message`.
-10. Заверши WorkSession через `session(action="end", ...)`.
+## Рабочий цикл
 
-## Session
+Открой WorkSession через `session(action="start")`. Прочитай `task_list`; Coordinator уточняет карточку через `task_get`, Executor берёт её через `task_claim` с `claim_intent`. Выполняй команды через `command_run`; полученный `cmd_hash` дочитывай через `command_read` с opaque cursor. Проверяй конечный status и exit code. Сохраняй результаты через `task_comment`, `task_state` или Coordinator `task_manage`. Заверши сессию после сохранения рабочего состояния.
 
-Provider-managed connector использует server-resolved provider identity. Persistent Access slot поддерживает initial compatibility binding. `mode="legacy"` создаёт временный Access slot.
+Coordinator `health` доступен до начала сессии. Компактный результат подходит для обычной проверки; `extended=true` добавляет диагностику.
 
-Следи за `hard_expires_at`, session warnings, alerts и текущим `session_epoch`. Завершай рабочий этап в безопасной точке до hard expiry.
+## Жизненный цикл
 
-## Observe
+LogicalAgent сохраняет identity. Автоматически созданная managed WorkSession имеет ограниченный TTL; её claims освобождаются при end, interrupt и expiry. Явно созданные persistent slots используют отдельную политику владения. Checkpoint и история задачи остаются доступными следующей сессии.
 
-`observe` читает:
+При lifecycle-ошибке сохрани доступный результат, выполни указанное recovery-действие и начни новую сессию, когда Session Gate разрешает старт. Повторно прочитай задачу перед новым claim. Используй актуальные серверные ревизии и session epoch.
 
-- `sessions`;
-- `tasks`;
-- `namespaces`.
+## Команды и задачи
 
-Используй `detail="summary"` для ориентации. Используй `detail="full"` для точечного текущего состояния. Коллекции читай через `limit` и opaque `cursor`.
+`command_run` принимает команду, optional `queue_id` и `task_scope`. Scope выбирай из `task_scope_options`: `none`, `all` или конкретный `namespace/task_id`. Очереди выполняются FIFO; завершившаяся быстро команда может вернуть первую страницу вывода сразу.
 
-## Managed tasks
+`command_cancel` отменяет собственную команду. `command_recovery` выполняет разрешённый recovery-путь. Чтение известного `cmd_hash` доступно без Access Code. Ограничивай вывод и проверяй завершение команды.
 
-Task actions:
+Состояния задач: `ready`, `in_progress`, `blocked`, `deferred`, `done`. Claim готовой задачи атомарно переводит её в `in_progress`. Сохраняй checkpoint, result, blocker_reason и release_reason. Dependency override использует содержательные `force_reason` и audit evidence.
 
-- `create`;
-- `claim`;
-- `release`;
-- `update`;
-- `checkpoint`;
-- `comment`;
-- `relate`;
-- `unrelate`;
-- `state`;
-- `done`;
-- `archive`;
-- `review`.
+## Сообщения
 
-Состояния: `ready`, `in_progress`, `blocked`, `deferred`, `done`.
+Выбирай адресата из `message(action="recipients")`. Отправляй по `public_name`, читай inbox через `read`, подтверждай через `ack`, отвечай через `reply`. Используй возвращённый `message_hash`. `history` продолжает журнал через opaque cursor. Broadcast задаётся `target="broadcast"` или отсутствием target; task addressing использует `namespace` и `task_id`.
 
-Primary claim создаёт ownership и атомарно переводит claimable ready work в `in_progress`. `claim_intent`, `result`, `blocker_reason`, `release_reason` и review evidence сохраняют durable handoff context.
+Обрабатывай требуемые ACK и ответы на alerts перед дальнейшими мутациями.
 
-Dependency override использует `force=true` вместе с содержательным `force_reason` и создаёт audit evidence.
+## Ошибки и повторные вызовы
 
-Командную provenance связывай через `task_scope`: `none`, `all` или конкретный `namespace/task_id` из текущих `task_scope_options`.
+Ожидаемая ошибка приходит как `isError:false` и `ok:false` с объектом `error`. Используй code, details, outcome и retry для следующего действия. При неизвестном результате сначала прочитай фактическое состояние.
 
-## Commands
+Строгая проверка работает на сервере; planning-схемы компактны. Повторение JSON-RPC ID `0` не обеспечивает exactly-once исполнение команд. Проверяй сохранённый command receipt перед повторным запуском с побочными эффектами.
 
-`cmd` actions:
+## Репозиторий и релиз
 
-- `run` — numbered FIFO execution;
-- `read` — bounded output page и command status;
-- `cancel` — cancellation конкретной команды;
-- `recovery` — emergency execution path.
+Проверь `git status`, worktrees и canonical branch в project context. Продолжай существующую canonical работу, согласовав владение файлами с другими агентами. Сохраняй чужие изменения. Выполни focused tests, lint и общий набор перед релизом; коммить только свою область. Изолированную ветку используй при реальной необходимости и интегрируй проверенный результат в canonical.
 
-`run` может вернуть завершённый результат вместе с первой bounded output page. Queued/running результат продолжай через `read`.
+Деплой ограничивай серверами, указанными в текущей задаче. Используй штатный installer/activation, сохрани rollback и durable state, проверь health, реальные tool calls и версии после переключения.
 
-Используй ограниченный вывод и точечные команды. Проверяй итоговый status и exit code.
+## Безопасность
 
-## Messaging
+Сохраняй секреты вне вывода и отчётов. Ограничивай изменения текущей задачей. Сохраняй живые claims других агентов; восстановление осиротевшего владения сопровождай проверкой сессии и audit evidence.
 
-`message` поддерживает inbox, history, send, ACK, reply и alert.
-
-Recipient lifecycle: `delivered → seen → read → replied`.
-
-Task-addressed message использует `namespace + task_id` и сохраняет durable task history reference.
-
-## Context
-
-`context` actions: `list`, `create`, `update`, `delete`.
-
-Primary entries содержат основной instance context. Additional entries содержат вспомогательный operational context.
-
-## Health
-
-`health` показывает application version, storage, auth mode, terminal runtime, scheduler, queues, command activity, output-cache и workflow summary.
-
-Используй `health` как первый и финальный operational check.
-
-## Repository work
-
-1. Проверь `git status` и worktrees.
-2. Определи canonical branch из project context.
-3. Создай отдельную task branch и worktree.
-4. Сохрани чужие рабочие изменения.
-5. Выполни focused tests и lint.
-6. Подлей свежий canonical в task branch.
-7. Реши конфликты в task branch.
-8. Повтори проверки.
-9. Интегрируй reviewed candidate в canonical.
-
-## Safety
-
-- Сохраняй секреты вне вывода команд и отчётов.
-- Используй штатные service/deployment entry points.
-- Сохраняй durable state при rollout/rollback.
-- Проверяй права, владельцев, health и журналы после инфраструктурных изменений.
-- Ограничивай destructive operations прямой целью текущей задачи.
-
-Полный контракт: [references/tool-contract.md](references/tool-contract.md).
+Legacy `/mcp` остаётся compatibility surface. Его каталог и Access Code сценарии описаны в [references/tool-contract.md](references/tool-contract.md).

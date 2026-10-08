@@ -512,6 +512,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def live():
         return {"ok": True, "version": __version__}
 
+    from terminal_mcp.operation_metadata import action_is_consequential
+
     def custom_openapi():
         if app.openapi_schema:
             return app.openapi_schema
@@ -531,7 +533,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for method, operation in item.items():
                 if method.lower() in {"get", "post", "put", "patch", "delete"}:
                     operation["security"] = [{"BearerAuth": []}]
-                    operation["x-openai-isConsequential"] = False
+                    operation["x-openai-isConsequential"] = action_is_consequential(
+                        operation.get("operationId", "")
+                    )
         app.openapi_schema = schema
         return schema
 

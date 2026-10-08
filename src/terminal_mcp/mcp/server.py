@@ -91,7 +91,10 @@ _SAFE_READ_ONLY = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
 )
 _SAFE_OPERATION = ToolAnnotations(
-    readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+)
+_SHELL_OPERATION = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
 )
 
 
@@ -312,8 +315,8 @@ def build_mcp(
         description=(
             "Mutate a managed task under an active unified session using a strict "
             "action-discriminated request. Provider-bound managed callers omit code; legacy "
-            "compatibility callers use their Access code. Claim ownership is durable per logical "
-            "slot; WIP is one live managed-task claim per slot."
+            "compatibility callers use their Access code. Claims follow slot/session lifetime "
+            "policy; WIP is one live managed-task claim per slot."
         ),
     )
     async def access_task_tool(boundary: TaskToolArguments) -> dict:
@@ -324,7 +327,7 @@ def build_mcp(
     @mcp.tool(
         name="cmd",
         structured_output=False,
-        annotations=_SAFE_OPERATION,
+        annotations=_SHELL_OPERATION,
         description=(
             "Run, read, cancel, or execute recovery commands. Provider-bound managed callers "
             "omit code and are resolved from server request identity; legacy mutations require "

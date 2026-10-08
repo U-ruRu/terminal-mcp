@@ -42,6 +42,7 @@ from terminal_mcp.mcp.output_contracts import (
     TaskOutput,
     projected_result,
 )
+from terminal_mcp.mcp.output_planning import flat_output_schema
 
 
 class _Strict(BaseModel):
@@ -389,6 +390,5 @@ def install_role_output_contract(mcp, role: str) -> None:
         tool.fn = contracted
         wire_model = RootModel[output_model.__success_type__ | RoleFailure]
         tool.fn_metadata.output_model = wire_model
-        tool.fn_metadata.output_schema = wire_model.model_json_schema()
-        tool.fn_metadata.output_schema.setdefault("type", "object")
+        tool.fn_metadata.output_schema = flat_output_schema(wire_model.model_json_schema())
         tool.fn_metadata.wrap_output = False
