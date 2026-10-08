@@ -539,3 +539,43 @@ async def test_public_send_returns_durable_receipt_within_total_peer_budget(
     assert fb.store.wire(result["message_hash"])
     assert len(fb.store.pending()) == 1
     assert count(fb, "coordination_message_recipients") == 1
+
+
+@pytest.mark.asyncio
+async def test_large_fleet_envelope_is_rejected_before_local_or_peer_commit(mesh_pair):
+    fb = mesh_pair.nodes["firstbyte"]
+    template = fb.mesh.store.slots["carol"]
+    for index in range(160):
+        agent_id = f"recipient-{index}-" + "x" * 135
+        fb.mesh.store.slots[agent_id] = SimpleNamespace(
+            **{**vars(template), "logical_agent_id": agent_id, "slot_id": agent_id}
+        )
+        fb.mesh.store.attached.add(agent_id)
+    result = await fb.message(actor("alice"), text="\U0001f600" * 12000, scope="fleet")
+    assert result["ok"] is False and result["code"] == "output_item_too_large", result
+    assert result["outcome"] == "not_committed"
+    assert count(fb, "coordination_messages") == 0
+    assert count(fb, "coordination_message_recipients") == 0
+    assert not fb.store.pending()
+    assert not mesh_pair.calls
+
+
+@pytest.mark.asyncio
+async def test_oversized_peer_acceptance_proof_rolls_back_all_obligations(mesh_pair):
+    fb = mesh_pair.nodes["firstbyte"]
+    sent = await fb.message(actor("alice"), text="template", scope="local")
+    wire = {**fb.store.wire(sent["message_hash"]), "message_hash": "firstbyte:meshmsg:large-proof"}
+    recipients = [
+        {
+            "logical_agent_id": f"{index}:" + "a" * 150,
+            "public_name": "\u754c" * 40 + f"-{index:012d}",
+        }
+        for index in range(256)
+    ]
+    before_messages = count(fb, "coordination_messages")
+    before_recipients = count(fb, "coordination_message_recipients")
+    with pytest.raises(MeshMessagingError, match="output_item_too_large"):
+        fb.store.accept(wire, recipients)
+    assert count(fb, "coordination_messages") == before_messages
+    assert count(fb, "coordination_message_recipients") == before_recipients
+    assert fb.store.wire(wire["message_hash"]) is None

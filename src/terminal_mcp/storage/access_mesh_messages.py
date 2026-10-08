@@ -72,6 +72,10 @@ class AccessMeshMessageStore:
     @staticmethod
     def queue(db, peer_id, kind, payload):
         data = canonical(payload)
+        # Budget the complete envelope, including recipient exclusion metadata.
+        # This runs inside the acceptance transaction, before local commit.
+        if len(data.encode("utf-8")) > 64 * 1024:
+            raise MeshMessagingError("output_item_too_large")
         db.execute(
             "INSERT OR IGNORE INTO access_mesh_message_outbox"
             "(peer_id,kind,event_key,payload_json,message_hash) VALUES(?,?,?,?,?)",
@@ -140,6 +144,15 @@ class AccessMeshMessageStore:
         with self.connect() as db:
             return self._receipt_tx(db, message_hash)
 
+    def _acceptance_receipt_tx(self, db, message_hash):
+        receipt = self._receipt_tx(db, message_hash)
+        # An inbound peer must receive its full delivery proof within the HTTP
+        # budget. Reject transactionally rather than committing unacknowledgeable
+        # obligations and returning an oversized response forever on every retry.
+        if len(canonical(receipt).encode("utf-8")) > 64 * 1024:
+            raise MeshMessagingError("output_item_too_large")
+        return receipt
+
     def accept(self, wire, recipients, *, peers=(), excluded=(), reply_author=None):
         """Commit local recipients and every pending forwarding job before any RPC."""
         message_hash = wire["message_hash"]
@@ -151,7 +164,7 @@ class AccessMeshMessageStore:
             if existing:
                 if existing[0] != canonical(wire):
                     raise MeshMessagingError("idempotency_conflict")
-                return self._receipt_tx(db, message_hash)
+                return self._acceptance_receipt_tx(db, message_hash)
             parent = None
             if reply_author is not None:
                 parent = self._recipient_tx(db, wire["reply_to"], reply_author)
@@ -217,7 +230,7 @@ class AccessMeshMessageStore:
                     (stamp, stamp, message_hash, wire["reply_to"], reply_author),
                 )
                 self._queue_receipt_tx(db, wire["reply_to"], reply_author)
-            return self._receipt_tx(db, message_hash)
+            return self._acceptance_receipt_tx(db, message_hash)
 
     @staticmethod
     def _recipient_tx(db, message_hash, agent_id):
