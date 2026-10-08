@@ -114,6 +114,7 @@ def build_access_mesh_operator_router(application):
         "/mutate",
         operation_id="mutateAccessMesh",
         openapi_extra={
+            "x-runtime-schema": OperatorMutation.model_json_schema(),
             "x-readOnly": False,
             "x-destructive": True,
             "x-idempotent": True,

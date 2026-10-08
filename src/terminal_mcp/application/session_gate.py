@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
@@ -48,11 +48,19 @@ class SessionGate:
             identity = await self.access_mesh.resolve(actor, operation)
         except AccessMeshError as exc:
             return SessionResolution(actor, failure=failure(exc.code), managed=True)
+        identity["node_attachment_id"] = self.access_mesh.connection_key(actor)
         resolved = (
             actor.with_identity(identity)
             if identity.get("work_session_id")
             else actor.with_agent(identity["logical_agent_id"], identity["authority_node_id"])
         )
+        resolved = replace(
+            resolved,
+            issuer_node_id=identity["issuer_node_id"],
+            slot_id=identity["slot_id"],
+            node_attachment_id=identity["node_attachment_id"],
+        )
+        identity.pop("node_attachment_id", None)
         return SessionResolution(resolved, identity=identity, managed=True)
 
     @property

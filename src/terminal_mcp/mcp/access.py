@@ -65,4 +65,25 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
         mcp, "access", overrides={("access", "session"): IssuerSessionInput}
     )
     install_role_output_contract(mcp, "access", overrides={("access", "session"): IssuerOutput})
+    from terminal_mcp.operation_metadata import install_action_metadata
+
+    install_action_metadata(mcp, "access", mesh=True)
+    from terminal_mcp.mcp.role_contracts import schema_digest, serialized_schema
+
+    tool = mcp._tool_manager.get_tool("session")
+    mcp.role_schema_contract = {
+        "endpoint_role": "access",
+        "contract_version": 1,
+        "access_mesh": True,
+        "tools": [
+            {
+                "tool_name": "session",
+                "runtime_input_schema_digest": schema_digest(
+                    IssuerSessionInput.model_json_schema()
+                ),
+                "planning_input_schema_digest": schema_digest(tool.parameters),
+                "planning_input_schema_bytes": len(serialized_schema(tool.parameters)),
+            }
+        ],
+    }
     return mcp

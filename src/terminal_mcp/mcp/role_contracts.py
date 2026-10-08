@@ -520,6 +520,9 @@ def schema_contract(role: str, tool_name: str) -> dict[str, object]:
     model = ROLE_TOOL_MODELS[(role, tool_name)]
     runtime_schema = model.model_json_schema()
     published_schema = planning_schema(model)
+    from terminal_mcp.operation_metadata import tool_action_effects
+
+    published_schema["x-terminal-mcp-action-matrix"] = tool_action_effects(role, tool_name)
     return {
         "tool_name": tool_name,
         "endpoint_role": role,

@@ -596,7 +596,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def live():
         return {"ok": True, "version": __version__}
 
-    from terminal_mcp.operation_metadata import action_is_consequential
+    from terminal_mcp.operation_metadata import (
+        action_is_consequential,
+        openapi_action_matrix,
+        openapi_effects,
+    )
 
     def custom_openapi():
         if app.openapi_schema:
@@ -617,6 +621,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for method, operation in item.items():
                 if method.lower() in {"get", "post", "put", "patch", "delete"}:
                     operation["security"] = [{"BearerAuth": []}]
+                    operation["x-terminal-mcp-effects"] = openapi_effects(
+                        operation.get("operationId", "")
+                    )
+                    operation["x-terminal-mcp-action-matrix"] = openapi_action_matrix(
+                        operation.get("operationId", "")
+                    )
                     operation["x-openai-isConsequential"] = action_is_consequential(
                         operation.get("operationId", "")
                     )

@@ -427,4 +427,7 @@ def build_mcp(
 
     _install_activity_touch()
 
+    from terminal_mcp.operation_metadata import install_action_metadata
+
+    install_action_metadata(mcp, "legacy")
     return mcp

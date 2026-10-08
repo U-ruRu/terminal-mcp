@@ -29,8 +29,6 @@ def flat_output_schema(schema: dict) -> dict:
         if not kinds:
             return {}
         result = {"type": next(iter(kinds)) if len(kinds) == 1 else sorted(kinds)}
-        if "array" in kinds:
-            result["items"] = {}
         return result
 
     fields = defaultdict(list)
@@ -42,5 +40,4 @@ def flat_output_schema(schema: dict) -> dict:
         "type": "object",
         "properties": properties,
         "required": ["ok"],
-        "additionalProperties": False,
     }

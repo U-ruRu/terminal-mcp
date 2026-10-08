@@ -35,6 +35,9 @@ class ActorContext:
     node_id: str = ""
     endpoint_role: str = "legacy"
     contract_version: int = 1
+    issuer_node_id: str | None = None
+    slot_id: str | None = None
+    node_attachment_id: str | None = field(default=None, repr=False)
     logical_agent_id: str | None = None
     work_session_id: str | None = None
     session_epoch: int | None = None
@@ -114,6 +117,13 @@ class ActorContext:
         return replace(
             self,
             logical_agent_id=str(identity["logical_agent_id"]),
+            issuer_node_id=str(identity["issuer_node_id"])
+            if identity.get("issuer_node_id")
+            else self.issuer_node_id,
+            slot_id=str(identity["slot_id"]) if identity.get("slot_id") else self.slot_id,
+            node_attachment_id=str(identity["node_attachment_id"])
+            if identity.get("node_attachment_id")
+            else self.node_attachment_id,
             work_session_id=str(identity["work_session_id"]),
             session_epoch=int(identity["session_epoch"]),
             authority_node_id=(

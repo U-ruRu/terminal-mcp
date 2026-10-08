@@ -986,6 +986,9 @@ def build_role_mcp(
 
     registered = mcp._tool_manager._tools
     mcp._tool_manager._tools = {name: registered[name] for name in ROLE_TOOLS[role]}
+    from terminal_mcp.operation_metadata import install_action_metadata
+
+    install_action_metadata(mcp, role, mesh=bool(mesh))
     mcp.role_schema_contract = role_schema_contract(role)
     if mesh:
         from terminal_mcp.mcp.role_contracts import (
