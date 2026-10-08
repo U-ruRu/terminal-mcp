@@ -35,6 +35,7 @@ class CommandScheduler:
         self.queue_events = {q: asyncio.Event() for q in range(1, self.queue_workers + 1)}
         self.workers = {}
         self.cancel_requested = set()
+        self.cancel_tasks = {}
         self.execution_done = {}
         self.finalization_pending = {}
         self.reconciler_task = None
@@ -123,13 +124,15 @@ class CommandScheduler:
                 return_exceptions=True,
             )
             await asyncio.sleep(0)
-        workers = list(self.workers.values()) + list(self.resume_tasks.values())
+        workers = (list(self.workers.values()) + list(self.resume_tasks.values())
+                   + list(self.cancel_tasks.values()))
         for worker in workers:
             worker.cancel()
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
         self.workers.clear()
         self.resume_tasks.clear()
+        self.cancel_tasks.clear()
         with self.claimed_commands_lock:
             self.claimed_commands.clear()
         self.pidless_first_seen.clear()
@@ -337,9 +340,22 @@ class CommandScheduler:
             if cmd_hash not in running_hashes:
                 self.pidless_first_seen.pop(cmd_hash, None)
 
+    def enqueue_cancel(self, command):
+        """Schedule an already-durable cancel intent without delaying its receipt."""
+        current = self.cancel_tasks.get(command.cmd_hash)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(self.cancel(command), name=f"cancel-{command.cmd_hash}")
+        self.cancel_tasks[command.cmd_hash] = task
+
     async def _reconciler(self):
         while not self.stopping:
             try:
+                for pending in await self.repo.active_cancel_intents():
+                    self.enqueue_cancel(pending)
+                for cmd_hash, task in list(self.cancel_tasks.items()):
+                    if task.done():
+                        self.cancel_tasks.pop(cmd_hash, None)
                 await self._recover_remote_running()
                 await self._reconcile_processless_running()
             except asyncio.CancelledError:

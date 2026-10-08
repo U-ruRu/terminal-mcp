@@ -55,15 +55,6 @@ class CommandApplication(ApplicationCapability):
             "session_epoch": identity["session_epoch"],
             "access_code": request.code,
         }
-        if actor.transport == "mcp" and actor.request_id not in {None, "", "0"}:
-            return await self.backend.replay_command(
-                request.action,
-                request.command,
-                idempotency_key=f"{identity['work_session_id']}:{actor.request_id}",
-                queue_id=request.queue_id if request.action == "run" else None,
-                task_scope=request.task_scope if request.action == "run" else "none",
-                **options,
-            )
         if request.action == "run":
             return await self.backend.run(
                 request.command, queue_id=request.queue_id, task_scope=request.task_scope, **options

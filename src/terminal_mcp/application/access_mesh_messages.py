@@ -290,18 +290,9 @@ class AccessMeshMessaging:
             "task_id": task_id,
             "reply_to": reply_to,
         }
-        key = {
-            "connection": self.mesh.connection_key(actor),
-            "cycle": identity["work_session_id"],
-            "epoch": identity["session_epoch"],
-            "request": actor.request_id,
-            "payload": payload,
-        }
-        suffix = (
-            hashlib.sha256(canonical(key).encode()).hexdigest()[:40]
-            if actor.request_id is not None
-            else secrets.token_hex(20)
-        )
+        # Explicit outbound sends are distinct regardless of JSON-RPC id
+        # or identical text. Inbound retransmission dedup uses message_hash.
+        suffix = secrets.token_hex(20)
         message_hash = f"{self.node_id}:meshmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:

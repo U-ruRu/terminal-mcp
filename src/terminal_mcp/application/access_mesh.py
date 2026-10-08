@@ -262,10 +262,11 @@ class AccessMeshApplication:
         binding = self.connection_key(actor)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
-        request_id = actor.request_id
-        if request_id in {None, "", "0"}:
-            request_id = "fresh:" + secrets.token_urlsafe(18)
-        key = hashlib.sha256(f"{binding}:{request_id}:{fingerprint}".encode()).hexdigest()
+        # JSON-RPC request ids are transport correlation only. Separate
+        # operator requests remain separate even when the connector reuses id.
+        key = hashlib.sha256(
+            f"{binding}:{secrets.token_urlsafe(24)}:{fingerprint}".encode()
+        ).hexdigest()
         return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
 
     @staticmethod

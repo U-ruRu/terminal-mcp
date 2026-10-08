@@ -82,13 +82,13 @@ class SqliteRepository:
         async with observed_connection(
             aiosqlite.connect,
             self.path,
-            busy_timeout=1.0,
+            busy_timeout=3.0,
             diagnostics=self.sqlite_diagnostics,
             operation=operation,
             pragmas=(
                 *(("PRAGMA journal_mode=WAL",) if ensure_wal else ()),
                 "PRAGMA synchronous=NORMAL",
-                "PRAGMA busy_timeout=1000",
+                "PRAGMA busy_timeout=3000",
                 "PRAGMA foreign_keys=ON",
             ),
             command_hash=command_hash,
@@ -506,6 +506,11 @@ class SqliteRepository:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
             return columns
 
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS command_cancel_intents("
+            "cmd_hash TEXT PRIMARY KEY REFERENCES commands(hash) ON DELETE CASCADE,"
+            "requested_at TEXT NOT NULL)"
+        )
         command_columns = await add_columns(
             "commands",
             [
@@ -1614,6 +1619,64 @@ class SqliteRepository:
             ).fetchone()
             await db.commit()
         return Command(*row), True
+
+    async def accept_cancel_intent(self, cmd_hash):
+        """Persist a cancellation request without waiting for process shutdown.
+
+        The queued/worker-claim race is serialized inside one write transaction.
+        Returns (command, outcome); accepted outcomes are 'queued', 'running',
+        or 'previously_accepted'.
+        """
+        now = utc_text()
+        async with self._connect("accept_cancel_intent", command_hash=cmd_hash) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        f"SELECT {_COMMAND_COLUMNS} FROM commands WHERE hash=?", (cmd_hash,)
+                    )
+                ).fetchone()
+                if row is None:
+                    await db.commit()
+                    return None, "command_not_found"
+                command = Command(*row)
+                prior = await (
+                    await db.execute(
+                        "SELECT 1 FROM command_cancel_intents WHERE cmd_hash=?", (cmd_hash,)
+                    )
+                ).fetchone()
+                if prior:
+                    await db.commit()
+                    return command, "previously_accepted"
+                if command.status not in {"queued", "running"}:
+                    await db.commit()
+                    return command, "command_already_finished"
+                await db.execute(
+                    "INSERT INTO command_cancel_intents(cmd_hash,requested_at) VALUES(?,?)",
+                    (cmd_hash, now),
+                )
+                if command.status == "queued":
+                    await db.execute(
+                        "UPDATE commands SET status='cancelled',finished_at=?,error=NULL "
+                        "WHERE hash=? AND status='queued'", (now, cmd_hash),
+                    )
+                await db.commit()
+                return command, command.status
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def active_cancel_intents(self):
+        """List durable cancellation requests still requiring process termination."""
+        async with self._connect("active_cancel_intents") as db:
+            rows = await (
+                await db.execute(
+                    f"SELECT {','.join('c.' + col.strip() for col in _COMMAND_COLUMNS.split(','))} "
+                    "FROM commands c JOIN command_cancel_intents i ON i.cmd_hash=c.hash "
+                    "WHERE c.status='running' ORDER BY i.requested_at LIMIT 100"
+                )
+            ).fetchall()
+        return [Command(*row) for row in rows]
 
     async def cancel_if_queued(self, cmd_hash):
         """Linearize queued cancellation against worker claim in one write transaction.

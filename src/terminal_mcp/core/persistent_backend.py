@@ -13,7 +13,6 @@ from terminal_mcp.core.persistent_lifecycle import (
     PersistentLifecycleCoordinator,
     PersistentLifecycleError,
 )
-from terminal_mcp.core.public_errors import normalize_public_error
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
 COMMAND_RUN_INLINE_BUDGET_SECONDS = 5.0
@@ -80,54 +79,25 @@ class PersistentBackend:
         return result
 
     async def _idempotent(
-        self,
-        logical_agent_id: str,
-        operation: str,
-        idempotency_key: str,
-        request: dict,
-        action,
-        *,
-        preserve_uncertain: bool = False,
+        self, logical_agent_id: str, operation: str, idempotency_key: str,
+        request: dict, action, *, preserve_uncertain: bool = False,
     ):
-        fingerprint = self.lifecycle.store.idempotency_fingerprint(request)
-        try:
-            replay = await self.lifecycle.store.idempotency_reserve(
-                logical_agent_id, operation, idempotency_key, fingerprint
-            )
-            if replay is not None:
-                return replay
+        """Perform every authorized business operation independently.
+
+        Legacy idempotency receipts and JSON-RPC ids never control the mutation.
+        Best-effort post-commit audit must not turn success into a false failure.
+        """
+        result = await action()
+        if result.get("ok"):
             try:
-                result = await action()
-            except (PersistentLifecycleError, ValueError):
-                if not preserve_uncertain:
-                    await self.lifecycle.store.idempotency_abort(
-                        logical_agent_id, operation, idempotency_key, fingerprint
+                await self._audit(logical_agent_id, operation, payload={"request": request})
+            except Exception:
+                if self.service.events:
+                    self.service.events.emit(
+                        "postcommit_audit_failed", level="ERROR", outcome="error",
+                        logical_agent_id=logical_agent_id, operation=operation,
                     )
-                raise
-            if not result.get("ok"):
-                if (
-                    not preserve_uncertain
-                    or normalize_public_error(result).outcome == "not_committed"
-                ):
-                    await self.lifecycle.store.idempotency_abort(
-                        logical_agent_id, operation, idempotency_key, fingerprint
-                    )
-                return result
-            result = await self.lifecycle.store.idempotency_complete(
-                logical_agent_id,
-                operation,
-                idempotency_key,
-                fingerprint,
-                result,
-            )
-            await self._audit(
-                logical_agent_id,
-                operation,
-                payload={"request": request},
-            )
-            return result
-        except PersistentStoreError as exc:
-            return self._error(PersistentLifecycleError(exc.code, blockers=exc.blockers))
+        return result
 
     async def _execution_authority(
         self,
@@ -1867,8 +1837,12 @@ class PersistentBackend:
     ):
         loop = asyncio.get_running_loop()
         inline_deadline = loop.time() + COMMAND_RUN_INLINE_BUDGET_SECONDS
+        command = None
         if not cmd:
-            return {"ok": False, "code": "invalid_command", "error": "command is required"}
+            return {
+                "ok": False, "code": "input_validation_failed",
+                "error": "command is required", "path": "command",
+            }
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
                 session, permit = await self._execution_authority(
@@ -1892,8 +1866,9 @@ class PersistentBackend:
                 if selected is None:
                     return {
                         "ok": False,
-                        "code": "invalid_task_scope",
+                        "code": "input_validation_failed",
                         "error": "invalid_task_scope",
+                        "path": "task_scope",
                         "task_scope_options": options,
                     }
                 if queue_id is None:
@@ -1902,7 +1877,8 @@ class PersistentBackend:
                     if queue_id < 1 or queue_id > self.terminal.queue_workers:
                         return {
                             "ok": False,
-                            "code": "invalid_queue",
+                            "code": "input_validation_failed",
+                            "path": "queue_id",
                             "error": (
                                 f"queue_id must be between 1 and {self.terminal.queue_workers}"
                             ),
@@ -2002,6 +1978,16 @@ class PersistentBackend:
         except PersistentLifecycleError as exc:
             return self._error(exc)
         except Exception as exc:
+            if command is not None:
+                # The command was committed. Its hash is the recovery receipt;
+                # failures in submission, task audit or inline readback cannot
+                # be reported as an uncommitted command.
+                return {
+                    "ok": True, "cmd_hash": command.cmd_hash,
+                    "status": command.status, "queue_id": command.queue_id,
+                    "execution_started": bool(command.claimed_at or command.started_at),
+                    "postcommit_warning": type(exc).__name__,
+                }
             return {"ok": False, "code": "run_failed", "error": str(exc)}
 
     async def recovery(
@@ -2014,7 +2000,10 @@ class PersistentBackend:
         access_code: str | None = None,
     ):
         if not cmd:
-            return {"ok": False, "code": "invalid_command", "error": "command is required"}
+            return {
+                "ok": False, "code": "input_validation_failed",
+                "error": "command is required", "path": "command",
+            }
         command = None
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
@@ -2100,8 +2089,8 @@ class PersistentBackend:
                 if attribution is None:
                     return {
                         "ok": False,
-                        "code": "command_not_persistent",
-                        "error": "command_not_persistent",
+                        "code": "command_not_found",
+                        "error": "command_not_found",
                     }
                 exact = (
                     attribution["logical_agent_id"] == logical_agent_id
@@ -2110,38 +2099,29 @@ class PersistentBackend:
                 )
                 if not exact:
                     return {"ok": False, "code": "command_not_owned", "error": "command_not_owned"}
-                command, cancelled_before_start = await self.repo.cancel_if_queued(cmd_hash)
+                command, outcome = await self.repo.accept_cancel_intent(cmd_hash)
                 if command is None:
-                    return {"ok": False, "code": "command_not_found", "error": "command_not_found"}
-                if cancelled_before_start:
                     return {
-                        "ok": True,
-                        "cmd_hash": cmd_hash,
-                        "cancelled_from": "queued",
-                        "execution_started": False,
-                        "error": None,
+                        "ok": False, "code": "command_not_found",
+                        "error": "command_not_found",
                     }
-                if command.status == "cancelled":
+                if outcome == "command_already_finished":
                     return {
-                        "ok": True,
-                        "cmd_hash": cmd_hash,
-                        "cancelled_from": "running",
-                        "execution_started": True,
-                        "error": None,
-                    }
-                if command.status != "running":
-                    return {
-                        "ok": False,
-                        "code": "command_not_running",
+                        "ok": False, "code": "command_already_finished",
                         "error": f"command is already {command.status}",
                     }
-                ok, error = await self.terminal.cancel(command)
+                if outcome == "running" or (
+                    outcome == "previously_accepted" and command.status == "running"
+                ):
+                    self.terminal.enqueue_cancel(command)
                 return {
-                    "ok": ok,
-                    "cmd_hash": cmd_hash,
-                    "cancelled_from": "running" if ok else None,
-                    "execution_started": True,
-                    "error": error,
+                    "ok": True, "cmd_hash": cmd_hash,
+                    "cancel_requested": True,
+                    "cancelled_from": (
+                        "queued" if outcome == "queued" else "running"
+                    ),
+                    "execution_started": bool(command.claimed_at or command.started_at),
+                    "error": None,
                 }
         except PersistentLifecycleError as exc:
             return self._error(exc)
@@ -2228,19 +2208,6 @@ class PersistentBackend:
                         # revision and must not replace the committed result.
                     return result
 
-                if idempotency_key:
-                    return await self._idempotent(
-                        logical_agent_id,
-                        f"task.{action}",
-                        idempotency_key,
-                        {
-                            "namespace": namespace,
-                            "task_id": task_id,
-                            "action": action,
-                            "kwargs": kwargs,
-                        },
-                        mutate_once,
-                    )
                 return await mutate_once()
         except PersistentLifecycleError as exc:
             return self._error(exc)
