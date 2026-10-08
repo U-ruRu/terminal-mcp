@@ -5,6 +5,7 @@ import json
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
+from terminal_mcp.application.projections import _with_session_lifecycle
 from terminal_mcp.application.task_requests import TaskRequest, task_request_to_backend
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.public_errors import public_error
@@ -61,7 +62,4 @@ class TaskApplication(ApplicationCapability):
             session_scoped_claim=isinstance(identity.get("session_lifecycle"), dict),
             **backend_request,
         )
-        lifecycle = identity.get("session_lifecycle")
-        if result.get("ok") and isinstance(lifecycle, dict):
-            result["session_lifecycle"] = lifecycle
-        return result
+        return _with_session_lifecycle(result, identity)

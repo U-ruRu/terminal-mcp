@@ -44,3 +44,17 @@ def _finish_cmd_read_page(result: dict, *, start: int, scope: dict) -> dict:
     if line_truncated:
         result["line_truncated"] = True
     return result
+
+
+def _with_session_lifecycle(result: dict, identity: dict) -> dict:
+    lifecycle = identity.get("session_lifecycle")
+    if result.get("ok") and isinstance(lifecycle, dict):
+        result["session_lifecycle"] = {
+            key: lifecycle[key]
+            for key in ("state", "remaining_seconds", "hard_expires_at", "return_to_chat")
+            if key in lifecycle
+        }
+        for key in ("issuer_node_id", "slot_id"):
+            if key in identity:
+                result[key] = identity[key]
+    return result

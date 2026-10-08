@@ -4,7 +4,11 @@ import asyncio
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
-from terminal_mcp.application.projections import _finish_cmd_read_page, _read_error
+from terminal_mcp.application.projections import (
+    _finish_cmd_read_page,
+    _read_error,
+    _with_session_lifecycle,
+)
 from terminal_mcp.application.requests import CmdRequest
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.read_contract import (
@@ -14,20 +18,6 @@ from terminal_mcp.core.read_contract import (
     decode_cursor,
     encode_cursor,
 )
-
-
-def _with_session_lifecycle(result: dict, identity: dict) -> dict:
-    lifecycle = identity.get("session_lifecycle")
-    if result.get("ok") and isinstance(lifecycle, dict):
-        result["session_lifecycle"] = {
-            key: lifecycle[key]
-            for key in ("state", "remaining_seconds", "hard_expires_at", "return_to_chat")
-            if key in lifecycle
-        }
-        for key in ("issuer_node_id", "slot_id"):
-            if key in identity:
-                result[key] = identity[key]
-    return result
 
 
 class CommandApplication(ApplicationCapability):

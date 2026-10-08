@@ -6,7 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from terminal_mcp.core.read_contract import DEFAULT_CMD_READ_LINES, MAX_CMD_READ_LINES
 from terminal_mcp.mcp.output_contracts import AccessError, CmdReadResult
-from terminal_mcp.mcp.role_contracts import Cursor, Hash, MessageInput, StrictRoleInput
+from terminal_mcp.mcp.role_contracts import (
+    Cursor,
+    ExpectedRevision,
+    Hash,
+    MessageInput,
+    Namespace,
+    ResultValue,
+    StrictRoleInput,
+    TaskId,
+)
 
 
 class AttachInput(StrictRoleInput):
@@ -46,6 +55,33 @@ class MeshCommandReadInput(StrictRoleInput):
     cmd_hash: Hash | None = None
     limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
     cursor: Cursor | None = None
+
+
+class MeshTaskCommentInput(StrictRoleInput):
+    action: Literal["comment", "checkpoint"] = "comment"
+    namespace: Namespace
+    task_id: TaskId
+    comment_text: Annotated[
+        str | None, Field(min_length=1, max_length=4000, description="Required for action=comment.")
+    ] = None
+    checkpoint: Annotated[
+        ResultValue | None,
+        Field(
+            description="Required for action=checkpoint; saves progress and preserves task state."
+        ),
+    ] = None
+    expected_revision: ExpectedRevision | None = None
+
+    def to_request(self):
+        from terminal_mcp.application.task_requests import TaskCheckpointRequest, TaskCommentRequest
+
+        model = TaskCheckpointRequest if self.action == "checkpoint" else TaskCommentRequest
+        return model.model_validate({"action": self.action, **self.model_dump(exclude_unset=True)})
+
+    @model_validator(mode="after")
+    def action_fields(self):
+        self.to_request()
+        return self
 
 
 class MeshMessageInput(MessageInput):

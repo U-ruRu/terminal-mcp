@@ -352,3 +352,169 @@ def test_message_projection_does_not_hide_queued_remote_delivery():
     assert result.structuredContent["message"]["state"] == "queued"
     assert result.structuredContent["message"]["pending_peers"] == ["bacloud"]
     assert result.structuredContent["message"]["outcome"] == "committed"
+
+
+def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        slot = call(client, "access", "session", {"action": "start", "mode": "legacy"})
+        binding = {"issuer_node_id": "firstbyte", "access_code": slot["access_code"]}
+        for role in ["executor", "coordinator"]:
+            assert call(client, role, "session", binding)["ok"]
+        key = {"namespace": "mesh-checkpoints", "task_id": "one"}
+        created = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "create",
+                **key,
+                "title": "checkpoint",
+                "state": "in_progress",
+                "isolation_hint": "independent temporary test database",
+            },
+            request_id=10,
+        )
+        assert created["ok"], created
+        claimed = call(
+            client,
+            "executor",
+            "task_claim",
+            {"action": "claim", **key, "claim_intent": "verify checkpoint"},
+            request_id=11,
+        )
+        assert claimed["ok"], claimed
+        checkpoint = call(
+            client,
+            "executor",
+            "task_comment",
+            {
+                "action": "checkpoint",
+                **key,
+                "checkpoint": {"step": "first"},
+                "expected_revision": 1,
+            },
+            request_id=12,
+        )
+        assert checkpoint["ok"], checkpoint
+        assert checkpoint["action"] == "checkpoint"
+        assert checkpoint["task"]["state"] == "in_progress"
+        assert checkpoint["task"]["revision"] == 2
+        commented = call(
+            client,
+            "executor",
+            "task_comment",
+            {**key, "comment_text": "checkpoint saved"},
+            request_id=13,
+        )
+        assert commented["ok"], commented
+        read = call(client, "coordinator", "task_get", key)
+        assert read["ok"], read
+        stored = client.portal.call(
+            app.state.service.task_store.get_task, key["namespace"], key["task_id"]
+        )
+        assert stored["checkpoint"] == {"step": "first"} and stored["state"] == "in_progress"
+        malformed = call(
+            client,
+            "executor",
+            "task_comment",
+            {"action": "checkpoint", **key, "comment_text": "wrong field"},
+            request_id=14,
+        )
+        assert malformed["error"]["code"] == "input_validation_failed", malformed
+        released = call(
+            client,
+            "executor",
+            "task_claim",
+            {"action": "release", **key, "release_reason": "checkpoint handed over"},
+            request_id=15,
+        )
+        assert released["ok"] and released["task"]["state"] == "in_progress", released
+        after_release = client.portal.call(
+            app.state.service.task_store.get_task, key["namespace"], key["task_id"]
+        )
+        assert released["task"]["revision"] == after_release["revision"]
+        assert after_release["checkpoint"] == stored["checkpoint"]
+        unowned = call(
+            client,
+            "executor",
+            "task_state",
+            {
+                **key,
+                "state": "blocked",
+                "blocker_reason": "fixture blocker",
+                "expected_revision": released["task"]["revision"],
+            },
+            request_id=160,
+        )
+        assert unowned["error"]["code"] == "owner_required"
+        reclaimed = call(
+            client,
+            "executor",
+            "task_claim",
+            {**key, "action": "claim", "claim_intent": "complete verified fixture"},
+            request_id=161,
+        )
+        assert reclaimed["ok"], reclaimed
+        blocked = call(
+            client,
+            "executor",
+            "task_state",
+            {
+                **key,
+                "state": "blocked",
+                "blocker_reason": "fixture blocker",
+                "expected_revision": released["task"]["revision"],
+            },
+            request_id=16,
+        )
+        assert blocked["ok"] and blocked["task"]["state"] == "blocked", blocked
+        reclaimed = call(
+            client,
+            "executor",
+            "task_claim",
+            {**key, "action": "claim", "claim_intent": "resolve verified fixture"},
+            request_id=162,
+        )
+        assert reclaimed["ok"], reclaimed
+        done = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                **key,
+                "action": "done",
+                "result": {"verified": True},
+                "expected_revision": blocked["task"]["revision"],
+            },
+            request_id=17,
+        )
+        assert done["ok"] and done["task"]["state"] == "done", done
+        archive = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                **key,
+                "action": "archive",
+                "archive_note": "verified fixture",
+                "expected_revision": done["task"]["revision"],
+            },
+            request_id=18,
+        )
+        assert archive["ok"], archive
+        # Replays return the immutable committed checkpoint receipt after later mutations.
+        replay = call(
+            client,
+            "executor",
+            "task_comment",
+            {
+                **key,
+                "action": "checkpoint",
+                "checkpoint": {"step": "first"},
+                "expected_revision": 1,
+            },
+            request_id=12,
+        )
+        assert replay["ok"] and replay["task"] == checkpoint["task"], replay
+        assert len(rpc(client, "executor", "tools/list").json()["result"]["tools"]) == 10

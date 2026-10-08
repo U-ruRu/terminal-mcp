@@ -32,7 +32,7 @@ ROLE_CAPABILITIES = {
 }
 
 ROLE_TASK_ACTIONS = {
-    "executor": frozenset({"claim", "release", "state", "comment"}),
+    "executor": frozenset({"claim", "release", "state", "comment", "checkpoint"}),
     "coordinator": frozenset(
         {
             "create",
@@ -48,7 +48,6 @@ ROLE_TASK_ACTIONS = {
         }
     ),
 }
-
 
 
 def canonical_application_result(result):

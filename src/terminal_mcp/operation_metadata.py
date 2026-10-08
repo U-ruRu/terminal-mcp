@@ -146,7 +146,7 @@ def tool_action_effects(role, name, *, mesh=False):
             if key not in {"claim", "release"}
         }
     if name == "task_comment":
-        return {"comment": APPEND_EFFECTS}
+        return {"comment": APPEND_EFFECTS, **({"checkpoint": REPLACE_EFFECTS} if mesh else {})}
     if name == "task_state":
         return {"state": TASK_ACTION_EFFECTS["state"]}
     if name in {"command_run", "command_recovery"}:

@@ -272,17 +272,17 @@
         },
         {
           "annotations": {
-            "destructiveHint": false,
+            "destructiveHint": true,
             "idempotentHint": false,
             "openWorldHint": false,
             "readOnlyHint": false
           },
           "name": "task_comment",
-          "planning_input_bytes": 311,
-          "planning_input_digest": "4aeb7d0c9e67e364aa740af7c7930d713f77f01bd4ac7702eae61bff63554c8b",
+          "planning_input_bytes": 732,
+          "planning_input_digest": "5ab356d1dd753f1760b341b612ff13e91f4a3c67d44eb26ba509bb69680c086c",
           "planning_output_bytes": 274,
           "planning_output_digest": "6bd2fb2c32e13eec7fad52e5d7c17a1a733e950e964e016a80fabf5736d9069e",
-          "runtime_input_digest": "341bf7077a77575d9af316eae255551ec1af21f2ea0b454e1e0618fd1a5526f6",
+          "runtime_input_digest": "606c2a3eda929738d7c1275fac1c09bf4466e6509d2e949895f77c8327fa6668",
           "runtime_output_digest": "b7bb4701ce88922871792a76be5e63e531bd2264f40d75a066c87fe2356755fe"
         },
         {

@@ -58,6 +58,7 @@ from terminal_mcp.mcp.access_contracts import (
     MeshMessageInput,
     MeshObserveOutput,
     MeshSessionOutput,
+    MeshTaskCommentInput,
 )
 from terminal_mcp.mcp.output_contracts import (
     _task_record as _normalize_task_record,
@@ -602,7 +603,14 @@ def build_role_mcp(
         {
             (role, "session"): AttachInput,
             (role, "message"): MeshMessageInput,
-            **({(role, "command_read"): MeshCommandReadInput} if role == "executor" else {}),
+            **(
+                {
+                    (role, "command_read"): MeshCommandReadInput,
+                    (role, "task_comment"): MeshTaskCommentInput,
+                }
+                if role == "executor"
+                else {}
+            ),
         }
         if mesh
         else {}
@@ -821,6 +829,10 @@ def build_role_mcp(
             request, failure = _validate(boundary, role, "task_comment")
             if failure is not None:
                 return failure
+            if mesh:
+                canonical = request.to_request()
+                raw = await application.task(_actor(application, role), canonical)
+                return _structured(task_result(raw, canonical.action))
             request = TaskCommentInput.model_validate(request)
             canonical = TaskCommentRequest(
                 action="comment",
@@ -931,6 +943,13 @@ def build_role_mcp(
                     destructiveHint=False,
                     idempotentHint=True,
                     openWorldHint=False,
+                )
+            elif tool.name == "task_comment":
+                tool.description = (
+                    "Append comment_text with action='comment' (the default), or save "
+                    "checkpoint with action='checkpoint' and optional expected_revision. "
+                    "Checkpoint updates preserve task state and history. "
+                    "Writes require this connector's attached local work cycle."
                 )
             elif tool.name == "command_read":
                 tool.description = (
