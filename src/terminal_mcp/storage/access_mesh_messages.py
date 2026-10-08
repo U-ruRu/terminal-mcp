@@ -58,6 +58,17 @@ class AccessMeshMessageStore:
         finally:
             db.close()
 
+    def activity(self, issuer_id, slot_id):
+        """Observe local attachment activity without materializing a session."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT MAX(t.last_active_at) FROM access_mesh_activity t "
+                "JOIN access_mesh_attachments a USING(connection_key) "
+                "WHERE a.issuer_id=? AND a.slot_id=?",
+                (issuer_id, slot_id),
+            ).fetchone()
+        return row[0] if row else None
+
     @staticmethod
     def queue(db, peer_id, kind, payload):
         data = canonical(payload)

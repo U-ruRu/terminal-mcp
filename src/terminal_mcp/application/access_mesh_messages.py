@@ -15,7 +15,6 @@ import secrets
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from terminal_mcp.core.managed_sessions import ManagedOperation
@@ -35,6 +34,7 @@ from terminal_mcp.storage.access_mesh_messages import (
 )
 
 MAX_WIRE_BYTES = 64 * 1024
+PUBLIC_DELIVERY_BUDGET_SECONDS = 1.0
 MAX_RECIPIENTS = 256
 RECIPIENT_FIELDS = (
     "public_name",
@@ -125,17 +125,6 @@ class AccessMeshMessaging:
     def node_id(self):
         return self.mesh.store.local_node_id
 
-    def _activity(self, slot):
-        # Read exact local attachment activity; no directory/issuer/network fallback.
-        with self.store.connect() as db:
-            row = db.execute(
-                "SELECT MAX(t.last_active_at) FROM access_mesh_activity t "
-                "JOIN access_mesh_attachments a USING(connection_key) "
-                "WHERE a.issuer_id=? AND a.slot_id=?",
-                (slot.issuer_id, slot.slot_id),
-            ).fetchone()
-        return row[0] if row else None
-
     async def _local_recipients(self):
         records = {}
         after = ""
@@ -145,7 +134,7 @@ class AccessMeshMessaging:
                 break
             for slot in slots:
                 identity = await asyncio.to_thread(
-                    self.mesh.store.local_identity, slot, now=self.mesh.clock()
+                    self.mesh.store.observed_identity, slot, now=self.mesh.clock()
                 )
                 lifecycle = identity.get("session_lifecycle") or {}
                 if (
@@ -162,7 +151,9 @@ class AccessMeshMessaging:
                     "session_started_at": lifecycle.get("started_at"),
                     "hard_expires_at": identity.get("hard_expires_at"),
                     "remaining_seconds": max(0, int(lifecycle.get("remaining_seconds") or 0)),
-                    "last_active_at": await asyncio.to_thread(self._activity, slot),
+                    "last_active_at": await asyncio.to_thread(
+                        self.store.activity, slot.issuer_id, slot.slot_id
+                    ),
                 }
                 if len(records) > MAX_RECIPIENTS:
                     raise MeshMessagingError("output_item_too_large")
@@ -305,7 +296,7 @@ class AccessMeshMessaging:
         message_hash = f"{self.node_id}:meshmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:
-            await self.flush(message_hash=message_hash)
+            await self.flush_for_call(message_hash=message_hash)
             return await asyncio.to_thread(self.store.receipt, message_hash)
         wire = MeshWireMessage.model_validate(
             {
@@ -334,7 +325,7 @@ class AccessMeshMessaging:
         )
         try:
             if peers:
-                await self.flush(message_hash=message_hash)
+                await self.flush_for_call(message_hash=message_hash)
             receipt = await asyncio.to_thread(self.store.receipt, message_hash)
         except Exception:
             logging.getLogger(__name__).warning(
@@ -597,6 +588,18 @@ class AccessMeshMessaging:
         except MeshMessagingError as exc:
             return _failure(exc.code)
 
+    async def flush_for_call(self, *, message_hash):
+        """The durable accept receipt does not wait for a busy or offline Fleet."""
+        try:
+            await asyncio.wait_for(
+                self.flush(message_hash=message_hash),
+                timeout=PUBLIC_DELIVERY_BUDGET_SECONDS,
+            )
+        except TimeoutError:
+            # The transaction has already queued every remaining delivery.
+            # Lifespan workers retry it without extending this caller's budget.
+            return
+
     async def flush(self, *, message_hash=None):
         if self.replication is None:
             return
@@ -659,35 +662,3 @@ class AccessMeshMessaging:
                 await asyncio.wait_for(self._stop.wait(), timeout=2)
             except TimeoutError:
                 pass
-
-
-def build_access_mesh_message_router(messages, replication_auth):
-    router = APIRouter()
-
-    @router.post("/internal/fleet/access-mesh/messages/{kind}", include_in_schema=False)
-    async def peer_message(
-        kind: str,
-        request: Request,
-        x_terminal_mcp_peer: str = Header(default=""),
-        authorization: str = Header(default=""),
-    ):
-        peer = replication_auth.authenticate(x_terminal_mcp_peer, authorization)
-        if peer is None or peer.instance_id not in {item.instance_id for item in messages.peers}:
-            raise HTTPException(401, "invalid access mesh peer")
-        raw = bytearray()
-        async for part in request.stream():
-            raw.extend(part)
-            if len(raw) > MAX_WIRE_BYTES:
-                raise HTTPException(413, "message payload exceeds byte budget")
-        try:
-            payload = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise HTTPException(400, "invalid message payload") from exc
-        if not isinstance(payload, dict):
-            raise HTTPException(400, "invalid message payload")
-        result = await messages.handle_peer(peer.instance_id, kind, payload)
-        if len(canonical(result).encode()) > MAX_WIRE_BYTES:
-            raise HTTPException(413, "message response exceeds byte budget")
-        return result
-
-    return router
