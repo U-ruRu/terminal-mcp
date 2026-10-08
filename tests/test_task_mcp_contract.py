@@ -601,7 +601,7 @@ async def test_public_boundary_preserves_backend_supported_completion_fields(
     backend = _RecordingBackend()
     mcp = build_mcp(_Service(backend))
     tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
-    validator = Draft202012Validator(tool.parameters)
+    validator = Draft202012Validator(tool.parameters["x-runtime-schema"])
     arguments = {"request": task_request}
     assert not list(validator.iter_errors(arguments))
 
@@ -626,7 +626,7 @@ async def test_public_boundary_defers_dynamic_state_and_claim_requirements_to_ba
     backend = _RecordingBackend()
     mcp = build_mcp(_Service(backend))
     tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
-    validator = Draft202012Validator(tool.parameters)
+    validator = Draft202012Validator(tool.parameters["x-runtime-schema"])
     arguments = {"request": task_request}
     assert not list(validator.iter_errors(arguments))
 
@@ -648,7 +648,7 @@ def test_generated_discovery_schema_matches_runtime_conditionals():
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
         "task"
     ]
-    schema = tool.parameters
+    schema = tool.parameters["x-runtime-schema"]
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
 
@@ -706,7 +706,7 @@ def test_generated_discovery_accepts_all_minimal_and_full_variants():
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
         "task"
     ]
-    validator = Draft202012Validator(tool.parameters)
+    validator = Draft202012Validator(tool.parameters["x-runtime-schema"])
     for action in ACTIONS:
         assert not list(validator.iter_errors({"request": MINIMAL_VALID[action]})), action
         assert not list(validator.iter_errors({"request": FULL_VALID[action]})), action
@@ -717,7 +717,9 @@ def test_generated_checkpoint_schema_uses_one_of():
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
         "task"
     ]
-    checkpoint = tool.parameters["$defs"]["TaskCheckpointRequest"]["properties"]["checkpoint"]
+    checkpoint = tool.parameters["x-runtime-schema"]["$defs"]["TaskCheckpointRequest"][
+        "properties"
+    ]["checkpoint"]
     assert "anyOf" not in checkpoint
     assert checkpoint["oneOf"] == [
         {"type": "string", "maxLength": 4000},
@@ -731,7 +733,7 @@ def test_generated_done_schema_preserves_idempotent_compatibility_shape():
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
         "task"
     ]
-    done = tool.parameters["$defs"]["TaskDoneRequest"]
+    done = tool.parameters["x-runtime-schema"]["$defs"]["TaskDoneRequest"]
     assert "result" in done["properties"]
     assert "result" not in done["required"]
     description = done["properties"]["result"]["description"]
@@ -758,7 +760,7 @@ def test_generated_discovery_schema_rejects_regression_inputs():
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
         "task"
     ]
-    validator = Draft202012Validator(tool.parameters)
+    validator = Draft202012Validator(tool.parameters["x-runtime-schema"])
     invalid = [
         {
             "code": "1234",
@@ -798,9 +800,11 @@ def test_fastmcp_runtime_arg_model_is_the_discovery_schema_source():
         "task"
     ]
     assert tool.fn_metadata.arg_model is TaskToolArguments
-    assert tool.parameters == TaskToolArguments.model_json_schema()
-    assert tool.parameters["required"] == ["request"]
-    assert tool.parameters["additionalProperties"] is False
+    assert tool.parameters["x-runtime-schema"] == TaskToolArguments.model_json_schema()
+    assert tool.parameters["x-runtime-schema"]["required"] == ["request"]
+    assert "required" not in tool.parameters
+    assert tool.parameters["x-runtime-schema"]["additionalProperties"] is False
+    assert "additionalProperties" not in tool.parameters
 
 
 @pytest.mark.asyncio
@@ -831,7 +835,7 @@ async def test_tool_run_returns_structured_errors_for_full_public_boundary(
     backend = _RecordingBackend()
     mcp = build_mcp(_Service(backend))
     tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
-    validator = Draft202012Validator(tool.parameters)
+    validator = Draft202012Validator(tool.parameters["x-runtime-schema"])
     assert list(validator.iter_errors(arguments))
 
     result = await tool.run(arguments, convert_result=True)

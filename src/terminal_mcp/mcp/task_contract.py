@@ -109,6 +109,7 @@ from terminal_mcp.core.public_errors import (
     public_error,
     validation_issue,
 )
+from terminal_mcp.mcp.task_planning import task_planning_schema
 
 
 class TaskToolArguments(ArgModelBase):
@@ -145,11 +146,11 @@ class TaskToolArguments(ArgModelBase):
 
 
 def install_task_input_contract(mcp) -> None:
-    """Make the same model authoritative for FastMCP execution and discovery."""
+    """Keep strict runtime rules as annotations on permissive discovery."""
 
     tool = {item.name: item for item in mcp._tool_manager.list_tools()}["task"]
     tool.fn_metadata.arg_model = TaskToolArguments
-    tool.parameters = TaskToolArguments.model_json_schema()
+    tool.parameters = task_planning_schema(TaskToolArguments.model_json_schema())
 
 
 def task_request_action(request: object) -> str:
