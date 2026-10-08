@@ -809,12 +809,29 @@ class PersistentAgentStore:
                 if cur.rowcount == 0:
                     existing = await (
                         await db.execute(
-                            "SELECT state FROM logical_agent_work_sessions WHERE work_session_id=?",
-                            (work_session_id,),
+                            "SELECT state FROM logical_agent_work_sessions WHERE work_session_id=? "
+                            "AND logical_agent_id=? AND session_epoch=?",
+                            (work_session_id, logical_agent_id, session_epoch),
                         )
                     ).fetchone()
                     if existing is None:
                         raise PersistentStoreError("session_not_found")
+                    # A late cleanup retry is fenced to its exact old session.
+                    await db.commit()
+                    return (
+                        await self.get_slot(logical_agent_id),
+                        await self.get_work_session(work_session_id),
+                    )
+                from terminal_mcp.storage.claim_leases import release_session_claims
+
+                await release_session_claims(
+                    db,
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    now=stamp,
+                    reason=reason,
+                )
                 await db.execute(
                     "UPDATE logical_agent_arms SET revoked_at=COALESCE(revoked_at,?) "
                     "WHERE logical_agent_id=? AND consumed_at IS NULL AND revoked_at IS NULL",

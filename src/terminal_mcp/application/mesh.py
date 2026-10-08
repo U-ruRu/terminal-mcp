@@ -363,10 +363,7 @@ class MeshApplication:
                     )
                 logical_agent_id = str(item.get("logical_agent_id") or "")
                 authority_node_id = str(item.get("authority_node_id") or "")
-                if (
-                    not logical_agent_id
-                    or authority_node_id != self._bridge.config.instance_id
-                ):
+                if not logical_agent_id or authority_node_id != self._bridge.config.instance_id:
                     raise MeshApplicationError("invalid_request", "access batch authority mismatch")
                 access.append(
                     {
@@ -434,7 +431,74 @@ class MeshApplication:
                     reset_admission_context(token)
             return {"ok": True, "result": result}
 
+    async def unified_session_managed(self, actor: ActorContext, payload: dict):
+        """Home-authority managed operations from an authenticated Fleet peer.
+
+        Forwarded provider evidence is resolved again at home. Peer authentication
+        transports the original OAuth admission; it never grants mesh/operator role.
+        """
+        self._require_peer(actor)
+        if payload.get("requesting_instance_id") != actor.peer_node_id:
+            raise MeshApplicationError("invalid_request", "requesting instance mismatch")
+        from terminal_mcp.core.managed_sessions import ManagedOperation, ManagedSessionError
+        from terminal_mcp.core.persistent_admission import PersistentAdmissionError
+
+        try:
+            admission = self._forwarded_admission(payload)
+            if admission is None or admission.auth_mode != "oauth":
+                raise ManagedSessionError("persistent_auth_required")
+            # AuthFoundation models these external OAuth principals as their client id.
+            client_id = admission.credential_id.removeprefix("oauth:")
+            if not client_id or admission.principal_id != client_id:
+                raise ManagedSessionError("persistent_auth_required")
+            role = payload.get("endpoint_role")
+            version = payload.get("contract_version")
+            if role not in {"executor", "coordinator"} or type(version) is not int or version < 1:
+                raise ManagedSessionError("capability_not_allowed")
+            home = self._bridge.config.instance_id
+            forwarded = ActorContext.from_admission(
+                admission,
+                node_id=home,
+                endpoint_role=role,
+                contract_version=version,
+                provider=payload.get("provider"),
+                provider_metadata=payload.get("provider_metadata"),
+                logical_agent_id=payload.get("logical_agent_id"),
+                authority_node_id=home,
+            )
+            # No implicit remote bootstrap: the globally bound identity must exist.
+            resolved = await self._session_gate._resolve_provider_actor(forwarded)
+            if resolved.authority_node_id != home or not resolved.logical_agent_id:
+                raise ManagedSessionError("authority_unavailable")
+            action = payload.get("action")
+            with resolved.bind():
+                if action == "start":
+                    result = await self._session_gate.start(resolved, mode=None)
+                elif action in {"end", "interrupt"}:
+                    result = await self._session_gate.stop(
+                        resolved, None, interrupt=action == "interrupt"
+                    )
+                elif action == "authorize":
+                    operation = ManagedOperation(payload.get("managed_operation"))
+                    if operation.value.startswith("operator."):
+                        raise ManagedSessionError("capability_not_allowed")
+                    resolution = await self._session_gate._managed_resolution(resolved, operation)
+                    result = resolution.failure or resolution.identity
+                else:
+                    raise ManagedSessionError("operation_not_allowed")
+            # The envelope signals successful RPC delivery. Application failures,
+            # including lifecycle repair hints, retain their complete payload.
+            return {"ok": True, "result": result}
+        except (ManagedSessionError, PersistentStoreError, PersistentAdmissionError) as exc:
+            return {"ok": True, "result": {"ok": False, "code": exc.code, "error": exc.code}}
+        except (TypeError, ValueError) as exc:
+            raise MeshApplicationError(
+                "invalid_request", "invalid managed session request"
+            ) from exc
+
     async def unified_session_stop(self, actor: ActorContext, operation: str, payload: dict):
+        if operation == "managed":
+            return await self.unified_session_managed(actor, payload)
         self._require_peer(actor)
         with actor.bind():
             if operation not in {"end", "interrupt"}:
@@ -673,11 +737,41 @@ class MeshApplication:
                 self.raise_store_error(exc)
             return {"ok": True, **result}
 
-    async def drain(self, actor: ActorContext, payload: dict):
+    async def _verify_session_authority(self, actor: ActorContext, payload: dict) -> None:
         self._require_peer(actor)
+        agent, session, epoch = (
+            payload.get(key) for key in ("logical_agent_id", "work_session_id", "session_epoch")
+        )
+        if (
+            not isinstance(agent, str)
+            or not agent
+            or not isinstance(session, str)
+            or not session
+            or type(epoch) is not int
+            or epoch < 1
+        ):
+            raise MeshApplicationError("invalid_request", "provide an exact session identity")
+        if payload.get("authority_node_id") != actor.peer_node_id:
+            raise MeshApplicationError("invalid_request", "authority instance mismatch")
+        route = await self._bridge.route_info(agent)
+        if route is None:
+            raise MeshApplicationError(
+                "authority_unavailable", "session authority route unavailable"
+            )
+        if route.get("authority_node_id") != actor.peer_node_id:
+            raise MeshApplicationError("wrong_authority", "peer is not the session authority")
+        if route.get("state") == "recovery_required":
+            raise MeshApplicationError("recovery_required", "authority route needs recovery")
+        supplied = payload.get("authority_epoch")
+        # Previous protocol peers omit the epoch; actual home identity is always checked.
+        if supplied is not None and (
+            type(supplied) is not int or supplied < 1 or supplied != route.get("authority_epoch")
+        ):
+            raise MeshApplicationError("wrong_authority", "stale authority epoch")
+
+    async def drain(self, actor: ActorContext, payload: dict):
+        await self._verify_session_authority(actor, payload)
         with actor.bind():
-            if payload.get("authority_node_id") != actor.peer_node_id:
-                raise MeshApplicationError("invalid_request", "authority instance mismatch")
             try:
                 blockers = await self._bridge.receive_drain(
                     logical_agent_id=str(payload.get("logical_agent_id") or ""),
@@ -690,10 +784,8 @@ class MeshApplication:
             return {"ok": not blockers, "blockers": blockers}
 
     async def revoke(self, actor: ActorContext, payload: dict):
-        self._require_peer(actor)
+        await self._verify_session_authority(actor, payload)
         with actor.bind():
-            if payload.get("authority_node_id") != actor.peer_node_id:
-                raise MeshApplicationError("invalid_request", "authority instance mismatch")
             try:
                 blockers = await self._bridge.receive_revoke(
                     logical_agent_id=str(payload.get("logical_agent_id") or ""),

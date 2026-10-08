@@ -959,6 +959,106 @@ class TaskStore:
             ClaimOwner.legacy_session(agent_id), active_only=active_only
         )
 
+    async def fence_claim_session(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        reason: str,
+        now: str | None = None,
+    ):
+        """Durable admission fence, serialized against a late remote claim commit."""
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT INTO work_claim_session_fences VALUES(?,?,?,?,?) "
+                "ON CONFLICT(logical_agent_id,work_session_id,session_epoch) DO NOTHING",
+                (logical_agent_id, work_session_id, session_epoch, now or utc_text(), reason),
+            )
+            await db.commit()
+
+    async def release_work_session_claims(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        reason: str,
+        now: str | None = None,
+    ) -> int:
+        from terminal_mcp.storage.claim_leases import release_session_claims
+
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                count = await release_session_claims(
+                    db,
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    now=now or utc_text(),
+                    reason=reason,
+                )
+                await db.commit()
+                return count
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def expired_claim_sessions(
+        self, *, local_authority: str, now: str | None = None
+    ) -> list[dict]:
+        """Remote leases are recovered even for sessions which ran no command."""
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT DISTINCT l.logical_agent_id,l.work_session_id,l.session_epoch "
+                    "FROM work_claim_leases l JOIN work_claims c ON c.id=l.claim_id "
+                    "LEFT JOIN logical_agent_work_sessions s ON s.work_session_id=l.work_session_id "
+                    "LEFT JOIN work_claim_session_fences f ON f.logical_agent_id=l.logical_agent_id "
+                    "AND f.work_session_id=l.work_session_id AND f.session_epoch=l.session_epoch "
+                    "WHERE c.released_at IS NULL AND (l.hard_expires_at<=? OR f.revoked_at IS NOT NULL) "
+                    "AND (s.authority_node_id IS NULL OR s.authority_node_id<>?) "
+                    "ORDER BY l.hard_expires_at,l.work_session_id LIMIT 256",
+                    (now or utc_text(), local_authority),
+                )
+            ).fetchall()
+        return [dict(logical_agent_id=r[0], work_session_id=r[1], session_epoch=r[2]) for r in rows]
+
+    async def stale_leased_claims(self, *, now: str | None = None) -> list[dict]:
+        """Bounded health diagnostics; observations do not mutate ownership."""
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT c.id,c.namespace,c.task_id,l.logical_agent_id,l.work_session_id,l.session_epoch "
+                    "FROM work_claims c JOIN work_claim_leases l ON c.id=l.claim_id "
+                    "LEFT JOIN logical_agent_work_sessions s ON s.work_session_id=l.work_session_id "
+                    "LEFT JOIN work_claim_session_fences f ON f.logical_agent_id=l.logical_agent_id "
+                    "AND f.work_session_id=l.work_session_id AND f.session_epoch=l.session_epoch "
+                    "WHERE c.released_at IS NULL AND (l.hard_expires_at<=? "
+                    "OR s.state IN ('ended','expired','failed','suspended') OR f.revoked_at IS NOT NULL) "
+                    "ORDER BY c.id LIMIT 256",
+                    (now or utc_text(),),
+                )
+            ).fetchall()
+        return [
+            dict(
+                zip(
+                    (
+                        "id",
+                        "namespace",
+                        "task_id",
+                        "logical_agent_id",
+                        "work_session_id",
+                        "session_epoch",
+                    ),
+                    r,
+                    strict=True,
+                )
+            )
+            for r in rows
+        ]
+
     async def all_active_claims(self):
         async with self._connect() as db:
             rows = await (
@@ -1042,6 +1142,7 @@ class TaskStore:
         dependency_override: Any = None,
         now: str | None = None,
         expected_revision: int | None = None,
+        lease: dict | None = None,
     ):
         now = now or utc_text()
         async with self._connect() as db:
@@ -1055,6 +1156,15 @@ class TaskStore:
                     )
                 ).fetchone()
                 if existing:
+                    prior_lease = await (
+                        await db.execute(
+                            "SELECT 1 FROM work_claim_leases WHERE claim_id=?", (existing[0],)
+                        )
+                    ).fetchone()
+                    if lease is not None and prior_lease is not None:
+                        from terminal_mcp.storage.claim_leases import attach_claim_lease
+
+                        await attach_claim_lease(db, existing[0], owner.owner_id, lease)
                     await db.execute(
                         "UPDATE work_claims SET claim_intent=? WHERE id=?",
                         (claim_intent, existing[0]),
@@ -1131,6 +1241,23 @@ class TaskStore:
                         owner.owner_id,
                     ),
                 )
+                if lease is not None:
+                    from terminal_mcp.storage.claim_leases import attach_claim_lease
+
+                    await attach_claim_lease(db, cur.lastrowid, owner.owner_id, lease)
+                if lease is not None:
+                    transitioned = await db.execute(
+                        "UPDATE work_items SET state='in_progress',state_changed_at=?,updated_at=?,"
+                        "revision=revision+1 WHERE namespace=? AND task_id=? AND state='ready'",
+                        (now, now, namespace, task_id),
+                    )
+                    if transitioned.rowcount:
+                        await db.execute(
+                            "INSERT INTO work_claim_auto_state(namespace,task_id,created_at) "
+                            "VALUES(?,?,?) ON CONFLICT(namespace,task_id) DO UPDATE SET "
+                            "created_at=excluded.created_at",
+                            (namespace, task_id, now),
+                        )
                 if dependency_override:
                     await db.execute(
                         "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
@@ -1222,11 +1349,23 @@ class TaskStore:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
+                leased = await (
+                    await db.execute(
+                        "SELECT 1 FROM work_claims c JOIN work_claim_leases l ON l.claim_id=c.id "
+                        "WHERE c.namespace=? AND c.task_id=? AND c.owner_kind=? AND c.owner_id=? "
+                        "AND c.released_at IS NULL LIMIT 1",
+                        (namespace, task_id, owner.kind, owner.owner_id),
+                    )
+                ).fetchone()
                 cur = await db.execute(
                     "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
                     (now, namespace, task_id, owner.kind, owner.owner_id),
                 )
                 if cur.rowcount:
+                    if leased is not None:
+                        from terminal_mcp.storage.claim_leases import refresh_released_task
+
+                        await refresh_released_task(db, namespace, task_id, now=now)
                     await db.execute(
                         "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
                         (

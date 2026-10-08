@@ -240,12 +240,12 @@ def test_mcp_tools_advertise_canonical_access_surface():
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     assert set(tools) == {"session", "observe", "message", "task", "cmd", "context", "health"}
 
-    for tool in tools.values():
-        # Project policy keeps MCP tools conservatively marked read-only/non-destructive;
-        # mutation authorization is enforced by the tool contract and Access authority.
-        assert tool.annotations.readOnlyHint is True
-        assert tool.annotations.destructiveHint is False
-        assert tool.annotations.openWorldHint is False
+    for name, tool in tools.items():
+        # Metadata describes aggregate effects; authorization stays in the runtime.
+        readonly = name in {"observe", "health"}
+        assert tool.annotations.readOnlyHint is readonly
+        assert tool.annotations.destructiveHint is (not readonly)
+        assert tool.annotations.openWorldHint is (name == "cmd")
     assert tools["observe"].annotations.idempotentHint is True
     assert tools["health"].annotations.idempotentHint is True
     for name in {"session", "message", "task", "cmd", "context"}:

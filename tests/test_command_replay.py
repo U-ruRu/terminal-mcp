@@ -217,3 +217,22 @@ async def test_zero_request_id_scopes_task_replays_by_normalized_mutation():
         )
     assert backend.keys[0] != backend.keys[1]
     assert backend.keys[0] == backend.keys[2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["run", "recovery"])
+async def test_remote_receipts_authorize_and_replay_without_local_authority_slot(tmp_path, action):
+    repo = SqliteRepository(tmp_path / "remote.sqlite3")
+    await repo.initialize()
+    backend = ReplayBackend(PersistentAgentStore(repo.path))
+    args = {**identity(), "logical_agent_id": "foreign-la"}
+    first = await backend.replay_command(action, "printf remote", **args)
+    assert first["ok"] and backend.launches == 1
+    assert await backend.lifecycle.store.get_slot("foreign-la") is None
+    restarted = ReplayBackend(backend.lifecycle.store)
+    assert await restarted.replay_command(action, "printf remote", **args) == first
+    assert restarted.launches == 0
+    restarted.authorized = False
+    denied = await restarted.replay_command(action, "printf remote", **args)
+    assert denied["code"] == "stale_session"
+    assert restarted.launches == 0

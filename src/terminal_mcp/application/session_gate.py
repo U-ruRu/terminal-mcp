@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.managed_sessions import ManagedOperation, ManagedSessionError
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleError
+from terminal_mcp.core.work_windows import WorkWindowError
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
 
 
@@ -42,10 +43,14 @@ class SessionGate:
         return getattr(self.service, "persistent", None)
 
     @staticmethod
-    def _managed_failure(exc: ManagedSessionError) -> dict:
+    def _managed_failure(exc: ManagedSessionError | WorkWindowError) -> dict:
         code = "session_required" if exc.code == "identity_not_bound" else exc.code
         result = {"ok": False, "code": code, "error": code}
-        if exc.return_to_chat:
+        if getattr(exc, "return_to_chat", False) or exc.code in {
+            "session_expired",
+            "session_draining",
+            "window_cooldown",
+        }:
             result["return_to_chat"] = True
         return result
 
@@ -96,6 +101,43 @@ class SessionGate:
             return False
         return not await self.managed_sessions.has_managed_window(logical_agent_id)
 
+    async def _remote_managed(
+        self, actor: ActorContext, action: str, operation: ManagedOperation | None = None
+    ) -> dict | None:
+        """Route an already resolved provider identity to its authoritative session store."""
+        local = getattr(getattr(self.backend, "lifecycle", None), "authority_node_id", None)
+        if not local or not actor.authority_node_id or actor.authority_node_id == local:
+            return None
+        bridge = getattr(self.backend, "fleet_bridge", None)
+        if bridge is None:
+            raise ManagedSessionError("authority_unavailable")
+        payload = {
+            "action": action,
+            "logical_agent_id": actor.logical_agent_id,
+            "provider": actor.provider,
+            "provider_metadata": dict(actor.provider_metadata),
+            "endpoint_role": actor.endpoint_role,
+            "contract_version": actor.contract_version,
+        }
+        if operation is not None:
+            payload["managed_operation"] = operation.value
+        try:
+            with actor.bind():
+                result = await bridge.unified_session_call(
+                    actor.authority_node_id, "managed", payload
+                )
+        except PersistentStoreError as exc:
+            raise ManagedSessionError(exc.code) from exc
+        if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+            raise ManagedSessionError("authority_unavailable")
+        if result.get("ok") and action == "authorize":
+            if (
+                result.get("logical_agent_id") != actor.logical_agent_id
+                or result.get("authority_node_id") != actor.authority_node_id
+            ):
+                raise ManagedSessionError("identity_mismatch")
+        return result
+
     async def _managed_resolution(
         self, actor: ActorContext, operation: ManagedOperation
     ) -> SessionResolution | None:
@@ -110,8 +152,15 @@ class SessionGate:
             return None
         try:
             resolved = await self._resolve_provider_actor(actor)
+            remote = await self._remote_managed(resolved, "authorize", operation)
+            if remote is not None:
+                if not remote.get("ok"):
+                    return SessionResolution(resolved, failure=remote, managed=True)
+                return SessionResolution(
+                    resolved.with_identity(remote), identity=remote, managed=True
+                )
             admitted = await self.managed_sessions.authorize_operation(resolved, operation)
-        except ManagedSessionError as exc:
+        except (ManagedSessionError, WorkWindowError) as exc:
             return SessionResolution(
                 actor,
                 failure=self._managed_failure(exc),
@@ -196,7 +245,7 @@ class SessionGate:
         try:
             resolved = await self._resolve_provider_actor(actor)
             grant = await self.managed_sessions._authorize(resolved, operation)
-        except ManagedSessionError as exc:
+        except (ManagedSessionError, WorkWindowError) as exc:
             return SessionResolution(
                 actor,
                 failure=self._managed_failure(exc),
@@ -229,7 +278,7 @@ class SessionGate:
             admitted = await self.managed_sessions.authorize_operation(
                 resolved, ManagedOperation.OBSERVE
             )
-        except ManagedSessionError as exc:
+        except (ManagedSessionError, WorkWindowError) as exc:
             return self._managed_failure(exc)
         snapshot = admitted.snapshot
         window = snapshot.window
@@ -421,7 +470,7 @@ class SessionGate:
             bootstrapped = False
             try:
                 resolved = await self._resolve_provider_actor(actor)
-            except ManagedSessionError as exc:
+            except (ManagedSessionError, WorkWindowError) as exc:
                 if exc.code != "identity_not_bound":
                     return self._managed_failure(exc)
                 resolved = None
@@ -440,6 +489,9 @@ class SessionGate:
                         return failure(code_value)
             if resolved is not None:
                 try:
+                    remote = await self._remote_managed(resolved, "start")
+                    if remote is not None:
+                        return remote
                     if (
                         actor.endpoint_role in {"executor", "coordinator"}
                         and code is None
@@ -450,7 +502,7 @@ class SessionGate:
                             resolved, resolved.logical_agent_id
                         )
                     started = await self.managed_sessions.start(resolved)
-                except ManagedSessionError as exc:
+                except (ManagedSessionError, WorkWindowError) as exc:
                     if not code:
                         return self._managed_failure(exc)
                     managed_failure = SessionResolution(
@@ -521,10 +573,13 @@ class SessionGate:
         if code is None and self._has_provider_identity(actor):
             try:
                 resolved = await self._resolve_provider_actor(actor)
+                remote = await self._remote_managed(resolved, "interrupt" if interrupt else "end")
+                if remote is not None:
+                    return remote
                 ended = await self.managed_sessions.end(
                     resolved, reason="session_interrupt" if interrupt else "session_end"
                 )
-            except ManagedSessionError as exc:
+            except (ManagedSessionError, WorkWindowError) as exc:
                 if exc.code != "identity_not_bound" or actor.endpoint_role in {
                     "executor",
                     "coordinator",

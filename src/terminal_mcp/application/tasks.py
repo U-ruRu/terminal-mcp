@@ -49,6 +49,7 @@ class TaskApplication(ApplicationCapability):
             namespace=namespace,
             task_id=task_id,
             idempotency_key=replay_key,
+            session_scoped_claim=isinstance(identity.get("session_lifecycle"), dict),
             **backend_request,
         )
         lifecycle = identity.get("session_lifecycle")

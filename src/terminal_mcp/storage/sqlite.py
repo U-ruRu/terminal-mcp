@@ -24,7 +24,7 @@ from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 from terminal_mcp.storage.work_windows import install_work_window_schema
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -208,6 +208,32 @@ class SqliteRepository:
                     owner_id TEXT NOT NULL,
                     FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS work_claim_leases(
+                    claim_id INTEGER PRIMARY KEY REFERENCES work_claims(id) ON DELETE CASCADE,
+                    logical_agent_id TEXT NOT NULL, work_session_id TEXT NOT NULL,
+                    session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+                    hard_expires_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS work_claim_leases_session
+                    ON work_claim_leases(logical_agent_id,work_session_id,session_epoch);
+                CREATE TABLE IF NOT EXISTS work_claim_auto_state(
+                    namespace TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(namespace,task_id),
+                    FOREIGN KEY(namespace,task_id) REFERENCES work_items(namespace,task_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TRIGGER IF NOT EXISTS work_claim_auto_state_manual_transition
+                AFTER UPDATE OF state ON work_items
+                BEGIN
+                    DELETE FROM work_claim_auto_state
+                    WHERE namespace=NEW.namespace AND task_id=NEW.task_id;
+                END;
+                CREATE TABLE IF NOT EXISTS work_claim_session_fences(
+                    logical_agent_id TEXT NOT NULL, work_session_id TEXT NOT NULL,
+                    session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+                    revoked_at TEXT NOT NULL, reason TEXT NOT NULL,
+                    PRIMARY KEY(logical_agent_id,work_session_id,session_epoch)
+                );
                 CREATE TABLE IF NOT EXISTS work_dependencies(
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL,
                     dependency_namespace TEXT NOT NULL, dependency_task_id TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -276,8 +302,7 @@ class SqliteRepository:
                 CREATE TABLE IF NOT EXISTS persistent_agent_audit(
                     id INTEGER PRIMARY KEY AUTOINCREMENT, logical_agent_id TEXT NOT NULL,
                     event_type TEXT NOT NULL, principal_id TEXT NOT NULL, work_session_id TEXT,
-                    session_epoch INTEGER, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
-                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                    session_epoch INTEGER, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS logical_agent_rearms(
                     logical_agent_id TEXT PRIMARY KEY, work_session_id TEXT NOT NULL,
@@ -293,8 +318,7 @@ class SqliteRepository:
                     request_fingerprint TEXT NOT NULL,
                     state TEXT NOT NULL CHECK(state IN ('pending','complete')),
                     result_json TEXT, created_at TEXT NOT NULL,
-                    PRIMARY KEY(logical_agent_id,operation,idempotency_key),
-                    FOREIGN KEY(logical_agent_id) REFERENCES logical_agents(logical_agent_id) ON DELETE RESTRICT
+                    PRIMARY KEY(logical_agent_id,operation,idempotency_key)
                 );
                 CREATE TABLE IF NOT EXISTS logical_agent_node_attachments(
                     node_attachment_id TEXT PRIMARY KEY, logical_agent_id TEXT NOT NULL,
@@ -449,6 +473,9 @@ class SqliteRepository:
                 """
             )
             await self._migrate(db)
+            from terminal_mcp.storage.execution_references import migrate_execution_references
+
+            await migrate_execution_references(db)
             await install_work_window_schema(db)
             await install_event_journal(db)
             legacy_output_migrated = await self._migrate_legacy_output(db)
@@ -460,6 +487,10 @@ class SqliteRepository:
                     (recovered_at,),
                 )
             await self._scrub_pruned_command_bodies(db)
+            if current_version < 21:
+                from terminal_mcp.storage.claim_leases import migrate_existing_claim_leases
+
+                await migrate_existing_claim_leases(db, now=utc_text())
             await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             await db.commit()
             if legacy_output_migrated:
@@ -1816,8 +1847,7 @@ class SqliteRepository:
             return
         marks = ",".join("?" for _ in hashes)
         await db.execute(
-            f"UPDATE commands SET cmd=? WHERE hash IN ({marks}) "
-            "AND status IN (?,?,?) AND cmd<>?",
+            f"UPDATE commands SET cmd=? WHERE hash IN ({marks}) AND status IN (?,?,?) AND cmd<>?",
             (_SCRUBBED_COMMAND_BODY, *hashes, *terminal, _SCRUBBED_COMMAND_BODY),
         )
 

@@ -94,10 +94,7 @@ class FakeFleetBridge:
         limit=50,
         offset=0,
     ):
-        return [
-            dict(item)
-            for item in self.inbox[offset : offset + limit]
-        ]
+        return [dict(item) for item in self.inbox[offset : offset + limit]]
 
 
 def make_backend():
@@ -407,10 +404,7 @@ async def test_public_fleet_inbox_pagination_surfaces_only_returned_page():
         for index in range(12)
     ]
     expected = [item["message_ref"] for item in bridge.inbox]
-    tools = {
-        tool.name: tool
-        for tool in build_mcp(backend.service)._tool_manager.list_tools()
-    }
+    tools = {tool.name: tool for tool in build_mcp(backend.service)._tool_manager.list_tools()}
     message_tool = tools["message"]
 
     cursor = None
@@ -436,8 +430,35 @@ async def test_public_fleet_inbox_pagination_surfaces_only_returned_page():
     assert page_sizes == [2, 2, 2, 2, 2, 2]
     assert received == expected
     assert len(received) == len(set(received)) == 12
-    assert bridge.surface_calls == [
-        expected[index : index + 2]
-        for index in range(0, 12, 2)
-    ]
+    assert bridge.surface_calls == [expected[index : index + 2] for index in range(0, 12, 2)]
     assert all(item["seen_count"] == 1 for item in bridge.inbox)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["Recipient", "broadcast", None])
+async def test_managed_identity_without_access_code_uses_fleet_delivery(target):
+    backend, bridge, state, calls = make_backend()
+    bridge.slots = list(state["targets"].values())
+    result = await backend.access_message(
+        "Sender",
+        _resolved_identity=dict(state["identity"]),
+        text="managed fleet delivery",
+        target=target,
+        mode="notify",
+    )
+    assert result["ok"] is True, result
+    assert result["delivered_to"] == ["Recipient"]
+    assert calls == [("la_sender", "ws_sender", 4, "message", None)]
+    assert bridge.deliveries[0]["sender_agent_id"] == "la_sender"
+
+
+@pytest.mark.asyncio
+async def test_managed_identity_without_code_uses_fleet_inbox():
+    backend, bridge, state, calls = make_backend()
+    result = await backend.access_message(
+        "Sender",
+        _resolved_identity=dict(state["identity"]),
+    )
+    assert result["ok"] is True, result
+    assert result["messages"] == []
+    assert calls == [("la_sender", "ws_sender", 4, "message", None)]

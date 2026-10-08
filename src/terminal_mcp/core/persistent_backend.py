@@ -194,7 +194,7 @@ class PersistentBackend:
         access = await self.access_authority.register_access_slot(
             logical_agent_id,
             slot.authority_node_id,
-            slot_kind="persistent",
+            slot_kind=slot_kind,
             display_suffix=display_suffix,
         )
         if int(access["access_generation"]) == 0:
@@ -510,7 +510,9 @@ class PersistentBackend:
             normalized_mode = "alert"
             require_reply = True
             alert = True
-        if access_code is None:
+        # Managed callers already carry a server-authorized session identity.
+        # Access-code omission must not downgrade their Fleet routing to local.
+        if access_code is None and _resolved_identity is None:
             return await self._access_message_legacy(
                 sender_public_name,
                 text=text,
@@ -792,7 +794,7 @@ class PersistentBackend:
         self,
         sender: dict,
         *,
-        access_code: str,
+        access_code: str | None,
         text: str | None,
         target: str | None,
         message_hash: str | None,
@@ -2095,6 +2097,7 @@ class PersistentBackend:
         namespace: str,
         task_id: str | None = None,
         idempotency_key: str | None = None,
+        session_scoped_claim: bool = False,
         **kwargs,
     ):
         if self.task_coordinator is None:
@@ -2111,6 +2114,22 @@ class PersistentBackend:
                 if permit is not None and self.fleet_bridge is not None:
                     self.fleet_bridge.ensure_permit_valid(permit)
 
+                claim_lease = None
+                if action == "claim":
+                    managed = await self.lifecycle.store.has_managed_window(logical_agent_id)
+                    access = await self._access_get(logical_agent_id)
+                    if (
+                        session_scoped_claim
+                        or managed
+                        or (access or {}).get("slot_kind") == "legacy"
+                    ):
+                        authority = _session or permit
+                        claim_lease = {
+                            "work_session_id": work_session_id,
+                            "session_epoch": session_epoch,
+                            "hard_expires_at": authority.hard_expires_at,
+                        }
+
                 async def mutate_once():
                     result = await self.task_coordinator.mutate(
                         logical_agent_id,
@@ -2118,6 +2137,7 @@ class PersistentBackend:
                         namespace=namespace,
                         task_id=task_id,
                         _claim_owner=ClaimOwner.logical_agent(logical_agent_id),
+                        _claim_lease=claim_lease,
                         **kwargs,
                     )
                     actual_task = result.get("task") if isinstance(result, dict) else None
@@ -2172,6 +2192,8 @@ class PersistentBackend:
                 return await mutate_once()
         except PersistentLifecycleError as exc:
             return self._error(exc)
+        except PersistentStoreError as exc:
+            return {"ok": False, "code": exc.code, "error": exc.code}
 
     async def claim_release(
         self,

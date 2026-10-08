@@ -27,3 +27,39 @@ Explicit role handoff uses `session.end` on the original endpoint followed by `s
 Task mutations and command launches derive replay keys from the server-observed MCP request ID and WorkSession. `run` and `recovery` return their stored command receipt on replay after rechecking the session and execution fence. A payload mismatch reports `idempotency_conflict`. An uncertain launch retains its reservation and reports an in-progress/reconciliation state on retry, preserving at-most-once launch behavior. A confirmed pre-commit rejection releases its reservation.
 
 Observed stateless ChatGPT connector calls reuse JSON-RPC ID `0`. Task replay keys for this client include the normalized mutation fingerprint, so distinct mutations remain distinct and an exact task retry reuses its receipt. Command calls with this non-unique ID execute as fresh requests; command replay protection applies to non-zero per-operation request IDs. A constant transport ID alone cannot distinguish an intentional repeated command from a delivery retry. The client supplies no additional public tool argument.
+
+## Fleet session authority and claim leases (runtime schema 21)
+
+A provider-bound identity is resolved once and routed to its home authority for
+managed session start, admission, end and interrupt. Authenticated Fleet forwarding
+preserves the original OAuth principal, provider evidence and endpoint role. The
+home authority rechecks the binding. A conflicting active principal or role keeps
+its typed runtime error. Execution on another node uses a short-lived authority
+permit; the execution node stores receipts and audit records for the global
+identity without creating a local authority slot.
+
+Claims acquired by automatic managed sessions and temporary compatibility slots
+carry an exact `(LogicalAgent, WorkSession, session_epoch)` lease. A leased claim
+moves a ready task to `in_progress` atomically. End, interrupt and hard expiry first
+fence command execution, then release that session's claims. Releasing the last
+leased owner returns a task to `ready` only when the lease automatically advanced
+its activity state. Explicit state assignments, including a same-state manual
+override, clear that provenance. Checkpoint, result, history and other owners survive. Explicit durable ownership
+retains its separately controlled workflow state and lifetime.
+
+Remote revocation writes a durable session fence even when no claim exists yet.
+This serializes against late claim admission. Pending execution blockers retain
+ownership until drainage succeeds. The Fleet recovery sweep also considers
+expired task-only leases and persisted revoke fences, so restart and a missed peer
+notification cannot leave the claim permanently assigned. A cleanup retry for an
+old epoch leaves successor-session claims intact. Health reports stale leases
+while recovery is pending.
+
+Schema 21 retains pending and completed execution receipts, audit records, indexes
+and audit sequence numbers while removing their inappropriate local-slot foreign
+key. Authority-owned tables keep their foreign keys. Existing managed claims are
+leased only when exact claim-event and WorkSession evidence exists; completed old
+sessions then release those claims transactionally. Upgrade from schema 20 needs
+a runtime database backup. A binary-only rollback to schema 20 is blocked after
+the durable schema upgrade; recovery uses a compatible binary or the coordinated
+database restore procedure.

@@ -757,6 +757,16 @@ class WorkWindowStore(PersistentAgentStore):
             window = await self._current(db, logical_agent_id)
             if window is None or window.work_window_id != binding.work_window_id:
                 raise WorkWindowStoreError("session_binding_invalid")
+            from terminal_mcp.storage.claim_leases import release_session_claims
+
+            await release_session_claims(
+                db,
+                logical_agent_id,
+                work_session_id,
+                session_epoch,
+                now=stamp,
+                reason=session.end_reason or "session_end",
+            )
             terminal = "expired" if window.phase(now) is WindowPhase.EXPIRED else "ended"
             result = replace(session, state=terminal, ended_at=stamp)
             await db.execute(

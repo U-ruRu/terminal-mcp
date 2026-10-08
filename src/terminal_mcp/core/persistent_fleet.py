@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import secrets
 import time
 from dataclasses import asdict, dataclass
@@ -14,6 +15,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
 from terminal_mcp.storage.persistent_agents import PersistentStoreError
+
+_log = logging.getLogger(__name__)
 
 
 def _decode(value: str) -> bytes:
@@ -1363,8 +1366,17 @@ class PersistentFleetBridge:
                     permit = PersistentCommandPermit.from_dict(response.json()["permit"])
                     ttl_ms = int(permit.ttl_ms)
                     deadline = request_started + min(ttl_ms, self.permit_ttl_ms) / 1000.0
+                    current_route = await self.route_info(logical_agent_id)
                     valid = (
                         permit.authority_node_id == peer.instance_id
+                        and (
+                            current_route is None
+                            or (
+                                permit.authority_node_id == current_route.get("authority_node_id")
+                                and permit.authority_epoch == current_route.get("authority_epoch")
+                                and current_route.get("state") != "recovery_required"
+                            )
+                        )
                         and permit.node_instance_id == self.config.instance_id
                         and permit.logical_agent_id == logical_agent_id
                         and permit.work_session_id == work_session_id
@@ -1414,6 +1426,8 @@ class PersistentFleetBridge:
         attachments = await self.store.attachments_for_session(
             logical_agent_id, work_session_id, session_epoch, active_only=True
         )
+        route = await self.route_info(logical_agent_id)
+        authority_fields = {"authority_epoch": route["authority_epoch"]} if route else {}
         blockers = []
         if not attachments:
             return blockers
@@ -1437,6 +1451,7 @@ class PersistentFleetBridge:
                             "work_session_id": work_session_id,
                             "session_epoch": session_epoch,
                             "authority_node_id": self.config.instance_id,
+                            **authority_fields,
                             "hard_expires_at": attachment["hard_expires_at"],
                         },
                     )
@@ -1463,6 +1478,8 @@ class PersistentFleetBridge:
         attachments = await self.store.attachments_for_session(
             logical_agent_id, work_session_id, session_epoch, active_only=True
         )
+        route = await self.route_info(logical_agent_id)
+        authority_fields = {"authority_epoch": route["authority_epoch"]} if route else {}
         blockers = []
         if not attachments:
             return blockers
@@ -1486,6 +1503,7 @@ class PersistentFleetBridge:
                             "work_session_id": work_session_id,
                             "session_epoch": session_epoch,
                             "authority_node_id": self.config.instance_id,
+                            **authority_fields,
                             "reason": reason,
                         },
                     )
@@ -1526,25 +1544,50 @@ class PersistentFleetBridge:
         session_epoch: int,
         reason: str,
     ) -> list[dict]:
+        await self.task_store.fence_claim_session(
+            logical_agent_id, work_session_id, session_epoch, reason=reason
+        )
         await self.store.revoke_command_permits(logical_agent_id, work_session_id, session_epoch)
         if self.execution_fence is None:
             return [{"kind": "runtime_unavailable", "node_instance_id": self.config.instance_id}]
-        return await self.execution_fence.revoke_session(
+        blockers = await self.execution_fence.revoke_session(
             logical_agent_id, work_session_id, session_epoch, reason=reason
         )
+
+        if not blockers:
+            await self.task_store.release_work_session_claims(
+                logical_agent_id, work_session_id, session_epoch, reason=reason
+            )
+        return blockers
 
     async def reconcile_remote_expiry(self) -> None:
         if self.execution_fence is None:
             return
-        for session in await self.store.expired_remote_permit_sessions():
-            await self.store.revoke_command_permits(
+        sessions = list(await self.store.expired_remote_permit_sessions())
+        sessions.extend(
+            await self.task_store.expired_claim_sessions(local_authority=self.config.instance_id)
+        )
+        seen = set()
+        failures = 0
+        for session in sessions:
+            key = (
                 session["logical_agent_id"],
                 session["work_session_id"],
                 session["session_epoch"],
             )
-            await self.execution_fence.revoke_session(
-                session["logical_agent_id"],
-                session["work_session_id"],
-                session["session_epoch"],
-                reason="hard_duration",
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                await self.receive_revoke(
+                    logical_agent_id=key[0],
+                    work_session_id=key[1],
+                    session_epoch=key[2],
+                    reason="hard_duration",
+                )
+            except Exception:
+                failures += 1
+        if failures:
+            _log.warning(
+                "remote_claim_recovery_batch failures=%d attempted=%d", failures, len(seen)
             )

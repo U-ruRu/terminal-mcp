@@ -1035,6 +1035,9 @@ class TaskCoordinator:
             owner = kwargs.get("_claim_owner")
             claim_method = self.store.claim_owner if owner is not None else self.store.claim
             claim_identity = owner if owner is not None else agent_id
+            lease_kwargs = {}
+            if owner is not None and kwargs.get("_claim_lease") is not None:
+                lease_kwargs["lease"] = kwargs["_claim_lease"]
             await claim_method(
                 namespace,
                 task_id,
@@ -1045,6 +1048,7 @@ class TaskCoordinator:
                 dependency_override=dependency_override,
                 now=now,
                 expected_revision=kwargs.get("expected_revision"),
+                **lease_kwargs,
             )
         except TaskAgentBusy as exc:
             warning = _warning(
@@ -1675,7 +1679,7 @@ class TaskCoordinator:
 
     async def health(self):
         stats = await self.store.stats()
-        stale_claims = 0
+        stale_claims = len(await self.store.stale_leased_claims())
         now = utc_now()
         for claim in await self.store.all_active_claims():
             if claim.get("owner_kind", "legacy_session") == "logical_agent":
