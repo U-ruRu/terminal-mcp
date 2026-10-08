@@ -1,62 +1,58 @@
 ---
 name: terminal-operations
-description: Выполняет серверные задачи через Terminal MCP Executor и Coordinator: sessions, tasks, messaging, commands, health и recovery.
-compatibility: Terminal MCP 0.13.1; Executor v1 and Coordinator v1 role endpoints.
+description: Работает с Linux-серверами через Terminal MCP Access Mesh V2: выдача доступа на Access, однократный attach к Executor/Coordinator, задачи, команды, сообщения и проверка результата.
+compatibility: Terminal MCP 0.14.0; Access v1, Executor v1, Coordinator v1; Python runtime server-side.
 metadata:
   author: U-ruRu
-  version: "2.1.0"
+  version: "3.0.0"
   language: ru
 ---
 
 # Terminal operations
 
-## Выбор роли
+Используй для фактической работы на подключённом сервере: изучения репозитория, выполнения команд, координации задач и проверки живого сервиса. Сначала прочитай контекст проекта и состояние сервера. Сохраняй существующие ограничения на серверы, worktree, ветку и деплой.
 
-Executor: `/terminal-mcp/executor/v1/mcp` — команды, чтение задач, claim/state/comment, сообщения.
-Coordinator: `/terminal-mcp/coordinator/v1/mcp` — управление задачами, граф, наблюдение агента, сообщения и health.
+## Коннекторы и доступ
 
-Используй инструменты выбранной роли из текущего discovery. Сервер получает identity и роль из доверенного контекста вызова.
+Access: `/terminal-mcp/access/v1/mcp`, один инструмент `session`.
+Executor: `/terminal-mcp/executor/v1/mcp`, десять инструментов выполнения/задач/сообщений.
+Coordinator: `/terminal-mcp/coordinator/v1/mcp`, восемь инструментов задач/наблюдения/сообщений/health.
+На FirstByte и BacLOUD установлены одинаковые три первичных контракта: всего шесть коннекторов. Точные каталоги и валидные JSON-примеры находятся в [tool-contract.md](references/tool-contract.md).
 
-## Рабочий цикл
+Получи слот на выбранном Access через `session(action="start", mode="legacy")`. Persistent-слот создаёт оператор; для его активации используй Access `session(action="start", mode="persistent", code=...)`. Сохрани полученные issuer_node_id и access_code только в рабочем контексте. Виды слотов — legacy и persistent; kind неизменен, Mobile/Console управляет теми же слотами.
 
-Открой WorkSession через `session(action="start")`. Прочитай `task_list`; Coordinator уточняет карточку через `task_get`, Executor берёт её через `task_claim` с `claim_intent`. Выполняй команды через `command_run`; полученный `cmd_hash` дочитывай через `command_read` с opaque cursor. Проверяй конечный status и exit code. Сохраняй результаты через `task_comment`, `task_state` или Coordinator `task_manage`. Заверши сессию после сохранения рабочего состояния.
+На каждом нужном Executor/Coordinator выполни единственный первоначальный `session(action="attach", issuer_node_id=..., access_code=...)`. Квалифицированный `issuer:dddd` также подходит. Четырёхзначный код разрешается внутри issuer. Повторный attach того же слота идемпотентен; другой слот в существующей привязке вызывает binding conflict.
 
-Coordinator `health` доступен до начала сессии. Компактный результат подходит для обычной проверки; `extended=true` добавляет диагностику.
+Role session = attach-only. Последующие команды, задачи и сообщения получают identity из доверенного контекста коннектора и вызываются без Access Code. Завершение issuer-сессии передаётся исходному Access. Состояние ролей наблюдай через доступные read-инструменты, а не выдуманные session status/start/end/detach действия роли.
 
-## Жизненный цикл
+## Задача и команда
 
-LogicalAgent сохраняет identity. Автоматически созданная managed WorkSession имеет ограниченный TTL; её claims освобождаются при end, interrupt и expiry. Явно созданные persistent slots используют отдельную политику владения. Checkpoint и история задачи остаются доступными следующей сессии.
+Прочитай актуальную задачу и checkpoint, проверь владельца и revision. Coordinator создаёт и изменяет задачу; Executor делает claim/release. Claim требует краткого claim_intent. Перед записью кода выбери отдельный worktree/ветку и согласуй границы с уже работающими агентами.
 
-При lifecycle-ошибке сохрани доступный результат, выполни указанное recovery-действие и начни новую сессию, когда Session Gate разрешает старт. Повторно прочитай задачу перед новым claim. Используй актуальные серверные ревизии и session epoch.
+Claim lifecycle сохраняет state, checkpoint и result. Явно установи in_progress через task_state либо Coordinator task_manage(action="state"). Обновление свойств action=update сохраняет state. Сохраняй промежуточный checkpoint через Executor task_comment(action="checkpoint") либо Coordinator task_manage(action="checkpoint"); action="comment" добавляет запись истории. Выполни команды с подходящим task_scope из ответа сервера, прочитай вывод до терминального статуса, проверь exit_code и фактический результат. Для завершения передай проверяемый result через явное state=done/action=done.
 
-## Команды и задачи
+Читай известный cmd_hash через command_read без Access Code, в том числе для команды другого LogicalAgent. Вариант command_read без cmd_hash возвращает локальный журнал всех агентов с identity metadata. Предварительный attach для этих чтений не требуется; настроенная транспортная аутентификация сохраняется. Успешный запуск команды подтверждает только запуск: тест, Git diff, health или readback должен подтвердить нужный эффект.
 
-`command_run` принимает команду, optional `queue_id` и `task_scope`. Scope выбирай из `task_scope_options`: `none`, `all` или конкретный `namespace/task_id`. Очереди выполняются FIFO; завершившаяся быстро команда может вернуть первую страницу вывода сразу.
+Используй limit/cursor и компактный detail по умолчанию. Продолжай opaque next_cursor без преобразования. При усечении нужного результата прочитай следующую страницу. Не выводи токены, private keys, Access Codes, raw provider identifiers и содержимое секретных конфигураций.
 
-`command_cancel` отменяет собственную команду. `command_recovery` выполняет разрешённый recovery-путь. Чтение известного `cmd_hash` доступно без Access Code. Ограничивай вывод и проверяй завершение команды.
+## Локальные циклы и продолжение
 
-Состояния задач: `ready`, `in_progress`, `blocked`, `deferred`, `done`. Claim готовой задачи атомарно переводит её в `in_progress`. Сохраняй checkpoint, result, blocker_reason и release_reason. Dependency override использует содержательные `force_reason` и audit evidence.
+WorkSession и write gate локальны на каждом execution-сервере; LogicalAgent/public_name общие между ролями и серверами. Реплицированные policy/deadline определяют duration/cooldown/rearm/warning/draining. Повторные вызовы сохраняют deadline. При rearm новый локальный цикл создаётся по политике без повторного attach и issuer RPC на каждый вызов.
 
-## Сообщения
+В draining сохрани checkpoint и выполни разрешённую финализацию. cleanup_pending означает незавершённое fencing/освобождение старой работы; опирайся на runtime retry и сохранённый checkpoint. Legacy claims снимаются при end/expiry; persistent claims — при release_on_end=true. Suspend/delete запускают отзыв и cleanup. Явное состояние задачи остаётся прежним.
 
-Выбирай адресата из `message(action="recipients")`. Отправляй по `public_name`, читай inbox через `read`, подтверждай через `ack`, отвечай через `reply`. Используй возвращённый `message_hash`. `history` продолжает журнал через opaque cursor. Broadcast задаётся `target="broadcast"` или отсутствием target; task addressing использует `namespace` и `task_id`.
+При исчерпании собственной сессии сохрани проверенный SHA, логи, оставшиеся действия и ограничения. Продолжай через предусмотренную сервером смену/перевооружение сессии. Общая задача завершается по критериям приёмки, а не по окончанию одной агентской сессии.
 
-Обрабатывай требуемые ACK и ответы на alerts перед дальнейшими мутациями.
+## Сообщения и ошибки
 
-## Ошибки и повторные вызовы
+Найди адресата через message(action="recipients"); используй стабильный public_name. local ограничивает сервер, fleet является scope по умолчанию. Рассылка исключает отправителя, повторные LogicalAgent и истёкшие локальные сессии. Локальное принятие фиксируется до обращения к peer. Для queued/partial сохрани message_hash и pending_peers: durable outbox повторит доставку после восстановления.
 
-Ожидаемая ошибка приходит как `isError:false` и `ok:false` с объектом `error`. Используй code, details, outcome и retry для следующего действия. При неизвестном результате сначала прочитай фактическое состояние.
+Read/history/ACK используют локальное состояние. Notify считается прочитанным после успешной выдачи страницы. Mode ack требует ACK; alert требует reply. Ответ и освобождение локального обязательства атомарны. Проверь обязательства перед следующей командой; ACK не заменяет reply для alert.
 
-Строгая проверка работает на сервере; planning-схемы компактны. Повторение JSON-RPC ID `0` не обеспечивает exactly-once исполнение команд. Проверяй сохранённый command receipt перед повторным запуском с побочными эффектами.
+Inputs use permissive planning schemas; типы, обязательность и условия проверяются runtime. Handled errors приходят с isError:false, ok:false и структурированным error. Используй фактические code/details/outcome/retry/reason/path. Различай committed и not_committed; при неизвестном исходе сначала сверяй persisted state. Повторный JSON-RPC ID не склеивает разные task payload. Для shell constant ID не гарантирует exactly-once: сначала сверяй cmd_hash/journal.
 
-## Репозиторий и релиз
+## Проверка и передача результата
 
-Проверь `git status`, worktrees и canonical branch в project context. Продолжай существующую canonical работу, согласовав владение файлами с другими агентами. Сохраняй чужие изменения. Выполни focused tests, lint и общий набор перед релизом; коммить только свою область. Изолированную ветку используй при реальной необходимости и интегрируй проверенный результат в canonical.
+Фиксируй коммит только после тестов и проверки diff. Перед деплоем закрепи точный SHA, конфигурацию, резервные копии и ограничения восстановления. Текущий проект Terminal MCP разворачивается и проходит живую приёмку только на FirstByte и BacLOUD; Secondary служит разработке. Проверяй все шесть первичных коннекторов, межсерверные сообщения, задачи, expiry/cleanup и read-функции. Legacy /mcp проверяется дополнительно.
 
-Деплой ограничивай серверами, указанными в текущей задаче. Используй штатный installer/activation, сохрани rollback и durable state, проверь health, реальные tool calls и версии после переключения.
-
-## Безопасность
-
-Сохраняй секреты вне вывода и отчётов. Ограничивай изменения текущей задачей. Сохраняй живые claims других агентов; восстановление осиротевшего владения сопровождай проверкой сессии и audit evidence.
-
-Legacy `/mcp` остаётся compatibility surface. Его каталог и Access Code сценарии описаны в [references/tool-contract.md](references/tool-contract.md).
+Обозначай выполненные проверки и оставшиеся ограничения отдельно. Закрывай задачу только после требуемых деплоя и приёмки. Сохраняй проверенный результат в checkpoint/handoff и в task result; не подменяй отсутствие живого теста прохождением unit tests.

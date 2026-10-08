@@ -1,6 +1,10 @@
 # Split-service deployment
 
-Status: implemented in canonical `0.13.1` architecture.
+Status: implemented in canonical `0.14.0` architecture.
+
+For Access Mesh V2 configuration, security-state recovery and the FirstByte/BacLOUD
+six-connector release gate, use [Access Mesh deployment](access-mesh-deployment.md).
+This guide describes execution topology transitions, not a binary/data downgrade approval.
 
 ## Topology
 
@@ -76,7 +80,7 @@ python -m terminal_mcp.deployment.driver rollback \
   --approved-gates
 ```
 
-Rollback restores the captured topology files, permissions and service configuration. Durable application, auth and fleet databases retain their current state.
+Rollback restores the captured topology files, permissions and service configuration. Durable application, auth and fleet databases retain their current state. Schema and Access security/revocation compatibility remain separate checks; topology rollback does not authorize replacing newer durable security state.
 
 ## Runtime invariants
 
