@@ -77,8 +77,13 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
             tools = result.json()["result"]["tools"]
             assert len(tools) == count
             for tool in tools:
-                assert tool["inputSchema"]["type"] == "object"
-                assert "required" not in tool["inputSchema"]
+                schema = tool["inputSchema"]
+                assert schema["type"] == "object"
+                if role in {"executor", "coordinator"} and tool["name"] == "session":
+                    assert schema["required"] == ["access_code"]
+                    assert schema["properties"]["action"]["const"] == "attach"
+                else:
+                    assert "required" not in schema
             public = client.get(f"/.well-known/oauth-protected-resource/terminal-mcp/{role}/v1/mcp")
             assert public.status_code == 200
             assert public.json()["resource"].endswith(f"/terminal-mcp/{role}/v1/mcp")

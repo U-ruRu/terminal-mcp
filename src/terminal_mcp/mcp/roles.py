@@ -935,8 +935,10 @@ def build_role_mcp(
             if tool.name == "session":
                 tool.description = (
                     "Attach this connector once using issuer_node_id and access_code. "
+                    "Access Code is mandatory; action is attach-only. "
                     "The local binding survives restart and automatic work-cycle rearm. "
-                    "Manage issuance and end the shared access cycle through Access MCP."
+                    "Manage issuance and end the shared access cycle through Access MCP. "
+                    "Contract updated for Terminal MCP 0.14.1."
                 )
                 tool.annotations = ToolAnnotations(
                     readOnlyHint=False,

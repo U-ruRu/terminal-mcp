@@ -488,7 +488,44 @@ def _planning_hint(schema: dict, definitions: dict) -> str:
 
 
 def planning_schema(model: type[StrictRoleInput]) -> dict:
-    """Publish argument names and hints; runtime owns all value validation."""
+    """Publish bounded argument hints, with an explicit Mesh attachment boundary."""
+    from terminal_mcp.mcp.access_contracts import AttachInput
+
+    if model is AttachInput:
+        # Executor and Coordinator publish the same attach-only schema.
+        # Retain qualified-code compatibility without using nested JSONSchema.
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "const": "attach",
+                    "default": "attach",
+                    "description": "Attach to an existing Access session; never start or end here.",
+                },
+                "issuer_node_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": (
+                        "Issuer node ID (for example firstbyte or bacloud). "
+                        "Required with an unqualified four-digit access_code."
+                    ),
+                },
+                "access_code": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 133,
+                    "pattern": r"^(?:[A-Za-z0-9_.:-]{1,128}:)?[0-9]{4}$",
+                    "description": (
+                        "Required Access Code issued by Access MCP: four digits "
+                        "with issuer_node_id, or issuer-qualified code."
+                    ),
+                },
+            },
+            "required": ["access_code"],
+            "additionalProperties": False,
+        }
     if model is TaskManageInput:
         from terminal_mcp.application.base import ROLE_TASK_ACTIONS
         from terminal_mcp.mcp.task_planning import task_action_planning_schema

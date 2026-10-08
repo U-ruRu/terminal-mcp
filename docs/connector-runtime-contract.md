@@ -1,6 +1,8 @@
 # Connector runtime contract
 
-Release: **0.14.0**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
+Release: **0.14.1**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
+
+In 0.14.1 both Executor and Coordinator publish `session` with required `access_code` and attach-only `action`. Only Access MCP issues or ends a session. The optional `issuer_node_id` is required for unqualified four-digit access codes.
 
 ## Published surfaces
 

@@ -1,6 +1,6 @@
 # Access Mesh V2: deployment and acceptance
 
-Release contract: **0.14.0**. This procedure targets **FirstByte and BacLOUD only**. Secondary hosts source, isolated tests and coordination. Main/Tokyo are outside this rollout. A passed source suite is preparation evidence, not proof of an installed release.
+Release contract: **0.14.1**. This procedure targets **FirstByte and BacLOUD only**. Secondary hosts source, isolated tests and coordination. Main/Tokyo are outside this rollout. A passed source suite is preparation evidence, not proof of an installed release.
 
 ## 1. Freeze the candidate and prepare recovery
 
