@@ -1250,6 +1250,21 @@ class TaskCoordinator:
         return await self._result(namespace, task_id, [])
 
     async def _action_update(self, agent_id, namespace, task_id, **kwargs):
+        if kwargs.get("state") is not None:
+            return public_error(
+                "input_validation_failed",
+                reason="constraint_violation",
+                path="state",
+                details=ValidationRepair(
+                    validation_errors=(
+                        ValidationIssue(
+                            error_class="invalid_value",
+                            path="state",
+                            description="Change workflow state with action=state or action=done.",
+                        ),
+                    )
+                ),
+            ).as_dict()
         if not await self._required(namespace, task_id):
             return self._missing()
         return await self._update_from_kwargs(agent_id, namespace, task_id, kwargs)
@@ -1257,7 +1272,7 @@ class TaskCoordinator:
     async def _action_state(self, agent_id, namespace, task_id, **kwargs):
         if kwargs.get("state") is None:
             return {"ok": False, "error": "task.state: state required", "warnings": []}
-        return await self._action_update(agent_id, namespace, task_id, **kwargs)
+        return await self._update_from_kwargs(agent_id, namespace, task_id, kwargs)
 
     async def _action_done(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)
@@ -1266,7 +1281,7 @@ class TaskCoordinator:
         if current["state"] != "done" and not self._valid_result(kwargs.get("result")):
             return {"ok": False, "error": "task.done: result required", "warnings": []}
         kwargs["state"] = "done"
-        return await self._action_update(agent_id, namespace, task_id, **kwargs)
+        return await self._update_from_kwargs(agent_id, namespace, task_id, kwargs)
 
     async def _action_archive(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)

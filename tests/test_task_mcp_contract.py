@@ -88,7 +88,6 @@ FULL_VALID = {
         "title": "Updated",
         "lane": "integration",
         "priority": "P0",
-        "state": "in_progress",
         "description": "Updated description",
         "next_action": "Integrate",
         "resource_context": {"path": "src"},
@@ -548,14 +547,14 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
         ),
         (
             {
-                **_base("update"),
+                **_base("state"),
                 "state": "done",
                 "result": {"summary": "update completion"},
                 "force": True,
                 "force_reason": "Dependency is externally satisfied",
             },
             {
-                "action": "update",
+                "action": "state",
                 "state": "done",
                 "result": {"summary": "update completion"},
                 "force": True,
@@ -568,12 +567,12 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
         ),
         (
             {
-                **_base("update"),
+                **_base("state"),
                 "state": "blocked",
                 "blocker_reason": "Waiting for dependency",
             },
             {
-                "action": "update",
+                "action": "state",
                 "state": "blocked",
                 "blocker_reason": "Waiting for dependency",
             },

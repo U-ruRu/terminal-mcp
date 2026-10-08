@@ -6,9 +6,12 @@ from datetime import timedelta
 import aiosqlite
 import pytest
 import pytest_asyncio
+from pydantic import TypeAdapter, ValidationError
 
+from terminal_mcp.application.task_requests import TaskRequest
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
+from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.tasks import TaskStore
 
@@ -163,3 +166,56 @@ async def test_owner_sweep_isolates_failures_and_retries_with_atomic_audit(store
         ).fetchall()
     assert sorted(row[0] for row in rows) == ["bad", "good"]
     assert all(json.loads(row[1])["reason"] == "slot_deleted" for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["ready", "in_progress", "blocked", "deferred", "done"])
+async def test_property_update_preserves_state_and_only_explicit_state_can_change_it(store, state):
+    await store.create_task("v2", "state", "Original", state=state)
+    await store.claim("v2", "state", "agent", claim_intent="owned")
+    coordinator = TaskCoordinator(store)
+    updated = await coordinator.mutate(
+        "agent",
+        action="update",
+        namespace="v2",
+        task_id="state",
+        title="Changed title",
+        next_action="Next step",
+    )
+    assert updated["ok"], updated
+    assert updated["task"]["state"] == state
+    before = await store.get_task("v2", "state")
+    denied = await coordinator.mutate(
+        "agent",
+        action="update",
+        namespace="v2",
+        task_id="state",
+        state="deferred",
+    )
+    assert denied["ok"] is False
+    assert denied["code"] == "input_validation_failed"
+    assert await store.get_task("v2", "state") == before
+    changed = await coordinator.mutate(
+        "agent",
+        action="state",
+        namespace="v2",
+        task_id="state",
+        state="deferred",
+    )
+    assert changed["ok"], changed
+    assert changed["task"]["state"] == "deferred"
+
+
+@pytest.mark.parametrize("state", ["ready", "in_progress", "blocked", "deferred", "done", None])
+def test_update_runtime_model_rejects_state_field(state):
+    adapter = TypeAdapter(TaskRequest)
+    with pytest.raises(ValidationError) as exc:
+        adapter.validate_python(
+            {
+                "action": "update",
+                "namespace": "v2",
+                "task_id": "state",
+                "state": state,
+            }
+        )
+    assert any(item["type"] == "extra_forbidden" for item in exc.value.errors())
