@@ -144,6 +144,58 @@ class AccessSlotEvent:
                 raise AccessMeshError("access_mesh_missing_time")
 
 
+    def to_wire(self) -> dict:
+        """Bounded transport representation; never includes the raw Access Code."""
+        return {
+            "issuer_id": self.issuer_id,
+            "slot_id": self.slot_id,
+            "logical_agent_id": self.logical_agent_id,
+            "revision": self.revision,
+            "event_id": self.event_id,
+            "kind": self.kind,
+            "policy": asdict(self.policy) if self.policy is not None else None,
+            "code_tag": self.code_tag,
+            "effective_at": _text(self.effective_at) if self.effective_at else None,
+        }
+
+    @classmethod
+    def from_wire(cls, data: dict) -> AccessSlotEvent:
+        allowed = {
+            "issuer_id", "slot_id", "logical_agent_id", "revision",
+            "event_id", "kind", "policy", "code_tag", "effective_at",
+        }
+        if not isinstance(data, dict) or set(data) != allowed:
+            raise AccessMeshError("access_mesh_invalid_wire_event")
+        try:
+            raw_policy = data["policy"]
+            if raw_policy is not None and type(raw_policy) is not dict:
+                raise ValueError("policy must be an object")
+            raw_time = data["effective_at"]
+            if raw_time is not None and type(raw_time) is not str:
+                raise ValueError("effective_at must be a string")
+            return cls(
+                issuer_id=data["issuer_id"],
+                slot_id=data["slot_id"],
+                logical_agent_id=data["logical_agent_id"],
+                revision=data["revision"],
+                event_id=data["event_id"],
+                kind=data["kind"],
+                policy=SlotPolicy(**raw_policy) if raw_policy is not None else None,
+                code_tag=data["code_tag"],
+                effective_at=datetime.fromisoformat(raw_time) if raw_time is not None else None,
+            )
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+            raise AccessMeshError("access_mesh_invalid_wire_event") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class PendingDelivery:
+    peer_node_id: str
+    event: AccessSlotEvent
+    issued_kind: Literal["legacy", "persistent"] | None
+
+
+
 @dataclass(frozen=True, slots=True)
 class ApplyResult:
     outcome: Literal["applied", "duplicate", "stale"]
@@ -232,6 +284,23 @@ class LocalAccessMesh:
                 CREATE INDEX IF NOT EXISTS access_mesh_code_lookup
                 ON access_mesh_slot_replicas(issuer_id,code_tag)
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS access_mesh_event_outbox (
+                  peer_node_id TEXT NOT NULL,
+                  event_id TEXT NOT NULL,
+                  issuer_id TEXT NOT NULL,
+                  slot_id TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  payload_json TEXT NOT NULL,
+                  acked_at TEXT,
+                  PRIMARY KEY(peer_node_id,event_id),
+                  UNIQUE(peer_node_id,issuer_id,slot_id,revision)
+                ) WITHOUT ROWID
+            """)
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS access_mesh_outbox_unacked
+                ON access_mesh_event_outbox(peer_node_id,acked_at,issuer_id,slot_id,revision)
+            """)
 
     def code_tag(self, issuer_id: str, code: str) -> str:
         """A mesh-keyed verifier, not the plaintext four-digit AC."""
@@ -265,12 +334,80 @@ class LocalAccessMesh:
             ).fetchone()
         return self._snapshot(row) if row is not None else None
 
+    @staticmethod
+    def _queue_event(
+        db: sqlite3.Connection,
+        event: AccessSlotEvent,
+        issued_kind: Literal["legacy", "persistent"] | None,
+        recipients: tuple[str, ...],
+    ) -> None:
+        """Durably queue all peer deliveries in the same transaction as the event."""
+        payload = json.dumps(
+            {"event": event.to_wire(), "issued_kind": issued_kind}, sort_keys=True,
+        )
+        for peer in recipients:
+            db.execute(
+                """INSERT INTO access_mesh_event_outbox
+                   (peer_node_id,event_id,issuer_id,slot_id,revision,payload_json)
+                   VALUES(?,?,?,?,?,?)""",
+                (
+                    peer, event.event_id, event.issuer_id, event.slot_id,
+                    event.revision, payload,
+                ),
+            )
+
+    def pending_outbox(self, *, peer_node_id: str, limit: int = 50) -> tuple[PendingDelivery, ...]:
+        """Fetch bounded durable deliveries for an authenticated peer transport."""
+        if (
+            peer_node_id not in self.trusted_issuers or peer_node_id == self.local_node_id
+            or type(limit) is not int or not 1 <= limit <= 100
+        ):
+            raise AccessMeshError("access_mesh_invalid_peer")
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT payload_json FROM access_mesh_event_outbox
+                   WHERE peer_node_id=? AND acked_at IS NULL
+                   ORDER BY issuer_id,slot_id,revision
+                   LIMIT ?""",
+                (peer_node_id, limit),
+            ).fetchall()
+        values: list[PendingDelivery] = []
+        for row in rows:
+            content = json.loads(row["payload_json"])
+            values.append(PendingDelivery(
+                peer_node_id=peer_node_id,
+                event=AccessSlotEvent.from_wire(content["event"]),
+                issued_kind=content["issued_kind"],
+            ))
+        return tuple(values)
+
+    def acknowledge_delivery(
+        self, *, peer_node_id: str, event_id: str, authenticated_peer_id: str,
+    ) -> bool:
+        """ACK only after a receiving peer durably commits its event."""
+        if (
+            peer_node_id != authenticated_peer_id
+            or peer_node_id not in self.trusted_issuers
+            or peer_node_id == self.local_node_id
+        ):
+            raise AccessMeshError("access_mesh_untrusted_peer")
+        _required_identifier(event_id)
+        with self._connect() as db:
+            changed = db.execute(
+                """UPDATE access_mesh_event_outbox
+                   SET acked_at=COALESCE(acked_at,?)
+                   WHERE peer_node_id=? AND event_id=?""",
+                (_text(datetime.now(UTC)), peer_node_id, event_id),
+            )
+            return changed.rowcount == 1
+
     def apply_event(
         self,
         event: AccessSlotEvent,
         *,
         authenticated_peer_id: str,
         issued_kind: Literal["legacy", "persistent"] | None = None,
+        broadcast_to: tuple[str, ...] = (),
     ) -> ApplyResult:
         """Process an issuer event once; out-of-order gaps demand snapshot/catchup.
 
@@ -282,6 +419,12 @@ class LocalAccessMesh:
             or event.issuer_id not in self.trusted_issuers
         ):
             raise AccessMeshError("access_mesh_untrusted_issuer")
+        recipients = tuple(dict.fromkeys(broadcast_to))
+        if recipients and (
+            event.issuer_id != self.local_node_id
+            or any(p not in self.trusted_issuers or p == self.local_node_id for p in recipients)
+        ):
+            raise AccessMeshError("access_mesh_untrusted_peer")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute(
@@ -306,6 +449,7 @@ class LocalAccessMesh:
                         _text(event.effective_at) if event.effective_at else None,
                     ),
                 )
+                self._queue_event(db, event, issued_kind, recipients)
                 return ApplyResult("applied")
             if event.logical_agent_id != old["logical_agent_id"]:
                 raise AccessMeshError("access_mesh_identity_conflict")
@@ -365,6 +509,7 @@ class LocalAccessMesh:
                     "DELETE FROM access_mesh_attachments WHERE issuer_id=? AND slot_id=?",
                     (event.issuer_id, event.slot_id),
                 )
+            self._queue_event(db, event, issued_kind, recipients)
         return ApplyResult(
             "applied", release_claims=release_claims,
             logical_agent_id=event.logical_agent_id if release_claims else None,
