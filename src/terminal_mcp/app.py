@@ -36,7 +36,11 @@ from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.persistent_policy import PersistentPolicyController
 from terminal_mcp.core.service import TerminalService
-from terminal_mcp.fleet.access_mesh import AccessMeshReplication, build_access_mesh_router
+from terminal_mcp.fleet.access_mesh import (
+    AccessMeshReplication,
+    PinnedAccessMeshPeerAuth,
+    build_access_mesh_router,
+)
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.control_plane import ManagedFleetControl
 from terminal_mcp.fleet.control_storage import FleetControlStore
@@ -507,9 +511,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if access_mesh:
         app.include_router(build_access_mesh_operator_router(application))
     if access_mesh and fleet_replication:
-        app.include_router(build_access_mesh_router(access_mesh, fleet_replication))
+        # Managed Fleet Control changes fleet_replication.config in place at
+        # startup. Access Mesh outbound uses the bootstrap config; inbound
+        # authentication MUST use that same pinned trust/token material.
+        mesh_peer_auth = PinnedAccessMeshPeerAuth(fleet_config)
+        app.include_router(build_access_mesh_router(access_mesh, mesh_peer_auth))
         app.include_router(
-            build_access_mesh_message_router(access_mesh_messages, fleet_replication)
+            build_access_mesh_message_router(access_mesh_messages, mesh_peer_auth)
         )
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:

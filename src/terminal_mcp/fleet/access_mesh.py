@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException
@@ -16,6 +17,27 @@ from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEven
 
 _LOG = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 64 * 1024
+
+
+class PinnedAccessMeshPeerAuth:
+    """Inbound peer trust pinned to the immutable Access Mesh bootstrap config.
+
+    Managed Fleet Control may rotate FleetReplicationService.config at runtime;
+    Access Mesh uses its own static peer proof/token pair in outbound requests.
+    """
+
+    def __init__(self, config):
+        self.config = config
+
+    def authenticate(self, peer_instance_id: str, authorization: str):
+        peer = self.config.peers_by_id.get(peer_instance_id)
+        prefix = "bearer "
+        if peer is None or not authorization.lower().startswith(prefix):
+            return None
+        token = authorization[len(prefix):].strip()
+        if not token or not secrets.compare_digest(token, peer.auth_token):
+            return None
+        return peer
 
 
 class AccessMeshReplication:
