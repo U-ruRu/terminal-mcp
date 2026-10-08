@@ -185,7 +185,6 @@ class TaskUpdateRequest(TaskRevisionRequest):
     title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     lane: TaskLane | None = None
     priority: TaskPriority | None = None
-    state: TaskState | None = None
     description: Annotated[str, Field(max_length=8000)] | None = None
     next_action: Annotated[str, Field(max_length=2000)] | None = None
     resource_context: ResourceContext | None = None

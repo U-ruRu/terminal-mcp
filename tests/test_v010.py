@@ -1085,7 +1085,7 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
             result={"summary": "update path must also remain blocked"},
         )
         assert via_update["ok"] is False
-        assert via_update["code"] == "dependency_open"
+        assert via_update["code"] == "input_validation_failed"
 
         missing_reason = await service.task(
             agent,
