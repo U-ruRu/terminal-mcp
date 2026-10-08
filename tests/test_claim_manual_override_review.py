@@ -40,6 +40,9 @@ async def test_manual_state_override_during_lease_survives_cleanup(tmp_path):
         "session_epoch": session.session.session_epoch,
         "hard_expires_at": session.session.hard_expires_at,
     }
+    # TaskStore.claim_owner controls ownership only; state is a coordinator decision.
+    assert (await tasks.get_task("review", "x"))["state"] == "ready"
+    await tasks.update_task("review", "x", state="in_progress")
     await tasks.claim_owner("review", "x", ClaimOwner.logical_agent("la_one"), lease=lease)
     assert (await tasks.get_task("review", "x"))["state"] == "in_progress"
     await tasks.update_task(

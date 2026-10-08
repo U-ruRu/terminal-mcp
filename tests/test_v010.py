@@ -819,8 +819,13 @@ def test_mcp_schema_has_unified_task_contract():
     assert set(tools) == {"session", "observe", "message", "task", "cmd", "context", "health"}
 
     task = tools["task"].parameters
-    assert task["required"] == ["request"]
-    request = task["properties"]["request"]
+    # Planning intentionally permits partial inputs; strict validation runs in the tool.
+    assert not task.get("required")
+    assert set(task["properties"]) == {"request"}
+    assert "action" in task["properties"]["request"]["properties"]
+    runtime_task = task["x-runtime-schema"]
+    assert runtime_task["required"] == ["request"]
+    request = runtime_task["properties"]["request"]
     assert request["discriminator"]["propertyName"] == "action"
     assert set(request["discriminator"]["mapping"]) == {
         "create",
@@ -838,7 +843,7 @@ def test_mcp_schema_has_unified_task_contract():
     }
     assert len(request["oneOf"]) == 12
     assert "payload" not in task["properties"]
-    claim = task["$defs"]["TaskClaimRequest"]
+    claim = runtime_task["$defs"]["TaskClaimRequest"]
     claim_code = claim["properties"]["code"]["anyOf"][0]
     assert claim_code["minLength"] == 4
     assert claim_code["maxLength"] == 4

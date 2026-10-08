@@ -294,8 +294,13 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert "cursor" in message["properties"]
 
     task = tools["task"].parameters
-    assert task["required"] == ["request"]
-    task_request = task["properties"]["request"]
+    # Planning intentionally permits partial inputs; strict validation runs in the tool.
+    assert not task.get("required")
+    assert set(task["properties"]) == {"request"}
+    assert "action" in task["properties"]["request"]["properties"]
+    runtime_task = task["x-runtime-schema"]
+    assert runtime_task["required"] == ["request"]
+    task_request = runtime_task["properties"]["request"]
     assert task_request["discriminator"]["propertyName"] == "action"
     assert set(task_request["discriminator"]["mapping"]) == {
         "create",
@@ -313,10 +318,10 @@ def test_mcp_tools_advertise_canonical_access_surface():
     }
     assert len(task_request["oneOf"]) == 12
     assert "payload" not in task["properties"]
-    claim_code = task["$defs"]["TaskClaimRequest"]["properties"]["code"]["anyOf"][0]
+    claim_code = runtime_task["$defs"]["TaskClaimRequest"]["properties"]["code"]["anyOf"][0]
     assert claim_code["minLength"] == 4
     assert claim_code["maxLength"] == 4
-    assert "code" not in task["$defs"]["TaskClaimRequest"]["required"]
+    assert "code" not in runtime_task["$defs"]["TaskClaimRequest"]["required"]
     assert "WIP is one live managed-task claim per slot" in tools["task"].description
 
     cmd = tools["cmd"].parameters
