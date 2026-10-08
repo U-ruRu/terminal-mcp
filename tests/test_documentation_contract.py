@@ -18,6 +18,7 @@ from terminal_mcp.mcp.access_contracts import (
     IssuerSessionInput,
     MeshCommandReadInput,
     MeshMessageInput,
+    MeshTaskCommentInput,
 )
 from terminal_mcp.mcp.role_contracts import TaskManageInput
 from terminal_mcp.mcp.roles import COORDINATOR_TOOLS, EXECUTOR_TOOLS
@@ -136,14 +137,15 @@ def test_documented_json_examples_validate_in_authoritative_runtime_models(index
         "access.session": IssuerSessionInput,
         "role.session": AttachInput,
         "executor.command_read": MeshCommandReadInput,
+        "executor.task_comment": MeshTaskCommentInput,
         "role.message": MeshMessageInput,
         "coordinator.task_manage": TaskManageInput,
         "operator.mutate": OperatorMutation,
     }
     assert kind in models, (index, kind)
     models[kind].model_validate(payload)
-    if kind == "coordinator.task_manage":
-        TypeAdapter(TaskRequest).validate_python(payload)
+    if kind in {"coordinator.task_manage", "executor.task_comment"}:
+        TypeAdapter(TaskRequest).validate_python({"action": "comment", **payload})
     if kind == "role.session":
         assert payload.get("action", "attach") == "attach"
     if kind not in {"access.session", "role.session", "operator.mutate"}:
@@ -151,11 +153,12 @@ def test_documented_json_examples_validate_in_authoritative_runtime_models(index
 
 
 def test_reference_has_examples_for_all_primary_boundaries():
-    assert len(EXAMPLES) >= 16
+    assert len(EXAMPLES) >= 18
     assert {kind for _, kind, _ in EXAMPLES} == {
         "access.session",
         "role.session",
         "executor.command_read",
+        "executor.task_comment",
         "role.message",
         "coordinator.task_manage",
         "operator.mutate",

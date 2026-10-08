@@ -70,6 +70,16 @@ Claim/release/lifecycle cleanup preserve explicit state, checkpoint and result. 
 
 `task_list` returns TaskListItem records. `task_claim` accepts claim/release; claim requires claim_intent. `task_state` explicitly transitions workflow and supplies result when completing or blocker_reason when entering an owned blocked state. `task_comment` supports `action=comment` (the default) for appended history and `action=checkpoint` for a durable checkpoint. Checkpoint carries its canonical ownership/revision checks and preserves workflow state.
 
+<!-- contract-example: executor.task_comment -->
+```json
+{"namespace":"example","task_id":"sample","comment_text":"Checked the current output"}
+```
+
+<!-- contract-example: executor.task_comment -->
+```json
+{"action":"checkpoint","namespace":"example","task_id":"sample","checkpoint":{"step":"tests passed","evidence":"retained-log-reference"},"expected_revision":2}
+```
+
 `command_run` accepts command, optional queue_id and task_scope. Use returned scope choices (`none`, `all`, `namespace/task_id`). FIFO execution returns a terminal result for fast commands or a cmd_hash for continued reads. Check terminal status and exit_code. Cancellation/recovery remains ownership- and lifecycle-gated.
 
 `command_read` with a known hash reads retained local output across all LogicalAgent without an Access Code or initial attach. With no hash it selects the local all-agent journal. Configured transport authentication still applies.
