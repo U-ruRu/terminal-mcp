@@ -23,23 +23,32 @@ class TaskApplication(ApplicationCapability):
         if failure is not None:
             return failure
         replay_key = None
-        if actor.transport == "mcp" and actor.request_id:
-            replay_key = f"{identity['work_session_id']}:{actor.request_id}"
-            if actor.request_id == "0":
-                # Stateless connector requests reuse zero. Scope semantic task replays
-                # by the normalized operation so distinct mutations cannot collide.
-                payload = {
-                    "action": action,
-                    "namespace": namespace,
-                    "task_id": task_id,
-                    "request": backend_request,
-                }
-                fingerprint = hashlib.sha256(
-                    json.dumps(
-                        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-                    ).encode()
-                ).hexdigest()
-                replay_key += f":{fingerprint}"
+        if actor.transport == "mcp" and actor.request_id is not None:
+            # A connector can reuse any JSON-RPC id, not only zero. A replay is
+            # the same normalized mutation in the same authorized caller cycle.
+            # Hash the complete scope so request ids/principals stay private and
+            # the stored key remains bounded even for long transport metadata.
+            payload = {
+                "version": 2,
+                "caller": {
+                    "logical_agent_id": identity["logical_agent_id"],
+                    "work_session_id": identity["work_session_id"],
+                    "session_epoch": identity["session_epoch"],
+                    "principal_id": actor.principal_id,
+                    "endpoint_role": actor.endpoint_role,
+                    "request_id": actor.request_id,
+                },
+                "action": action,
+                "namespace": namespace,
+                "task_id": task_id,
+                "request": backend_request,
+            }
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode("utf-8")
+            ).hexdigest()
+            replay_key = f"task-v2:{fingerprint}"
         result = await self.backend.task(
             logical_agent_id=identity["logical_agent_id"],
             work_session_id=identity["work_session_id"],
