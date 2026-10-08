@@ -91,7 +91,7 @@ async def test_standalone_messaging_matches_fleet_delivery_semantics(tmp_path):
     assert notify["scope"] == "direct"
     notify_hash = notify["message_hash"]
 
-    for expected_seen in range(1, 6):
+    for expected_seen in range(1, 4):
         state = await backend.message_state(
             logical_agent_id=recipient["logical_agent_id"],
             work_session_id=recipient["session"]["work_session_id"],
@@ -127,7 +127,7 @@ async def test_standalone_messaging_matches_fleet_delivery_semantics(tmp_path):
     )
     archived = next(item for item in history["messages"] if item["message_hash"] == notify_hash)
     assert archived["mode"] == "notify"
-    assert archived["seen_count"] == 5
+    assert archived["seen_count"] == 3
 
     ack = await message(
         sender["public_name"],

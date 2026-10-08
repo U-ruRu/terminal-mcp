@@ -64,7 +64,7 @@ def body(result):
 
 
 @pytest.mark.asyncio
-async def test_ack_gate_blocks_only_run_and_surfaces_messages_on_identity_read():
+async def test_ack_gate_blocks_run_read_and_recovery_until_ack():
     service = GateService()
     service.persistent.state = {
         "messages": [{"message_hash": "ack-1", "mode": "ack", "text": "ack me"}],
@@ -95,8 +95,9 @@ async def test_ack_gate_blocks_only_run_and_surfaces_messages_on_identity_read()
             convert_result=True,
         )
     )
-    assert read["ok"] is True
-    assert read["messages"][0]["mode"] == "ack"
+    assert read["ok"] is False
+    assert read["code"] == "coordination_ack_required"
+    assert read["details"]["pending_messages"][0]["message_hash"] == "ack-1"
 
     recovery = body(
         await cmd.run(
@@ -110,11 +111,13 @@ async def test_ack_gate_blocks_only_run_and_surfaces_messages_on_identity_read()
             convert_result=True,
         )
     )
-    assert recovery["ok"] is True
+    assert recovery["ok"] is False
+    assert recovery["code"] == "coordination_ack_required"
+    assert recovery["details"]["pending_messages"][0]["message_hash"] == "ack-1"
 
 
 @pytest.mark.asyncio
-async def test_alert_gate_blocks_work_but_never_blocks_cancel():
+async def test_alert_gate_blocks_every_command_action_until_reply():
     service = GateService()
     service.persistent.state = {
         "messages": [{"message_hash": "alert-1", "mode": "alert", "text": "reply"}],
@@ -139,5 +142,6 @@ async def test_alert_gate_blocks_work_but_never_blocks_cancel():
             convert_result=True,
         )
     )
-    assert cancelled["ok"] is True
-    assert cancelled["messages"][0]["mode"] == "alert"
+    assert cancelled["ok"] is False
+    assert cancelled["code"] == "coordination_alert"
+    assert cancelled["details"]["pending_messages"][0]["message_hash"] == "alert-1"

@@ -86,7 +86,7 @@ async def test_remote_expiry_reconciles_after_restart_without_local_session(remo
     assert await reconcile(restarted, when) == 1
     after = await restarted.get_task(NS, TASK)
     assert after["state"] == "ready"
-    assert after["revision"] == before["revision"] + 1
+    assert after["revision"] == before["revision"]  # ownership expiry leaves content-CAS unchanged
     assert after["checkpoint"] == {"retain": ["handoff", 7]}
     assert await restarted.active_claims(NS, TASK) == []
     assert await restarted.stale_leased_claims(now=utc_text(when)) == []

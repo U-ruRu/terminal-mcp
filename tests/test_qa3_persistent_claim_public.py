@@ -36,8 +36,8 @@ def test_persistent_public_role_claim_never_uses_session_lease(tmp_path):
             client, "coordinator", "session", binding,
             request_id=803, conversation="qa3-coordinator",
         )
-        assert attached_executor["logical_agent_id"] == issued["logical_agent_id"]
-        assert attached_coord["logical_agent_id"] == issued["logical_agent_id"]
+        assert "logical_agent_id" not in issued  # C agent-facing start hides internal IDs
+        assert attached_executor["logical_agent_id"] == attached_coord["logical_agent_id"]
 
         created = call(
             client, "coordinator", "task_manage",
@@ -56,7 +56,7 @@ def test_persistent_public_role_claim_never_uses_session_lease(tmp_path):
 
         claims_before = asyncio.run(TaskStore(db).active_claims(ns, task_id))
         assert len(claims_before) == 1, claims_before
-        assert claims_before[0]["owner_id"] == issued["logical_agent_id"]
+        assert claims_before[0]["owner_id"] == attached_executor["logical_agent_id"]
         with sqlite3.connect(db) as store:
             active = store.execute(
                 """SELECT c.id, l.work_session_id
@@ -75,5 +75,5 @@ def test_persistent_public_role_claim_never_uses_session_lease(tmp_path):
         assert ended["ok"], ended
         claims_after = asyncio.run(TaskStore(db).active_claims(ns, task_id))
         assert len(claims_after) == 1, claims_after
-        assert claims_after[0]["owner_id"] == issued["logical_agent_id"]
+        assert claims_after[0]["owner_id"] == attached_executor["logical_agent_id"]
 
