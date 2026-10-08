@@ -174,6 +174,17 @@ def make_backend():
     backend._execution_authority = execution_authority
     backend._resolve_access_name = resolve_name
     backend._access_get = access_get
+
+    async def active_sessions(*, limit=None, offset=0):
+        names = {"Sender", "Recipient"}
+        rows = [
+            {"public_name":item["public_name"], "session_state":"active"}
+            for item in bridge.slots
+            if item["public_name"] in names
+        ]
+        return {"ok": True, "sessions": rows[offset : offset + limit if limit else None]}
+
+    backend.access_observe_slots = active_sessions
     return backend, bridge, state, calls
 
 
@@ -265,6 +276,21 @@ async def test_persistent_broadcast_is_fleet_scoped_and_skips_inactive_sessions(
 
     assert result["ok"] is True
     assert result["scope"] == "fleet"
+    assert result["delivered_to"] == ["Recipient"]
+    assert [item["logical_agent_id"] for item in bridge.deliveries] == ["la_recipient"]
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skips_large_registered_but_inactive_slot_population():
+    backend, bridge, state, _ = make_backend()
+    bridge.slots = list(state["targets"].values()) + [
+        {"logical_agent_id": f"la_stale_{i}", "public_name": f"Stale-{i}", "status": "active"}
+        for i in range(150)
+    ]
+    result = await backend.access_message(
+        "Sender", access_code="0042", text="active-only", target="broadcast"
+    )
+    assert result["ok"] is True
     assert result["delivered_to"] == ["Recipient"]
     assert [item["logical_agent_id"] for item in bridge.deliveries] == ["la_recipient"]
 

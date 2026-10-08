@@ -974,16 +974,33 @@ class PersistentBackend:
                 }
             recipients.append((str(access["logical_agent_id"]), str(access["public_name"])))
         else:
-            # Persistent implicit broadcast is Fleet-scoped, never attachment-local.
-            try:
-                slots = await self.fleet_bridge.list_access_slots()
-            except PersistentStoreError as exc:
-                return {"ok": False, "code": exc.code, "error": exc.code}
-            for access in slots:
-                rid = str(access.get("logical_agent_id") or "")
-                if not rid or rid == sender_id or access.get("status") != "active":
+            # A registered Access slot is not necessarily an active WorkSession.
+            # Reuse the Fleet-wide active-session snapshot used by recipients.
+            # Delivering to all registered slots can exhaust MCP request timeouts
+            # when old/inactive authority peers are part of the registry.
+            live = await self.access_observe_slots()
+            if not live.get("ok"):
+                return live
+            seen: set[str] = set()
+            for session in live.get("sessions") or []:
+                if session.get("session_state") != "active":
                     continue
-                recipients.append((rid, str(access["public_name"])))
+                name = str(session.get("public_name") or "")
+                if not name or name == sender_name:
+                    continue
+                try:
+                    access = await self._resolve_access_name(name)
+                except PersistentStoreError:
+                    continue
+                rid = str(access.get("logical_agent_id") or "")
+                if (
+                    rid
+                    and rid != sender_id
+                    and rid not in seen
+                    and access.get("status") == "active"
+                ):
+                    recipients.append((rid, name))
+                    seen.add(rid)
 
         if not recipients:
             return {"ok": False, "code": "no_active_recipients", "error": "no_active_recipients"}
