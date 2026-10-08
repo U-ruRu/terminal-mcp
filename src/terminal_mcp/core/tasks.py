@@ -988,6 +988,9 @@ class TaskCoordinator:
                 now=now,
             )
         except Exception as exc:
+            if await self.store.get_task(namespace, task_id) is not None:
+                return {"ok": False, "code": "task_already_exists",
+                        "error": "task.create: task_already_exists", "warnings": []}
             return {"ok": False, "error": f"task.create: {exc}", "warnings": []}
         self._inc("terminal_mcp_tasks_created_total")
         return await self._result(
@@ -1140,6 +1143,9 @@ class TaskCoordinator:
             return self._missing()
         claims = await self._live_claims(namespace, task_id)
         own = next((item for item in claims if item["agent_id"] == agent_id), None)
+        if not own and claims:
+            return {"ok": False, "code": "not_owner",
+                    "error": "task.release: not_owner", "warnings": []}
         if not own:
             return await self._result(
                 namespace,
@@ -1153,7 +1159,9 @@ class TaskCoordinator:
                     )
                 ],
             )
-        reason, error = self._clean_reason(kwargs.get("release_reason"), "release_reason")
+        reason, error = self._clean_reason(
+            kwargs.get("release_reason") or "released_by_owner", "release_reason"
+        )
         if error:
             return self._text_input_failure(
                 "release_reason",
@@ -1324,9 +1332,21 @@ class TaskCoordinator:
         return await self._update_from_kwargs(agent_id, namespace, task_id, kwargs)
 
     async def _action_state(self, agent_id, namespace, task_id, **kwargs):
-        if kwargs.get("state") is None:
-            return {"ok": False, "error": "task.state: state required", "warnings": []}
-        return await self._update_from_kwargs(agent_id, namespace, task_id, kwargs)
+        state = kwargs.get("state")
+        if state not in STATES:
+            return {"ok": False, "code": "input_validation_failed",
+                    "error": "task.state: invalid or missing state", "warnings": []}
+        owner = kwargs.get("_claim_owner")
+        acting_id = owner.owner_id if owner is not None else agent_id
+        try:
+            committed = await self.store.set_workflow_state(
+                namespace, task_id, state, agent_id=acting_id,
+            )
+        except TaskOwnershipConflict:
+            return self._ownership_conflict_result()
+        except (KeyError, ValueError) as exc:
+            return {"ok": False, "error": f"task.state: {exc}", "warnings": []}
+        return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_done(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)
@@ -1452,7 +1472,7 @@ class TaskCoordinator:
         if fields.get("state") == current.get("state"):
             unsafe_fields.discard("state")
         workflow_change = bool(unsafe_fields or kwargs.get("dependencies") is not None)
-        if workflow_change and owner != agent_id:
+        if workflow_change and claims and owner != agent_id:
             return {
                 "ok": False,
                 "code": "owner_required",

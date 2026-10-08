@@ -174,8 +174,8 @@ class TaskReleaseRequest(TaskRevisionRequest):
     release_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
         default=None,
         description=(
-            "Required only when releasing an existing live claim; omitted for the idempotent "
-            "not-claimed path, which TaskCoordinator resolves from current claim state."
+            "Optional owner release reason; omission uses a default audit reason. "
+            "Releasing an already-released own claim is an idempotent success."
         ),
     )
 
@@ -231,15 +231,13 @@ class TaskStateRequest(TaskRevisionRequest):
     blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
         default=None,
         description=(
-            "Required by TaskCoordinator only for a real transition into blocked while a live "
-            "claim exists; optional for idempotent blocked state calls."
+            "Optional note; simple workflow state changes never require blocker_reason."
         ),
     )
     result: ResultValue | None = Field(
         default=None,
         description=(
-            "Required by TaskCoordinator only for a real transition into done; optional for "
-            "idempotent already-done state calls."
+            "Optional legacy metadata; simple workflow state changes do not modify result."
         ),
     )
     force: bool = False

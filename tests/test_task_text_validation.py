@@ -12,7 +12,6 @@ from terminal_mcp.storage.tasks import TaskStore
     [
         ("create", "isolation_hint", " "),
         ("claim", "claim_intent", " \n"),
-        ("release", "release_reason", None),
         ("release", "release_reason", " "),
         ("comment", "comment_text", " "),
     ],
