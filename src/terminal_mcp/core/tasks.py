@@ -1130,7 +1130,9 @@ class TaskCoordinator:
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.claim: {exc}", "warnings": warnings}
         self._inc("terminal_mcp_task_claims_total")
-        return await self._result(namespace, task_id, warnings, committed_task=committed)
+        return await self._result(
+            namespace, task_id, warnings, committed_task=committed, include_claim_snapshot=True
+        )
 
     async def _action_release(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)
@@ -1865,6 +1867,7 @@ class TaskCoordinator:
         details=None,
         committed_task=None,
         include_description=False,
+        include_claim_snapshot=False,
     ):
         task = (
             committed_task
@@ -1881,18 +1884,15 @@ class TaskCoordinator:
                 task.sessions_by_agent,
                 now=task.observed_at,
             )
-            # Exact mutation receipts come from the captured write transaction.
-            # Preserve the committed revision and materialize mandatory public
-            # claim snapshot fields from that SAME committed record, never by
-            # issuing a post-commit list/read that can race another writer.
-            description = task.get("description") or ""
-            projected["description_preview"] = description[:DESCRIPTION_PREVIEW_LIMIT]
-            projected["description_truncated"] = len(description) > DESCRIPTION_PREVIEW_LIMIT
-            # The claim has been captured with the committed TaskRecord; a
-            # post-commit read could observe a later owner's revision instead.
-            projected["claim"] = projected.get("owner")
+            if include_claim_snapshot:
+                # Project the claim from the exact write-transaction snapshot;
+                # a post-commit read may see a newer owner or task revision.
+                description = task.get("description") or ""
+                projected["description_preview"] = description[:DESCRIPTION_PREVIEW_LIMIT]
+                projected["description_truncated"] = len(description) > DESCRIPTION_PREVIEW_LIMIT
+                projected["claim"] = projected.get("owner")
             if include_description:
-                projected["description"] = description
+                projected["description"] = task.get("description") or ""
         else:
             projected = await self._decorate(task, details=False) if task else None
         for warning in warnings:
