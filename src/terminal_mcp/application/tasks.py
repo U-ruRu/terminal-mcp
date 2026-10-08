@@ -59,7 +59,17 @@ class TaskApplication(ApplicationCapability):
             namespace=namespace,
             task_id=task_id,
             idempotency_key=replay_key,
-            session_scoped_claim=isinstance(identity.get("session_lifecycle"), dict),
+            # Native Mesh cleanup owns the current deadline and release policy.
+            # The older window lease would pin a superseded deadline and could
+            # release intentionally retained persistent ownership.
+            session_scoped_claim=(
+                isinstance(identity.get("session_lifecycle"), dict)
+                and not (
+                    getattr(self.service, "access_mesh", None) is not None
+                    and identity.get("issuer_node_id")
+                    and identity.get("slot_id")
+                )
+            ),
             **backend_request,
         )
         return _with_session_lifecycle(result, identity)
