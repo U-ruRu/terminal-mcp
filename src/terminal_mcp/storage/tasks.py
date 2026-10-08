@@ -7,7 +7,7 @@ from typing import Any
 
 import aiosqlite
 
-from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
@@ -51,6 +51,15 @@ class TaskRevisionConflict(RuntimeError):
         )
 
 
+class TaskOwnershipConflict(RuntimeError):
+    """A workflow mutation lost the ownership snapshot authorized at preflight."""
+
+    def __init__(self, namespace: str, task_id: str):
+        self.namespace = namespace
+        self.task_id = task_id
+        super().__init__(f"Task ownership changed before mutation: {namespace}/{task_id}")
+
+
 class TaskRelationConflict(RuntimeError):
     def __init__(self, code: str, message: str):
         self.code = code
@@ -64,10 +73,18 @@ class TaskCommittedRecord(dict):
     Callers receive this object only after a successful commit.
     """
 
-    def __init__(self, task: dict, claims: list[dict], dependencies: list[dict]):
+    def __init__(
+        self,
+        task: dict,
+        claims: list[dict],
+        dependencies: list[dict],
+        sessions_by_agent: dict | None = None,
+    ):
         super().__init__(task)
         self.claims = claims
         self.dependencies = dependencies
+        self.sessions_by_agent = sessions_by_agent or {}
+        self.observed_at = utc_now()
 
 
 class TaskStore:
@@ -96,6 +113,20 @@ class TaskStore:
             raise KeyError(f"unknown task: {namespace}/{task_id}")
         if int(current[0]) != int(expected_revision):
             raise TaskRevisionConflict(namespace, task_id, int(expected_revision), int(current[0]))
+
+    @staticmethod
+    async def _assert_claim_snapshot(db, namespace, task_id, expected_claim_ids):
+        if expected_claim_ids is None:
+            return
+        rows = await (
+            await db.execute(
+                "SELECT id FROM work_claims WHERE namespace=? AND task_id=? "
+                "AND released_at IS NULL ORDER BY claimed_at,id",
+                (namespace, task_id),
+            )
+        ).fetchall()
+        if tuple(row[0] for row in rows) != tuple(expected_claim_ids):
+            raise TaskOwnershipConflict(namespace, task_id)
 
     @staticmethod
     def _json(value: Any) -> str:
@@ -434,16 +465,36 @@ class TaskStore:
                 (namespace, task_id),
             )
         ).fetchall()
+        session_fields = (
+            "agent_id",
+            "registered_at",
+            "last_activity_at",
+            "state",
+            "global_expires_at",
+        )
+        sessions = await (
+            await db.execute(
+                "SELECT DISTINCT s.agent_id,s.registered_at,s.last_activity_at,s.state,"
+                "s.global_expires_at FROM agent_sessions s JOIN work_claims c "
+                "ON s.agent_id=c.owner_id WHERE c.namespace=? AND c.task_id=? "
+                "AND c.released_at IS NULL AND c.owner_kind='legacy_session'",
+                (namespace, task_id),
+            )
+        ).fetchall()
         return TaskCommittedRecord(
             task,
             [self._claim_record(row) for row in rows],
             [
                 {
-                    "namespace": row[0], "task_id": row[1], "state": row[2] or "missing",
-                    "archived": bool(row[3]), "satisfied": row[2] == "done",
+                    "namespace": row[0],
+                    "task_id": row[1],
+                    "state": row[2] or "missing",
+                    "archived": bool(row[3]),
+                    "satisfied": row[2] == "done",
                 }
                 for row in dependencies
             ],
+            {row[0]: dict(zip(session_fields, row, strict=True)) for row in sessions},
         )
 
     async def get_task(self, namespace: str, task_id: str):
@@ -697,6 +748,7 @@ class TaskStore:
         task_id: str,
         *,
         expected_revision: int | None = None,
+        expected_claim_ids: tuple[int, ...] | None = None,
         dependencies=None,
         event_type: str = "updated",
         event_agent_id: str | None = None,
@@ -777,6 +829,7 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_claim_snapshot(db, namespace, task_id, expected_claim_ids)
                 exists = await (
                     await db.execute(
                         "SELECT revision,state,input_refs_json,output_refs_json,output_state_id "
@@ -1167,6 +1220,7 @@ class TaskStore:
         exclusive: bool = False,
         event_payload: Any = None,
         dependency_override: Any = None,
+        capture_task: bool = False,
         now: str | None = None,
         expected_revision: int | None = None,
     ):
@@ -1179,6 +1233,7 @@ class TaskStore:
             event_payload=event_payload,
             dependency_override=dependency_override,
             now=now,
+            capture_task=capture_task,
             expected_revision=expected_revision,
         )
 
@@ -1192,6 +1247,7 @@ class TaskStore:
         exclusive: bool = False,
         event_payload: Any = None,
         dependency_override: Any = None,
+        capture_task: bool = False,
         now: str | None = None,
         expected_revision: int | None = None,
         lease: dict | None = None,
@@ -1237,7 +1293,14 @@ class TaskStore:
                             now,
                         ),
                     )
+                    committed = (
+                        await self._committed_record_tx(db, namespace, task_id)
+                        if capture_task
+                        else None
+                    )
                     await db.commit()
+                    if capture_task:
+                        return committed
                     return {
                         "id": existing[0],
                         "agent_id": owner.owner_id,
@@ -1323,7 +1386,14 @@ class TaskStore:
                     "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
                     (namespace, task_id, "claim", owner.owner_id, self._json(payload), now),
                 )
+                committed = (
+                    await self._committed_record_tx(db, namespace, task_id)
+                    if capture_task
+                    else None
+                )
                 await db.commit()
+                if capture_task:
+                    return committed
                 return {
                     "id": cur.lastrowid,
                     "agent_id": owner.owner_id,
@@ -1363,16 +1433,20 @@ class TaskStore:
         agent_id: str,
         *,
         reason: str,
+        capture_task: bool = False,
         now: str | None = None,
         expected_revision: int | None = None,
-    ) -> bool:
+        expected_claim_id: int | None = None,
+    ) -> bool | TaskCommittedRecord:
         return await self.release_owner_claim_mutation(
             namespace,
             task_id,
             ClaimOwner.legacy_session(agent_id),
             reason=reason,
             now=now,
+            capture_task=capture_task,
             expected_revision=expected_revision,
+            expected_claim_id=expected_claim_id,
         )
 
     async def release_owner_claim_mutation(
@@ -1382,10 +1456,11 @@ class TaskStore:
         owner: ClaimOwner,
         *,
         reason: str,
+        capture_task: bool = False,
         now: str | None = None,
         expected_revision: int | None = None,
         expected_claim_id: int | None = None,
-    ) -> bool:
+    ) -> bool | TaskCommittedRecord:
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -1445,7 +1520,14 @@ class TaskStore:
                             now,
                         ),
                     )
+                committed = (
+                    await self._committed_record_tx(db, namespace, task_id)
+                    if capture_task
+                    else None
+                )
                 await db.commit()
+                if capture_task:
+                    return committed
                 return cur.rowcount > 0
             except Exception:
                 await db.rollback()
@@ -1650,13 +1732,16 @@ class TaskStore:
         related_task_id: str,
         relation_kind: str,
         agent_id: str,
+        capture_task: bool = False,
         now: str | None = None,
         expected_revision: int | None = None,
+        expected_claim_ids: tuple[int, ...] | None = None,
     ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_claim_snapshot(db, namespace, task_id, expected_claim_ids)
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 source = await (
                     await db.execute(
@@ -1767,7 +1852,14 @@ class TaskStore:
                             now,
                         ),
                     )
+                committed = (
+                    await self._committed_record_tx(db, namespace, task_id)
+                    if capture_task
+                    else None
+                )
                 await db.commit()
+                if capture_task:
+                    return committed
                 return cur.rowcount > 0
             except Exception:
                 await db.rollback()
@@ -1782,13 +1874,16 @@ class TaskStore:
         related_task_id: str,
         relation_kind: str,
         agent_id: str,
+        capture_task: bool = False,
         now: str | None = None,
         expected_revision: int | None = None,
+        expected_claim_ids: tuple[int, ...] | None = None,
     ):
         now = now or utc_text()
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await self._assert_claim_snapshot(db, namespace, task_id, expected_claim_ids)
                 await self._assert_task_revision(db, namespace, task_id, expected_revision)
                 cur = await db.execute(
                     "DELETE FROM work_relations WHERE namespace=? AND task_id=? AND related_namespace=? AND related_task_id=? AND relation_kind=?",
@@ -1812,7 +1907,14 @@ class TaskStore:
                             now,
                         ),
                     )
+                committed = (
+                    await self._committed_record_tx(db, namespace, task_id)
+                    if capture_task
+                    else None
+                )
                 await db.commit()
+                if capture_task:
+                    return committed
                 return cur.rowcount > 0
             except Exception:
                 await db.rollback()
@@ -1892,6 +1994,8 @@ class TaskStore:
         agent_id: str,
         evidence: Any = None,
         warnings: Any = None,
+        capture_task: bool = False,
+        event_payload: dict | None = None,
         now: str | None = None,
         expected_revision: int | None = None,
     ):
@@ -1957,7 +2061,20 @@ class TaskStore:
                         for dimension in dimensions
                     ],
                 )
+                if event_payload is not None:
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,"
+                        "payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (namespace, task_id, "review", agent_id, self._json(event_payload), now),
+                    )
+                committed = (
+                    await self._committed_record_tx(db, namespace, task_id)
+                    if capture_task
+                    else None
+                )
                 await db.commit()
+                if capture_task:
+                    return committed
             except Exception:
                 await db.rollback()
                 raise
@@ -2031,6 +2148,8 @@ class TaskStore:
         *,
         agent_id: str | None = None,
         payload: Any = None,
+        capture_task: bool = False,
+        expected_revision: int | None = None,
         now: str | None = None,
         logical_agent_id: str | None = None,
         work_session_id: str | None = None,
@@ -2038,6 +2157,8 @@ class TaskStore:
     ):
         now = now or utc_text()
         async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await self._assert_task_revision(db, namespace, task_id, expected_revision)
             cur = await db.execute(
                 "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at,"
                 "logical_agent_id,work_session_id,session_epoch) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -2053,7 +2174,12 @@ class TaskStore:
                     session_epoch,
                 ),
             )
+            committed = (
+                await self._committed_record_tx(db, namespace, task_id) if capture_task else None
+            )
             await db.commit()
+        if capture_task:
+            return committed
         result = {
             "id": cur.lastrowid,
             "event_type": event_type,

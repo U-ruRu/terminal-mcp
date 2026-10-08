@@ -19,6 +19,7 @@ from terminal_mcp.storage.tasks import (
     TaskAgentBusy,
     TaskClaimConflict,
     TaskCommittedRecord,
+    TaskOwnershipConflict,
     TaskRelationConflict,
     TaskRevisionConflict,
 )
@@ -494,6 +495,24 @@ class TaskCoordinator:
             result.pop("resource_context", None)
         return result
 
+    async def _claim_snapshot(self, namespace, task_id):
+        return tuple(claim["id"] for claim in await self.store.active_claims(namespace, task_id))
+
+    @staticmethod
+    def _effective_revision(kwargs, current):
+        value = kwargs.get("expected_revision")
+        return current["revision"] if value is None else value
+
+    @staticmethod
+    def _ownership_conflict_result():
+        return {
+            "ok": False,
+            "code": "owner_required",
+            "error": "Task ownership changed before commit; refresh ownership and retry.",
+            "warnings": [],
+            "outcome": "not_committed",
+        }
+
     async def _owner_error(self, agent_id, namespace, task_id, operation):
         claims = await self._live_claims(namespace, task_id)
         if claims and claims[0]["agent_id"] != agent_id:
@@ -862,6 +881,8 @@ class TaskCoordinator:
                         namespace, task_id, int(expected), current["revision"]
                     )
             return await handler(agent_id, namespace, task_id, **kwargs)
+        except TaskOwnershipConflict:
+            return self._ownership_conflict_result()
         except TaskRevisionConflict as exc:
             return await self._result(
                 namespace,
@@ -999,6 +1020,18 @@ class TaskCoordinator:
             )
         warnings = []
         live_claims = await self._cleanup_stale_claims(namespace, task_id)
+        # Stale-lease cleanup may advance the revision. The admission policy and
+        # optimistic write guard must refer to the same refreshed record.
+        current = await self._required(namespace, task_id)
+        if not current:
+            return self._missing()
+        if current.get("archived_at") is not None:
+            return {
+                "ok": False,
+                "code": "archived_task",
+                "error": "Task is archived.",
+                "warnings": [],
+            }
         others = [item for item in live_claims if item["agent_id"] != agent_id]
         if others and not current.get("cooperative"):
             warning = _warning(
@@ -1050,7 +1083,7 @@ class TaskCoordinator:
             lease_kwargs = {}
             if owner is not None and kwargs.get("_claim_lease") is not None:
                 lease_kwargs["lease"] = kwargs["_claim_lease"]
-            await claim_method(
+            committed = await claim_method(
                 namespace,
                 task_id,
                 claim_identity,
@@ -1059,7 +1092,8 @@ class TaskCoordinator:
                 event_payload={"warnings": [item["code"] for item in warnings]},
                 dependency_override=dependency_override,
                 now=now,
-                expected_revision=kwargs.get("expected_revision"),
+                expected_revision=self._effective_revision(kwargs, current),
+                capture_task=True,
                 **lease_kwargs,
             )
         except TaskAgentBusy as exc:
@@ -1096,10 +1130,11 @@ class TaskCoordinator:
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.claim: {exc}", "warnings": warnings}
         self._inc("terminal_mcp_task_claims_total")
-        return await self._result(namespace, task_id, warnings)
+        return await self._result(namespace, task_id, warnings, committed_task=committed)
 
     async def _action_release(self, agent_id, namespace, task_id, **kwargs):
-        if not await self._required(namespace, task_id):
+        current = await self._required(namespace, task_id)
+        if not current:
             return self._missing()
         claims = await self._live_claims(namespace, task_id)
         own = next((item for item in claims if item["agent_id"] == agent_id), None)
@@ -1125,28 +1160,34 @@ class TaskCoordinator:
             )
         owner = kwargs.get("_claim_owner")
         if owner is None:
-            await self.store.release_claim_mutation(
+            committed = await self.store.release_claim_mutation(
                 namespace,
                 task_id,
                 agent_id,
                 reason=reason,
                 now=utc_text(),
-                expected_revision=kwargs.get("expected_revision"),
+                expected_revision=self._effective_revision(kwargs, current),
+                expected_claim_id=own["id"],
+                capture_task=True,
             )
         else:
-            await self.store.release_owner_claim_mutation(
+            committed = await self.store.release_owner_claim_mutation(
                 namespace,
                 task_id,
                 owner,
                 reason=reason,
                 now=utc_text(),
-                expected_revision=kwargs.get("expected_revision"),
+                expected_revision=self._effective_revision(kwargs, current),
+                expected_claim_id=own["id"],
+                capture_task=True,
             )
-        return await self._result(namespace, task_id, [])
+        return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_checkpoint(self, agent_id, namespace, task_id, **kwargs):
-        if not await self._required(namespace, task_id):
+        current = await self._required(namespace, task_id)
+        if not current:
             return self._missing()
+        ownership = await self._claim_snapshot(namespace, task_id)
         owner_error = await self._owner_error(agent_id, namespace, task_id, "checkpoint")
         if owner_error:
             return owner_error
@@ -1157,12 +1198,14 @@ class TaskCoordinator:
             namespace,
             task_id,
             {"checkpoint": kwargs["checkpoint"]},
-            kwargs.get("expected_revision"),
+            self._effective_revision(kwargs, current),
             "checkpoint",
+            expected_claim_ids=ownership,
         )
 
     async def _action_comment(self, agent_id, namespace, task_id, **kwargs):
-        if not await self._required(namespace, task_id):
+        current = await self._required(namespace, task_id)
+        if not current:
             return self._missing()
         text, error = self._clean_reason(kwargs.get("comment_text"), "comment_text")
         if error:
@@ -1171,19 +1214,22 @@ class TaskCoordinator:
                 max_length=4000,
                 missing=kwargs.get("comment_text") is None,
             )
-        await self.store.add_event(
+        committed = await self.store.add_event(
             namespace,
             task_id,
             "comment",
             agent_id=agent_id,
             payload={"text": text, "kind": "comment"},
             now=utc_text(),
+            capture_task=True,
         )
-        return await self._result(namespace, task_id, [])
+        return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_relate(self, agent_id, namespace, task_id, **kwargs):
-        if not await self._required(namespace, task_id):
+        current = await self._required(namespace, task_id)
+        if not current:
             return self._missing()
+        ownership = await self._claim_snapshot(namespace, task_id)
         owner_error = await self._owner_error(agent_id, namespace, task_id, "relate")
         if owner_error:
             return owner_error
@@ -1203,14 +1249,16 @@ class TaskCoordinator:
                 "warnings": [],
             }
         try:
-            await self.store.add_relation(
+            committed = await self.store.add_relation(
                 namespace,
                 task_id,
                 related_namespace=related_namespace,
                 related_task_id=related_task_id,
                 relation_kind=kind,
                 agent_id=agent_id,
-                expected_revision=kwargs.get("expected_revision"),
+                expected_revision=self._effective_revision(kwargs, current),
+                expected_claim_ids=ownership,
+                capture_task=True,
             )
         except TaskRelationConflict as exc:
             return {
@@ -1221,11 +1269,13 @@ class TaskCoordinator:
             }
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": f"task.relate: {exc}", "warnings": []}
-        return await self._result(namespace, task_id, [])
+        return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_unrelate(self, agent_id, namespace, task_id, **kwargs):
-        if not await self._required(namespace, task_id):
+        current = await self._required(namespace, task_id)
+        if not current:
             return self._missing()
+        ownership = await self._claim_snapshot(namespace, task_id)
         owner_error = await self._owner_error(agent_id, namespace, task_id, "unrelate")
         if owner_error:
             return owner_error
@@ -1238,16 +1288,18 @@ class TaskCoordinator:
                 "error": "task.unrelate: relation_kind and related_task_id required",
                 "warnings": [],
             }
-        await self.store.remove_relation(
+        committed = await self.store.remove_relation(
             namespace,
             task_id,
             related_namespace=related_namespace,
             related_task_id=related_task_id,
             relation_kind=kind,
             agent_id=agent_id,
-            expected_revision=kwargs.get("expected_revision"),
+            expected_revision=self._effective_revision(kwargs, current),
+            expected_claim_ids=ownership,
+            capture_task=True,
         )
-        return await self._result(namespace, task_id, [])
+        return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_update(self, agent_id, namespace, task_id, **kwargs):
         if kwargs.get("state") is not None:
@@ -1287,6 +1339,7 @@ class TaskCoordinator:
         current = await self._required(namespace, task_id)
         if not current:
             return self._missing()
+        ownership = await self._claim_snapshot(namespace, task_id)
         owner_error = await self._owner_error(agent_id, namespace, task_id, "archive")
         if owner_error:
             return owner_error
@@ -1314,8 +1367,9 @@ class TaskCoordinator:
             namespace,
             task_id,
             {"archived_at": now, "archive_note": note},
-            kwargs.get("expected_revision"),
+            self._effective_revision(kwargs, current),
             "archived",
+            expected_claim_ids=ownership,
             release_claims_reason="task_archived",
             event_extra={"archive_note": note, "state": current["state"]},
         )
@@ -1389,6 +1443,7 @@ class TaskCoordinator:
                     "error": "task.update: candidate_ref is frozen while review_of relation exists",
                     "warnings": [],
                 }
+        ownership = await self._claim_snapshot(namespace, task_id)
         claims = await self._live_claims(namespace, task_id)
         owner = claims[0]["agent_id"] if claims else None
         unsafe_fields = set(fields) - SAFE_PARTICIPANT_FIELDS
@@ -1498,9 +1553,10 @@ class TaskCoordinator:
             namespace,
             task_id,
             fields,
-            kwargs.get("expected_revision"),
+            self._effective_revision(kwargs, current),
             "updated",
             warnings=warnings,
+            expected_claim_ids=ownership if workflow_change else None,
             dependencies=kwargs.get("dependencies"),
             release_claims_reason="task_done" if target_state == "done" else None,
             event_extra=event_extra or None,
@@ -1517,6 +1573,7 @@ class TaskCoordinator:
         event_type,
         warnings=None,
         dependencies=None,
+        expected_claim_ids=None,
         release_claims_reason=None,
         event_extra=None,
         additional_events=None,
@@ -1548,6 +1605,7 @@ class TaskCoordinator:
                 namespace,
                 task_id,
                 expected_revision=expected_revision,
+                expected_claim_ids=expected_claim_ids,
                 dependencies=dependencies,
                 event_type=event_type,
                 event_agent_id=agent_id,
@@ -1557,6 +1615,8 @@ class TaskCoordinator:
                 now=now,
                 **fields,
             )
+        except TaskOwnershipConflict:
+            return self._ownership_conflict_result()
         except TaskRevisionConflict as exc:
             warnings.append(
                 _warning(
@@ -1634,8 +1694,16 @@ class TaskCoordinator:
             )
         now = utc_text()
         output_refs = list(current.get("output_refs") or [])
+        payload = {
+            "output_state_id": output_state_id,
+            "output_refs": output_refs,
+            "dimensions": dimensions,
+            "verdict": verdict,
+            "evidence": kwargs.get("evidence") or {},
+            "warnings": [item["code"] for item in warnings],
+        }
         try:
-            await self.store.upsert_reviews(
+            committed = await self.store.upsert_reviews(
                 namespace,
                 task_id,
                 output_state_id=output_state_id,
@@ -1646,7 +1714,9 @@ class TaskCoordinator:
                 evidence=kwargs.get("evidence") or {},
                 warnings=warnings,
                 now=now,
-                expected_revision=kwargs.get("expected_revision"),
+                expected_revision=self._effective_revision(kwargs, current),
+                capture_task=True,
+                event_payload=payload,
             )
         except ValueError as exc:
             if "changed before review" in str(exc):
@@ -1657,23 +1727,8 @@ class TaskCoordinator:
                     "warnings": warnings,
                 }
             raise
-        await self.store.add_event(
-            namespace,
-            task_id,
-            "review",
-            agent_id=agent_id,
-            payload={
-                "output_state_id": output_state_id,
-                "output_refs": output_refs,
-                "dimensions": dimensions,
-                "verdict": verdict,
-                "evidence": kwargs.get("evidence") or {},
-                "warnings": [item["code"] for item in warnings],
-            },
-            now=now,
-        )
         self._inc("terminal_mcp_task_reviews_total")
-        return await self._result(namespace, task_id, warnings)
+        return await self._result(namespace, task_id, warnings, committed_task=committed)
 
     async def _required(self, namespace, task_id):
         return await self.store.get_task(namespace, task_id) if task_id else None
@@ -1819,23 +1874,15 @@ class TaskCoordinator:
         if isinstance(task, TaskCommittedRecord):
             # A committed mutation is reported from its transaction snapshot.
             # No post-commit database read or external projection can mask it.
-            projected = self._external_task(task)
-            claims = [
-                self._claim_view(item, "owner" if index == 0 else "participant")
-                for index, item in enumerate(task.claims)
-            ]
-            blocking = [dep for dep in task.dependencies if not dep["satisfied"]]
-            projected.update(
-                claims=claims,
-                owner=claims[0] if claims else None,
-                participants=claims[1:],
-                active=bool(claims),
-                blocking_dependencies=blocking,
-                operational_status=self._operational_status(task, task.claims, blocking),
+            projected = self._decorate_prefetched(
+                task,
+                task.claims,
+                task.dependencies,
+                task.sessions_by_agent,
+                now=task.observed_at,
             )
-            projected.pop("resource_context", None)
-            if not include_description:
-                projected.pop("description", None)
+            if include_description:
+                projected["description"] = task.get("description") or ""
         else:
             projected = await self._decorate(task, details=False) if task else None
         for warning in warnings:
