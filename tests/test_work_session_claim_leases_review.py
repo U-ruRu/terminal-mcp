@@ -144,6 +144,7 @@ async def test_late_remote_cleanup_preserves_successor_claim(remote_case):
 @pytest.mark.asyncio
 async def test_remote_expiry_preserves_another_cooperative_durable_owner(remote_case):
     case = remote_case
+    await case.tasks.update_task(NS, TASK, state="in_progress")
     await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(REMOTE), lease=lease(case))
     await case.tasks.claim_owner(NS, TASK, ClaimOwner.logical_agent(OTHER))
     when = case.now + timedelta(seconds=121)

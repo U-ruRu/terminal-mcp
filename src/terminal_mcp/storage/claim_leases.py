@@ -97,35 +97,14 @@ async def release_session_claims(
 
 
 async def refresh_released_task(db, namespace: str, task_id: str, *, now: str) -> None:
-    live = await (
-        await db.execute(
-            "SELECT 1 FROM work_claims WHERE namespace=? AND task_id=? "
-            "AND released_at IS NULL LIMIT 1",
-            (namespace, task_id),
-        )
-    ).fetchone()
-    automatic = await (
-        await db.execute(
-            "SELECT 1 FROM work_claim_auto_state WHERE namespace=? AND task_id=?",
-            (namespace, task_id),
-        )
-    ).fetchone()
-    if live is None and automatic is not None:
-        await db.execute(
-            "UPDATE work_items SET state=CASE WHEN state='in_progress' "
-            "THEN 'ready' ELSE state END, "
-            "ready_since=CASE WHEN state='in_progress' THEN ? ELSE ready_since END, "
-            "state_changed_at=CASE WHEN state='in_progress' THEN ? ELSE state_changed_at END, "
-            "revision=revision+1,updated_at=? WHERE namespace=? AND task_id=?",
-            (now, now, now, namespace, task_id),
-        )
-    else:
-        # Leave state out of SET: an explicit state assignment clears its provenance.
-        await db.execute(
-            "UPDATE work_items SET revision=revision+1,updated_at=? "
-            "WHERE namespace=? AND task_id=?",
-            (now, namespace, task_id),
-        )
+    # Ownership changes never infer a workflow transition, including old rows
+    # carrying pre-V2 automatic-state provenance. Keep timestamps/checkpoints/
+    # results intact and invalidate stale projections through the task revision.
+    await db.execute(
+        "UPDATE work_items SET revision=revision+1,updated_at=? "
+        "WHERE namespace=? AND task_id=?",
+        (now, namespace, task_id),
+    )
     leased_owner = await (
         await db.execute(
             "SELECT 1 FROM work_claims c JOIN work_claim_leases l ON l.claim_id=c.id "

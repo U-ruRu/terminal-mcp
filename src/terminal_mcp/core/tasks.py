@@ -12,6 +12,7 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
+from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.public_errors import ValidationIssue, ValidationRepair, public_error
 from terminal_mcp.storage.tasks import (
     TaskAgentBusy,
@@ -1715,26 +1716,10 @@ class TaskCoordinator:
         return stats
 
     async def release_agent_claims(self, agent_id, *, reason="agent_finish", now=None):
-        now = now or utc_text()
-        claims = await self.store.claims_for_agent(agent_id, active_only=True)
-        if not claims:
-            return 0
-        released = 0
-        for claim in claims:
-            if not await self.store.release_claim(
-                claim["namespace"], claim["task_id"], agent_id, now=now
-            ):
-                continue
-            released += 1
-            await self.store.add_event(
-                claim["namespace"],
-                claim["task_id"],
-                "claim_released",
-                agent_id=agent_id,
-                payload={"reason": reason},
-                now=now,
-            )
-        return released
+        result = await self.store.release_owner_claims_mutation(
+            owner=ClaimOwner.legacy_session(agent_id), reason=reason, now=now
+        )
+        return result["released_count"]
 
     async def task_refs_for_agent(self, agent_id):
         rows = await self.store.claims_for_agent(agent_id, active_only=True)
@@ -1750,9 +1735,7 @@ class TaskCoordinator:
                     "lane": item["lane"],
                     "priority": VALUE_PRIORITY.get(int(item["priority"]), "P3"),
                     "state": item["state"],
-                    "operational_status": item["state"]
-                    if item["state"] != "ready"
-                    else "in_progress",
+                    "operational_status": item["state"],
                     "isolation_hint": item["isolation_hint"],
                 }
             )
