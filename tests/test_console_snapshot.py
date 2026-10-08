@@ -194,3 +194,48 @@ def test_console_snapshot_cursor_first_contract_replays_concurrent_changes(tmp_p
         assert replay["gap"] is False
         assert any(event["event_type"] == "health.changed" for event in replay["events"])
         assert replay["high_water_seq"] > snapshot["high_water_seq"]
+
+
+def test_console_snapshot_starts_independent_read_models_concurrently(tmp_path, monkeypatch):
+    import asyncio
+
+    app = create_app(settings(tmp_path))
+    service = app.state.service
+    started = set()
+    all_started = asyncio.Event()
+
+    async def synchronize(name):
+        started.add(name)
+        if len(started) == 3:
+            all_started.set()
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+
+    original_health = service.health
+    original_context = service.context
+    original_overview = service.agent_coordinator.overview
+
+    async def health(*args, **kwargs):
+        await synchronize("health")
+        return await original_health(*args, **kwargs)
+
+    async def context(*args, **kwargs):
+        await synchronize("context")
+        return await original_context(*args, **kwargs)
+
+    async def overview(*args, **kwargs):
+        if kwargs.get("show_details") is True:
+            await synchronize("agents")
+        return await original_overview(*args, **kwargs)
+
+    monkeypatch.setattr(service, "health", health)
+    monkeypatch.setattr(service, "context", context)
+    monkeypatch.setattr(service.agent_coordinator, "overview", overview)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/actions/console/snapshot",
+            headers={"Authorization": "Bearer console-token"},
+        )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert started == {"health", "context", "agents"}
