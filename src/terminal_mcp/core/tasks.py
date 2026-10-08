@@ -1881,8 +1881,18 @@ class TaskCoordinator:
                 task.sessions_by_agent,
                 now=task.observed_at,
             )
+            # Exact mutation receipts come from the captured write transaction.
+            # Preserve the committed revision and materialize mandatory public
+            # claim snapshot fields from that SAME committed record, never by
+            # issuing a post-commit list/read that can race another writer.
+            description = task.get("description") or ""
+            projected["description_preview"] = description[:DESCRIPTION_PREVIEW_LIMIT]
+            projected["description_truncated"] = len(description) > DESCRIPTION_PREVIEW_LIMIT
+            # The claim has been captured with the committed TaskRecord; a
+            # post-commit read could observe a later owner's revision instead.
+            projected["claim"] = projected.get("owner")
             if include_description:
-                projected["description"] = task.get("description") or ""
+                projected["description"] = description
         else:
             projected = await self._decorate(task, details=False) if task else None
         for warning in warnings:

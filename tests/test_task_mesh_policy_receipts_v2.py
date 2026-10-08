@@ -108,12 +108,13 @@ def lease_count(case):
 
 
 class Gate:
-    def __init__(self, case):
+    def __init__(self, case, *, mesh_enabled=False):
         self.case = case
+        self.mesh_enabled = mesh_enabled
 
     async def identity(self, *args):
         session = self.case.session
-        return {
+        identity = {
             "logical_agent_id": session.logical_agent_id,
             "work_session_id": session.work_session_id,
             "session_epoch": session.session_epoch,
@@ -122,7 +123,12 @@ class Gate:
                 "remaining_seconds": 900,
                 "hard_expires_at": session.hard_expires_at,
             },
-        }, None
+        }
+        if self.mesh_enabled:
+            # Real Access Mesh attachment has the issuer+slot tuple.
+            identity["issuer_node_id"] = "firstbyte"
+            identity["slot_id"] = "qa-lease-policy"
+        return identity, None
 
 
 @pytest.mark.asyncio
@@ -133,7 +139,7 @@ async def test_application_claim_uses_native_mesh_cleanup_not_legacy_window_leas
 ):
     runtime = backend(case, mesh_enabled=mesh_enabled, mode=mode)
     service = SimpleNamespace(persistent=runtime, access_mesh=runtime.service.access_mesh)
-    app = TaskApplication(service, Gate(case))
+    app = TaskApplication(service, Gate(case, mesh_enabled=mesh_enabled))
     result = await app.task(
         ActorContext(transport="mcp", endpoint_role="executor", request_id=None),
         TaskClaimRequest(action="claim", namespace="policy", task_id="task", claim_intent="owned"),
