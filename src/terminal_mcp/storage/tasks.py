@@ -1245,19 +1245,8 @@ class TaskStore:
                     from terminal_mcp.storage.claim_leases import attach_claim_lease
 
                     await attach_claim_lease(db, cur.lastrowid, owner.owner_id, lease)
-                if lease is not None:
-                    transitioned = await db.execute(
-                        "UPDATE work_items SET state='in_progress',state_changed_at=?,updated_at=?,"
-                        "revision=revision+1 WHERE namespace=? AND task_id=? AND state='ready'",
-                        (now, now, namespace, task_id),
-                    )
-                    if transitioned.rowcount:
-                        await db.execute(
-                            "INSERT INTO work_claim_auto_state(namespace,task_id,created_at) "
-                            "VALUES(?,?,?) ON CONFLICT(namespace,task_id) DO UPDATE SET "
-                            "created_at=excluded.created_at",
-                            (namespace, task_id, now),
-                        )
+                # Ownership is independent of the agent's explicit workflow state.
+                # A session lease must never start a task as a side effect.
                 if dependency_override:
                     await db.execute(
                         "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
@@ -1343,6 +1332,7 @@ class TaskStore:
         reason: str,
         now: str | None = None,
         expected_revision: int | None = None,
+        expected_claim_id: int | None = None,
     ) -> bool:
         now = now or utc_text()
         async with self._connect() as db:
@@ -1357,9 +1347,17 @@ class TaskStore:
                         (namespace, task_id, owner.kind, owner.owner_id),
                     )
                 ).fetchone()
+                where = (
+                    "namespace=? AND task_id=? AND owner_kind=? AND owner_id=? "
+                    "AND released_at IS NULL"
+                )
+                params = [now, namespace, task_id, owner.kind, owner.owner_id]
+                if expected_claim_id is not None:
+                    # A delayed lifecycle sweep must not release a successor claim.
+                    where += " AND id=?"
+                    params.append(expected_claim_id)
                 cur = await db.execute(
-                    "UPDATE work_claims SET released_at=? WHERE namespace=? AND task_id=? AND owner_kind=? AND owner_id=? AND released_at IS NULL",
-                    (now, namespace, task_id, owner.kind, owner.owner_id),
+                    f"UPDATE work_claims SET released_at=? WHERE {where}", params
                 )
                 if cur.rowcount:
                     if leased is not None:
@@ -1400,6 +1398,46 @@ class TaskStore:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def release_owner_claims_mutation(
+        self,
+        *,
+        owner: ClaimOwner,
+        reason: str,
+        now: str | None = None,
+    ) -> dict:
+        """Release each observed claim atomically, preserving all workflow fields.
+
+        Failed claims remain available for retry. Every successful release and its
+        audit are committed together; exact claim ids fence late/repeated sweeps.
+        This also handles historical owners with more than one pre-WIP claim.
+        """
+        now = now or utc_text()
+        claims = await self.claims_for_owner(owner, active_only=True)
+        released_count = 0
+        errors = []
+        for claim in claims:
+            try:
+                released = await self.release_owner_claim_mutation(
+                    claim["namespace"],
+                    claim["task_id"],
+                    owner,
+                    reason=reason,
+                    now=now,
+                    expected_claim_id=claim["id"],
+                )
+                released_count += int(released)
+            except Exception as exc:
+                errors.append(
+                    {
+                        "namespace": claim["namespace"],
+                        "task_id": claim["task_id"],
+                        "claim_id": claim["id"],
+                        "code": "claim_release_failed",
+                        "message": str(exc),
+                    }
+                )
+        return {"ok": not errors, "released_count": released_count, "errors": errors}
 
     async def release_claims(
         self,

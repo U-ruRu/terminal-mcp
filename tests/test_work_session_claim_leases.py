@@ -57,6 +57,7 @@ async def stop(sessions, snapshot, now, reason="session_end"):
 @pytest.mark.parametrize("reason", ["session_end", "session_interrupt", "hard_duration"])
 async def test_end_interrupt_expiry_release_exact_claim_and_preserve_checkpoint(lease_case, reason):
     sessions, tasks, first, now = lease_case
+    await tasks.update_task("lease-test", "task", state="in_progress")
     await tasks.claim_owner(
         "lease-test", "task", ClaimOwner.logical_agent("la_one"), lease=lease(first)
     )
@@ -70,7 +71,7 @@ async def test_end_interrupt_expiry_release_exact_claim_and_preserve_checkpoint(
     await stop(sessions, first, when, reason)
     assert await tasks.active_claims("lease-test", "task") == []
     result = await tasks.get_task("lease-test", "task")
-    assert result["state"] == "ready"
+    assert result["state"] == "in_progress"
     assert result["checkpoint"] == {"keep": "checkpoint"}
     revision = result["revision"]
     await stop(sessions, first, when + timedelta(seconds=1), reason)
@@ -138,7 +139,7 @@ async def test_invalid_session_lease_is_rejected_before_claim_commit(lease_case,
 
 
 @pytest.mark.asyncio
-async def test_explicit_release_returns_ready_and_is_idempotent(lease_case):
+async def test_explicit_release_preserves_ready_and_is_idempotent(lease_case):
     _, tasks, first, _ = lease_case
     owner = ClaimOwner.logical_agent("la_one")
     await tasks.claim_owner("lease-test", "task", owner, lease=lease(first))
@@ -199,7 +200,7 @@ async def test_v20_claim_migration_uses_exact_managed_evidence_and_preserves_dur
 @pytest.mark.asyncio
 async def test_cooperative_session_release_preserves_other_owner_until_last_release(lease_case):
     sessions, tasks, first, now = lease_case
-    await tasks.update_task("lease-test", "task", cooperative=True)
+    await tasks.update_task("lease-test", "task", cooperative=True, state="in_progress")
     await tasks.claim_owner(
         "lease-test", "task", ClaimOwner.logical_agent("la_one"), lease=lease(first)
     )
@@ -221,4 +222,4 @@ async def test_cooperative_session_release_preserves_other_owner_until_last_rele
     await tasks.release_owner_claim_mutation(
         "lease-test", "task", ClaimOwner.logical_agent("la_two"), reason="last owner done"
     )
-    assert (await tasks.get_task("lease-test", "task"))["state"] == "ready"
+    assert (await tasks.get_task("lease-test", "task"))["state"] == "in_progress"
