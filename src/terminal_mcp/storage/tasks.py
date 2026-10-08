@@ -57,6 +57,19 @@ class TaskRelationConflict(RuntimeError):
         super().__init__(message)
 
 
+class TaskCommittedRecord(dict):
+    """Dict-compatible task record and ownership captured by its write transaction.
+
+    Auxiliary snapshots are Python attributes, never extra public task fields.
+    Callers receive this object only after a successful commit.
+    """
+
+    def __init__(self, task: dict, claims: list[dict], dependencies: list[dict]):
+        super().__init__(task)
+        self.claims = claims
+        self.dependencies = dependencies
+
+
 class TaskStore:
     def __init__(self, path):
         self.path = path
@@ -381,23 +394,61 @@ class TaskStore:
                             now,
                         ),
                     )
+                committed = await self._committed_record_tx(db, namespace, task_id)
                 await db.commit()
             except Exception:
                 await db.rollback()
                 raise
-        return await self.get_task(namespace, task_id)
+        return committed
+
+    async def _get_task_tx(self, db, namespace: str, task_id: str):
+        row = await (
+            await db.execute(
+                "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
+                "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint,input_refs_json,output_refs_json,output_state_id "
+                "FROM work_items WHERE namespace=? AND task_id=?",
+                (namespace, task_id),
+            )
+        ).fetchone()
+        return self._task(row)
+
+    async def _committed_record_tx(self, db, namespace: str, task_id: str):
+        task = await self._get_task_tx(db, namespace, task_id)
+        if task is None:
+            raise KeyError(f"unknown task: {namespace}/{task_id}")
+        rows = await (
+            await db.execute(
+                "SELECT id,agent_id,owner_kind,owner_id,claimed_at,released_at,claim_intent "
+                "FROM work_claims WHERE namespace=? AND task_id=? AND released_at IS NULL "
+                "ORDER BY claimed_at,id",
+                (namespace, task_id),
+            )
+        ).fetchall()
+        dependencies = await (
+            await db.execute(
+                "SELECT d.dependency_namespace,d.dependency_task_id,w.state,w.archived_at "
+                "FROM work_dependencies d LEFT JOIN work_items w "
+                "ON w.namespace=d.dependency_namespace AND w.task_id=d.dependency_task_id "
+                "WHERE d.namespace=? AND d.task_id=? "
+                "ORDER BY d.dependency_namespace,d.dependency_task_id",
+                (namespace, task_id),
+            )
+        ).fetchall()
+        return TaskCommittedRecord(
+            task,
+            [self._claim_record(row) for row in rows],
+            [
+                {
+                    "namespace": row[0], "task_id": row[1], "state": row[2] or "missing",
+                    "archived": bool(row[3]), "satisfied": row[2] == "done",
+                }
+                for row in dependencies
+            ],
+        )
 
     async def get_task(self, namespace: str, task_id: str):
         async with self._connect() as db:
-            row = await (
-                await db.execute(
-                    "SELECT namespace,task_id,title,lane,priority,state,description,next_action,resource_json,"
-                    "reviews_json,cooperative,checkpoint_json,candidate_ref,result_json,tags_json,state_changed_at,ready_since,archived_at,archive_note,revision,created_at,updated_at,isolation_hint,input_refs_json,output_refs_json,output_state_id "
-                    "FROM work_items WHERE namespace=? AND task_id=?",
-                    (namespace, task_id),
-                )
-            ).fetchone()
-        return self._task(row)
+            return await self._get_task_tx(db, namespace, task_id)
 
     async def list_tasks(
         self,
@@ -897,11 +948,12 @@ class TaskStore:
                                 for row in claimants
                             ],
                         )
+                committed = await self._committed_record_tx(db, namespace, task_id)
                 await db.commit()
             except Exception:
                 await db.rollback()
                 raise
-        return await self.get_task(namespace, task_id)
+        return committed
 
     @staticmethod
     def _claim_record(row, *, include_task=False):

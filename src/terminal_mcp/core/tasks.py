@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from collections import Counter
 
@@ -17,6 +18,7 @@ from terminal_mcp.core.public_errors import ValidationIssue, ValidationRepair, p
 from terminal_mcp.storage.tasks import (
     TaskAgentBusy,
     TaskClaimConflict,
+    TaskCommittedRecord,
     TaskRelationConflict,
     TaskRevisionConflict,
 )
@@ -77,7 +79,10 @@ class TaskCoordinator:
 
     def _inc(self, name, labels=()):
         if self.metrics:
-            self.metrics.inc(name, labels)
+            try:
+                self.metrics.inc(name, labels)
+            except Exception:
+                logging.getLogger(__name__).warning("Task metric recording failed", exc_info=True)
 
     async def _live_claims(self, namespace, task_id):
         return await live_task_claims(
@@ -931,7 +936,7 @@ class TaskCoordinator:
 
         now = utc_text()
         try:
-            await self.store.create_task_mutation(
+            committed = await self.store.create_task_mutation(
                 namespace,
                 task_id,
                 kwargs.get("title") or task_id,
@@ -964,7 +969,13 @@ class TaskCoordinator:
         except Exception as exc:
             return {"ok": False, "error": f"task.create: {exc}", "warnings": []}
         self._inc("terminal_mcp_tasks_created_total")
-        return await self._result(namespace, task_id, warnings)
+        return await self._result(
+            namespace,
+            task_id,
+            warnings,
+            committed_task=committed,
+            include_description=kwargs.get("description") is not None,
+        )
 
     async def _action_claim(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)
@@ -1518,7 +1529,7 @@ class TaskCoordinator:
             if key in fields:
                 event_payload[key] = fields[key]
         try:
-            await self.store.update_task_mutation(
+            committed = await self.store.update_task_mutation(
                 namespace,
                 task_id,
                 expected_revision=expected_revision,
@@ -1554,7 +1565,13 @@ class TaskCoordinator:
             return {"ok": False, "error": f"task.update: {exc}", "warnings": warnings}
         except Exception as exc:
             return {"ok": False, "error": f"task.update: {exc}", "warnings": warnings}
-        return await self._result(namespace, task_id, warnings)
+        return await self._result(
+            namespace,
+            task_id,
+            warnings,
+            committed_task=committed,
+            include_description="description" in fields,
+        )
 
     async def _action_review(self, agent_id, namespace, task_id, **kwargs):
         current = await self._required(namespace, task_id)
@@ -1767,14 +1784,50 @@ class TaskCoordinator:
             )
 
     async def _result(
-        self, namespace, task_id, warnings, *, ok=True, error=None, code=None, details=None
+        self,
+        namespace,
+        task_id,
+        warnings,
+        *,
+        ok=True,
+        error=None,
+        code=None,
+        details=None,
+        committed_task=None,
+        include_description=False,
     ):
-        task = await self.store.get_task(namespace, task_id)
+        task = (
+            committed_task
+            if committed_task is not None
+            else await self.store.get_task(namespace, task_id)
+        )
+        if isinstance(task, TaskCommittedRecord):
+            # A committed mutation is reported from its transaction snapshot.
+            # No post-commit database read or external projection can mask it.
+            projected = self._external_task(task)
+            claims = [
+                self._claim_view(item, "owner" if index == 0 else "participant")
+                for index, item in enumerate(task.claims)
+            ]
+            blocking = [dep for dep in task.dependencies if not dep["satisfied"]]
+            projected.update(
+                claims=claims,
+                owner=claims[0] if claims else None,
+                participants=claims[1:],
+                active=bool(claims),
+                blocking_dependencies=blocking,
+                operational_status=self._operational_status(task, task.claims, blocking),
+            )
+            projected.pop("resource_context", None)
+            if not include_description:
+                projected.pop("description", None)
+        else:
+            projected = await self._decorate(task, details=False) if task else None
         for warning in warnings:
             self._inc("terminal_mcp_task_warnings_total", (("code", warning["code"]),))
         result = {
             "ok": ok,
-            "task": await self._decorate(task, details=False) if task else None,
+            "task": projected,
             "warnings": warnings,
             "error": error,
         }
