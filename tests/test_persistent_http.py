@@ -58,7 +58,12 @@ def test_slot_create_schema_requires_display_name_field_but_accepts_empty_string
     assert empty.json()["slot"]["display_name"] == ""
 
 
-def test_bearer_persistent_lifecycle_idempotency_and_cancel_fence(tmp_path):
+def test_bearer_persistent_lifecycle_idempotency_and_cancel_fence(tmp_path, monkeypatch):
+    # The fence test owns the process lifetime. A fixed sleep of five seconds
+    # raced run's five-second inline wait and could complete before cancel.
+    monkeypatch.setattr(
+        "terminal_mcp.core.persistent_backend.COMMAND_RUN_INLINE_BUDGET_SECONDS", 0.05
+    )
     app = create_app(settings(tmp_path, auth_mode="bearer", bearer_tokens="alpha-token"))
     headers = {"Authorization": "Bearer alpha-token"}
     with TestClient(app) as client:
@@ -117,7 +122,7 @@ def test_bearer_persistent_lifecycle_idempotency_and_cancel_fence(tmp_path):
         queued = client.post(
             "/actions/persistent/run",
             json={
-                "cmd": "sleep 5",
+                "cmd": "while :; do sleep 0.1; done",
                 "logical_agent_id": logical_agent_id,
                 "work_session_id": session["work_session_id"],
                 "session_epoch": session["session_epoch"],
@@ -145,7 +150,7 @@ def test_bearer_persistent_lifecycle_idempotency_and_cancel_fence(tmp_path):
             },
             headers=headers,
         ).json()
-        assert fenced["ok"] is True
+        assert fenced["ok"] is True, fenced
 
     with sqlite3.connect(tmp_path / "db.sqlite3") as db:
         principal = db.execute(
