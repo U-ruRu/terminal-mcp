@@ -925,89 +925,101 @@ class TerminalService:
         # Snapshot reads may observe newer state, so clients must apply replay idempotently.
         high_water_seq = await self.event_store.high_water_seq()
 
-        health = await self.health(auth_mode)
-        agents = await self.agent_coordinator.overview(
-            agent_id=None,
-            show_details=True,
-            show_intents=False,
-            show_commands=False,
-            since_minutes=history_minutes,
-            touch=False,
-            reveal_agent_ids=True,
-        )
-        contexts = await self.context("list", show_details=True)
+        # Fetch remote Persistent slots while independent Console views load.
+        # TaskGroup also cancels the fetch if the mobile client disconnects.
+        async with asyncio.TaskGroup() as group:
+            persistent_future = group.create_task(
+                self._persistent_console_snapshot(persistent_policy)
+            )
+            # Independent read-only projections share the mobile initial-snapshot deadline.
+            health, agents, contexts = await asyncio.gather(
+                self.health(auth_mode),
+                self.agent_coordinator.overview(
+                    agent_id=None,
+                    show_details=True,
+                    show_intents=False,
+                    show_commands=False,
+                    since_minutes=history_minutes,
+                    touch=False,
+                    reveal_agent_ids=True,
+                ),
+                self.context("list", show_details=True),
+            )
 
-        task_page = await self.tasks(
-            show_done=True,
-            show_archived=True,
-            show_details=False,
-            limit=1000,
-            cursor=0,
-            reveal_agent_ids=True,
-        )
-        task_items = list(task_page.get("tasks") or [])
-        next_cursor = task_page.get("next_cursor")
-        while next_cursor is not None:
-            page = await self.tasks(
+            task_page = await self.tasks(
                 show_done=True,
                 show_archived=True,
                 show_details=False,
                 limit=1000,
-                cursor=next_cursor,
+                cursor=0,
                 reveal_agent_ids=True,
             )
-            task_items.extend(page.get("tasks") or [])
-            next_cursor = page.get("next_cursor")
-        tasks = {
-            "summary": task_page.get("summary") or {},
-            "tag_counts": task_page.get("tag_counts") or {},
-            "recommended": task_page.get("recommended"),
-            "tasks": task_items,
-        }
+            task_items = list(task_page.get("tasks") or [])
+            next_cursor = task_page.get("next_cursor")
+            while next_cursor is not None:
+                page = await self.tasks(
+                    show_done=True,
+                    show_archived=True,
+                    show_details=False,
+                    limit=1000,
+                    cursor=next_cursor,
+                    reveal_agent_ids=True,
+                )
+                task_items.extend(page.get("tasks") or [])
+                next_cursor = page.get("next_cursor")
+            tasks = {
+                "summary": task_page.get("summary") or {},
+                "tag_counts": task_page.get("tag_counts") or {},
+                "recommended": task_page.get("recommended"),
+                "tasks": task_items,
+            }
 
-        communications = []
-        for session in agents.get("sessions") or []:
-            name = session["name"]
-            stable_agent_id = session.get("agent_id")
-            detail = await self.agent_coordinator.overview(
-                agent_id=None,
-                target=name,
-                target_agent_id=stable_agent_id,
-                target_session_ref=session.get("session_ref"),
-                show_details=False,
-                show_intents=True,
-                show_commands=False,
-                since_minutes=history_minutes,
-                touch=False,
-            )
-            selected = (detail.get("sessions") or [{}])[0]
-            communications.append(
-                {
-                    "name": name,
+            # Bound parallel per-session reads; an active fleet can contain dozens
+            # of sessions, and serial journal lookups exhaust the Android timeout.
+            communication_limit = asyncio.Semaphore(8)
+
+            async def read_communication(session):
+                async with communication_limit:
+                    detail = await self.agent_coordinator.overview(
+                        agent_id=None,
+                        target=session["name"],
+                        target_agent_id=session.get("agent_id"),
+                        target_session_ref=session.get("session_ref"),
+                        show_details=False,
+                        show_intents=True,
+                        show_commands=False,
+                        since_minutes=history_minutes,
+                        touch=False,
+                    )
+                selected = (detail.get("sessions") or [{}])[0]
+                return {
+                    "name": session["name"],
                     "session_ref": session.get("session_ref"),
-                    "agent_id": stable_agent_id,
+                    "agent_id": session.get("agent_id"),
                     "messages_awaiting_read": selected.get("messages_awaiting_read", 0),
                     "messages_awaiting_reply": selected.get("messages_awaiting_reply", 0),
                     "alerts_pending": selected.get("alerts_pending", 0),
                     "message_journal": selected.get("message_journal") or [],
                     "intent_journal": detail.get("intent_journal") or [],
                 }
-            )
 
-        instance = {
-            "application": "terminal-mcp",
-            "version": __version__,
-            "public_base_url": public_base_url,
-            "health": health,
-            "resources": collect_host_resources(),
-        }
-        consistency = {
-            "mode": "cursor_first_at_least_once",
-            "high_water_seq": high_water_seq,
-            "replay_from_seq": high_water_seq,
-            "duplicate_events_possible": True,
-        }
-        persistent = await self._persistent_console_snapshot(persistent_policy)
+            communications = list(await asyncio.gather(
+                *(read_communication(session) for session in (agents.get("sessions") or []))
+            ))
+            instance = {
+                "application": "terminal-mcp",
+                "version": __version__,
+                "public_base_url": public_base_url,
+                "health": health,
+                "resources": collect_host_resources(),
+            }
+            consistency = {
+                "mode": "cursor_first_at_least_once",
+                "high_water_seq": high_water_seq,
+                "replay_from_seq": high_water_seq,
+                "duplicate_events_possible": True,
+            }
+        persistent = persistent_future.result()
         return {
             "ok": True,
             "high_water_seq": high_water_seq,
