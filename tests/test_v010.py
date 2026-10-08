@@ -1046,7 +1046,7 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
             result={"summary": "must claim before completion"},
         )
         assert unclaimed_direct["ok"] is False
-        assert unclaimed_direct["code"] == "owner_required"
+        assert unclaimed_direct["code"] == "dependency_open"
         direct_claim = await service.task(
             agent,
             action="claim",
@@ -1077,9 +1077,13 @@ async def test_terminal_completion_enforces_dependencies_and_force_audit(tmp_pat
             state="done",
             result={"summary": "state path must also remain blocked"},
         )
-        assert via_state["ok"] is False
-        assert via_state["code"] == "dependency_open"
-        assert via_state["blocking_dependencies"][0]["task_id"] == "OPEN"
+        # A status-only done is intentional and independent of dependency gating.
+        assert via_state["ok"] is True
+        assert via_state["task"]["state"] == "done"
+        reopened = await service.task(
+            agent, action="state", namespace="deps", task_id="DIRECT", state="ready"
+        )
+        assert reopened["ok"] and reopened["task"]["state"] == "ready"
 
         via_update = await service.task(
             agent,

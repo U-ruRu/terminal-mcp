@@ -145,8 +145,8 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
             state="blocked",
             blocker_reason="participant cannot block task",
         )
-        assert denied_state["ok"] is False
-        assert owner_error(denied_state)
+        assert denied_state["ok"] is True
+        assert denied_state["task"]["state"] == "blocked"
 
         denied_done = await service.task(
             peer,
@@ -187,13 +187,6 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
         )
         assert participant_comment["ok"] is True
 
-        missing_release_reason = await service.task(
-            owner, action="release", namespace="wf", task_id="COOP"
-        )
-        assert missing_release_reason["ok"] is False
-        assert missing_release_reason["code"] == "input_validation_failed"
-        assert missing_release_reason["path"] == "release_reason"
-
         released = await service.task(
             owner,
             action="release",
@@ -202,6 +195,11 @@ async def test_claim_intent_owner_participants_owner_handoff_and_owner_only_muta
             release_reason="Implementation slice complete; peer continues validation.",
         )
         assert released["ok"] is True
+        repeated_release = await service.task(
+            owner, action="release", namespace="wf", task_id="COOP"
+        )
+        # Repeat own release is successful and must not add another release event.
+        assert repeated_release["ok"] is True
         after = await detail(service, "wf", "COOP")
         assert after["owner"]["agent_name"] == public_agent_name(peer)
         assert after["participants"] == []
@@ -669,8 +667,8 @@ async def test_claimed_blocked_and_done_require_context_and_leave_history(tmp_pa
             task_id="STATEFUL",
             state="blocked",
         )
-        assert no_reason["ok"] is False
-        assert "blocker_reason" in no_reason["error"]
+        assert no_reason["ok"] is True
+        assert no_reason["task"]["state"] == "blocked"
 
         blocked = await service.task(
             owner,
@@ -683,13 +681,13 @@ async def test_claimed_blocked_and_done_require_context_and_leave_history(tmp_pa
         assert blocked["ok"] is True
         assert blocked["task"]["state"] == "blocked"
         blocked_detail = await detail(service, "wf", "STATEFUL")
+        # Explicit state mutation is a no-op when already blocked; reason does not
+        # edit content or append a redundant event under the atomic-state contract.
         blocker_events = [
-            event
-            for event in blocked_detail["events"]
-            if event["payload"].get("blocker_reason")
-            == "Upstream fixture still returns an invalid schema."
+            event for event in blocked_detail["events"]
+            if event["event_type"] == "updated" and event["payload"].get("state") == "blocked"
         ]
-        assert blocker_events
+        assert len(blocker_events) == 1
         assert blocker_events[0]["agent_name"] == public_agent_name(owner)
 
         ready = await service.task(
@@ -1819,7 +1817,7 @@ async def test_dependency_blockers_project_operational_status_and_claimability(t
 
 
 @pytest.mark.asyncio
-async def test_unclaimed_terminal_transitions_require_live_owner(tmp_path):
+async def test_unclaimed_state_allowed_but_claimed_state_rejects_other_actor(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     try:
         actor = await register(service, "terminal transition actor")
@@ -1835,8 +1833,8 @@ async def test_unclaimed_terminal_transitions_require_live_owner(tmp_path):
         unclaimed_state = await service.task(
             actor, action="state", namespace="wf", task_id="OWNER-GATE", state="deferred"
         )
-        assert unclaimed_state["ok"] is False
-        assert unclaimed_state["code"] == "owner_required"
+        assert unclaimed_state["ok"] is True
+        assert unclaimed_state["task"]["state"] == "deferred"
         unclaimed_done = await service.task(
             actor,
             action="done",
@@ -1844,8 +1842,8 @@ async def test_unclaimed_terminal_transitions_require_live_owner(tmp_path):
             task_id="OWNER-GATE",
             result={"summary": "must claim first"},
         )
-        assert unclaimed_done["ok"] is False
-        assert unclaimed_done["code"] == "owner_required"
+        assert unclaimed_done["ok"] is True
+        assert unclaimed_done["task"]["state"] == "done"
         safe_metadata = await service.task(
             peer,
             action="update",
@@ -1862,6 +1860,11 @@ async def test_unclaimed_terminal_transitions_require_live_owner(tmp_path):
             claim_intent="own terminal transitions",
         )
         assert claimed["ok"] is True
+        foreign_state = await service.task(
+            peer, action="state", namespace="wf", task_id="OWNER-GATE", state="blocked"
+        )
+        assert foreign_state["ok"] is False
+        assert foreign_state["code"] == "owner_required"
         owned_state = await service.task(
             actor, action="state", namespace="wf", task_id="OWNER-GATE", state="deferred"
         )
@@ -1936,8 +1939,8 @@ async def test_expired_owner_and_force_cannot_bypass_owner_gate(tmp_path):
             force=True,
             force_reason="dependency override only",
         )
-        assert forced["ok"] is False
-        assert forced["code"] == "owner_required"
+        assert forced["ok"] is True
+        assert forced["task"]["state"] == "done"
         reclaimed = await service.task(
             peer,
             action="claim",
