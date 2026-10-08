@@ -52,6 +52,9 @@ from terminal_mcp.core.task_projections import (
     project_task_working_set,
 )
 from terminal_mcp.mcp.output_contracts import (
+    _task_record as _normalize_task_record,
+)
+from terminal_mcp.mcp.output_contracts import (
     cmd_result,
     message_result,
     observe_result,
@@ -114,6 +117,15 @@ _READ = ToolAnnotations(
 )
 _MUTATE = ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+)
+
+# Mixed-mode tools are destructive if *any* action has irreversible effects.
+_DURABLE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+)
+# Arbitrary shell commands can modify state and contact external systems.
+_SHELL = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
 )
 _CANCEL = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
@@ -265,12 +277,13 @@ async def _message(application, actor, request: MessageInput) -> dict:
 def _task_record_from_observe(raw: dict) -> tuple[TaskRecord | None, dict | None]:
     if not raw.get("ok"):
         return None, raw
-    projected = _structured(observe_result(raw, "tasks", detail="full", task_id="selected"))
-    task = projected.get("task")
+    task = raw.get("task")
     if not isinstance(task, dict):
         return None, {"ok": False, "code": "resource_not_found", "error": "resource_not_found"}
     try:
-        return TaskRecord.model_validate(task), None
+        # Normalize the internal record without serializing an oversized MCP
+        # response; _task_get budgets the selected projection afterwards.
+        return TaskRecord.model_validate(_normalize_task_record(task)), None
     except ValidationError:
         return None, public_error("internal_error").as_dict()
 
@@ -304,6 +317,7 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
         show_done=True,
         show_archived=True,
         limit=1,
+        _defer_full_task_budget=True,
     )
     record, failure = _task_record_from_observe(raw)
     if failure is not None:
@@ -313,7 +327,17 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
     if request.detail == "detail":
         try:
             detail = project_task_detail(record).model_dump(mode="json", exclude_none=True)
-        except ValidationError:
+            bounded_page(
+                [detail],
+                limit=1,
+                cursor=None,
+                scope={
+                    "kind": "task-detail",
+                    "namespace": request.namespace,
+                    "task_id": request.task_id,
+                },
+            )
+        except (ValidationError, OutputItemTooLarge):
             return public_error("output_item_too_large").as_dict()
         return {"ok": True, "detail": "detail", "task": detail}
 
@@ -366,6 +390,7 @@ async def _task_graph(application, actor, request: TaskGraphInput) -> dict:
         show_done=True,
         show_archived=True,
         limit=1,
+        _defer_full_task_budget=True,
     )
     record, failure = _task_record_from_observe(raw)
     if failure is not None:
@@ -530,7 +555,7 @@ def build_role_mcp(
     @mcp.tool(
         name="session",
         structured_output=False,
-        annotations=_MUTATE,
+        annotations=_DURABLE,
         description=ROLE_TOOL_DESCRIPTIONS[(role, "session")],
     )
     async def role_session(boundary: RuntimeBoundary) -> dict:
@@ -561,7 +586,7 @@ def build_role_mcp(
     @mcp.tool(
         name="message",
         structured_output=False,
-        annotations=_MUTATE,
+        annotations=_DURABLE,
         description=ROLE_TOOL_DESCRIPTIONS[(role, "message")],
     )
     async def role_message(boundary: RuntimeBoundary) -> dict:
@@ -575,7 +600,7 @@ def build_role_mcp(
         @mcp.tool(
             name="command_run",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_SHELL,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "command_run")],
         )
         async def command_run(boundary: RuntimeBoundary) -> dict:
@@ -632,7 +657,7 @@ def build_role_mcp(
         @mcp.tool(
             name="command_recovery",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_SHELL,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "command_recovery")],
         )
         async def command_recovery(boundary: RuntimeBoundary) -> dict:
@@ -677,7 +702,7 @@ def build_role_mcp(
         @mcp.tool(
             name="task_state",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_DURABLE,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_state")],
         )
         async def task_state(boundary: RuntimeBoundary) -> dict:
@@ -696,7 +721,7 @@ def build_role_mcp(
         @mcp.tool(
             name="task_comment",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_DURABLE,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_comment")],
         )
         async def task_comment(boundary: RuntimeBoundary) -> dict:
@@ -731,7 +756,7 @@ def build_role_mcp(
         @mcp.tool(
             name="task_manage",
             structured_output=False,
-            annotations=_MUTATE,
+            annotations=_DURABLE,
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_manage")],
         )
         async def task_manage(boundary: RuntimeBoundary) -> dict:

@@ -238,9 +238,9 @@ class SessionOutput(RootModel[SessionSuccess | AccessError]):
 
 class SessionSummary(_Strict):
     public_name: str
-    mode: SessionMode
+    mode: SessionMode | None = None
     display_suffix: str | None = None
-    authority_node_id: str
+    authority_node_id: str | None = None
     access_generation: int | None = None
     session_ref: str | None = None
     session_epoch: int | None = None
