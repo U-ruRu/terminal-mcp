@@ -185,7 +185,8 @@ async def test_reused_zero_id_never_returns_a_stale_command_receipt(action):
 
 
 @pytest.mark.asyncio
-async def test_zero_request_id_scopes_task_replays_by_normalized_mutation():
+@pytest.mark.parametrize("request_id", ["0", "1", "reused-connector-id", "", 0])
+async def test_reused_request_id_scopes_task_replays_by_normalized_mutation(request_id):
     from terminal_mcp.application.task_requests import TaskCommentRequest
     from terminal_mcp.application.tasks import TaskApplication
 
@@ -207,7 +208,7 @@ async def test_zero_request_id_scopes_task_replays_by_normalized_mutation():
 
     backend = Backend()
     app = TaskApplication(SimpleNamespace(persistent=backend), Gate())
-    actor = ActorContext(transport="mcp", endpoint_role="executor", request_id="0")
+    actor = ActorContext(transport="mcp", endpoint_role="executor", request_id=request_id)
     for text in ("First mutation", "Different mutation", "First mutation"):
         await app.task(
             actor,
