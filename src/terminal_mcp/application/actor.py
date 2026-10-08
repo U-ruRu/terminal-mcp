@@ -100,8 +100,9 @@ class ActorContext:
 
     @contextmanager
     def bind(self) -> Iterator[ActorContext]:
+        admission = self.admission()
         actor_token = _current_actor.set(self)
-        token = bind_admission_context(self.admission())
+        token = bind_admission_context(admission)
         try:
             yield self
         finally:

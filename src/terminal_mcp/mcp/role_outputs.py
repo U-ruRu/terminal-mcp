@@ -362,9 +362,12 @@ def role_error_result(raw: dict) -> CallToolResult:
     )
 
 
-def install_role_output_contract(mcp, role: str) -> None:
+def install_role_output_contract(mcp, role: str, *, overrides=None) -> None:
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    for (endpoint_role, tool_name), output_model in ROLE_OUTPUT_MODELS.items():
+    for (endpoint_role, tool_name), output_model in {
+        **ROLE_OUTPUT_MODELS,
+        **(overrides or {}),
+    }.items():
         if endpoint_role != role:
             continue
         tool = tools[tool_name]
@@ -375,7 +378,7 @@ def install_role_output_contract(mcp, role: str) -> None:
                 raw = await _raw_fn(**kwargs)
                 if raw.get("ok") is False:
                     return role_error_result(raw)
-                if _name == "session" and raw.get("action") == "start":
+                if _name == "session" and role != "access" and raw.get("action") == "start":
                     diagnostic = session_provider_fingerprint()
                     if diagnostic is not None:
                         raw = {**raw, "provider_identity": diagnostic}

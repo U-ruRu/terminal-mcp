@@ -741,7 +741,9 @@ class PersistentBackend:
         session_epoch: int,
         surface: bool = False,
     ) -> dict:
-        if self.fleet_bridge is None:
+        mesh = getattr(self.service, "access_mesh", None)
+        mesh_slot = mesh.store.slot_for_agent(logical_agent_id) if mesh else None
+        if self.fleet_bridge is None or mesh_slot is not None:
             coordinator = self.service.agent_coordinator
             if coordinator is None:
                 return {

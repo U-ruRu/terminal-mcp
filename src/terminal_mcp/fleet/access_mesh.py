@@ -31,7 +31,7 @@ class AccessMeshReplication:
         self._last_snapshot_pass = {peer.instance_id: 0.0 for peer in config.peers}
         self.peer_health = {
             peer.instance_id: {"status": "degraded", "reason": "catchup_pending"}
-            for peer in config.peers
+            for peer in self.peers
         }
 
     @property

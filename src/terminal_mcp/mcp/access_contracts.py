@@ -1,0 +1,168 @@
+"""Access issuer and local role-attachment contracts; metadata is never an input."""
+
+from typing import Annotated, ClassVar, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+
+from terminal_mcp.core.read_contract import DEFAULT_CMD_READ_LINES, MAX_CMD_READ_LINES
+from terminal_mcp.mcp.output_contracts import AccessError, CmdReadResult
+from terminal_mcp.mcp.role_contracts import Cursor, Hash, MessageInput, StrictRoleInput
+
+
+class AttachInput(StrictRoleInput):
+    action: Literal["attach"] = "attach"
+    issuer_node_id: Annotated[str | None, Field(min_length=1, max_length=128)] = None
+    access_code: Annotated[
+        str, Field(min_length=4, max_length=133, pattern=r"^(?:[A-Za-z0-9_.:-]{1,128}:)?[0-9]{4}$")
+    ]
+
+    @model_validator(mode="after")
+    def issuer_required(self):
+        if not self.issuer_node_id and ":" not in self.access_code:
+            raise ValueError("issuer_node_id is required for an unqualified access_code")
+        return self
+
+
+class IssuerSessionInput(StrictRoleInput):
+    action: Literal["start", "end", "status"]
+    mode: Literal["legacy", "persistent"] | None = None
+    code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
+
+    @model_validator(mode="after")
+    def action_fields(self):
+        if self.action == "start":
+            if self.mode is None:
+                raise ValueError("mode is required for start")
+            if self.mode == "persistent" and self.code is None:
+                raise ValueError("code is required for persistent activation")
+            if self.mode == "legacy" and self.code is not None:
+                raise ValueError("code is not accepted when issuing a legacy slot")
+        elif self.mode is not None:
+            raise ValueError("mode is accepted only for start")
+        return self
+
+
+class MeshCommandReadInput(StrictRoleInput):
+    cmd_hash: Hash | None = None
+    limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
+    cursor: Cursor | None = None
+
+
+class MeshMessageInput(MessageInput):
+    scope: Literal["local", "fleet"] = "fleet"
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MeshCycle(_Strict):
+    state: Literal[
+        "active", "warning", "draining", "expired", "cooldown", "idle", "suspended", "deleted"
+    ]
+    started_at: str | None
+    hard_expires_at: str | None
+    remaining_seconds: int = Field(ge=0)
+    rearm_at: str | None
+
+
+class MeshPolicy(_Strict):
+    duration_seconds: int = Field(ge=1)
+    cooldown_seconds: int = Field(ge=0)
+    rearm_enabled: bool
+    warning_seconds: int = Field(ge=0)
+    draining_seconds: int = Field(ge=0)
+    release_on_end: bool | None = None
+
+
+class MeshLocalSession(_Strict):
+    ok: Literal[True]
+    action: Literal["attach", "status"]
+    attached: bool
+    issuer_node_id: str
+    slot_id: str
+    logical_agent_id: str
+    authority_node_id: str
+    public_name: str
+    mode: Literal["legacy", "persistent"]
+    slot_kind: Literal["legacy", "persistent"]
+    slot_state: Literal["active", "suspended", "deleted"]
+    session_lifecycle: MeshCycle
+    cleanup_pending: bool
+    hard_expires_at: str | None
+    work_session_id: str | None = None
+    session_epoch: int | None = None
+    role: Literal["executor", "coordinator"]
+    contract_version: int
+
+
+class MeshSessionOutput(RootModel[MeshLocalSession | AccessError]):
+    __success_type__: ClassVar = MeshLocalSession
+
+
+class IssuerReceipt(_Strict):
+    ok: Literal[True]
+    action: Literal[
+        "start",
+        "end",
+        "status",
+        "create",
+        "policy",
+        "suspend",
+        "resume",
+        "delete",
+        "rotate",
+        "update",
+    ]
+    issuer_node_id: str
+    slot_id: str
+    logical_agent_id: str
+    public_name: str
+    mode: Literal["legacy", "persistent"]
+    revision: int
+    access_code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
+    slot_state: Literal["active", "suspended", "deleted"] | None = None
+    session_lifecycle: MeshCycle | None = None
+    policy: MeshPolicy | None = None
+
+
+class IssuerOutput(RootModel[IssuerReceipt | AccessError]):
+    __success_type__: ClassVar = IssuerReceipt
+
+
+class CommandJournalItem(_Strict):
+    cmd_hash: str
+    created_at: str | None = None
+    actor: str | None = None
+    logical_agent_id: str | None = None
+    issuer_node_id: str | None = None
+    status: str
+    queue_id: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    exit_code: int | None = None
+
+
+class CommandJournal(_Strict):
+    ok: Literal[True]
+    action: Literal["journal"]
+    node_id: str
+    commands: list[CommandJournalItem]
+    next_cursor: str | None
+
+
+class MeshCommandReadOutput(RootModel[CmdReadResult | CommandJournal | AccessError]):
+    __success_type__: ClassVar = CmdReadResult | CommandJournal
+
+
+class MeshUnboundSession(_Strict):
+    ok: Literal[True]
+    action: Literal["status"]
+    attached: Literal[False]
+    authority_node_id: str
+    role: Literal["executor", "coordinator"]
+    contract_version: int
+
+
+class MeshObserveOutput(RootModel[MeshLocalSession | MeshUnboundSession | AccessError]):
+    __success_type__: ClassVar = MeshLocalSession | MeshUnboundSession

@@ -1,4 +1,5 @@
 import contextlib
+import json
 import socket
 
 from fastapi import FastAPI
@@ -6,6 +7,7 @@ from fastapi.openapi.utils import get_openapi
 from starlette.routing import Mount
 
 from terminal_mcp.application import TerminalApplication
+from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.application.command_scheduler import CommandScheduler
 from terminal_mcp.application.managed_identity import (
     ManagedGrantAuthorizer,
@@ -22,6 +24,7 @@ from terminal_mcp.auth.routes import build_oauth_router
 from terminal_mcp.auth.service import AuthService
 from terminal_mcp.auth.storage import OAuthStore
 from terminal_mcp.config import Settings
+from terminal_mcp.core.access_mesh_grants import SlotPolicy
 from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.persistent_execution import (
@@ -32,6 +35,7 @@ from terminal_mcp.core.persistent_fleet import PersistentFleetBridge
 from terminal_mcp.core.persistent_lifecycle import PersistentLifecycleCoordinator
 from terminal_mcp.core.persistent_policy import PersistentPolicyController
 from terminal_mcp.core.service import TerminalService
+from terminal_mcp.fleet.access_mesh import AccessMeshReplication, build_access_mesh_router
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.control_plane import ManagedFleetControl
 from terminal_mcp.fleet.control_storage import FleetControlStore
@@ -61,11 +65,13 @@ from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
 from terminal_mcp.http.provider_identity_fleet import build_provider_identity_fleet_router
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
+from terminal_mcp.mcp.access import build_access_mcp
 from terminal_mcp.mcp.roles import build_role_mcp
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.metrics import Metrics
 from terminal_mcp.observability import EventLogger
 from terminal_mcp.runtime import RuntimeConfigProvider
+from terminal_mcp.storage.access_mesh import AccessMeshStore
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.application_uow import SqliteApplicationUnitOfWork
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -299,6 +305,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if fleet_control and fleet_config and fleet_replication
         else None
     )
+    access_mesh = None
+    access_mesh_replication = None
+    if settings.access_mesh_enabled:
+        settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+        mesh_store = AccessMeshStore(
+            settings.database_path,
+            local_node_id=settings.fleet_instance_id,
+            trusted_issuers=frozenset(
+                [settings.fleet_instance_id, *json.loads(settings.access_mesh_peers_json)]
+            ),
+            proof_key=settings.access_mesh_proof_key.encode(),
+        )
+        access_mesh = AccessMeshApplication(
+            mesh_store,
+            task_store=service.task_store,
+            execution_fence=persistent_local_fence,
+            legacy_enabled=settings.access_mesh_legacy_enabled,
+            defaults=SlotPolicy(
+                settings.access_mesh_duration_sec,
+                settings.access_mesh_cooldown_sec,
+                True,
+                settings.access_mesh_warning_sec,
+                settings.access_mesh_draining_sec,
+            ),
+        )
+        service.access_mesh = access_mesh
+        persistent_lifecycle.access_mesh = access_mesh
+        if fleet_config and fleet_replication:
+            access_mesh_replication = AccessMeshReplication(access_mesh, fleet_config)
+            service.access_mesh_replication = access_mesh_replication
+
     application = TerminalApplication(
         service,
         auth_mode=settings.mode_for("mcp"),
@@ -326,6 +363,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     coordinator_mcp = build_role_mcp(
         application, "coordinator", settings.public_base_url, settings.mode_for("mcp")
+    )
+
+    access_mcp = (
+        build_access_mcp(application, public_base_url=settings.public_base_url)
+        if access_mesh
+        else None
     )
 
     @contextlib.asynccontextmanager
@@ -377,13 +420,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await managed_fleet_control.start()
         await persistent_lifecycle.start()
         await managed_runtime.start()
+        if access_mesh:
+            await access_mesh.start()
+        if access_mesh_replication:
+            await access_mesh_replication.start()
         try:
             async with contextlib.AsyncExitStack() as stack:
                 await stack.enter_async_context(mcp.session_manager.run())
                 await stack.enter_async_context(executor_mcp.session_manager.run())
                 await stack.enter_async_context(coordinator_mcp.session_manager.run())
+                if access_mcp:
+                    await stack.enter_async_context(access_mcp.session_manager.run())
                 yield
         finally:
+            if access_mesh_replication:
+                await access_mesh_replication.stop()
+            if access_mesh:
+                await access_mesh.stop()
             await managed_runtime.stop()
             await persistent_lifecycle.stop()
             if managed_fleet_control:
@@ -401,6 +454,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             events.stop()
 
     app = FastAPI(title="terminal-mcp", version=__version__, lifespan=lifespan)
+    app.state.access_mesh = access_mesh
+    app.state.access_mesh_replication = access_mesh_replication
+    app.state.access_mcp = access_mcp
+    app.state.executor_mcp = executor_mcp
+    app.state.coordinator_mcp = coordinator_mcp
     app.state.settings = settings
     app.state.service = service
     app.state.application = application
@@ -431,6 +489,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.persistent_policy_controller = persistent_policy_controller
     app.state.persistent_fleet = persistent_fleet
     app.include_router(build_public_router())
+    if access_mesh and fleet_replication:
+        app.include_router(build_access_mesh_router(access_mesh, fleet_replication))
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:
             app.include_router(
@@ -506,6 +566,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.router.routes.append(
         Mount("/terminal-mcp/coordinator/v1/mcp", app=coordinator_mcp.streamable_http_app())
     )
+    if access_mcp:
+        app.router.routes.append(
+            Mount("/terminal-mcp/access/v1/mcp", app=access_mcp.streamable_http_app())
+        )
     app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))
 
     @app.get("/health/live", include_in_schema=False)

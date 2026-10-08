@@ -113,8 +113,8 @@
         "endpoint_role": "coordinator",
         "contract_version": 1,
         "runtime_input_schema_digest": "6232410f5645f99e3e052331d84c1bfb42a3718eccfb93ad1dbf1c56e37f58a0",
-        "planning_input_schema_digest": "30de8d508c7194b562eb57a5dab0f34e036b5c10e4fde67d7875ff03d9b51e2e",
-        "planning_input_schema_bytes": 1910
+        "planning_input_schema_digest": "fa59357b061657935facd9493de4b7645ea03159bd72cda36c6275e619946a81",
+        "planning_input_schema_bytes": 33097
       },
       {
         "tool_name": "task_graph",

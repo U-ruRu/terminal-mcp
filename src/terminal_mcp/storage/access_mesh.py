@@ -7,10 +7,15 @@ A new cycle waits for cleanup, preventing delayed release of a newer claim.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import secrets
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from terminal_mcp.core.access_mesh_grants import (
     AccessMeshError,
@@ -21,6 +26,8 @@ from terminal_mcp.core.access_mesh_grants import (
     _text,
     _utc,
 )
+
+_mutation_receipt: ContextVar[dict | None] = ContextVar("mesh_issuer_receipt", default=None)
 
 
 def public_name(issuer_id: str, logical_agent_id: str) -> str:
@@ -91,6 +98,12 @@ class AccessMeshStore(LocalAccessMesh):
                 request_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
                 result_json TEXT NOT NULL, created_at TEXT NOT NULL
             ) WITHOUT ROWID""")
+            db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_issuer_bindings (
+                connection_key TEXT PRIMARY KEY, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL
+            ) WITHOUT ROWID""")
+            db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_native_owners (
+                logical_agent_id TEXT PRIMARY KEY, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL
+            ) WITHOUT ROWID""")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS access_mesh_live_code_unique
                 ON access_mesh_slot_replicas(issuer_id,code_tag) WHERE state!='deleted'""")
 
@@ -108,8 +121,22 @@ class AccessMeshStore(LocalAccessMesh):
             "AND (issuer_id!=? OR slot_id!=?)",
             (slot.logical_agent_id, slot.issuer_id, slot.slot_id),
         ).fetchone()
-        if conflicting or (existing and existing[0] != self.local_node_id):
+        owner = db.execute(
+            "SELECT issuer_id,slot_id FROM access_mesh_native_owners WHERE logical_agent_id=?",
+            (slot.logical_agent_id,),
+        ).fetchone()
+        if (
+            conflicting
+            or (existing and existing[0] != self.local_node_id)
+            or (existing and owner is None)
+            or (owner and tuple(owner) != (slot.issuer_id, slot.slot_id))
+        ):
             raise AccessMeshError("access_mesh_identity_conflict")
+        db.execute(
+            "INSERT INTO access_mesh_native_owners VALUES(?,?,?) "
+            "ON CONFLICT(logical_agent_id) DO NOTHING",
+            (slot.logical_agent_id, slot.issuer_id, slot.slot_id),
+        )
         db.execute(
             """INSERT INTO logical_agents (
             logical_agent_id,display_name,state,authority_node_id,authority_epoch,
@@ -176,6 +203,9 @@ class AccessMeshStore(LocalAccessMesh):
         slot = self._snapshot(row)
         stamp = _text(datetime.now(UTC))
         self._native_slot(db, slot, stamp)
+        receipt = _mutation_receipt.get()
+        if receipt is not None and receipt["event_id"] == event.event_id:
+            self._save_receipt_tx(db, receipt)
         if event.kind in {"SessionEnded", "SlotSuspended", "SlotDeleted"}:
             self._queue_cleanup(
                 db,
@@ -185,6 +215,94 @@ class AccessMeshStore(LocalAccessMesh):
                 stamp=stamp,
                 release_claims=release_claims,
             )
+
+    def apply_event(self, event, *, mutation_receipt=None, **kwargs):
+        token = _mutation_receipt.set(mutation_receipt)
+        try:
+            return super().apply_event(event, **kwargs)
+        finally:
+            _mutation_receipt.reset(token)
+
+    def _receipt_cipher(self):
+        key = hmac.new(
+            self._proof_key,
+            f"access-mesh-issuer-receipt-v2:{self.local_node_id}".encode(),
+            hashlib.sha256,
+        ).digest()
+        return AESGCM(key)
+
+    def prepare_receipt(self, *, event_id, request_key, fingerprint, connection_key, result):
+        nonce = secrets.token_bytes(12)
+        encoded = json.dumps(result, separators=(",", ":"), sort_keys=True).encode()
+        sealed = nonce + self._receipt_cipher().encrypt(nonce, encoded, request_key.encode())
+        return {
+            "event_id": event_id,
+            "request_key": request_key,
+            "fingerprint": fingerprint,
+            "connection_key": connection_key,
+            "issuer_id": result["issuer_node_id"],
+            "slot_id": result["slot_id"],
+            "sealed": base64.b64encode(sealed).decode(),
+        }
+
+    @staticmethod
+    def _save_receipt_tx(db, receipt):
+        db.execute(
+            "INSERT INTO access_mesh_issuer_receipts VALUES(?,?,?,?)",
+            (
+                receipt["request_key"],
+                receipt["fingerprint"],
+                receipt["sealed"],
+                _text(datetime.now(UTC)),
+            ),
+        )
+        if receipt.get("connection_key"):
+            db.execute(
+                "INSERT INTO access_mesh_issuer_bindings VALUES(?,?,?) "
+                "ON CONFLICT(connection_key) DO UPDATE SET issuer_id=excluded.issuer_id,"
+                "slot_id=excluded.slot_id",
+                (receipt["connection_key"], receipt["issuer_id"], receipt["slot_id"]),
+            )
+
+    def save_receipt(self, receipt):
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._save_receipt_tx(db, receipt)
+
+    def receipt(self, request_key: str, fingerprint: str) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT fingerprint,result_json FROM access_mesh_issuer_receipts "
+                "WHERE request_key=?",
+                (request_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        if row[0] != fingerprint:
+            raise AccessMeshError("idempotency_conflict")
+        sealed = base64.b64decode(row[1])
+        clear = self._receipt_cipher().decrypt(sealed[:12], sealed[12:], request_key.encode())
+        return json.loads(clear)
+
+    def issuer_bound_slot(self, connection_key: str) -> SlotSnapshot | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT s.* FROM access_mesh_issuer_bindings b "
+                "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) "
+                "WHERE b.connection_key=?",
+                (connection_key,),
+            ).fetchone()
+        return self._snapshot(row) if row else None
+
+    def code_slot(self, issuer_id: str, code: str) -> SlotSnapshot | None:
+        tag = self.code_tag(issuer_id, code)
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM access_mesh_slot_replicas "
+                "WHERE issuer_id=? AND code_tag=? AND state!='deleted'",
+                (issuer_id, tag),
+            ).fetchone()
+        return self._snapshot(row) if row else None
 
     def slot_for_agent(self, logical_agent_id: str) -> SlotSnapshot | None:
         with self._connect() as db:
@@ -231,6 +349,55 @@ class AccessMeshStore(LocalAccessMesh):
                 (after, limit),
             ).fetchall()
         return [self._snapshot(row) for row in rows]
+
+    def observed_identity(self, slot: SlotSnapshot, *, now: datetime | None = None) -> dict:
+        """Pure status read. Lifecycle materialization belongs to tick/attach/write admission."""
+        now = _utc(now or datetime.now(UTC))
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
+                (slot.issuer_id, slot.slot_id),
+            ).fetchone()
+            if row is None:
+                raise AccessMeshError("access_mesh_slot_not_found")
+            slot = self._snapshot(row)
+            cycle = local_cycle(slot, now)
+            current = db.execute(
+                "SELECT l.*,s.state FROM access_mesh_local_sessions l "
+                "JOIN logical_agent_work_sessions s USING(work_session_id) "
+                "WHERE l.issuer_id=? AND l.slot_id=?",
+                (slot.issuer_id, slot.slot_id),
+            ).fetchone()
+            pending = db.execute(
+                "SELECT 1 FROM access_mesh_cleanup_jobs WHERE logical_agent_id=? "
+                "AND completed_at IS NULL LIMIT 1",
+                (slot.logical_agent_id,),
+            ).fetchone()
+        identity = {
+            "ok": True,
+            "issuer_node_id": slot.issuer_id,
+            "slot_id": slot.slot_id,
+            "logical_agent_id": slot.logical_agent_id,
+            "authority_node_id": self.local_node_id,
+            "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+            "mode": slot.kind,
+            "slot_kind": slot.kind,
+            "slot_state": slot.state,
+            "session_lifecycle": cycle,
+            "cleanup_pending": bool(pending),
+            "hard_expires_at": cycle["hard_expires_at"],
+        }
+        if (
+            not pending
+            and current
+            and current["state"] == "active"
+            and current["cycle_started_at"] == cycle["started_at"]
+            and cycle["state"] in {"active", "warning", "draining"}
+        ):
+            identity.update(
+                work_session_id=current["work_session_id"], session_epoch=current["session_epoch"]
+            )
+        return identity
 
     def local_identity(self, slot: SlotSnapshot, *, now: datetime | None = None) -> dict:
         """Materialize one bounded local cycle. No network, grants, or raw metadata."""
@@ -334,14 +501,54 @@ class AccessMeshStore(LocalAccessMesh):
             )
             return {**identity, "work_session_id": session_id, "session_epoch": epoch}
 
-    def pending_cleanup(self, *, limit: int = 50) -> list[dict]:
+    def initialize_command_journal(self) -> None:
+        # A monotonic side index gives stable local cursors across VACUUM and
+        # command retention. The command hash is the durable journal identity.
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS access_mesh_command_journal "
+                "(sequence INTEGER PRIMARY KEY AUTOINCREMENT, command_hash TEXT UNIQUE NOT NULL)"
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO access_mesh_command_journal(command_hash) "
+                "SELECT hash FROM commands ORDER BY COALESCE(enqueued_at,started_at,''),hash"
+            )
+            db.execute("""CREATE TRIGGER IF NOT EXISTS access_mesh_command_journal_insert
+                AFTER INSERT ON commands BEGIN
+                INSERT OR IGNORE INTO access_mesh_command_journal(command_hash) VALUES(NEW.hash);
+                END""")
+
+    def command_journal(self, *, after: int = 0, limit: int = 20) -> list[dict]:
+        if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 101:
+            raise AccessMeshError("access_mesh_invalid_limit")
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT j.sequence,c.hash AS cmd_hash,
+                COALESCE(c.enqueued_at,a.created_at,c.started_at) AS created_at,
+                COALESCE(l.display_name,a.agent_id) AS actor,a.logical_agent_id,
+                m.issuer_id AS issuer_node_id,c.status,c.queue_id,
+                c.started_at,c.finished_at,c.exit_code
+                FROM access_mesh_command_journal j JOIN commands c ON c.hash=j.command_hash
+                LEFT JOIN command_agent_attribution a ON a.command_hash=c.hash
+                LEFT JOIN logical_agents l ON l.logical_agent_id=a.logical_agent_id
+                LEFT JOIN access_mesh_slot_replicas m ON m.logical_agent_id=a.logical_agent_id
+                WHERE j.sequence>? ORDER BY j.sequence LIMIT ?""",
+                (after, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def pending_cleanup(
+        self, *, limit: int = 50, logical_agent_id: str | None = None
+    ) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise AccessMeshError("access_mesh_invalid_limit")
         with self._connect() as db:
             rows = db.execute(
                 "SELECT * FROM access_mesh_cleanup_jobs WHERE completed_at IS NULL "
-                "ORDER BY created_at,job_id LIMIT ?",
-                (limit,),
+                + ("AND logical_agent_id=? " if logical_agent_id else "")
+                + "ORDER BY created_at,job_id LIMIT ?",
+                (logical_agent_id, limit) if logical_agent_id else (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
 

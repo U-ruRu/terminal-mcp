@@ -7,6 +7,7 @@ from terminal_mcp.core.persistent_admission import bind_admission_context, reset
 MCP_PREFIXES = (
     "/mcp",
     "/terminal-mcp/executor/v1/mcp",
+    "/terminal-mcp/access/v1/mcp",
     "/terminal-mcp/coordinator/v1/mcp",
 )
 
@@ -14,6 +15,7 @@ PUBLIC_PREFIXES = (
     "/.well-known/",
     "/mcp/.well-known/",
     "/terminal-mcp/executor/v1/mcp/.well-known/",
+    "/terminal-mcp/access/v1/mcp/.well-known/",
     "/terminal-mcp/coordinator/v1/mcp/.well-known/",
     "/oauth/",
     "/docs",
@@ -146,9 +148,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if path == prefix or path.startswith(f"{prefix}/"):
                 resource_path = prefix
                 break
-        metadata = (
-            f"{self.s.public_base_url}/.well-known/oauth-protected-resource{resource_path}"
-        )
+        metadata = f"{self.s.public_base_url}/.well-known/oauth-protected-resource{resource_path}"
         header = f'Bearer resource_metadata="{metadata}"'
         return JSONResponse(
             {"error": "unauthorized", "detail": detail},

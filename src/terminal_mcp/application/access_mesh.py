@@ -8,7 +8,8 @@ import json
 import logging
 import secrets
 import sqlite3
-from datetime import UTC, datetime
+from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
@@ -20,7 +21,7 @@ from terminal_mcp.core.managed_sessions import (
 from terminal_mcp.core.persistent_admission import PersistentAdmissionError
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
-from terminal_mcp.storage.access_mesh import AccessMeshStore, public_name
+from terminal_mcp.storage.access_mesh import AccessMeshStore, local_cycle, public_name
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class AccessMeshApplication:
         self.registry = ProviderIdentityRegistry()
         self._cleanup_lock = asyncio.Lock()
         self._issuer_lock = asyncio.Lock()
+        self._issuer_session_lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._scan_after = ""
@@ -94,11 +96,37 @@ class AccessMeshApplication:
             code=access_code,
             connection_key=self.connection_key(actor),
         )
-        await self.cleanup()
+        await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         return {
             **identity,
             "action": "attach",
+            "attached": True,
+            "role": actor.endpoint_role,
+            "contract_version": actor.contract_version,
+        }
+
+    async def observe(self, actor: ActorContext) -> dict:
+        try:
+            key = self.connection_key(actor)
+            slot = await asyncio.to_thread(self.store.attached_slot, key)
+        except AccessMeshError as exc:
+            if exc.code not in {"identity_metadata_missing", "identity_metadata_invalid"}:
+                raise
+            slot = None
+        if slot is None:
+            return {
+                "ok": True,
+                "action": "status",
+                "attached": False,
+                "authority_node_id": self.store.local_node_id,
+                "role": actor.endpoint_role,
+                "contract_version": actor.contract_version,
+            }
+        identity = await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
+        return {
+            **identity,
+            "action": "status",
             "attached": True,
             "role": actor.endpoint_role,
             "contract_version": actor.contract_version,
@@ -110,11 +138,13 @@ class AccessMeshApplication:
         slot = await asyncio.to_thread(self.store.attached_slot, self.connection_key(actor))
         if slot is None:
             raise AccessMeshError("session_attach_required")
+        if operation in READ_OPERATIONS:
+            return await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         # Cleanup can be pending after an expiry first observed by this request.
         # It is local and bounded; remote issuer availability is never involved.
         if identity["cleanup_pending"]:
-            await self.cleanup()
+            await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
             identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
         if operation in READ_OPERATIONS:
             return identity
@@ -130,13 +160,23 @@ class AccessMeshApplication:
             raise AccessMeshError("session_draining")
         return identity
 
-    async def cleanup(self) -> None:
+    async def cleanup(
+        self, *, logical_agent_id: str | None = None, budget_seconds: float = 2.0
+    ) -> None:
+        if self._cleanup_lock.locked():
+            return
         async with self._cleanup_lock:
-            jobs = await asyncio.to_thread(self.store.pending_cleanup)
+            deadline = asyncio.get_running_loop().time() + budget_seconds
+            jobs = await asyncio.to_thread(
+                self.store.pending_cleanup, logical_agent_id=logical_agent_id
+            )
             for job in jobs:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
                 error = None
                 try:
-                    async with asyncio.timeout(3):
+                    async with asyncio.timeout(min(1.0, remaining)):
                         if job["work_session_id"]:
                             blockers = await self.execution_fence.revoke_session(
                                 job["logical_agent_id"],
@@ -172,6 +212,7 @@ class AccessMeshApplication:
         if self._task and not self._task.done():
             return
         self._stop.clear()
+        await asyncio.to_thread(self.store.initialize_command_journal)
         await self.tick()
         self._task = asyncio.create_task(self._loop(), name="access-mesh-local-lifecycle")
 
@@ -192,6 +233,30 @@ class AccessMeshApplication:
                     self.last_error = getattr(exc, "code", type(exc).__name__)
                     _LOG.warning("Access Mesh lifecycle tick failed: %s", self.last_error)
 
+    def _receipt_spec(self, actor, payload):
+        binding = self.connection_key(actor)
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
+        request_id = actor.request_id
+        if request_id in {None, "", "0"}:
+            request_id = "fresh:" + secrets.token_urlsafe(18)
+        key = hashlib.sha256(f"{binding}:{request_id}:{fingerprint}".encode()).hexdigest()
+        return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
+
+    @staticmethod
+    def _slot_receipt(slot, action, *, revision=None, code=None):
+        return {
+            "ok": True,
+            "action": action,
+            "issuer_node_id": slot.issuer_id,
+            "slot_id": slot.slot_id,
+            "logical_agent_id": slot.logical_agent_id,
+            "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+            "mode": slot.kind,
+            "revision": revision or slot.revision,
+            **({"access_code": code} if code is not None else {}),
+        }
+
     async def issue(
         self,
         actor: ActorContext,
@@ -200,6 +265,7 @@ class AccessMeshApplication:
         policy: SlotPolicy | None = None,
         start: bool = True,
         code: str | None = None,
+        receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
         if kind not in {"legacy", "persistent"}:
@@ -222,6 +288,24 @@ class AccessMeshApplication:
                     code_tag=self.store.code_tag(self.store.local_node_id, allocated),
                     effective_at=self.clock() if start else None,
                 )
+                result = {
+                    "ok": True,
+                    "action": "start" if start else "create",
+                    "issuer_node_id": event.issuer_id,
+                    "slot_id": slot_id,
+                    "logical_agent_id": agent_id,
+                    "mode": kind,
+                    "revision": 1,
+                    "public_name": public_name(event.issuer_id, agent_id),
+                    "access_code": allocated,
+                }
+                receipt = (
+                    self.store.prepare_receipt(
+                        event_id=event.event_id, result=result, **receipt_spec
+                    )
+                    if receipt_spec
+                    else None
+                )
                 try:
                     await asyncio.to_thread(
                         self.store.apply_event,
@@ -231,24 +315,18 @@ class AccessMeshApplication:
                         broadcast_to=tuple(
                             sorted(self.store.trusted_issuers - {self.store.local_node_id})
                         ),
+                        mutation_receipt=receipt,
                     )
-                    break
+                    return result
                 except sqlite3.IntegrityError:
+                    collision = await asyncio.to_thread(
+                        self.store.code_slot, self.store.local_node_id, allocated
+                    )
+                    if collision is None:
+                        raise
                     if code is not None:
                         raise AccessMeshError("access_mesh_code_in_use") from None
-            else:
-                raise AccessMeshError("access_mesh_code_capacity")
-        return {
-            "ok": True,
-            "action": "start" if start else "create",
-            "issuer_node_id": event.issuer_id,
-            "slot_id": slot_id,
-            "logical_agent_id": agent_id,
-            "mode": kind,
-            "revision": 1,
-            "public_name": public_name(event.issuer_id, agent_id),
-            "access_code": allocated,
-        }
+            raise AccessMeshError("access_mesh_code_capacity")
 
     async def change(
         self,
@@ -259,6 +337,7 @@ class AccessMeshApplication:
         expected_revision: int,
         policy: SlotPolicy | None = None,
         effective_at: datetime | None = None,
+        receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
         async with self._issuer_lock:
@@ -267,7 +346,18 @@ class AccessMeshApplication:
                 raise AccessMeshError("access_mesh_slot_not_found")
             if slot.revision != expected_revision:
                 raise AccessMeshError("revision_conflict")
-            code = f"{secrets.randbelow(10000):04d}" if kind == "AccessCodeRotated" else None
+            code = None
+            if kind == "AccessCodeRotated":
+                for _ in range(100):
+                    candidate = f"{secrets.randbelow(10000):04d}"
+                    if (
+                        await asyncio.to_thread(self.store.code_slot, slot.issuer_id, candidate)
+                        is None
+                    ):
+                        code = candidate
+                        break
+                if code is None:
+                    raise AccessMeshError("access_mesh_code_capacity")
             event = AccessSlotEvent(
                 issuer_id=slot.issuer_id,
                 slot_id=slot.slot_id,
@@ -279,6 +369,22 @@ class AccessMeshApplication:
                 code_tag=self.store.code_tag(slot.issuer_id, code) if code else None,
                 effective_at=effective_at or (self.clock() if kind.startswith("Session") else None),
             )
+            action = {
+                "SessionStarted": "start",
+                "SessionEnded": "end",
+                "SessionUpdated": "update",
+                "SlotPolicyChanged": "policy",
+                "SlotSuspended": "suspend",
+                "SlotResumed": "resume",
+                "SlotDeleted": "delete",
+                "AccessCodeRotated": "rotate",
+            }.get(kind, "update")
+            result = self._slot_receipt(slot, action, revision=event.revision, code=code)
+            receipt = (
+                self.store.prepare_receipt(event_id=event.event_id, result=result, **receipt_spec)
+                if receipt_spec
+                else None
+            )
             try:
                 await asyncio.to_thread(
                     self.store.apply_event,
@@ -287,14 +393,87 @@ class AccessMeshApplication:
                     broadcast_to=tuple(
                         sorted(self.store.trusted_issuers - {self.store.local_node_id})
                     ),
+                    mutation_receipt=receipt,
                 )
-            except sqlite3.IntegrityError as exc:
-                raise AccessMeshError("access_mesh_code_in_use") from exc
-        await self.cleanup()
-        return {
-            "ok": True,
-            "issuer_node_id": slot.issuer_id,
-            "slot_id": slot.slot_id,
-            "revision": event.revision,
-            **({"access_code": code} if code else {}),
-        }
+            except sqlite3.IntegrityError:
+                if (
+                    code is None
+                    or await asyncio.to_thread(self.store.code_slot, slot.issuer_id, code) is None
+                ):
+                    raise
+                raise AccessMeshError("access_mesh_code_in_use") from None
+        # Cleanup is resumable after commit. Its failures cannot turn a durable
+        # issuer event into an apparent pre-commit failure or permit duplicate events.
+        try:
+            await self.cleanup()
+        except Exception:
+            _LOG.exception("Access Mesh cleanup pending after committed issuer event")
+        return result
+
+    async def issuer_session(
+        self, actor: ActorContext, *, action: str, mode=None, code=None
+    ) -> dict:
+        if action not in {"start", "end", "status"}:
+            raise AccessMeshError("invalid_request")
+        if action != "status":
+            self.require_write(actor)
+        binding = self.connection_key(actor)
+        async with self._issuer_session_lock:
+            spec = self._receipt_spec(actor, {"action": action, "mode": mode, "code": code})
+            if action != "status":
+                replay = await asyncio.to_thread(
+                    self.store.receipt, spec["request_key"], spec["fingerprint"]
+                )
+                if replay is not None:
+                    return replay
+            if action == "start" and mode == "legacy":
+                if code is not None:
+                    raise AccessMeshError("legacy_code_not_allowed")
+                return await self.issue(actor, kind="legacy", receipt_spec=spec)
+            slot = (
+                await asyncio.to_thread(self.store.code_slot, self.store.local_node_id, code)
+                if code is not None
+                else await asyncio.to_thread(self.store.issuer_bound_slot, binding)
+            )
+            if slot is None or slot.state == "deleted":
+                raise AccessMeshError("access_mesh_slot_not_found")
+            cycle = local_cycle(slot, self.clock())
+            if action == "status":
+                return {
+                    **self._slot_receipt(slot, action),
+                    "slot_state": slot.state,
+                    "session_lifecycle": cycle,
+                    "policy": asdict(slot.policy),
+                }
+            if action == "start":
+                if mode != "persistent" or slot.kind != "persistent":
+                    raise AccessMeshError("access_mode_mismatch")
+                if slot.state != "active":
+                    raise AccessMeshError("slot_not_armed")
+                if cycle["state"] == "cooldown":
+                    raise AccessMeshError("window_cooldown")
+                if cycle["state"] in {"idle", "expired"}:
+                    # Manual activation also respects the preceding fixed window's cooldown.
+                    if slot.anchor is not None and self.clock() < slot.anchor + timedelta(
+                        seconds=slot.policy.duration_seconds + slot.policy.cooldown_seconds
+                    ):
+                        raise AccessMeshError("window_cooldown")
+                    return await self.change(
+                        actor,
+                        slot_id=slot.slot_id,
+                        kind="SessionStarted",
+                        expected_revision=slot.revision,
+                        receipt_spec=spec,
+                    )
+            elif cycle["state"] in {"active", "warning", "draining"}:
+                return await self.change(
+                    actor,
+                    slot_id=slot.slot_id,
+                    kind="SessionEnded",
+                    expected_revision=slot.revision,
+                    receipt_spec=spec,
+                )
+            result = self._slot_receipt(slot, action)
+            receipt = self.store.prepare_receipt(event_id="none", result=result, **spec)
+            await asyncio.to_thread(self.store.save_receipt, receipt)
+            return result

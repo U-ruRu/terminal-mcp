@@ -1,5 +1,7 @@
 """Canonical commands application capability (transport independent)."""
 
+import asyncio
+
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _finish_cmd_read_page, _read_error
@@ -8,18 +10,54 @@ from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.read_contract import (
     DEFAULT_CMD_READ_LINES,
     InvalidCursor,
+    bounded_page,
     decode_cursor,
+    encode_cursor,
 )
 
 
 def _with_session_lifecycle(result: dict, identity: dict) -> dict:
     lifecycle = identity.get("session_lifecycle")
     if result.get("ok") and isinstance(lifecycle, dict):
-        result["session_lifecycle"] = lifecycle
+        result["session_lifecycle"] = {
+            key: lifecycle[key]
+            for key in ("state", "remaining_seconds", "hard_expires_at", "return_to_chat")
+            if key in lifecycle
+        }
+        for key in ("issuer_node_id", "slot_id"):
+            if key in identity:
+                result[key] = identity[key]
     return result
 
 
 class CommandApplication(ApplicationCapability):
+    @application_operation("commands")
+    async def journal(
+        self, actor: ActorContext, *, limit: int = 20, cursor: str | None = None
+    ) -> dict:
+        mesh = self.gate.access_mesh
+        if mesh is None:
+            return _read_error("capability_not_allowed", "Local mesh journal is disabled")
+        scope = {"kind": "command.journal", "node_id": mesh.store.local_node_id}
+        try:
+            after = decode_cursor(cursor, scope)
+            rows = await asyncio.to_thread(mesh.store.command_journal, after=after, limit=limit + 1)
+            data = [{key: value for key, value in row.items() if key != "sequence"} for row in rows]
+            page, _ = bounded_page(data, limit=limit, cursor=None, scope=scope)
+        except InvalidCursor as exc:
+            return _read_error("invalid_cursor", str(exc))
+        more = len(page) < len(rows)
+        next_cursor = (
+            encode_cursor(rows[len(page) - 1]["sequence"], scope) if more and page else None
+        )
+        return {
+            "ok": True,
+            "action": "journal",
+            "node_id": mesh.store.local_node_id,
+            "commands": page,
+            "next_cursor": next_cursor,
+        }
+
     async def _launch(self, actor: ActorContext, identity: dict, request: CmdRequest) -> dict:
         options = {
             "logical_agent_id": identity["logical_agent_id"],
@@ -57,6 +95,8 @@ class CommandApplication(ApplicationCapability):
                 "cmd_hash": request.cmd_hash,
                 "authorization": "anonymous",
             }
+            if self.gate.access_mesh is not None:
+                scope["node_id"] = self.gate.access_mesh.store.local_node_id
             try:
                 start = decode_cursor(request.cursor, scope)
             except InvalidCursor as exc:
@@ -119,8 +159,12 @@ class CommandApplication(ApplicationCapability):
                 scope = {
                     "kind": "cmd.read",
                     "cmd_hash": result["cmd_hash"],
-                    "authorization": identity["logical_agent_id"],
+                    "authorization": "anonymous"
+                    if self.gate.access_mesh is not None
+                    else identity["logical_agent_id"],
                 }
+                if self.gate.access_mesh is not None:
+                    scope["node_id"] = self.gate.access_mesh.store.local_node_id
                 output = await self.service.read(
                     cmd_hash=result["cmd_hash"],
                     lines_count=DEFAULT_CMD_READ_LINES,

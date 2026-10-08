@@ -630,11 +630,14 @@ def error_from_exception(exc: BaseException) -> PublicError:
     """Map known exception classes without inspecting their text; propagate cancellation."""
     if not isinstance(exc, Exception):
         raise exc
+    from terminal_mcp.core.access_mesh_grants import AccessMeshError
     from terminal_mcp.core.managed_sessions import ManagedSessionError
     from terminal_mcp.core.provider_identity import ProviderIdentityError
     from terminal_mcp.core.work_windows import WorkWindowError
 
-    if isinstance(exc, (ProviderIdentityError, WorkWindowError, ManagedSessionError)):
+    if isinstance(
+        exc, (AccessMeshError, ProviderIdentityError, WorkWindowError, ManagedSessionError)
+    ):
         return public_error(exc.code)
     if isinstance(exc, PublicFailure):
         return exc.public

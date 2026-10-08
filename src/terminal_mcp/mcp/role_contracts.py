@@ -489,6 +489,13 @@ def _planning_hint(schema: dict, definitions: dict) -> str:
 
 def planning_schema(model: type[StrictRoleInput]) -> dict:
     """Publish argument names and hints; runtime owns all value validation."""
+    if model is TaskManageInput:
+        from terminal_mcp.application.base import ROLE_TASK_ACTIONS
+        from terminal_mcp.mcp.task_planning import task_action_planning_schema
+
+        return task_action_planning_schema(
+            actions=ROLE_TASK_ACTIONS["coordinator"], exclude_fields={"code"}
+        )
     runtime = model.model_json_schema()
     definitions = runtime.get("$defs", {})
     properties = {}
@@ -523,9 +530,9 @@ def schema_contract(role: str, tool_name: str) -> dict[str, object]:
     }
 
 
-def install_role_input_contract(mcp, role: str) -> None:
+def install_role_input_contract(mcp, role: str, *, overrides=None) -> None:
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    for (endpoint_role, tool_name), model in ROLE_TOOL_MODELS.items():
+    for (endpoint_role, tool_name), model in {**ROLE_TOOL_MODELS, **(overrides or {})}.items():
         if endpoint_role != role:
             continue
         tool = tools[tool_name]
@@ -557,6 +564,10 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
     else:
         path = "$"
         for candidate in (
+            "issuer_node_id",
+            "access_code",
+            "mode",
+            "code",
             "task_id",
             "isolation_hint",
             "claim_intent",

@@ -51,6 +51,14 @@ from terminal_mcp.core.task_projections import (
     project_task_detail,
     project_task_working_set,
 )
+from terminal_mcp.mcp.access_contracts import (
+    AttachInput,
+    MeshCommandReadInput,
+    MeshCommandReadOutput,
+    MeshMessageInput,
+    MeshObserveOutput,
+    MeshSessionOutput,
+)
 from terminal_mcp.mcp.output_contracts import (
     _task_record as _normalize_task_record,
 )
@@ -508,7 +516,7 @@ async def _health_identity(application, actor) -> dict:
             return {
                 **diagnostic,
                 "status": "unbound"
-                if code in {"identity_not_bound", "session_required"}
+                if code in {"identity_not_bound", "session_required", "session_attach_required"}
                 else "unavailable",
                 "code": code,
             }
@@ -544,6 +552,35 @@ def build_role_mcp(
     if role not in ROLE_TOOLS:
         raise ValueError("unsupported MCP endpoint role")
     application = get_application(service, auth_mode=auth_mode)
+    mesh = getattr(application.service, "access_mesh", None)
+    input_overrides = (
+        {
+            (role, "session"): AttachInput,
+            (role, "message"): MeshMessageInput,
+            **({(role, "command_read"): MeshCommandReadInput} if role == "executor" else {}),
+        }
+        if mesh
+        else {}
+    )
+    output_overrides = (
+        {
+            (role, "session"): MeshSessionOutput,
+            **(
+                {(role, "command_read"): MeshCommandReadOutput}
+                if role == "executor"
+                else {(role, "agent_observe"): MeshObserveOutput}
+            ),
+        }
+        if mesh
+        else {}
+    )
+
+    def _validate(boundary, endpoint_role, tool_name):
+        model = input_overrides.get(
+            (endpoint_role, tool_name), ROLE_TOOL_MODELS[(endpoint_role, tool_name)]
+        )
+        return validate_boundary(boundary, model)
+
     mcp = FastMCP(
         f"terminal-mcp-{role}-v1",
         stateless_http=True,
@@ -562,6 +599,12 @@ def build_role_mcp(
         request, failure = _validate(boundary, role, "session")
         if failure is not None:
             return failure
+        if mesh:
+            actor = _actor(application, role)
+            with actor.bind():
+                return await mesh.attach(
+                    actor, issuer_node_id=request.issuer_node_id, access_code=request.access_code
+                )
         request = SessionInput.model_validate(request)
         raw = await application.session(
             _actor(application, role),
@@ -628,7 +671,12 @@ def build_role_mcp(
             request, failure = _validate(boundary, role, "command_read")
             if failure is not None:
                 return failure
-            request = CommandReadInput.model_validate(request)
+            if mesh and request.cmd_hash is None:
+                return await application.commands.journal(
+                    _actor(application, role), limit=request.limit, cursor=request.cursor
+                )
+            if not mesh:
+                request = CommandReadInput.model_validate(request)
             canonical = CmdReadRequest(
                 action="read",
                 code=None,
@@ -795,6 +843,8 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             AgentObserveInput.model_validate(request)
+            if mesh:
+                return await mesh.observe(_actor(application, role))
             return await application.agent_observe(_actor(application, role))
 
         @mcp.tool(
@@ -819,8 +869,43 @@ def build_role_mcp(
                 result.update(auth_mode=raw.get("auth_mode"), identity=identity)
             return result
 
-    install_role_input_contract(mcp, role)
-    install_role_output_contract(mcp, role)
+    install_role_input_contract(mcp, role, overrides=input_overrides)
+    install_role_output_contract(mcp, role, overrides=output_overrides)
+    if mesh:
+        for tool in mcp._tool_manager.list_tools():
+            text = tool.description or ""
+            text = text.split(" Requires an active managed session;")[0]
+            if tool.name == "session":
+                tool.description = (
+                    "Attach this connector once using issuer_node_id and access_code. "
+                    "The local binding survives restart and automatic work-cycle rearm. "
+                    "Manage issuance and end the shared access cycle through Access MCP."
+                )
+                tool.annotations = ToolAnnotations(
+                    readOnlyHint=False,
+                    destructiveHint=False,
+                    idempotentHint=True,
+                    openWorldHint=False,
+                )
+            elif tool.name == "command_read":
+                tool.description = (
+                    "Read any local command by cmd_hash, or omit cmd_hash for the local "
+                    "command journal. Access Code and active work cycle are unnecessary. "
+                    "Use the returned opaque cursor for the next bounded page."
+                )
+            elif tool.name in {"task_list", "task_get", "task_graph", "agent_observe", "health"}:
+                tool.description = text + " Available without an active work cycle or Access Code."
+            elif tool.name == "message":
+                tool.description = (
+                    "Read inbox, history, and recipients; send, acknowledge, or reply. "
+                    "scope='fleet' targets local active participants first and configured "
+                    "Mesh peers; scope='local' stays on this node. Writes use an attached "
+                    "local work cycle. Alerts remain durable until reply."
+                )
+            else:
+                tool.description = (
+                    text + " Attach this connector once; writes use its local work cycle."
+                )
 
     def _install_activity_touch() -> None:
         for tool in mcp._tool_manager.list_tools():
@@ -857,4 +942,30 @@ def build_role_mcp(
     registered = mcp._tool_manager._tools
     mcp._tool_manager._tools = {name: registered[name] for name in ROLE_TOOLS[role]}
     mcp.role_schema_contract = role_schema_contract(role)
+    if mesh:
+        from terminal_mcp.mcp.role_contracts import (
+            schema_digest,
+            serialized_schema,
+        )
+
+        mcp.role_schema_contract = {
+            "endpoint_role": role,
+            "contract_version": 1,
+            "access_mesh": True,
+            "tools": [
+                {
+                    "tool_name": name,
+                    "runtime_input_schema_digest": schema_digest(
+                        input_overrides.get(
+                            (role, name), ROLE_TOOL_MODELS[(role, name)]
+                        ).model_json_schema()
+                    ),
+                    "planning_input_schema_digest": schema_digest(registered[name].parameters),
+                    "planning_input_schema_bytes": len(
+                        serialized_schema(registered[name].parameters)
+                    ),
+                }
+                for name in ROLE_TOOLS[role]
+            ],
+        }
     return mcp
