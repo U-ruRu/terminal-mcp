@@ -913,18 +913,35 @@ class WorkWindowStore(PersistentAgentStore):
         now = now or utc_now()
         stamp = utc_text(now)
         expiry = now + timedelta(seconds=lease_seconds)
+        # The recovery worker runs every second, including on nodes without
+        # any due windows. Probe using a *read-only* SQLite statement before
+        # attempting BEGIN IMMEDIATE: an idle poll must never contend with an
+        # unrelated task/command writer. Once work is visible, the exclusive
+        # transaction below re-evaluates the predicate before leasing, so
+        # parallel recovery workers still claim disjoint durable windows.
+        from_and_filter = (
+            "FROM logical_agent_window_recovery r "
+            "JOIN logical_agent_work_windows w ON w.work_window_id=r.work_window_id "
+            "JOIN logical_agents a ON a.logical_agent_id=w.logical_agent_id "
+            "WHERE r.next_check_at<=? AND (r.lease_expires_at IS NULL "
+            "OR r.lease_expires_at<=?) AND w.superseded_at IS NULL "
+            "AND a.authority_node_id=? AND a.state NOT IN ('deleted','deleting') "
+        )
+        filters = (stamp, stamp, self.authority_node_id)
+        async with self._connect("managed_recovery_probe") as db:
+            due = await (
+                await db.execute("SELECT 1 " + from_and_filter + "LIMIT 1", filters)
+            ).fetchone()
+        if due is None:
+            return []
+
         async with self._transaction("managed_recovery_claim") as db:
             rows = await (
                 await db.execute(
                     "SELECT r.work_window_id,r.attempts,w.snapshot_json "
-                    "FROM logical_agent_window_recovery r "
-                    "JOIN logical_agent_work_windows w ON w.work_window_id=r.work_window_id "
-                    "JOIN logical_agents a ON a.logical_agent_id=w.logical_agent_id "
-                    "WHERE r.next_check_at<=? AND (r.lease_expires_at IS NULL "
-                    "OR r.lease_expires_at<=?) AND w.superseded_at IS NULL "
-                    "AND a.authority_node_id=? AND a.state NOT IN ('deleted','deleting') "
-                    "ORDER BY r.next_check_at,r.work_window_id LIMIT ?",
-                    (stamp, stamp, self.authority_node_id, limit),
+                    + from_and_filter
+                    + "ORDER BY r.next_check_at,r.work_window_id LIMIT ?",
+                    (*filters, limit),
                 )
             ).fetchall()
             leases = []
