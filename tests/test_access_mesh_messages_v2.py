@@ -38,6 +38,11 @@ class LocalSlots:
             key=lambda s: s.logical_agent_id,
         )[:limit]
 
+    def canonical_slot(self, slot):
+        # This fixture has no collisions: the incoming slot is its own winner.
+        # Production AccessMeshStore implements this alias-resolution method.
+        return slot
+
     def slot_for_agent(self, agent_id):
         return self.slots.get(agent_id)
 
