@@ -37,10 +37,10 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
             if role in {"executor", "coordinator"} and tool.name == "session":
                 # The public connector must know the Access Code is mandatory,
                 # and that only attachment (never lifecycle mutation) is valid.
-                assert schema["required"] == ["access_code"]
+                assert schema["required"] == ["session_number"]
                 assert schema["properties"]["action"]["const"] == "attach"
-                assert schema["properties"]["access_code"]["type"] == "string"
-                assert schema["properties"]["issuer_node_id"]["type"] == "string"
+                assert schema["properties"]["session_number"]["type"] == "string"
+                assert "issuer_node_id" not in schema["properties"]
                 assert "allOf" not in schema
             else:
                 assert "required" not in schema and "allOf" not in schema
@@ -98,14 +98,14 @@ def test_executor_and_coordinator_publish_identical_attach_only_session_schema(t
     schema = executor.parameters
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
-    validator.validate({"access_code": "0427", "issuer_node_id": "firstbyte"})
-    validator.validate({"action": "attach", "access_code": "firstbyte:0427"})
+    validator.validate({"session_number": "0427"})
+    validator.validate({"action": "attach", "session_number": "0427"})
     for invalid in (
         {},
-        {"action": "start", "issuer_node_id": "firstbyte", "access_code": "0427"},
-        {"action": "end", "issuer_node_id": "firstbyte", "access_code": "0427"},
-        {"action": "detach", "issuer_node_id": "firstbyte", "access_code": "0427"},
-        {"action": "attach", "issuer_node_id": "firstbyte", "access_code": "abc"},
+        {"action": "start", "session_number": "0427"},
+        {"action": "end", "session_number": "0427"},
+        {"action": "detach", "session_number": "0427"},
+        {"action": "attach", "session_number": "abc"},
     ):
         with pytest.raises(JsonSchemaValidationError):
             validator.validate(invalid)

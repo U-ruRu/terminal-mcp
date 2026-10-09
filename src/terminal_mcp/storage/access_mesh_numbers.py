@@ -13,6 +13,7 @@ class MeshSessionNumbers:
             db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_claims(issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, number TEXT NOT NULL, logical_agent_id TEXT NOT NULL, started_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, PRIMARY KEY(issuer_id,slot_id))')
             db.execute('CREATE INDEX IF NOT EXISTS access_mesh_number_current ON access_mesh_number_claims(number,started_at,issuer_id,slot_id)')
             db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_incidents(number TEXT NOT NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, collided_with TEXT NOT NULL, detected_at TEXT NOT NULL, PRIMARY KEY(number,issuer_id,slot_id,collided_with))')
+            db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_ends(number TEXT NOT NULL, cycle_key TEXT NOT NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, event_id TEXT NOT NULL, ended_at TEXT NOT NULL, PRIMARY KEY(number,cycle_key))')
 
     @staticmethod
     def validate(number):
@@ -143,3 +144,29 @@ class MeshSessionNumbers:
             for number, attempt, expires in validated:
                 if not self._occupied(db, number, attempt):
                     db.execute('INSERT OR IGNORE INTO access_mesh_number_reservations VALUES(?,?,?)', (number, attempt, expires))
+
+
+    def record_end(self, *, number, cycle_key, issuer_id, slot_id, event_id, ended_at):
+        self.validate(number)
+        if issuer_id not in self.store.trusted_issuers:
+            raise AccessMeshError('access_mesh_untrusted_peer')
+        if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (cycle_key, slot_id, event_id)):
+            raise AccessMeshError('invalid_session_end')
+        stamp = self.stamp(datetime.fromisoformat(ended_at) if isinstance(ended_at, str) else ended_at)
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)',
+                       (number,cycle_key,issuer_id,slot_id,event_id,stamp))
+        return {'ok': True}
+
+    def end_for_cycle(self, number, cycle_key):
+        with self.store._connect() as db:
+            row = db.execute('SELECT ended_at FROM access_mesh_number_ends WHERE number=? AND cycle_key=?',
+                             (number, cycle_key)).fetchone()
+            return row['ended_at'] if row else None
+
+    def end_snapshot(self):
+        with self.store._connect() as db:
+            return [dict(row) for row in db.execute(
+                'SELECT * FROM access_mesh_number_ends ORDER BY number,cycle_key'
+            ).fetchall()]

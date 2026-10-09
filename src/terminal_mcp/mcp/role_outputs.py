@@ -362,7 +362,39 @@ def role_error_result(raw: dict) -> CallToolResult:
     )
 
 
-def install_role_output_contract(mcp, role: str, *, overrides=None) -> None:
+async def _session_envelope(application, role: str) -> dict:
+    """Attach public timer to the MCP envelope, separate from business result."""
+    timer = {"remaining_time": "00:00"}
+    if application is None or getattr(application.service, "access_mesh", None) is None:
+        return timer
+    try:
+        from terminal_mcp.adapters.actor import actor_for
+        from terminal_mcp.adapters.mcp_identity import current_provider_evidence
+        mesh = application.service.access_mesh
+        evidence = current_provider_evidence()
+        actor = actor_for(
+            application, transport="mcp", endpoint_role=role, contract_version=1,
+            provider=evidence.provider if evidence else None,
+            provider_metadata=evidence.metadata if evidence else {},
+        )
+        key = mesh.connection_key(actor)
+        slot = (mesh.store.issuer_bound_slot(key) if role == "access"
+                else mesh.store.attached_slot(key))
+        if slot is not None:
+            info = mesh.store.observed_identity(slot, now=mesh.clock())
+            cycle = info.get("session_lifecycle") or {}
+            remaining = max(0, int(cycle.get("remaining_seconds") or 0))
+            timer["remaining_time"] = f"{remaining // 60:02d}:{remaining % 60:02d}"
+            if cycle.get("state") in {"warning", "draining"}:
+                timer["warning"] = "Сессия заканчивается. Завершай текущую работу."
+            elif cycle.get("state") in {"expired", "cooldown"}:
+                timer["alert"] = "Время сессии истекло, возвращайся в чат с промежуточным отчётом."
+    except Exception:
+        logger.debug("Session envelope unavailable", exc_info=True)
+    return timer
+
+
+def install_role_output_contract(mcp, role: str, *, overrides=None, application=None) -> None:
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     for (endpoint_role, tool_name), output_model in {
         **ROLE_OUTPUT_MODELS,
@@ -377,18 +409,23 @@ def install_role_output_contract(mcp, role: str, *, overrides=None) -> None:
             try:
                 raw = await _raw_fn(**kwargs)
                 if raw.get("ok") is False:
-                    return role_error_result(raw)
+                    result = role_error_result(raw)
+                    result.meta = await _session_envelope(application, role)
+                    return result
                 if _name == "session" and role != "access" and raw.get("action") == "start":
                     diagnostic = session_provider_fingerprint()
                     if diagnostic is not None:
                         raw = {**raw, "provider_identity": diagnostic}
                 result = projected_result(raw, _model, tool=_name, variant=role)
                 if result.structuredContent.get("ok") is False:
-                    return role_error_result(result.structuredContent)
+                    result = role_error_result(result.structuredContent)
+                result.meta = {**(result.meta or {}), **await _session_envelope(application, role)}
                 return result
             except Exception as exc:
                 logger.exception("role_tool_failure role=%s tool=%s", role, _name)
-                return role_error_result(error_from_exception(exc).as_dict())
+                result = role_error_result(error_from_exception(exc).as_dict())
+                result.meta = await _session_envelope(application, role)
+                return result
 
         tool.fn = contracted
         wire_model = RootModel[output_model.__success_type__ | RoleFailure]

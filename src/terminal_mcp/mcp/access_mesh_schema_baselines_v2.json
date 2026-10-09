@@ -13,12 +13,12 @@
             "readOnlyHint": false
           },
           "name": "session",
-          "planning_input_bytes": 612,
-          "planning_input_digest": "35fe93c0ef89d5b79c9169c1ec2de987c2af783ae98eda3e920c216a5812a7b5",
-          "planning_output_bytes": 525,
-          "planning_output_digest": "081e5708fc3a88a6f32f64c449d90411de48a2d3d619ef35c1513c21844e0b7b",
-          "runtime_input_digest": "5ac8d3584197f1491944e45d237cc23292e1648988d7233f830c527fba4942fd",
-          "runtime_output_digest": "b70a0d6d579e848f6ec5730754b7e2e2ec3347898c2345a65654c7a7c75b79f9"
+          "planning_input_bytes": 496,
+          "planning_input_digest": "d3842ecfda4ee0f82d1ef95bab5d2be6280052817bd1b1870ea904231db1b0cb",
+          "planning_output_bytes": 182,
+          "planning_output_digest": "d436d6ba88bf27ec4277a6217d8ecc99ef4047069d98523e85069d950a2b2dae",
+          "runtime_input_digest": "ad65cbe81e04672c5b25d30bc67d46d42967016c971c82a158bf9be6b3f5da18",
+          "runtime_output_digest": "1107bdec59bd62218046a55e94e09781b106b3ec506495de056b52840285798d"
         }
       ]
     },
@@ -33,12 +33,12 @@
             "readOnlyHint": false
           },
           "name": "session",
-          "planning_input_bytes": 811,
-          "planning_input_digest": "a191ff1cbbd64dc4beaf2ba61b4c9d5f0171ea6f8edfb253d4ab3067c3180127",
-          "planning_output_bytes": 732,
-          "planning_output_digest": "9309e044cdc81d98e9867f561e7658e818d3d53425f7ba80401760d29db9450b",
-          "runtime_input_digest": "3d5b83ff905928a7b7920c421978ca00970ac554cd835cf7fbc635a8f81101d0",
-          "runtime_output_digest": "9ec073e7c374c600936d004c76e6f01a2e7bcde5b2222c794cbf3985a9bd7c1c"
+          "planning_input_bytes": 448,
+          "planning_input_digest": "805a895aa18033aae60df4500cccd13a3dbe5663bf86ccf4e058b41791e637c1",
+          "planning_output_bytes": 147,
+          "planning_output_digest": "b96b2756ab66159ac3d23f28da501e8f813363edd9b9920163eac73285c65038",
+          "runtime_input_digest": "77e9251dfe512d4214046438c0ebad27973d42e11ae137d50a8d2002107bb06c",
+          "runtime_output_digest": "f8bb294a4e77b069fa28ef5dc69e139f4727e5bab2511d33b8ebedbe94eb20db"
         },
         {
           "annotations": {
@@ -110,10 +110,10 @@
           "name": "agent_observe",
           "planning_input_bytes": 196,
           "planning_input_digest": "f561792fa84836dd7d44e67b4e136a95fad65b1af935384950c26e2ae99cbcec",
-          "planning_output_bytes": 732,
-          "planning_output_digest": "9309e044cdc81d98e9867f561e7658e818d3d53425f7ba80401760d29db9450b",
+          "planning_output_bytes": 173,
+          "planning_output_digest": "bb473cd3837e7f39432887aac7dffdb49eb010778f20efe4e03f77c7866df3a7",
           "runtime_input_digest": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
-          "runtime_output_digest": "0f85ff80247db90d4c9228fe24832f728bba6aaf2eb59c0a86a51d149294f056"
+          "runtime_output_digest": "8c7099f5e5197f4229620bd6b7dcb59a5c3937b85301dedeb2b7a6aed85d209f"
         },
         {
           "annotations": {
@@ -158,12 +158,12 @@
             "readOnlyHint": false
           },
           "name": "session",
-          "planning_input_bytes": 811,
-          "planning_input_digest": "a191ff1cbbd64dc4beaf2ba61b4c9d5f0171ea6f8edfb253d4ab3067c3180127",
-          "planning_output_bytes": 732,
-          "planning_output_digest": "9309e044cdc81d98e9867f561e7658e818d3d53425f7ba80401760d29db9450b",
-          "runtime_input_digest": "3d5b83ff905928a7b7920c421978ca00970ac554cd835cf7fbc635a8f81101d0",
-          "runtime_output_digest": "9ec073e7c374c600936d004c76e6f01a2e7bcde5b2222c794cbf3985a9bd7c1c"
+          "planning_input_bytes": 448,
+          "planning_input_digest": "805a895aa18033aae60df4500cccd13a3dbe5663bf86ccf4e058b41791e637c1",
+          "planning_output_bytes": 147,
+          "planning_output_digest": "b96b2756ab66159ac3d23f28da501e8f813363edd9b9920163eac73285c65038",
+          "runtime_input_digest": "77e9251dfe512d4214046438c0ebad27973d42e11ae137d50a8d2002107bb06c",
+          "runtime_output_digest": "f8bb294a4e77b069fa28ef5dc69e139f4727e5bab2511d33b8ebedbe94eb20db"
         },
         {
           "annotations": {

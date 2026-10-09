@@ -927,7 +927,7 @@ def build_role_mcp(
             return result
 
     install_role_input_contract(mcp, role, overrides=input_overrides)
-    install_role_output_contract(mcp, role, overrides=output_overrides)
+    install_role_output_contract(mcp, role, overrides=output_overrides, application=application)
     if mesh:
         for tool in mcp._tool_manager.list_tools():
             text = tool.description or ""

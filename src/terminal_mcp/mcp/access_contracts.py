@@ -163,5 +163,17 @@ class MeshUnboundSession(_Strict):
     contract_version: int
 
 
-class MeshObserveOutput(RootModel[MeshLocalSession | MeshUnboundSession | AccessError]):
-    __success_type__: ClassVar = MeshLocalSession | MeshUnboundSession
+class MeshAgentView(_Strict):
+    public_name: str
+    last_server: str
+    session_duration: int
+    last_activity: str | None
+
+
+class MeshAgentObserve(_Strict):
+    ok: Literal[True]
+    agents: list[MeshAgentView]
+
+
+class MeshObserveOutput(RootModel[MeshAgentObserve | AccessError]):
+    __success_type__: ClassVar = MeshAgentObserve

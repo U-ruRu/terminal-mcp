@@ -111,6 +111,29 @@ class AccessMeshReplication:
             except TimeoutError:
                 pass
 
+    async def announce_end(self, **event):
+        # The durable local event remains authoritative when peers are offline.
+        if not self.peers:
+            return
+        try:
+            await asyncio.wait_for(asyncio.gather(*(
+                self.request(peer, "numbers/end", event) for peer in self.peers
+            ), return_exceptions=True), timeout=2.5)
+        except TimeoutError:
+            pass
+
+    async def sync_ends(self, peer):
+        cursor = ""
+        while True:
+            response = await self.request(peer, "numbers/ends", {"after": cursor, "limit": 25})
+            if response.get("ok") is not True or not isinstance(response.get("ends"), list):
+                raise AccessMeshError("invalid_session_end_snapshot")
+            for event in response["ends"]:
+                await asyncio.to_thread(self.store.numbers.record_end, **event)
+            cursor = response.get("next_cursor")
+            if not cursor:
+                return
+
     async def sync_numbers(self, peer):
         cursor = ""
         while True:
@@ -240,6 +263,7 @@ class AccessMeshReplication:
             ):
                 await self._snapshot(peer)
                 await self.sync_numbers(peer)
+                await self.sync_ends(peer)
                 checked = True
             delivered = await self._deliver(peer)
             if checked or delivered:
@@ -409,5 +433,34 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         rows = [r for r in rows if (r["issuer_id"]+":"+r["slot_id"]) > after][:limit]
         reservations = await asyncio.to_thread(mesh.store.numbers.reservations)
         return {"ok": True, "claims": rows, "reservations": reservations[:50], "next_cursor": (rows[-1]["issuer_id"]+":"+rows[-1]["slot_id"]) if len(rows) == limit else None}
+
+    @router.post("/internal/fleet/access-mesh/numbers/end", include_in_schema=False)
+    async def number_end(payload: dict, x_terminal_mcp_peer: str = Header(default=""),
+                         authorization: str = Header(default="")):
+        peer = authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) != {"number", "cycle_key", "issuer_id", "slot_id", "event_id", "ended_at"}:
+            raise HTTPException(400, "invalid number end")
+        if payload["issuer_id"] != peer:
+            raise HTTPException(400, "issuer does not match authenticated peer")
+        try:
+            return await asyncio.to_thread(mesh.store.numbers.record_end, **payload)
+        except (AccessMeshError, ValueError, TypeError) as exc:
+            return {"ok": False, "code": getattr(exc, "code", "invalid_session_end")}
+
+    @router.post("/internal/fleet/access-mesh/numbers/ends", include_in_schema=False)
+    async def number_ends(payload: dict, x_terminal_mcp_peer: str = Header(default=""),
+                          authorization: str = Header(default="")):
+        authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) - {"after", "limit"}:
+            raise HTTPException(400, "invalid number end snapshot")
+        after, limit = payload.get("after", ""), payload.get("limit", 25)
+        if not isinstance(after, str) or len(after) > 300 or type(limit) is not int or not 1 <= limit <= 25:
+            raise HTTPException(400, "invalid number end snapshot cursor")
+        events = await asyncio.to_thread(mesh.store.numbers.end_snapshot)
+        events = [e for e in events if e["number"]+":"+e["cycle_key"] > after][:limit]
+        return {"ok": True, "ends": events, "next_cursor":
+                events[-1]["number"]+":"+events[-1]["cycle_key"] if len(events) == limit else None}
 
     return router

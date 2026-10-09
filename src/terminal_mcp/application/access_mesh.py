@@ -100,9 +100,16 @@ class AccessMeshApplication:
                     self.store.numbers.number_for_slot, current.issuer_id, current.slot_id)
                 if bound_number != session_number:
                     raise AccessMeshError("access_mesh_binding_conflict")
-                return {"ok": True}
-            await asyncio.to_thread(self.store.attach, issuer_id=winner["issuer_id"],
-                                    code=session_number, connection_key=connection)
+                slot = current
+            else:
+                slot = await asyncio.to_thread(
+                    self.store.attach, issuer_id=winner["issuer_id"],
+                    code=session_number, connection_key=connection,
+                )
+            # Attach creates the local WorkSession immediately, so another
+            # agent can discover this recipient before its first command.
+            await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+            await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
             return {"ok": True}
         if isinstance(access_code, str) and ":" in access_code:
             prefix, access_code = access_code.split(":", 1)
@@ -128,30 +135,36 @@ class AccessMeshApplication:
         }
 
     async def observe(self, actor: ActorContext) -> dict:
-        try:
-            key = self.connection_key(actor)
-            slot = await asyncio.to_thread(self.store.attached_slot, key)
-        except AccessMeshError as exc:
-            if exc.code not in {"identity_metadata_missing", "identity_metadata_invalid"}:
-                raise
-            slot = None
-        if slot is None:
-            return {
-                "ok": True,
-                "action": "status",
-                "attached": False,
-                "authority_node_id": self.store.local_node_id,
-                "role": actor.endpoint_role,
-                "contract_version": actor.contract_version,
-            }
-        identity = await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
-        return {
-            **identity,
-            "action": "status",
-            "attached": True,
-            "role": actor.endpoint_role,
-            "contract_version": actor.contract_version,
-        }
+        """Minimal public observation of named active local agents."""
+        now = self.clock()
+        records = []
+        after = ""
+        while True:
+            slots = await asyncio.to_thread(self.store.local_slots, after=after, limit=100)
+            if not slots:
+                break
+            for slot in slots:
+                identity = await asyncio.to_thread(self.store.observed_identity, slot, now=now)
+                cycle = identity.get("session_lifecycle") or {}
+                name = identity.get("public_name")
+                if not name or not cycle.get("started_at") or cycle.get("state") not in {
+                    "active", "warning", "draining",
+                } or not identity.get("work_session_id"):
+                    continue
+                start = datetime.fromisoformat(cycle["started_at"])
+                end = datetime.fromisoformat(cycle["hard_expires_at"])
+                records.append({
+                    "public_name": name,
+                    "last_server": self.store.local_node_id,
+                    "session_duration": max(0, int((end - start).total_seconds())),
+                    "last_activity": await asyncio.to_thread(
+                        self.store.last_activity, slot.issuer_id, slot.slot_id,
+                    ),
+                })
+            if len(slots) < 100:
+                break
+            after = slots[-1].logical_agent_id
+        return {"ok": True, "agents": records}
 
     async def resolve(self, actor: ActorContext, operation: ManagedOperation) -> dict:
         if operation not in READ_OPERATIONS:
@@ -369,15 +382,9 @@ class AccessMeshApplication:
                             sorted(self.store.trusted_issuers - {self.store.local_node_id})
                         ),
                         mutation_receipt=receipt,
+                        mutation_number={"number": allocated, "attempt_id": attempt_id},
                     )
                     started_at = event.effective_at or self.clock()
-                    await asyncio.to_thread(
-                        self.store.numbers.register,
-                        number=allocated, issuer_id=event.issuer_id, slot_id=slot_id,
-                        logical_agent_id=agent_id, started_at=started_at,
-                        hard_expires_at=started_at + timedelta(seconds=event.policy.duration_seconds),
-                        attempt_id=attempt_id,
-                    )
                     if self.replication is not None and announcement_deadline is not None:
                         await self.replication.announce_number(
                             number=allocated, issuer_id=event.issuer_id,
@@ -405,6 +412,7 @@ class AccessMeshApplication:
         effective_at: datetime | None = None,
         deadline_at: datetime | None = None,
         receipt_spec=None,
+        number_end: dict | None = None,
     ) -> dict:
         self.require_write(actor)
         async with self._issuer_lock:
@@ -462,6 +470,7 @@ class AccessMeshApplication:
                         sorted(self.store.trusted_issuers - {self.store.local_node_id})
                     ),
                     mutation_receipt=receipt,
+                    mutation_end=number_end,
                 )
             except AccessMeshError:
                 raise
@@ -556,13 +565,31 @@ class AccessMeshApplication:
                         receipt_spec=spec,
                     )
             elif cycle["state"] in {"active", "warning", "draining"}:
+                number_end = (
+                    await asyncio.to_thread(self.store.number_cycle, slot, self.clock())
+                    if action == "end" and mode is None else None
+                )
                 outcome = await self.change(
                     actor,
                     slot_id=slot.slot_id,
                     kind="SessionEnded",
                     expected_revision=slot.revision,
                     receipt_spec=spec,
+                    number_end=number_end,
                 )
+                if number_end is not None and self.replication is not None:
+                    # Announce after the local atomic end; replication failures do
+                    # not turn a committed end into an apparent failed mutation.
+                    try:
+                        end_event = next(
+                            (row for row in await asyncio.to_thread(self.store.numbers.end_snapshot)
+                             if row["number"] == number_end["number"]
+                             and row["cycle_key"] == number_end["cycle_key"]), None
+                        )
+                        if end_event is not None:
+                            await self.replication.announce_end(**end_event)
+                    except Exception:
+                        _LOG.exception("Mesh session-end propagation pending")
                 return {"ok": True} if action == "end" and mode is None else outcome
             result = self._slot_receipt(slot, action)
             receipt = self.store.prepare_receipt(event_id="none", result=result, **spec)

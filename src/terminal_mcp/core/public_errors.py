@@ -49,7 +49,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             validation_error input_validation_failed invalid_request invalid_command invalid_queue
-            invalid_mode
+            invalid_mode invalid_session_number invalid_session_attempt invalid_session_timestamp
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
             mode_required access_code_required legacy_code_not_allowed invalid_connect_url
             output_item_too_large execution_argument_invalid
@@ -82,7 +82,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             owner_required claim_conflict task_claim_conflict wip_limit_exceeded
             archived_task command_not_owned command_not_persistent command_not_running
             review_requirements_unsatisfied coordination_alert coordination_ack_required
-            session_already_active policy_in_use dependency_open
+            session_already_active session_already_started cannot_message_self policy_in_use dependency_open
         """,
         ),
         (
@@ -240,9 +240,10 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ("transient", "retry", "claim_release_failed"),
     )
     messages = {
-        "session_attach_required": (
-            "Attach this connector with issuer_node_id and access_code before writing."
-        ),
+        "session_attach_required": "Введи номер сессии",
+        "invalid_session_number": "Неверный номер сессии",
+        "session_already_started": "Сессия уже запущена",
+        "cannot_message_self": "Нельзя отправить сообщение самому себе",
         "access_mesh_issuer_required": (
             "Provide issuer_node_id or an issuer:1234 qualified access code."
         ),
@@ -265,8 +266,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "identity_metadata_invalid": "The connector supplied invalid provider identity metadata.",
         "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
-        "session_required": "Start a managed session with session.start before using this tool.",
-        "session_expired": "The managed session expired. Start a new session with session.start.",
+        "session_required": "Сначала запусти сессию",
+        "session_expired": "Сессия закончилась",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
         "fleet_control_invalid_header": (
@@ -279,7 +280,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "The authoritative node is unavailable. Check state before retrying changes."
         ),
         "capability_not_allowed": "This endpoint does not allow the operation.",
-        "coordination_alert": "Read and reply to the pending alert before continuing.",
+        "coordination_alert": "Подтверди Alert через Message",
         "coordination_ack_required": (
             "Read and acknowledge the pending message before running work."
         ),

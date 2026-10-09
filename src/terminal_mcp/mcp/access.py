@@ -61,7 +61,7 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
     install_role_input_contract(
         mcp, "access", overrides={("access", "session"): IssuerSessionInput}
     )
-    install_role_output_contract(mcp, "access", overrides={("access", "session"): IssuerOutput})
+    install_role_output_contract(mcp, "access", overrides={("access", "session"): IssuerOutput}, application=application)
     from terminal_mcp.operation_metadata import install_action_metadata
 
     install_action_metadata(mcp, "access", mesh=True)

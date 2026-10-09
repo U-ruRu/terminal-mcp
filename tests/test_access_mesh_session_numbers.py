@@ -138,3 +138,36 @@ async def test_offline_peer_allows_local_issuance_before_30_second_budget(tmp_pa
         assert issued['ok'] is True
         assert duration < 30, duration
         assert local.store.numbers.winner(issued['access_code'])['logical_agent_id'] == issued['logical_agent_id']
+
+@pytest.mark.asyncio
+async def test_mesh_end_fences_all_attached_nodes_and_ignores_stale_cycle(tmp_path):
+    import httpx
+    from test_access_mesh_replication_http import Routes, node, actor, T0
+    from terminal_mcp.core.managed_sessions import ManagedOperation
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        first, first_rep = await node(tmp_path, 'firstbyte', 'bacloud', routes, client)
+        second, second_rep = await node(tmp_path, 'bacloud', 'firstbyte', routes, client)
+        first.replication = first_rep
+        second.replication = second_rep
+        grant = await first.issue(actor(), code='0510')
+        await first_rep.tick()
+        await second_rep.tick()
+        await second.attach(actor(), session_number='0510')
+        await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
+        original = first.store.slot('firstbyte', grant['slot_id'])
+        ending = first.store.number_cycle(original, T0)
+        assert ending is not None
+        await first.change(actor(), slot_id=grant['slot_id'], kind='SessionEnded',
+                           expected_revision=original.revision, number_end=ending)
+        event = next(x for x in first.store.numbers.end_snapshot()
+                     if x['cycle_key'] == ending['cycle_key'])
+        await first_rep.announce_end(**event)
+        current = second.store.attached_slot(second.connection_key(actor()))
+        assert second.store.merged_cycle(current, T0)['state'] == 'expired'
+        with pytest.raises(AccessMeshError):
+            await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
+        # Old cycle key stays immutable; subsequent sessions have a new cycle key.
+        await first_rep.tick()
+        await second_rep.tick()
+        assert len(second.store.numbers.end_snapshot()) == 1

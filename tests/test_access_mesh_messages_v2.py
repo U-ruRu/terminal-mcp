@@ -625,3 +625,20 @@ async def test_oversized_peer_acceptance_proof_rolls_back_all_obligations(mesh_p
     assert count(fb, "coordination_messages") == before_messages
     assert count(fb, "coordination_message_recipients") == before_recipients
     assert fb.store.wire(wire["message_hash"]) is None
+
+@pytest.mark.asyncio
+async def test_directed_self_send_has_distinct_error_and_no_side_effect(mesh_pair):
+    fb = mesh_pair.nodes["firstbyte"]
+    sender_name = _public_name(fb.mesh.store.slots["alice"])
+    before = count(fb, "coordination_messages")
+    response = await fb.message(
+        actor("alice"), text="must never be inserted",
+        scope="local", target=sender_name,
+    )
+    assert response == {
+        "ok": False,
+        "code": "cannot_message_self",
+        "error": "Нельзя отправить сообщение самому себе",
+        "outcome": "not_committed",
+    }
+    assert count(fb, "coordination_messages") == before

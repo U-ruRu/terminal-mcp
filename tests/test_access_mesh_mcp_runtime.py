@@ -80,20 +80,19 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
                 schema = tool["inputSchema"]
                 assert schema["type"] == "object"
                 if role in {"executor", "coordinator"} and tool["name"] == "session":
-                    assert schema["required"] == ["access_code"]
+                    assert schema["required"] == ["session_number"]
                     assert schema["properties"]["action"]["const"] == "attach"
                 else:
                     assert "required" not in schema
             public = client.get(f"/.well-known/oauth-protected-resource/terminal-mcp/{role}/v1/mcp")
             assert public.status_code == 200
             assert public.json()["resource"].endswith(f"/terminal-mcp/{role}/v1/mcp")
-        missing = call(client, "executor", "session", {"access_code": "1234"})
-        assert missing["error"]["code"] == "input_validation_failed"
-        assert missing["error"]["path"] == "issuer_node_id"
+        missing = call(client, "executor", "session", {"session_number": "1234"})
+        assert missing["error"]["code"] in {"invalid_session_number", "access_mesh_slot_not_found"}
         rejected = call(client, "executor", "session", {"action": "start"})
         assert rejected["error"]["code"] == "input_validation_failed"
         unbound = call(client, "coordinator", "agent_observe", {}, meta=False)
-        assert unbound["attached"] is False
+        assert unbound == {"ok": True, "agents": []}
         read = call(client, "executor", "task_list", {}, meta=False)
         assert read["ok"] is True
         assert call(client, "executor", "command_read", {}, meta=False)["commands"] == []
@@ -104,23 +103,21 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
     app = create_app(config)
     with TestClient(app, base_url="https://terminal.example") as client:
         issued = call(
-            client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42
+            client, "access", "session", {"action": "start"}, request_id=42
         )
         assert issued["ok"] is True, issued
-        assert issued["issuer_node_id"] == "firstbyte"
+        record = app.state.access_mesh.store.numbers.winner(issued["session_number"])
+        assert record["issuer_id"] == "firstbyte"
         replay = call(
-            client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42
+            client, "access", "session", {"action": "start"}, request_id=42
         )
         assert replay == issued
-        binding = {"issuer_node_id": issued["issuer_node_id"], "access_code": issued["access_code"]}
+        binding = {"session_number": issued["session_number"]}
         executor = call(client, "executor", "session", binding)
         assert executor["ok"] is True, executor
         coord = call(client, "coordinator", "session", binding)
         assert coord["ok"] is True, coord
-        assert (
-            executor["logical_agent_id"] == coord["logical_agent_id"] == issued["logical_agent_id"]
-        )
-        assert executor["work_session_id"] == coord["work_session_id"]
+        assert executor == coord == {"ok": True}
         ran = call(
             client,
             "executor",
@@ -135,7 +132,7 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
         assert "mesh-runtime-ok" in "\n".join(read["lines"])
         journal = call(client, "executor", "command_read", {}, meta=False)
         assert journal["ok"] is True, journal
-        assert journal["commands"][0]["logical_agent_id"] == issued["logical_agent_id"]
+        assert journal["commands"][0]["logical_agent_id"] == record["logical_agent_id"]
         assert journal["commands"][0]["issuer_node_id"] == "firstbyte"
         end = call(client, "access", "session", {"action": "end"}, request_id=44)
         assert end["ok"] is True, end
@@ -150,11 +147,11 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
     restarted = create_app(config)
     with TestClient(restarted, base_url="https://terminal.example") as client:
         assert (
-            call(client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42)
+            call(client, "access", "session", {"action": "start"}, request_id=42)
             == issued
         )
         state = call(client, "coordinator", "agent_observe", {})
-        assert state["logical_agent_id"] == issued["logical_agent_id"]
+        assert all(set(row) == {"public_name", "last_server", "session_duration", "last_activity"} for row in state["agents"])
         assert call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)["ok"]
 
 
@@ -163,7 +160,7 @@ def test_access_outputs_validate_as_advertised(tmp_path):
     with TestClient(app, base_url="https://terminal.example") as client:
         catalog = rpc(client, "access", "tools/list").json()["result"]["tools"]
         validator = Draft202012Validator(catalog[0]["outputSchema"])
-        for args in ({}, {"action": "start", "mode": "legacy"}, {"action": "status"}):
+        for args in ({}, {"action": "start"}, {"action": "status"}):
             result = call(client, "access", "session", args)
             validator.validate(result)
 
@@ -175,7 +172,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             client,
             "access",
             "session",
-            {"action": "start", "mode": "legacy"},
+            {"action": "start"},
             request_id=100,
             conversation="sender-access",
         )
@@ -183,10 +180,13 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             client,
             "access",
             "session",
-            {"action": "start", "mode": "legacy"},
+            {"action": "start"},
             request_id=200,
             conversation="receiver-access",
         )
+        from terminal_mcp.storage.access_mesh import public_name
+        recipient_slot = app.state.access_mesh.store.numbers.winner(receiver["session_number"])
+        recipient_name = public_name(recipient_slot["issuer_id"], recipient_slot["logical_agent_id"])
         for role, conversation, slot in (
             ("executor", "sender-exec", sender),
             ("executor", "receiver-exec", receiver),
@@ -196,7 +196,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
                 client,
                 role,
                 "session",
-                {"issuer_node_id": "firstbyte", "access_code": slot["access_code"]},
+                {"session_number": slot["session_number"]},
                 conversation=conversation,
             )
             assert value["ok"], value
@@ -207,7 +207,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             {
                 "action": "send",
                 "text": "ack before next command",
-                "target": receiver["public_name"],
+                "target": recipient_name,
                 "mode": "ack",
                 "scope": "local",
             },
@@ -254,7 +254,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             {
                 "action": "send",
                 "text": "reply required",
-                "target": receiver["public_name"],
+                "target": recipient_name,
                 "mode": "alert",
                 "scope": "local",
             },
@@ -317,7 +317,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             {"action": "recipients", "scope": "local"},
             conversation="sender-exec",
         )
-        assert recipients["recipients"][0]["public_name"] == receiver["public_name"]
+        assert recipients["recipients"][0]["public_name"] == recipient_name
         assert recipients["recipients"][0]["last_active_at"]
         health = call(client, "coordinator", "health", {}, meta=False)
         assert health["status"] == "healthy", health
@@ -362,8 +362,8 @@ def test_message_projection_does_not_hide_queued_remote_delivery():
 def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_path):
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
-        slot = call(client, "access", "session", {"action": "start", "mode": "legacy"})
-        binding = {"issuer_node_id": "firstbyte", "access_code": slot["access_code"]}
+        slot = call(client, "access", "session", {"action": "start"})
+        binding = {"session_number": slot["session_number"]}
         for role in ["executor", "coordinator"]:
             assert call(client, role, "session", binding)["ok"]
         key = {"namespace": "mesh-checkpoints", "task_id": "one"}

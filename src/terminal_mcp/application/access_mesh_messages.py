@@ -97,7 +97,12 @@ class MeshRecipientsQuery(_Strict):
 
 
 def _failure(code, *, outcome="not_committed"):
-    return {"ok": False, "code": code, "error": code, "outcome": outcome}
+    messages = {
+        "cannot_message_self": "Нельзя отправить сообщение самому себе",
+        "recipient_not_found": "Получатель не найден",
+    }
+    return {"ok": False, "code": code, "error": messages.get(code, code),
+            "outcome": outcome}
 
 
 def _public_name(slot):
@@ -277,6 +282,8 @@ class AccessMeshMessaging:
             target, scope, namespace, task_id = parent["sender_name"], "fleet", None, None
         if isinstance(target, str) and target.casefold() == "broadcast":
             target = "broadcast"
+        if isinstance(target, str) and target.casefold() == identity["public_name"].casefold():
+            raise MeshMessagingError("cannot_message_self")
         payload = {
             "sender_id": identity["logical_agent_id"],
             "sender_name": identity["public_name"],
