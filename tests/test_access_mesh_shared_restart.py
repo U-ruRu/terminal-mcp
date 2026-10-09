@@ -82,3 +82,65 @@ async def test_cross_server_end_and_manual_start_reuses_original_shared_deadline
         assert changed["session_lifecycle"]["hard_expires_at"] == first.store.numbers.stamp(
             clock[0] + timedelta(seconds=240)
         )
+
+
+@pytest.mark.asyncio
+async def test_partition_recovery_replays_every_separate_end_of_original_cycle(tmp_path):
+    """Two ends separated by a restart survive outage and late catch-up."""
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        first, f_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        second, s_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
+        issuer = replace(actor(), endpoint_role="access")
+        spec = first._receipt_spec(
+            issuer,
+            {
+                "action": "start",
+                "mode": None,
+                "code": None,
+            },
+        )
+        granted = await first.issue(
+            issuer,
+            code="0321",
+            receipt_spec=spec,
+            policy=SlotPolicy(60, 0, True),
+        )
+        first.replication = f_rep
+        second.replication = s_rep
+        await f_rep.tick()
+        await s_rep.tick()
+        await second.attach(actor(), session_number="0321")
+        now = [T0 + timedelta(seconds=5)]
+        first.clock = second.clock = lambda: now[0]
+        first.store.clock = second.store.clock = first.clock
+        routes.offline.add("bacloud")
+        assert await first.issuer_session(issuer, action="end") == {"ok": True}
+        now[0] += timedelta(seconds=5)
+        restarted = await first.issuer_session(issuer, action="start")
+        assert restarted["session_number"] == "0321"
+        now[0] += timedelta(seconds=5)
+        assert await first.issuer_session(issuer, action="end") == {"ok": True}
+        assert len(first.store.numbers.end_snapshot()) == 2
+        assert second.store.numbers.end_snapshot() == []
+
+        routes.offline.remove("bacloud")
+        # Force the next bounded anti-entropy pass. Production performs
+        # it on a 30-second schedule after a disconnected peer recovers.
+        s_rep._last_snapshot_pass["firstbyte"] = 0
+        await s_rep.tick()
+        await f_rep.tick()
+        await s_rep.tick()
+        assert sorted(e["ended_at"] for e in first.store.numbers.end_snapshot()) == sorted(
+            e["ended_at"] for e in second.store.numbers.end_snapshot()
+        )
+        assert len(second.store.numbers.end_snapshot()) == 2
+        with pytest.raises(AccessMeshError, match="session_expired"):
+            await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
+
+        now[0] += timedelta(seconds=5)
+        assert (await first.issuer_session(issuer, action="start"))["session_number"] == "0321"
+        await f_rep.tick()
+        await s_rep.tick()
+        current = await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
+        assert current["logical_agent_id"] == granted["logical_agent_id"]

@@ -24,6 +24,10 @@ STORAGE_REVISIONS = (
     ("storage/sqlite.py", "SCHEMA_VERSION"),
     ("auth/foundation.py", "AUTH_SCHEMA_VERSION"),
 )
+# Optional for older installed releases that predate this independent Mesh
+# migration marker. Missing v1 values count as a schema difference, not as
+# a malformed package.
+OPTIONAL_STORAGE_REVISIONS = (("storage/access_mesh_numbers.py", "MESH_NUMBERS_SCHEMA_VERSION"),)
 VERSION_RX = re.compile(r'^__version__\s*=\s*["\'](\d+)\.(\d+)\.(\d+)["\']\s*$', re.MULTILINE)
 SHA_RX = re.compile(r"[0-9a-fA-F]{7,40}\Z")
 
@@ -57,6 +61,12 @@ def schema_fingerprint(package: Path) -> str:
         state[name] = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
     for name, symbol in STORAGE_REVISIONS:
         state[f"{name}:{symbol}"] = constant(package / name, symbol)
+    for name, symbol in OPTIONAL_STORAGE_REVISIONS:
+        try:
+            state[f"{name}:{symbol}"] = constant(package / name, symbol)
+        except ValueError:
+            # A v1 Mesh implementation had no dedicated schema counter.
+            state[f"{name}:{symbol}"] = None
     blob = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

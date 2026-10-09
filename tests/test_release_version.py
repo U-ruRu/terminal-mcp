@@ -55,6 +55,25 @@ def test_manifest_or_database_schema_change_increments_middle_digit(tmp_path):
     assert release_version.calculate(after, before)["version"] == "0.15.0"
 
 
+def test_mesh_number_storage_migration_increments_schema_version(tmp_path):
+    before = package(tmp_path / "installed")
+    after = package(tmp_path / "candidate")
+    path_before = before / "storage/access_mesh_numbers.py"
+    path_after = after / "storage/access_mesh_numbers.py"
+    # Old deployed Mesh files may exist without an explicit schema marker.
+    path_before.write_text("class MeshSessionNumbers: pass\n")
+    path_after.write_text("MESH_NUMBERS_SCHEMA_VERSION = 2\nclass MeshSessionNumbers: pass\n")
+    result = release_version.calculate(after, before)
+    assert (result["version"], result["bump"]) == ("0.15.0", "schema")
+    # A subsequent code-only change on the same Mesh v2 schema is a patch.
+    path_before.write_text(path_after.read_text())
+    (after / "app.py").write_text("def run(): return 2\n")
+    assert (
+        release_version.calculate(after, before)["version"],
+        release_version.calculate(after, before)["bump"],
+    ) == ("0.14.5", "code")
+
+
 def test_equivalent_json_and_non_runtime_file_do_not_bump(tmp_path):
     before = package(tmp_path / "installed")
     after = package(tmp_path / "candidate")

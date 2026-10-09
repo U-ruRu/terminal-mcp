@@ -7,6 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
 
+# Durable Mesh schema revision independent of the core SqliteRepository schema.
+# v2 preserves multiple Access.end events within a single original cycle.
+MESH_NUMBERS_SCHEMA_VERSION = 2
+
 
 class MeshSessionNumbers:
     """Stores temporary reservations and immutable session identities."""
