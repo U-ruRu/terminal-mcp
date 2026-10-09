@@ -26,15 +26,15 @@ The effective V2 discovery authority is `src/terminal_mcp/mcp/access_mesh_schema
 
 ## Issuer session versus role attach
 
-Only Access `session` accepts `start`, `end`, `status`. `start` requires `mode`; legacy issuance rejects a supplied session_number, and persistent activation requires an existing persistent slot's four-digit session_number. The issuer namespace scopes the number. Slot kind is immutable and has exactly two values: `legacy`, `persistent`.
+Only Access `session` accepts `start` and `end`. Public start takes no mode or session number and returns only `ok: true` with the four-digit `session_number`; end returns only `ok: true`. Number availability is negotiated across reachable Mesh peers, and the local issuer remains available during partitions. The operator provisions persistent slots through HTTP/Console.
 
-Executor/Coordinator `session` is attach-only and accepts `attach`, a Session Number and its issuer. Provide both issuer_node_id and a four-digit session_number. The same slot can attach to multiple role/node connectors. The trusted provider/principal/role context identifies each binding; an existing binding cannot switch slots. Subsequent domain writes omit codes and client-asserted identity/epoch fields. Ending a session is an Access/issuer operation, not a detach message to each node.
+Executor/Coordinator `session` is attach-only and accepts a four-digit `session_number` without a public issuer selector. Mesh resolves the source and current LogicalAgent. The same session may attach to multiple role/node connectors. The trusted provider/principal/role context identifies each binding; an existing binding cannot switch numbers. Subsequent domain writes omit codes and client-asserted identity/epoch fields. Ending a session is an Access/issuer operation, not a detach message to each node.
 
 Local grant/policy replicas provide admission. Reads use a pure observation path. Writes materialize the local WorkSession and check its local deadline, epoch and cleanup fence. Local operations do not call an issuer RPC for each permit. A partition does not suspend already-replicated deadlines; unseen issuer changes become enforceable after delivery/catchup. Binding an unknown grant requires local replication first.
 
 ## Workflow-state and ownership contract
 
-Task state is one of `ready`, `in_progress`, `blocked`, `deferred`, `done`. Create sets initial state; subsequent workflow transitions use `state` or `done`. `update` rejects a state field. Claim/release/expiry/end/suspend/delete preserve explicit task state, checkpoint and result.
+Task state is one of `ready`, `in_progress`, `qa`, `blocked`, `deferred`, `done`. Create sets initial state; subsequent workflow transitions use `state` or `done`. `update` rejects a state field. Claim/release/expiry/end/suspend/delete preserve explicit task state, checkpoint and result.
 
 Legacy claims release on end/expiry. Persistent claims release on end/expiry when their policy says `release_on_end=true`; otherwise ownership remains durable. Suspend/delete triggers cleanup. Local cleanup fences execution before releasing ownership and retains a pending fence on failure. Each release targets its exact old claim/session identity and is idempotent; a successor claim survives delayed cleanup.
 

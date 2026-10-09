@@ -28,9 +28,9 @@ Access выдаёт или активирует слот своего issuer. Ex
 
 ### Начало работы
 
-На выбранном Access вызови `session(action="start", mode="legacy")`: ответ содержит `issuer_node_id`, `public_name` и четырёхзначный `session_number`. Persistent-слот заранее создаёт оператор; агент активирует его на его issuer через `session(action="start", mode="persistent", session_number=...)`.
+На Access вызови `session(action="start")`: успешный ответ содержит только `ok: true` и четырёхзначный `session_number`. Сервер проверяет доступность номера в Mesh; при сетевом разделении выдача остаётся локально доступной. Завершение сессии — `session(action="end")`. Операторские persistent-слоты управляются через HTTP/Console.
 
-На каждом нужном Executor/Coordinator один раз выполни `session(action="attach", issuer_node_id=..., session_number=...)`. Идентификатор issuer обязателен для однозначного разрешения четырёхзначного номера сессии. Повторное attach того же слота сохраняет привязку; подмена слота в существующей привязке возвращает `access_mesh_binding_conflict`.
+На каждом нужном Executor/Coordinator один раз выполни `session(action="attach", session_number=...)`. Источник номера и текущая идентичность разрешаются сервером через Mesh. Повторное attach сохраняет привязку; подмена номера в существующей привязке возвращает `access_mesh_binding_conflict`.
 
 **Role session = attach-only.** Управление началом и завершением issuer-сессии выполняется на Access. После attach доменные операции получают identity из доверенного контекста коннектора; Session Number повторно в команды, задачи и сообщения не передаётся. Чтение известного `cmd_hash`, в том числе созданного другим агентом, доступно без Session Number и предварительного attach. `command_read` без `cmd_hash` возвращает локальный журнал команд всех LogicalAgent с opaque `next_cursor`. Настроенная транспортная аутентификация сохраняется и для чтения без номера сессии.
 

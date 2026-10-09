@@ -18,25 +18,25 @@ FirstByte and BacLOUD each expose these three connectors. Primary role session i
 
 ## Access and attach examples
 
-Create a fresh legacy slot on the chosen issuer:
+Start a session on the chosen Access issuer and receive only `ok` plus four-digit `session_number`:
 
 <!-- contract-example: access.session -->
 ```json
-{"action":"start","mode":"legacy"}
+{"action":"start"}
 ```
 
-Activate an operator-provisioned persistent slot on its issuer:
+When a prior session has ended and its cooldown is complete, start a fresh session:
 
 <!-- contract-example: access.session -->
 ```json
-{"action":"start","mode":"persistent","session_number":"0427"}
+{"action":"start"}
 ```
 
-Issuer lifecycle status/end uses the Access binding or the issuer's code:
+End a session using the bound Access connector:
 
 <!-- contract-example: access.session -->
 ```json
-{"action":"status"}
+{"action":"end"}
 ```
 
 <!-- contract-example: access.session -->
@@ -48,17 +48,17 @@ Bind each required Executor/Coordinator once:
 
 <!-- contract-example: role.session -->
 ```json
-{"action":"attach","issuer_node_id":"firstbyte","session_number":"0427"}
+{"action":"attach","session_number":"0427"}
 ```
 
-Use a different issuer with its independently issued four-digit session number:
+The same role contract also accepts a session number issued by another Mesh node:
 
 <!-- contract-example: role.session -->
 ```json
-{"action":"attach","issuer_node_id":"bacloud","session_number":"0427"}
+{"action":"attach","session_number":"0427"}
 ```
 
-The four-digit session_number requires issuer_node_id. Initial attach is write-once for a connector binding and idempotent for the same slot. Rebinding to a different slot is a structured conflict. Subsequent role operations omit Session Numbers and client-selected identity, provider metadata and epochs. Access handles issuer end; role tools do not expose detach or local session start/end.
+The four-digit session_number is sufficient: the Mesh resolves issuer identity. Initial attach is write-once for a connector binding and idempotent for the same session. Rebinding to a different number is a structured conflict. Subsequent role operations omit Session Numbers and client-selected identity, provider metadata and epochs. Access handles issuer end; role tools do not expose detach or local session start/end.
 
 ## Local lifecycle and policy
 

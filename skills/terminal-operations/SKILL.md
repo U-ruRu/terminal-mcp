@@ -19,9 +19,9 @@ Executor: `/terminal-mcp/executor/v1/mcp`, десять инструментов
 Coordinator: `/terminal-mcp/coordinator/v1/mcp`, восемь инструментов задач/наблюдения/сообщений/health.
 На FirstByte и BacLOUD установлены одинаковые три первичных контракта: всего шесть коннекторов. Точные каталоги и валидные JSON-примеры находятся в [tool-contract.md](references/tool-contract.md).
 
-Получи слот на выбранном Access через `session(action="start", mode="legacy")`. Persistent-слот создаёт оператор; для его активации используй Access `session(action="start", mode="persistent", session_number=...)`. Сохрани полученные issuer_node_id и session_number только в рабочем контексте. Виды слотов — legacy и persistent; kind неизменен, Mobile/Console управляет теми же слотами.
+На Access выполни `session(action="start")`. Получи из успешного ответа `session_number` (четыре цифры, включая ведущие нули) и используй его при первом подключении ролей. Публичная выдача номера согласуется между доступными узлами Mesh. Persistent-слотами управляет оператор через Mobile/Console.
 
-На каждом нужном Executor/Coordinator выполни единственный первоначальный `session(action="attach", issuer_node_id=..., session_number=...)`. Квалифицированный `issuer:dddd` также подходит. Четырёхзначный код разрешается внутри issuer. Повторный attach того же слота идемпотентен; другой слот в существующей привязке вызывает binding conflict.
+На каждом нужном Executor/Coordinator выполни первоначальный `session(action="attach", session_number=...)`. Источник номера определяется Mesh автоматически. Повторный attach того же номера идемпотентен; другой номер в существующей привязке вызывает binding conflict.
 
 Role session = attach-only. Последующие команды, задачи и сообщения получают identity из доверенного контекста коннектора и вызываются без Session Number. Завершение issuer-сессии передаётся исходному Access. Состояние ролей наблюдай через доступные read-инструменты, а не выдуманные session status/start/end/detach действия роли.
 
