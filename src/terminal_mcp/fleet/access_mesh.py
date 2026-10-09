@@ -62,6 +62,29 @@ class AccessMeshReplication:
             peer for peer in self.config.peers if peer.instance_id in self.store.trusted_issuers
         )
 
+    @staticmethod
+    def _consume_abandoned(task: asyncio.Task) -> None:
+        """Drain a late transport result without delaying public admission."""
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            _LOG.debug("Late Mesh peer reply ignored after budget", exc_info=True)
+
+    @classmethod
+    async def _hard_bounded_fanout(cls, requests, *, budget: float) -> None:
+        """Never await cancellation acknowledgements past the shared deadline."""
+        if budget <= 0:
+            return
+        tasks = [asyncio.create_task(request) for request in requests]
+        done, pending = await asyncio.wait(tasks, timeout=budget)
+        for task in done:
+            cls._consume_abandoned(task)
+        for task in pending:
+            task.add_done_callback(cls._consume_abandoned)
+            task.cancel()
+
     async def negotiate_number(
         self, *, preferred: str | None = None, _budget_seconds: float = 30.0
     ):
@@ -126,10 +149,12 @@ class AccessMeshReplication:
                     if suggested is not None:
                         break
             finally:
+                # Cancellation of remote transports is not guaranteed to be
+                # prompt. Never await them after the fixed negotiation cap.
                 for task in tasks:
                     if not task.done():
+                        task.add_done_callback(self._consume_abandoned)
                         task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
 
             if suggested is not None and loop.time() < negotiation_end:
                 number = suggested
@@ -179,15 +204,9 @@ class AccessMeshReplication:
             finally:
                 await self._deliver(peer)
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*(publish(peer) for peer in self.peers), return_exceptions=True),
-                timeout=budget,
-            )
-        except TimeoutError:
-            # Issuance has already committed locally. Periodic outbox/snapshot
-            # reconciliation is responsible for unfinished peer delivery.
-            pass
+        await self._hard_bounded_fanout(
+            (publish(peer) for peer in self.peers), budget=budget,
+        )
 
     async def announce_start(self, **event):
         """Propagate an explicit Access.start, including its actual timestamp."""
@@ -200,13 +219,9 @@ class AccessMeshReplication:
             finally:
                 await self._deliver(peer)
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*(publish(peer) for peer in self.peers), return_exceptions=True),
-                timeout=2.5,
-            )
-        except TimeoutError:
-            pass
+        await self._hard_bounded_fanout(
+            (publish(peer) for peer in self.peers), budget=2.5,
+        )
 
     async def sync_starts(self, peer):
         cursor = ""
@@ -224,16 +239,10 @@ class AccessMeshReplication:
         # The durable local event remains authoritative when peers are offline.
         if not self.peers:
             return
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    *(self.request(peer, "numbers/end", event) for peer in self.peers),
-                    return_exceptions=True,
-                ),
-                timeout=2.5,
-            )
-        except TimeoutError:
-            pass
+        await self._hard_bounded_fanout(
+            (self.request(peer, "numbers/end", event) for peer in self.peers),
+            budget=2.5,
+        )
 
     async def sync_ends(self, peer):
         cursor = ""
