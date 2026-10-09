@@ -190,3 +190,48 @@ def test_legacy_qa_schema_fingerprint_remains_verifiable_after_marker_added(tmp_
     migrated = package(tmp_path / "new-mesh-schema")
     (migrated / "storage/access_mesh_numbers.py").write_text("MESH_NUMBERS_SCHEMA_VERSION = 2\n")
     assert release_version.schema_fingerprint(migrated) != original_hash
+
+
+def test_consecutive_qa_builds_increment_code_on_same_schema_and_keep_sha(tmp_path):
+    canonical = package(tmp_path / "canonical")
+    first = package(tmp_path / "first-qa")
+    manifest_file = first / "mcp/access_mesh_schema_baselines_v2.json"
+    manifest_file.write_text(json.dumps({"roles": {"executor": {"tools": ["session", "state"]}}}))
+    bump = release_version.calculate(first, canonical)
+    assert (bump["version"], bump["bump"]) == ("0.15.0", "schema")
+    release_version.stamp(first, bump, "abcdef0")
+    release_version.verify_prior_metadata(first, bump)
+
+    second = package(tmp_path / "second-qa")
+    (second / "mcp/access_mesh_schema_baselines_v2.json").write_text(manifest_file.read_text())
+    (second / "app.py").write_text("def run(): return 123\n")
+    advanced = release_version.calculate(second, first)
+    assert (advanced["version"], advanced["bump"]) == ("0.15.1", "code")
+    release_version.stamp(second, advanced, "123abcd")
+    release_version.verify_prior_metadata(second, advanced)
+
+    rebuilt = package(tmp_path / "same-build")
+    (rebuilt / "mcp/access_mesh_schema_baselines_v2.json").write_text(manifest_file.read_text())
+    (rebuilt / "app.py").write_text((second / "app.py").read_text())
+    repeat = release_version.calculate(rebuilt, second)
+    assert (repeat["version"], repeat["bump"]) == ("0.15.1", "unchanged")
+    assert release_version.resolve_sha("123abcdf1", None) == "123abcd"
+
+    (rebuilt / "storage/sqlite.py").write_text("SCHEMA_VERSION = 23\n")
+    another_schema = release_version.calculate(rebuilt, second)
+    assert (another_schema["version"], another_schema["bump"]) == ("0.16.0", "schema")
+
+
+def test_prior_qa_release_metadata_must_match_actual_installed_files(tmp_path):
+    before = package(tmp_path / "prior")
+    meta = {
+        "version": "0.14.4",
+        "schema_fingerprint": release_version.schema_fingerprint(before),
+        "code_fingerprint": release_version.code_fingerprint(before),
+        "commit_sha": "abcdef0",
+        "release_id": "0.14.4-abcdef0",
+    }
+    release_version.verify_prior_metadata(before, meta)
+    (before / "app.py").write_text("def run(): return 2\n")
+    with pytest.raises(ValueError, match="code fingerprint"):
+        release_version.verify_prior_metadata(before, meta)

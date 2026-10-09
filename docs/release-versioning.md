@@ -28,8 +28,11 @@ Keep the generated MCP baseline manifests current with the runtime:
 schema-contract tests must pass before release. Every SQLite schema
 migration must update its explicit schema revision. After a QA test
 deployment, the installer uses the most recent confirmed canonical
-release as the version baseline rather than incrementing from an
-unreleased QA build. After release retention prunes canonical wheels,
+release as the version baseline only for old unversioned QA builds.
+For fully versioned QA builds with verified `RELEASE_META.json`, each new
+code change increments the third digit on the same schema (e.g.,
+`0.15.0` then `0.15.1`), and the exact same source can be redeployed
+without another bump. Tampered or stale QA metadata blocks deployment. After release retention prunes canonical wheels,
 the committed `release/canonical_baseline.json` preserves the 0.14.4
 reference until the next canonical promotion writes
 `/opt/terminal-mcp/CANONICAL_BASELINE.json`.

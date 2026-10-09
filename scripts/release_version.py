@@ -89,6 +89,24 @@ def code_fingerprint(package: Path) -> str:
     return digest.hexdigest()
 
 
+def verify_prior_metadata(prior: Path, meta: dict[str, object]) -> None:
+    """Do not trust a QA version marker if its installed bytes differ."""
+    version = ".".join(str(part) for part in semantic_version(prior))
+    if str(meta.get("version")) != version:
+        raise ValueError("prior QA metadata version does not match installed package")
+    if meta.get("schema_fingerprint") != schema_fingerprint(prior):
+        raise ValueError("prior QA metadata schema fingerprint differs from installed package")
+    if meta.get("code_fingerprint") != code_fingerprint(prior):
+        raise ValueError("prior QA metadata code fingerprint differs from installed package")
+    sha = meta.get("commit_sha")
+    release_id = meta.get("release_id")
+    if sha is not None and (not isinstance(sha, str) or not SHA_RX.fullmatch(sha)):
+        raise ValueError("prior QA metadata commit SHA is invalid")
+    expected_release = version + ("-" + sha[:7].lower() if sha else "")
+    if release_id != expected_release:
+        raise ValueError("prior QA metadata release ID is invalid")
+
+
 def calculate(
     package: Path, prior: Path | None, baseline: dict[str, object] | None = None
 ) -> dict[str, object]:
@@ -175,6 +193,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="project directory")
     parser.add_argument("--prior-package", type=Path, help="installed package directory")
+    parser.add_argument(
+        "--prior-metadata", type=Path, help="verify installed QA release metadata before bump"
+    )
     parser.add_argument("--prior-baseline", type=Path, help="last stable schema/code fingerprints")
     parser.add_argument("--sha", help="commit SHA provided by build pipeline")
     parser.add_argument("--source-repo", type=Path, help="git checkout for fallback commit SHA")
@@ -187,6 +208,10 @@ def main() -> None:
     prior = args.prior_package
     if prior and not (prior / "version.py").is_file():
         parser.error("prior package is missing version.py")
+    if args.prior_metadata:
+        if prior is None:
+            parser.error("--prior-metadata requires --prior-package")
+        verify_prior_metadata(prior, json.loads(args.prior_metadata.read_text(encoding="utf-8")))
     baseline = None
     if args.prior_baseline:
         baseline = json.loads(args.prior_baseline.read_text(encoding="utf-8"))

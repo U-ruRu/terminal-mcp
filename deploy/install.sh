@@ -496,7 +496,16 @@ stage(){
   # Anchor its automatic bump to the last confirmed canonical release.
   prior_release="$ROOT/current"
   stable_found=false
-  if [ -f "$ROOT/current/QA_RELEASE.json" ]; then
+  use_current_qa=false
+  # A QA release created by our versioning system is a legitimate
+  # prerelease baseline. Compare it first: schema remains 15, and new
+  # code on that schema becomes 0.15.1, 0.15.2, etc.
+  if [ -f "$ROOT/current/QA_RELEASE.json" ] &&
+     [ -f "$ROOT/current/RELEASE_META.json" ]; then
+    use_current_qa=true
+    version_args+=(--prior-metadata "$ROOT/current/RELEASE_META.json")
+  fi
+  if [ -f "$ROOT/current/QA_RELEASE.json" ] && [ "$use_current_qa" = false ]; then
     while IFS= read -r prior_candidate; do
       if [ -f "$prior_candidate/CANONICAL_RELEASE.json" ] &&
          [ ! -f "$prior_candidate/QA_RELEASE.json" ] &&
@@ -521,7 +530,9 @@ stage(){
       version_args+=(--prior-baseline "$baseline_file")
     fi
   fi
-  if [ "$stable_found" = true ] || [ ! -f "$ROOT/current/QA_RELEASE.json" ]; then
+  if [ "$stable_found" = true ] ||
+     [ "$use_current_qa" = true ] ||
+     [ ! -f "$ROOT/current/QA_RELEASE.json" ]; then
     if [ -x "$prior_release/bin/python" ]; then
       prior_pkg=$("$prior_release/bin/python" -c \
         'from pathlib import Path; import terminal_mcp; print(Path(terminal_mcp.__file__).resolve().parent)') || {
