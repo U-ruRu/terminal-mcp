@@ -23,11 +23,11 @@ def test_persistent_public_role_claim_never_uses_session_lease(tmp_path):
         code = provisioned["access_code"]
         issued = call(
             client, "access", "session",
-            {"action": "start", "mode": "persistent", "code": code},
+            {"action": "start", "mode": "persistent", "session_number": code},
             request_id=801, conversation="qa3-access",
         )
         assert issued["ok"], issued
-        binding = {"issuer_node_id": "firstbyte", "access_code": code}
+        binding = {"issuer_node_id": "firstbyte", "session_number": code}
         attached_executor = call(
             client, "executor", "session", binding,
             request_id=802, conversation="qa3-executor",

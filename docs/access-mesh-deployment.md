@@ -1,6 +1,6 @@
 # Access Mesh V2: deployment and acceptance
 
-Release contract: **0.14.3**. This procedure targets **FirstByte and BacLOUD only**. Secondary hosts source, isolated tests and coordination. Main/Tokyo are outside this rollout. A passed source suite is preparation evidence, not proof of an installed release.
+Release contract: **0.14.4**. This procedure targets **FirstByte and BacLOUD only**. Secondary hosts source, isolated tests and coordination. Main/Tokyo are outside this rollout. A passed source suite is preparation evidence, not proof of an installed release.
 
 ## 1. Freeze the candidate and prepare recovery
 
@@ -30,7 +30,7 @@ Access Mesh uses the environment prefix `TERMINAL_MCP_`. For each target validat
 
 Peer ids must be distinct, exclude the local node and be present in authenticated Fleet configuration. Validate proof/trust configuration without placing keys in the repository. Per-slot and durable operator defaults can differ from initial environment defaults; read the operator defaults/slot views when validating effective policy.
 
-Verify ingress and transport authentication for all six MCP URLs, plus the authenticated internal Fleet paths. Access session issuance is separate from role attach. An issuer-qualified four-digit code is sensitive binding material, not a replacement for OAuth/bearer transport security.
+Verify ingress and transport authentication for all six MCP URLs, plus the authenticated internal Fleet paths. Access session issuance is separate from role attach. A four-digit session number is sensitive binding material, not a replacement for OAuth/bearer transport security.
 
 ## 3. Install and activate under the release gate
 
@@ -56,7 +56,7 @@ Use independent trusted connector identities for independent agents. Use disposa
 | Area | Native checks on FirstByte and BacLOUD |
 | --- | --- |
 | Discovery | Access1, Executor10, Coordinator8 at the exact three paths; permissive input planning, strict runtime repair, real annotations/action matrix and bounded outputs. |
-| Both issuers | Create a legacy slot from each Access; operator-provision and activate persistent; attach the returned issuer/code once to both roles/nodes. Same code digits from different issuers resolve independently. Wrong issuer, code or binding fails before effects. |
+| Both issuers | Create a legacy slot from each Access; operator-provision and activate persistent; attach the returned issuer/session number once to both roles/nodes. Same code digits from different issuers resolve independently. Wrong issuer, code or binding fails before effects. |
 | Lifecycle | Duration/cooldown/rearm; warning/draining; deadline shortening/extension; end; suspend/resume; rotate/delete; new local epoch and exact execution/claim cleanup. Test a short disposable policy instead of modifying production agents. |
 | Task ownership | Claim preserves ready; explicit state enters in_progress; release and expiry preserve each explicit state/checkpoint/result. Legacy releases at end; persistent release_on_end behavior is explicit. Stale revision/owner, repeated cleanup and successor-claim races leave correct ownership and atomic receipts. |
 | Commands | Launch/read/cancel/recovery with correct task attribution; code-free reads of another agent's local hash; hashless all-agent journal, paging and retained-output behavior. Queue/admission/fencing remain valid. |

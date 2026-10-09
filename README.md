@@ -2,7 +2,7 @@
 
 `terminal-mcp` — Python-сервис управляемого доступа к Linux-терминалу через MCP, HTTP Actions и Console.
 
-Текущая версия приложения: **0.14.3**. В публичных контрактах Executor и Coordinator операция `session` поддерживает только `attach` с обязательным `access_code`. Основной контракт: **Distributed Multi-Issuer Access Mesh V2**.
+Текущая версия приложения: **0.14.4**. В публичных контрактах Executor и Coordinator операция `session` поддерживает только `attach` с обязательным `session_number`. Основной контракт: **Distributed Multi-Issuer Access Mesh V2**.
 
 ## Репозиторий и область релиза
 
@@ -28,11 +28,11 @@ Access выдаёт или активирует слот своего issuer. Ex
 
 ### Начало работы
 
-На выбранном Access вызови `session(action="start", mode="legacy")`: ответ содержит новый LogicalAgent, `issuer_node_id`, `public_name` и четырёхзначный `access_code`. Persistent-слот заранее создаёт оператор; агент активирует его на его issuer через `session(action="start", mode="persistent", code=...)`.
+На выбранном Access вызови `session(action="start", mode="legacy")`: ответ содержит `issuer_node_id`, `public_name` и четырёхзначный `session_number`. Persistent-слот заранее создаёт оператор; агент активирует его на его issuer через `session(action="start", mode="persistent", session_number=...)`.
 
-На каждом нужном Executor/Coordinator один раз выполни `session(action="attach", issuer_node_id=..., access_code=...)`. Поддерживается также квалифицированный код вида `issuer:dddd`. Идентификатор issuer обязателен для однозначного разрешения четырёхзначного кода. Повторное attach того же слота сохраняет привязку; подмена слота в существующей привязке возвращает `access_mesh_binding_conflict`.
+На каждом нужном Executor/Coordinator один раз выполни `session(action="attach", issuer_node_id=..., session_number=...)`. Идентификатор issuer обязателен для однозначного разрешения четырёхзначного номера сессии. Повторное attach того же слота сохраняет привязку; подмена слота в существующей привязке возвращает `access_mesh_binding_conflict`.
 
-**Role session = attach-only.** Управление началом и завершением issuer-сессии выполняется на Access. После attach доменные операции получают identity из доверенного контекста коннектора; Access Code повторно в команды, задачи и сообщения не передаётся. Чтение известного `cmd_hash`, в том числе созданного другим агентом, доступно без Access Code и предварительного attach. `command_read` без `cmd_hash` возвращает локальный журнал команд всех LogicalAgent с opaque `next_cursor`. Настроенная транспортная аутентификация сохраняется и для code-free чтения.
+**Role session = attach-only.** Управление началом и завершением issuer-сессии выполняется на Access. После attach доменные операции получают identity из доверенного контекста коннектора; Session Number повторно в команды, задачи и сообщения не передаётся. Чтение известного `cmd_hash`, в том числе созданного другим агентом, доступно без Session Number и предварительного attach. `command_read` без `cmd_hash` возвращает локальный журнал команд всех LogicalAgent с opaque `next_cursor`. Настроенная транспортная аутентификация сохраняется и для чтения без номера сессии.
 
 Первичная последовательность: Access выдаёт слот → нужные роли выполняют attach → Executor получает задачу и делает claim → явный `task_state(state="in_progress", ...)` отмечает начало работы → команды и проверка вывода → checkpoint/result → явное завершение задачи. Завершение issuer-сессии передаётся исходному Access; отдельного уведомления каждого execution-сервера о завершении работы нет.
 
@@ -115,7 +115,7 @@ Endpoint: `/mcp`.
 
 Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
-Legacy `/mcp` сохраняет совместимость со старыми клиентами, включая их session start/end/interrupt и Access Code binding. Этот контракт отделён от первичных Access/Executor/Coordinator V2 и не задаёт порядок работы новых коннекторов.
+Legacy `/mcp` сохраняет совместимость со старыми клиентами, включая их session start/end/interrupt и Session Number binding. Этот контракт отделён от первичных Access/Executor/Coordinator V2 и не задаёт порядок работы новых коннекторов.
 
 ## References
 

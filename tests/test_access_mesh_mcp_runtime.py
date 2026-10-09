@@ -80,14 +80,14 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
                 schema = tool["inputSchema"]
                 assert schema["type"] == "object"
                 if role in {"executor", "coordinator"} and tool["name"] == "session":
-                    assert schema["required"] == ["access_code"]
+                    assert schema["required"] == ["session_number"]
                     assert schema["properties"]["action"]["const"] == "attach"
                 else:
                     assert "required" not in schema
             public = client.get(f"/.well-known/oauth-protected-resource/terminal-mcp/{role}/v1/mcp")
             assert public.status_code == 200
             assert public.json()["resource"].endswith(f"/terminal-mcp/{role}/v1/mcp")
-        missing = call(client, "executor", "session", {"access_code": "1234"})
+        missing = call(client, "executor", "session", {"session_number": "1234"})
         assert missing["error"]["code"] == "input_validation_failed"
         assert missing["error"]["path"] == "issuer_node_id"
         rejected = call(client, "executor", "session", {"action": "start"})
@@ -112,14 +112,15 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
             client, "access", "session", {"action": "start", "mode": "legacy"}, request_id=42
         )
         assert replay["error"]["code"] == "session_already_started"
-        binding = {"issuer_node_id": issued["issuer_node_id"], "access_code": issued["access_code"]}
+        binding = {
+            "issuer_node_id": issued["issuer_node_id"],
+            "session_number": issued["session_number"],
+        }
         executor = call(client, "executor", "session", binding)
         assert executor["ok"] is True, executor
         coord = call(client, "coordinator", "session", binding)
         assert coord["ok"] is True, coord
-        assert (
-            executor["logical_agent_id"] == coord["logical_agent_id"]
-        )
+        assert executor["logical_agent_id"] == coord["logical_agent_id"]
         assert executor["work_session_id"] == coord["work_session_id"]
         ran = call(
             client,
@@ -197,7 +198,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
                 client,
                 role,
                 "session",
-                {"issuer_node_id": "firstbyte", "access_code": slot["access_code"]},
+                {"issuer_node_id": "firstbyte", "session_number": slot["session_number"]},
                 conversation=conversation,
             )
             assert value["ok"], value
@@ -364,7 +365,7 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
         slot = call(client, "access", "session", {"action": "start", "mode": "legacy"})
-        binding = {"issuer_node_id": "firstbyte", "access_code": slot["access_code"]}
+        binding = {"issuer_node_id": "firstbyte", "session_number": slot["session_number"]}
         for role in ["executor", "coordinator"]:
             assert call(client, role, "session", binding)["ok"]
         key = {"namespace": "mesh-checkpoints", "task_id": "one"}

@@ -97,7 +97,7 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class AccessCode(RootModel[str]):
+class SessionNumber(RootModel[str]):
     root: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
 
 
@@ -202,7 +202,7 @@ class SessionStartResult(_Strict):
     ok: Literal[True]
     action: Literal["start"]
     session: SessionInfo
-    access_code: AccessCode | None = None
+    session_number: SessionNumber | None = None
 
 
 class SessionEndResult(_Strict):
@@ -981,7 +981,7 @@ def session_result(raw: dict[str, Any], action: str) -> CallToolResult:
         session["session_state"] = raw.get("session_state") or "active"
         structured = {"ok": True, "action": "start", "session": session}
         if raw.get("access_code") is not None:
-            structured["access_code"] = raw["access_code"]
+            structured["session_number"] = raw["access_code"]
     else:
         structured = {
             "ok": True,

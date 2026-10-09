@@ -493,7 +493,8 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
 
     if model is AttachInput:
         # Executor and Coordinator publish the same attach-only schema.
-        # Retain qualified-code compatibility without using nested JSONSchema.
+        # The issuer-qualified internal representation stays private; this
+        # connector accepts only a four-digit session number.
         return {
             "type": "object",
             "properties": {
@@ -509,21 +510,18 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
                     "maxLength": 128,
                     "description": (
                         "Issuer node ID (for example firstbyte or bacloud). "
-                        "Required with an unqualified four-digit access_code."
+                        "Required together with the four-digit session_number."
                     ),
                 },
-                "access_code": {
+                "session_number": {
                     "type": "string",
                     "minLength": 4,
-                    "maxLength": 133,
-                    "pattern": r"^(?:[A-Za-z0-9_.:-]{1,128}:)?[0-9]{4}$",
-                    "description": (
-                        "Required Access Code issued by Access MCP: four digits "
-                        "with issuer_node_id, or issuer-qualified code."
-                    ),
+                    "maxLength": 4,
+                    "pattern": r"^[0-9]{4}$",
+                    "description": "Four-digit session number issued by Access MCP.",
                 },
             },
-            "required": ["access_code"],
+            "required": ["session_number"],
             "additionalProperties": False,
         }
     if model is TaskManageInput:
@@ -605,7 +603,7 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
         path = "$"
         for candidate in (
             "issuer_node_id",
-            "access_code",
+            "session_number",
             "mode",
             "code",
             "task_id",

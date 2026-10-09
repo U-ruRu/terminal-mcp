@@ -1,8 +1,8 @@
 # Connector runtime contract
 
-Release: **0.14.3**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
+Release: **0.14.4**. Contract: Distributed Multi-Issuer Access Mesh V2, endpoint version 1.
 
-In 0.14.2 both Executor and Coordinator publish `session` with required `access_code` and attach-only `action`. Only Access MCP issues or ends a session. The optional `issuer_node_id` is required for unqualified four-digit access codes.
+In 0.14.4 both Executor and Coordinator publish `session` with required `session_number` and attach-only `action`. Only Access MCP issues or ends a session. The optional `issuer_node_id` is required for unqualified four-digit session numbers.
 
 ## Published surfaces
 
@@ -26,9 +26,9 @@ The effective V2 discovery authority is `src/terminal_mcp/mcp/access_mesh_schema
 
 ## Issuer session versus role attach
 
-Only Access `session` accepts `start`, `end`, `status`. `start` requires `mode`; legacy issuance rejects a supplied code, and persistent activation requires an existing persistent slot's four-digit code. The issuer namespace scopes the code. Slot kind is immutable and has exactly two values: `legacy`, `persistent`.
+Only Access `session` accepts `start`, `end`, `status`. `start` requires `mode`; legacy issuance rejects a supplied session_number, and persistent activation requires an existing persistent slot's four-digit session_number. The issuer namespace scopes the number. Slot kind is immutable and has exactly two values: `legacy`, `persistent`.
 
-Executor/Coordinator `session` is attach-only and accepts `attach`, an Access Code and its issuer. The qualification can be `issuer_node_id` plus `access_code`, or an `issuer:dddd` code. The same slot can attach to multiple role/node connectors. The trusted provider/principal/role context identifies each binding; an existing binding cannot switch slots. Subsequent domain writes omit codes and client-asserted identity/epoch fields. Ending a session is an Access/issuer operation, not a detach message to each node.
+Executor/Coordinator `session` is attach-only and accepts `attach`, a Session Number and its issuer. Provide both issuer_node_id and a four-digit session_number. The same slot can attach to multiple role/node connectors. The trusted provider/principal/role context identifies each binding; an existing binding cannot switch slots. Subsequent domain writes omit codes and client-asserted identity/epoch fields. Ending a session is an Access/issuer operation, not a detach message to each node.
 
 Local grant/policy replicas provide admission. Reads use a pure observation path. Writes materialize the local WorkSession and check its local deadline, epoch and cleanup fence. Local operations do not call an issuer RPC for each permit. A partition does not suspend already-replicated deadlines; unseen issuer changes become enforceable after delivery/catchup. Binding an unknown grant requires local replication first.
 
@@ -60,7 +60,7 @@ Shell launch requires stronger care: constant JSON-RPC ID `0` is treated as a fr
 
 ## Read paths and paging
 
-`command_read(cmd_hash=...)` reads retained local output for any LogicalAgent without Access Code or prior attach. `command_read` with no hash returns a bounded all-agent local journal with command and identity metadata. Transport authentication still applies. Coordinator health also works before attach; health collection success and actual component health are separate fields.
+`command_read(cmd_hash=...)` reads retained local output for any LogicalAgent without Session Number or prior attach. `command_read` with no hash returns a bounded all-agent local journal with command and identity metadata. Transport authentication still applies. Coordinator health also works before attach; health collection success and actual component health are separate fields.
 
 Task reads and message reads use their declared scope and canonical projections. Message inbox/history/ACK are local to the attached connector's execution node; they do not query the issuer for read permission. Opaque cursors bind the original query/caller where required. Reuse them unchanged, with the same filters/detail mode. Message paging uses durable keyset sequences and is safe while prior inbox rows are consumed or retained data is pruned.
 
@@ -80,7 +80,7 @@ The full peer payload, including broadcast exclusions, and the full acceptance p
 
 Mobile/Console calls the operator API for the same two immutable slot kinds. Read endpoints are `/actions/access/slots`, `/actions/access/slots/{slot_id}`, `/actions/access/defaults`. `POST /actions/access/mutate` supports create/defaults/policy/deadline/end/suspend/resume/rotate/delete. This operator HTTP surface uses explicit idempotency keys and revision guards; it exposes no command execution.
 
-Duration, cooldown, rearm, warning/draining and release-on-end are per-slot policy. Warning/draining thresholds must be nonnegative and smaller than duration. Policy defaults persist separately and affect subsequent issuance defaults. A deadline mutation applies to an active cycle and requires a timezone-aware time later than its start. Slot list views exclude Access Codes; code issuance/rotation receipts are sensitive.
+Duration, cooldown, rearm, warning/draining and release-on-end are per-slot policy. Warning/draining thresholds must be nonnegative and smaller than duration. Policy defaults persist separately and affect subsequent issuance defaults. A deadline mutation applies to an active cycle and requires a timezone-aware time later than its start. Slot list views exclude Session Numbers; session number issuance/rotation receipts are sensitive.
 
 ## Effect metadata
 
@@ -92,4 +92,4 @@ OpenAPI operations publish corresponding `x-openai-isConsequential` classificati
 
 Run focused/runtime/discovery/documentation tests, the complete regression suite, and live FirstByte/BacLOUD checks on the exact release SHA. Required boundaries are six primary connectors, both directions of messaging, task ownership lifecycle, issuer-partition local operations, code-free cross-agent command reads and mobile revocation/deadline controls. See [deployment and acceptance](access-mesh-deployment.md). Legacy `/mcp` checks complement this matrix; they do not substitute for it.
 
-In 0.14.2 directed Fleet messages addressed by public_name are delivered to each active node attachment of the recipient LogicalAgent; local-first broadcast still deduplicates the recipient globally across nodes. Each local inbox deduplicates delivery by message_hash.
+In 0.14.4 directed Fleet messages addressed by public_name are delivered to each active node attachment of the recipient LogicalAgent; local-first broadcast still deduplicates the recipient globally across nodes. Each local inbox deduplicates delivery by message_hash.

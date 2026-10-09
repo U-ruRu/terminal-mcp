@@ -432,7 +432,7 @@ class PublicError(_BoundedValue):
 # Schema-owned paths only. Unknown extra-field names may themselves be secrets.
 PUBLIC_FIELDS = frozenset(
     """
-    issuer_node_id access_code slot_id policy duration_seconds cooldown_seconds
+    issuer_node_id session_number slot_id policy duration_seconds cooldown_seconds
     rearm_enabled release_on_end warning_seconds draining_seconds scope
     request action mode code display_name subject namespace task_id lane state
     operational_status tags detail show_done show_archived limit cursor sender text

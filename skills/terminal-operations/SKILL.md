@@ -1,7 +1,7 @@
 ---
 name: terminal-operations
 description: Работает с Linux-серверами через Terminal MCP Access Mesh V2: выдача доступа на Access, однократный attach к Executor/Coordinator, задачи, команды, сообщения и проверка результата.
-compatibility: Terminal MCP 0.14.3; Access v1, Executor v1, Coordinator v1; Python runtime server-side.
+compatibility: Terminal MCP 0.14.4; Access v1, Executor v1, Coordinator v1; Python runtime server-side.
 metadata:
   author: U-ruRu
   version: "3.0.0"
@@ -19,11 +19,11 @@ Executor: `/terminal-mcp/executor/v1/mcp`, десять инструментов
 Coordinator: `/terminal-mcp/coordinator/v1/mcp`, восемь инструментов задач/наблюдения/сообщений/health.
 На FirstByte и BacLOUD установлены одинаковые три первичных контракта: всего шесть коннекторов. Точные каталоги и валидные JSON-примеры находятся в [tool-contract.md](references/tool-contract.md).
 
-Получи слот на выбранном Access через `session(action="start", mode="legacy")`. Persistent-слот создаёт оператор; для его активации используй Access `session(action="start", mode="persistent", code=...)`. Сохрани полученные issuer_node_id и access_code только в рабочем контексте. Виды слотов — legacy и persistent; kind неизменен, Mobile/Console управляет теми же слотами.
+Получи слот на выбранном Access через `session(action="start", mode="legacy")`. Persistent-слот создаёт оператор; для его активации используй Access `session(action="start", mode="persistent", session_number=...)`. Сохрани полученные issuer_node_id и session_number только в рабочем контексте. Виды слотов — legacy и persistent; kind неизменен, Mobile/Console управляет теми же слотами.
 
-На каждом нужном Executor/Coordinator выполни единственный первоначальный `session(action="attach", issuer_node_id=..., access_code=...)`. Квалифицированный `issuer:dddd` также подходит. Четырёхзначный код разрешается внутри issuer. Повторный attach того же слота идемпотентен; другой слот в существующей привязке вызывает binding conflict.
+На каждом нужном Executor/Coordinator выполни единственный первоначальный `session(action="attach", issuer_node_id=..., session_number=...)`. Квалифицированный `issuer:dddd` также подходит. Четырёхзначный код разрешается внутри issuer. Повторный attach того же слота идемпотентен; другой слот в существующей привязке вызывает binding conflict.
 
-Role session = attach-only. Последующие команды, задачи и сообщения получают identity из доверенного контекста коннектора и вызываются без Access Code. Завершение issuer-сессии передаётся исходному Access. Состояние ролей наблюдай через доступные read-инструменты, а не выдуманные session status/start/end/detach действия роли.
+Role session = attach-only. Последующие команды, задачи и сообщения получают identity из доверенного контекста коннектора и вызываются без Session Number. Завершение issuer-сессии передаётся исходному Access. Состояние ролей наблюдай через доступные read-инструменты, а не выдуманные session status/start/end/detach действия роли.
 
 ## Задача и команда
 
@@ -31,9 +31,9 @@ Role session = attach-only. Последующие команды, задачи 
 
 Claim lifecycle сохраняет state, checkpoint и result. Явно установи in_progress через task_state либо Coordinator task_manage(action="state"). Обновление свойств action=update сохраняет state. Сохраняй промежуточный checkpoint через Executor task_comment(action="checkpoint") либо Coordinator task_manage(action="checkpoint"); action="comment" добавляет запись истории. Выполни команды с подходящим task_scope из ответа сервера, прочитай вывод до терминального статуса, проверь exit_code и фактический результат. Для завершения передай проверяемый result через явное state=done/action=done.
 
-Читай известный cmd_hash через command_read без Access Code, в том числе для команды другого LogicalAgent. Вариант command_read без cmd_hash возвращает локальный журнал всех агентов с identity metadata. Предварительный attach для этих чтений не требуется; настроенная транспортная аутентификация сохраняется. Успешный запуск команды подтверждает только запуск: тест, Git diff, health или readback должен подтвердить нужный эффект.
+Читай известный cmd_hash через command_read без Session Number, в том числе для команды другого LogicalAgent. Вариант command_read без cmd_hash возвращает локальный журнал всех агентов с identity metadata. Предварительный attach для этих чтений не требуется; настроенная транспортная аутентификация сохраняется. Успешный запуск команды подтверждает только запуск: тест, Git diff, health или readback должен подтвердить нужный эффект.
 
-Используй limit/cursor и компактный detail по умолчанию. Продолжай opaque next_cursor без преобразования. При усечении нужного результата прочитай следующую страницу. Не выводи токены, private keys, Access Codes, raw provider identifiers и содержимое секретных конфигураций.
+Используй limit/cursor и компактный detail по умолчанию. Продолжай opaque next_cursor без преобразования. При усечении нужного результата прочитай следующую страницу. Не выводи токены, private keys, Session Numbers, raw provider identifiers и содержимое секретных конфигураций.
 
 ## Локальные циклы и продолжение
 

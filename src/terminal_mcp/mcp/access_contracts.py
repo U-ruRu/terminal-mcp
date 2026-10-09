@@ -21,31 +21,31 @@ from terminal_mcp.mcp.role_contracts import (
 class AttachInput(StrictRoleInput):
     action: Literal["attach"] = "attach"
     issuer_node_id: Annotated[str | None, Field(min_length=1, max_length=128)] = None
-    access_code: Annotated[
-        str, Field(min_length=4, max_length=133, pattern=r"^(?:[A-Za-z0-9_.:-]{1,128}:)?[0-9]{4}$")
+    session_number: Annotated[
+        str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")
     ]
 
     @model_validator(mode="after")
     def issuer_required(self):
-        if not self.issuer_node_id and ":" not in self.access_code:
-            raise ValueError("issuer_node_id is required for an unqualified access_code")
+        if not self.issuer_node_id:
+            raise ValueError("issuer_node_id is required with session_number")
         return self
 
 
 class IssuerSessionInput(StrictRoleInput):
     action: Literal["start", "end", "status"]
     mode: Literal["legacy", "persistent"] | None = None
-    code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
+    session_number: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
 
     @model_validator(mode="after")
     def action_fields(self):
         if self.action == "start":
             if self.mode is None:
                 raise ValueError("mode is required for start")
-            if self.mode == "persistent" and self.code is None:
-                raise ValueError("code is required for persistent activation")
-            if self.mode == "legacy" and self.code is not None:
-                raise ValueError("code is not accepted when issuing a legacy slot")
+            if self.mode == "persistent" and self.session_number is None:
+                raise ValueError("session_number is required for persistent activation")
+            if self.mode == "legacy" and self.session_number is not None:
+                raise ValueError("session_number is not accepted when issuing a legacy session")
         elif self.mode is not None:
             raise ValueError("mode is accepted only for start")
         return self
@@ -158,7 +158,7 @@ class IssuerReceipt(_Strict):
     session_state: str | None = None
     hard_expires_at: str | None = None
     remaining_seconds: int | None = None
-    access_code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
+    session_number: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
 
 
 class IssuerOutput(RootModel[IssuerReceipt | AccessError]):

@@ -35,11 +35,11 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
             schema = tool.parameters
             Draft202012Validator.check_schema(schema)
             if role in {"executor", "coordinator"} and tool.name == "session":
-                # The public connector must know the Access Code is mandatory,
+                # The public connector must require the four-digit session number,
                 # and that only attachment (never lifecycle mutation) is valid.
-                assert schema["required"] == ["access_code"]
+                assert schema["required"] == ["session_number"]
                 assert schema["properties"]["action"]["const"] == "attach"
-                assert schema["properties"]["access_code"]["type"] == "string"
+                assert schema["properties"]["session_number"]["type"] == "string"
                 assert schema["properties"]["issuer_node_id"]["type"] == "string"
                 assert "allOf" not in schema
             else:
@@ -90,6 +90,7 @@ def test_http_action_metadata_and_mesh_schemas_are_authenticated_separately(tmp_
         assert rpc(client, "access", "tools/list", token=False).status_code == 401
         assert call(client, "executor", "command_read", {}, meta=False)["ok"] is True
 
+
 def test_executor_and_coordinator_publish_identical_attach_only_session_schema(tmp_path):
     app = create_app(settings(tmp_path))
     executor = app.state.executor_mcp._tool_manager.get_tool("session")
@@ -98,16 +99,18 @@ def test_executor_and_coordinator_publish_identical_attach_only_session_schema(t
     schema = executor.parameters
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
-    validator.validate({"access_code": "0427", "issuer_node_id": "firstbyte"})
-    validator.validate({"action": "attach", "access_code": "firstbyte:0427"})
+    validator.validate({"session_number": "0427", "issuer_node_id": "firstbyte"})
+    validator.validate(
+        {"action": "attach", "session_number": "0427", "issuer_node_id": "firstbyte"}
+    )
     for invalid in (
         {},
-        {"action": "start", "issuer_node_id": "firstbyte", "access_code": "0427"},
-        {"action": "end", "issuer_node_id": "firstbyte", "access_code": "0427"},
-        {"action": "detach", "issuer_node_id": "firstbyte", "access_code": "0427"},
-        {"action": "attach", "issuer_node_id": "firstbyte", "access_code": "abc"},
+        {"action": "start", "issuer_node_id": "firstbyte", "session_number": "0427"},
+        {"action": "end", "issuer_node_id": "firstbyte", "session_number": "0427"},
+        {"action": "detach", "issuer_node_id": "firstbyte", "session_number": "0427"},
+        {"action": "attach", "issuer_node_id": "firstbyte", "session_number": "abc"},
     ):
         with pytest.raises(JsonSchemaValidationError):
             validator.validate(invalid)
     assert "Attach this connector once" in coordinator.description
-    assert "mandatory" in coordinator.description
+    assert "session_number" in coordinator.description
