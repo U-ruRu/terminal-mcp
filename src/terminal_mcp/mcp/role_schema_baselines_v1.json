@@ -21,17 +21,17 @@
       {
         "contract_version": 1,
         "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 576,
-        "planning_input_schema_digest": "2ca9723b907ef17489f04200e1ff4a9310d02aebcd6b5690a8fc822361e44b58",
-        "runtime_input_schema_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
+        "planning_input_schema_bytes": 581,
+        "planning_input_schema_digest": "0bec8d43350b1b2a95e8cde424f15a518a5706211224e52625b1014c486c85ca",
+        "runtime_input_schema_digest": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
         "tool_name": "task_list"
       },
       {
         "contract_version": 1,
         "endpoint_role": "coordinator",
-        "planning_input_schema_bytes": 34127,
-        "planning_input_schema_digest": "4b3bcf25ea01e162d56278fe98b69e8558a8caccbaa943ba4fbacb522e7ab6bd",
-        "runtime_input_schema_digest": "6232410f5645f99e3e052331d84c1bfb42a3718eccfb93ad1dbf1c56e37f58a0",
+        "planning_input_schema_bytes": 29161,
+        "planning_input_schema_digest": "3ecfda37e69aa0eabed1d1032e45a2c3c772ee9ad497afb743df9b8177685e2a",
+        "runtime_input_schema_digest": "5ef4f3286de0b136412c51465fb1340c249292ee3b3b113add8e84f0dd636edf",
         "tool_name": "task_manage"
       },
       {
@@ -79,9 +79,9 @@
       {
         "contract_version": 1,
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 576,
-        "planning_input_schema_digest": "2ca9723b907ef17489f04200e1ff4a9310d02aebcd6b5690a8fc822361e44b58",
-        "runtime_input_schema_digest": "c3c8b2a4eb1c70f8ef776f811d536a7903efd8b022bf0c006aca341872562c63",
+        "planning_input_schema_bytes": 581,
+        "planning_input_schema_digest": "0bec8d43350b1b2a95e8cde424f15a518a5706211224e52625b1014c486c85ca",
+        "runtime_input_schema_digest": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
         "tool_name": "task_list"
       },
       {
@@ -127,9 +127,9 @@
       {
         "contract_version": 1,
         "endpoint_role": "executor",
-        "planning_input_schema_bytes": 513,
-        "planning_input_schema_digest": "4e8003dccc62e3b17c3c13801b8f4d65861e40804470a693b8665b0f8bce6221",
-        "runtime_input_schema_digest": "7ce9cc81891989724481105b3fa1b6982a615acd3652e8a65f869b644a38fe79",
+        "planning_input_schema_bytes": 476,
+        "planning_input_schema_digest": "73242e05726106e1829b85b588179108cfd65c63b1009807069a9a5956b7530a",
+        "runtime_input_schema_digest": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",
         "tool_name": "task_state"
       },
       {

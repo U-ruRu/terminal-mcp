@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from test_access_mesh_mcp_runtime import call, settings
+from test_access_mesh_native_lifecycle import actor
 
 from terminal_mcp.app import create_app
 
@@ -18,6 +19,28 @@ def mutate(client, action, key, **payload):
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def internal_persistent_start(client, app, number):
+    """Mobile provisioning starts a persistent slot via internal issuer API.
+
+    Public Access.start intentionally accepts action only.
+    """
+    async def start():
+        return await app.state.access_mesh.issuer_session(
+            actor("access"), action="start", mode="persistent", code=number
+        )
+
+    return client.portal.call(start)
+
+
+def internal_persistent_end(client, app, number):
+    async def end():
+        return await app.state.access_mesh.issuer_session(
+            actor("access"), action="end", mode="persistent", code=number
+        )
+
+    return client.portal.call(end)
 
 
 def test_mobile_provisioning_policy_rotation_delete_and_idempotency(tmp_path):
@@ -49,15 +72,9 @@ def test_mobile_provisioning_policy_rotation_delete_and_idempotency(tmp_path):
         assert persistent["ok"], persistent
         view = client.get(f"/actions/access/slots/{persistent['slot_id']}", headers=HEADERS).json()
         assert view["slot"]["session_lifecycle"]["state"] == "idle"
-        started = call(
-            client,
-            "access",
-            "session",
-            {"action": "start", "mode": "persistent", "session_number": persistent["access_code"]},
-            request_id=500,
-        )
+        started = internal_persistent_start(client, app, persistent["access_code"])
         assert started["ok"], started
-        binding = {"issuer_node_id": "firstbyte", "session_number": first["access_code"]}
+        binding = {"session_number": first["access_code"]}
         attached = call(client, "executor", "session", binding)
         assert attached["ok"], attached
         rotated = mutate(
@@ -117,7 +134,8 @@ def test_mobile_provisioning_policy_rotation_delete_and_idempotency(tmp_path):
 
 def test_defaults_persist_and_legacy_disable_does_not_disable_persistent(tmp_path):
     config = settings(tmp_path)
-    with TestClient(create_app(config), base_url="https://terminal.example") as client:
+    app = create_app(config)
+    with TestClient(app, base_url="https://terminal.example") as client:
         result = mutate(
             client,
             "defaults",
@@ -135,13 +153,7 @@ def test_defaults_persist_and_legacy_disable_does_not_disable_persistent(tmp_pat
         assert mutate(client, "create", "disabled", mode="legacy")["code"] == "legacy_disabled"
         persistent = mutate(client, "create", "persistent", mode="persistent")
         assert persistent["ok"], persistent
-        assert call(
-            client,
-            "access",
-            "session",
-            {"action": "start", "mode": "persistent", "session_number": persistent["access_code"]},
-            request_id=4,
-        )["ok"]
+        assert internal_persistent_start(client, app, persistent["access_code"])["ok"]
         malformed = mutate(
             client,
             "delete",
@@ -180,14 +192,8 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
             },
         )
         assert slot["ok"], slot
-        started = call(
-            client,
-            "access",
-            "session",
-            {"action": "start", "mode": "persistent", "session_number": slot["access_code"]},
-            request_id=10,
-        )
-        assert started["ok"] and started["hard_expires_at"] is not None
+        started = internal_persistent_start(client, app, slot["access_code"])
+        assert started["ok"], started
         updated = mutate(
             client,
             "deadline",
@@ -204,23 +210,17 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
         assert view["session_lifecycle"]["hard_expires_at"] == (
             clock[0] + timedelta(seconds=20)
         ).isoformat(timespec="microseconds")
-        ended = call(client, "access", "session", {"action": "end"}, request_id=11)
+        ended = internal_persistent_end(client, app, slot["access_code"])
         assert ended["ok"], ended
-        immediate = call(
-            client,
-            "access",
-            "session",
-            {"action": "start", "mode": "persistent", "session_number": slot["access_code"]},
-            request_id=12,
-        )
+        immediate = internal_persistent_start(client, app, slot["access_code"])
         assert immediate["ok"], immediate
-        assert immediate["hard_expires_at"] == view["session_lifecycle"]["hard_expires_at"]
+        resumed = client.get(
+            f"/actions/access/slots/{slot['slot_id']}", headers=HEADERS
+        ).json()["slot"]
+        assert resumed["session_lifecycle"]["hard_expires_at"] == view["session_lifecycle"]["hard_expires_at"]
         clock[0] += timedelta(seconds=5)
-        restarted = call(
-            client,
-            "access",
-            "session",
-            {"action": "start", "mode": "persistent", "session_number": slot["access_code"]},
-            request_id=13,
-        )
-        assert restarted["error"]["code"] == "session_already_started", restarted
+        restarted = internal_persistent_start(client, app, slot["access_code"])
+        assert restarted["ok"] is False and (
+            restarted.get("code") == "session_already_started"
+            or restarted.get("error") == "session_already_started"
+        ), restarted

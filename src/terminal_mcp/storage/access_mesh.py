@@ -487,7 +487,7 @@ class AccessMeshStore(LocalAccessMesh):
     def canonical_slot(self, slot: SlotSnapshot) -> SlotSnapshot:
         """Translate a historical Mesh alias to the deterministic winner."""
         number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
-        winner = self.numbers.winner(number) if number else None
+        winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
         if winner is None:
             return slot
         selected = self.slot(winner["issuer_id"], winner["slot_id"])
@@ -545,7 +545,7 @@ class AccessMeshStore(LocalAccessMesh):
     def merged_cycle(self, slot: SlotSnapshot, now: datetime) -> dict:
         """Choose the maximum shared expiry; apply end events to current cycle only."""
         number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
-        winner = self.numbers.winner(number) if number is not None else None
+        winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
         if winner and (winner["issuer_id"], winner["slot_id"]) == (slot.issuer_id, slot.slot_id):
             started = _parse(winner["started_at"])
             merged_end = _parse(winner["hard_expires_at"])
@@ -563,7 +563,7 @@ class AccessMeshStore(LocalAccessMesh):
     def number_cycle(self, slot: SlotSnapshot, now: datetime) -> dict | None:
         """Stable per-cycle key prevents a late end fencing a newer cycle."""
         number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
-        winner = self.numbers.winner(number) if number else None
+        winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
         if winner is None:
             return None
         effective = self.slot(winner["issuer_id"], winner["slot_id"])

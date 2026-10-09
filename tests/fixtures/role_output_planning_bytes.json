@@ -6,7 +6,7 @@
   "coordinator.task_get": 365,
   "coordinator.task_graph": 404,
   "coordinator.task_list": 379,
-  "coordinator.task_manage": 440,
+  "coordinator.task_manage": 498,
   "executor.command_cancel": 1132,
   "executor.command_read": 1132,
   "executor.command_recovery": 1132,
@@ -14,7 +14,7 @@
   "executor.message": 613,
   "executor.session": 601,
   "executor.task_claim": 440,
-  "executor.task_comment": 440,
+  "executor.task_comment": 313,
   "executor.task_list": 379,
-  "executor.task_state": 440
+  "executor.task_state": 313
 }

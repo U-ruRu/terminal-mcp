@@ -1235,7 +1235,7 @@ class TaskCoordinator:
 
     async def _action_comment(self, agent_id, namespace, task_id, **kwargs):
         text = kwargs.get("comment_text")
-        if not isinstance(text, str) or not 1 <= len(text) <= 4000:
+        if not isinstance(text, str) or not text.strip() or len(text) > 4000:
             return {"ok": False, "code": "input_validation_failed",
                     "error": "invalid comment_text"}
         try:

@@ -20,7 +20,6 @@ ACTIONS = {
     "relate",
     "unrelate",
     "state",
-    "done",
     "archive",
     "review",
 }
@@ -39,13 +38,12 @@ MINIMAL_VALID = {
     },
     "claim": {**_base("claim"), "claim_intent": "Implement contract"},
     "release": {**_base("release"), "release_reason": "Handing work back"},
-    "update": _base("update"),
+    "update": {**_base("update"), "expected_revision": 1},
     "checkpoint": {**_base("checkpoint"), "checkpoint": {}},
     "comment": {**_base("comment"), "comment_text": "Investigated implementation."},
     "relate": {**_base("relate"), "relation_kind": "depends_on", "related_task_id": "TASK-002"},
     "unrelate": {**_base("unrelate"), "relation_kind": "depends_on", "related_task_id": "TASK-002"},
     "state": {**_base("state"), "state": "ready"},
-    "done": {**_base("done"), "result": {}},
     "archive": {**_base("archive"), "archive_note": "Superseded"},
     "review": {**_base("review"), "dimensions": ["A"], "verdict": "NON_BLOCKING"},
 }
@@ -120,23 +118,7 @@ FULL_VALID = {
         "related_task_id": "TASK-002",
         "expected_revision": 6,
     },
-    "state": {
-        **_base("state"),
-        "state": "blocked",
-        "blocker_reason": "Waiting for dependency",
-        "force": True,
-        "force_reason": "External dependency state is authoritative",
-        "expected_revision": 6,
-    },
-    "done": {
-        **_base("done"),
-        "result": {"ok": True},
-        "output_refs": ["sha:abc"],
-        "candidate_ref": "sha:abc",
-        "force": True,
-        "force_reason": "External dependency state is authoritative",
-        "expected_revision": 7,
-    },
+    "state": {**_base("state"), "state": "qa"},
     "archive": {
         **_base("archive"),
         "archive_note": "Superseded",
@@ -165,7 +147,7 @@ def test_task_schema_is_action_discriminated_and_strict():
     schema = ADAPTER.json_schema()
     assert schema["discriminator"]["propertyName"] == "action"
     assert set(schema["discriminator"]["mapping"]) == ACTIONS
-    assert len(schema["oneOf"]) == 12
+    assert len(schema["oneOf"]) == len(ACTIONS) == 11
     for action, ref in schema["discriminator"]["mapping"].items():
         name = ref.rsplit("/", 1)[-1]
         variant = schema["$defs"][name]
@@ -193,8 +175,8 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
     assert "isolation_hint" not in update_props
     assert {"checkpoint", "result", "blocker_reason", "force", "force_reason"} <= set(update_props)
     assert {"force", "force_reason"} <= set(defs["TaskCreateRequest"]["properties"])
-    assert {"force", "force_reason"} <= set(defs["TaskDoneRequest"]["properties"])
-    assert {"force", "force_reason"} <= set(defs["TaskStateRequest"]["properties"])
+    assert "TaskDoneRequest" not in defs
+    assert set(defs["TaskStateRequest"]["properties"]) == {"action", "code", "namespace", "task_id", "state"}
     assert "candidate_ref" not in defs["TaskReviewRequest"]["properties"]
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["maxItems"] == 3
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["uniqueItems"] is True
@@ -241,16 +223,20 @@ def test_state_accepts_plain_states(state):
     ADAPTER.validate_python({**_base("state"), "state": state})
 
 
-def test_state_context_is_optional_at_boundary_for_idempotent_transitions():
-    ADAPTER.validate_python({**_base("state"), "state": "blocked", "blocker_reason": "blocked"})
-    ADAPTER.validate_python({**_base("state"), "state": "done", "result": {"ok": True}})
-    ADAPTER.validate_python({**_base("state"), "state": "blocked"})
-    ADAPTER.validate_python({**_base("state"), "state": "done"})
+def test_state_context_has_only_minimal_workflow_fields():
+    for state in ("ready", "in_progress", "qa", "blocked", "deferred", "done"):
+        ADAPTER.validate_python({**_base("state"), "state": state})
+    for key, value in (("result", {}), ("blocker_reason", "waiting"),
+                       ("expected_revision", 1), ("force", True),
+                       ("force_reason", "override")):
+        with pytest.raises(ValidationError):
+            ADAPTER.validate_python({**_base("state"), "state": "done", key: value})
 
 
-@pytest.mark.parametrize("result", ["complete", {"ok": True}, ["artifact"]])
-def test_done_accepts_supported_result_shapes(result):
-    ADAPTER.validate_python({**_base("done"), "result": result})
+def test_done_action_is_not_public():
+    for result in ("complete", {"ok": True}, ["artifact"]):
+        with pytest.raises(ValidationError):
+            ADAPTER.validate_python({**_base("done"), "result": result})
 
 
 def test_archive_accepts_either_note_and_rejects_neither():
@@ -278,7 +264,7 @@ def test_review_dimensions_are_bounded_unique_and_typed():
 def test_boundary_lengths_and_collection_limits():
     ADAPTER.validate_python({**_base("claim"), "claim_intent": "x" * 160, "expected_revision": 1})
     ADAPTER.validate_python({**_base("release"), "release_reason": "x" * 4000})
-    ADAPTER.validate_python({**MINIMAL_VALID["done"], "force": True, "force_reason": "x" * 2000})
+    ADAPTER.validate_python({**MINIMAL_VALID["update"], "title": "Changed"})
     ADAPTER.validate_python({**MINIMAL_VALID["create"], "input_refs": ["r"] * 64})
     ADAPTER.validate_python({**MINIMAL_VALID["create"], "tags": [f"t{i}" for i in range(50)]})
     ADAPTER.validate_python(
@@ -289,7 +275,7 @@ def test_boundary_lengths_and_collection_limits():
         {**_base("claim"), "claim_intent": "x" * 161},
         {**_base("claim"), "claim_intent": "work", "expected_revision": 0},
         {**_base("release"), "release_reason": "x" * 4001},
-        {**MINIMAL_VALID["done"], "force": True, "force_reason": "x" * 2001},
+        {**MINIMAL_VALID["update"], "expected_revision": 0},
         {**MINIMAL_VALID["create"], "input_refs": ["r"] * 65},
         {**MINIMAL_VALID["create"], "input_refs": ["x" * 513]},
         {**MINIMAL_VALID["create"], "tags": [f"t{i}" for i in range(51)]},
@@ -532,66 +518,24 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
             },
         ),
         (
-            {
-                **_base("done"),
-                "result": {"summary": "explicit emergency completion"},
-                "force": True,
-                "force_reason": "Dependency is externally satisfied",
-            },
-            {
-                "action": "done",
-                "result": {"summary": "explicit emergency completion"},
-                "force": True,
-                "force_reason": "Dependency is externally satisfied",
-            },
+            {**_base("state"), "state": "done"},
+            {"action": "state", "state": "done"},
         ),
         (
-            {
-                **_base("state"),
-                "state": "done",
-                "result": {"summary": "update completion"},
-                "force": True,
-                "force_reason": "Dependency is externally satisfied",
-            },
-            {
-                "action": "state",
-                "state": "done",
-                "result": {"summary": "update completion"},
-                "force": True,
-                "force_reason": "Dependency is externally satisfied",
-            },
+            {**_base("state"), "state": "qa"},
+            {"action": "state", "state": "qa"},
         ),
         (
-            {**_base("update"), "checkpoint": {"phase": "validated"}},
-            {"action": "update", "checkpoint": {"phase": "validated"}},
+            {**_base("update"), "title": "updated", "expected_revision": 5},
+            {"action": "update", "title": "updated", "expected_revision": 5},
         ),
         (
-            {
-                **_base("state"),
-                "state": "blocked",
-                "blocker_reason": "Waiting for dependency",
-            },
-            {
-                "action": "state",
-                "state": "blocked",
-                "blocker_reason": "Waiting for dependency",
-            },
+            {**_base("checkpoint"), "checkpoint": {"phase": "validated"}},
+            {"action": "checkpoint", "checkpoint": {"phase": "validated"}},
         ),
         (
-            {
-                **_base("state"),
-                "state": "done",
-                "result": {"summary": "state completion"},
-                "force": True,
-                "force_reason": "Dependency is externally satisfied",
-            },
-            {
-                "action": "state",
-                "state": "done",
-                "result": {"summary": "state completion"},
-                "force": True,
-                "force_reason": "Dependency is externally satisfied",
-            },
+            {**_base("state"), "state": "blocked"},
+            {"action": "state", "state": "blocked"},
         ),
     ],
 )
@@ -671,28 +615,11 @@ def test_generated_discovery_schema_matches_runtime_conditionals():
             ADAPTER.validate_python(payload["request"])
 
     valid = [
-        {
-            "request": {
-                "action": "create",
-                "code": "1234",
-                "namespace": "example",
-                "isolation_hint": "none",
-                "state": "done",
-                "result": {"ok": True},
-            }
-        },
-        {
-            "request": {
-                **_base("state"),
-                "state": "blocked",
-                "blocker_reason": "waiting",
-            }
-        },
+        {"request": {"action": "create", "code": "1234", "namespace": "example",
+                     "isolation_hint": "none", "state": "done", "result": {"ok": True}}},
         {"request": {**_base("state"), "state": "blocked"}},
-        {"request": {**_base("state"), "state": "blocked", "blocker_reason": None}},
-        {"request": {**_base("state"), "state": "done", "result": ["artifact"]}},
+        {"request": {**_base("state"), "state": "qa"}},
         {"request": {**_base("state"), "state": "done"}},
-        {"request": {**_base("state"), "state": "done", "result": None}},
         {"request": _base("release")},
         {"request": {**_base("archive"), "note": "legacy-compatible"}},
     ]
@@ -728,31 +655,21 @@ def test_generated_checkpoint_schema_uses_one_of():
     ]
 
 
-def test_generated_done_schema_preserves_idempotent_compatibility_shape():
-    backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
-    done = tool.parameters["x-runtime-schema"]["$defs"]["TaskDoneRequest"]
-    assert "result" in done["properties"]
-    assert "result" not in done["required"]
-    description = done["properties"]["result"]["description"]
-    assert "Required for normal completion" in description
-    assert "already-done compatibility" in description
+def test_generated_done_schema_is_absent():
+    tool = {tool.name: tool for tool in build_mcp(
+        _Service(_RecordingBackend()))._tool_manager.list_tools()}["task"]
+    schema = tool.parameters["x-runtime-schema"]
+    assert "TaskDoneRequest" not in schema["$defs"]
+    validator = Draft202012Validator(schema)
+    assert list(validator.iter_errors({"request": _base("done")}))
 
 
 @pytest.mark.asyncio
-async def test_done_without_result_reaches_backend_for_idempotent_compatibility():
+async def test_done_action_is_rejected_before_backend():
     backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}["task"]
     await tool.run({"request": _base("done")}, convert_result=True)
-    assert backend.identity_calls == 1
-    assert len(backend.task_calls) == 1
-    call = backend.task_calls[0]
-    assert call["action"] == "done"
-    assert "result" not in call
+    assert backend.task_calls == []
 
 
 def test_generated_discovery_schema_rejects_regression_inputs():

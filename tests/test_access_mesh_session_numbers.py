@@ -171,3 +171,41 @@ async def test_mesh_end_fences_all_attached_nodes_and_ignores_stale_cycle(tmp_pa
         await first_rep.tick()
         await second_rep.tick()
         assert len(second.store.numbers.end_snapshot()) == 1
+
+
+def test_recycled_number_forms_new_identity_epoch_and_retains_old_history(registry):
+    old = dict(number="0789", issuer_id="a", slot_id="old",
+               logical_agent_id="historical-agent",
+               started_at=T0, hard_expires_at=T0+timedelta(minutes=5))
+    new = dict(number="0789", issuer_id="b", slot_id="new",
+               logical_agent_id="new-agent",
+               started_at=T0+timedelta(minutes=6),
+               hard_expires_at=T0+timedelta(minutes=10))
+    registry.register(**old)
+    fresh = registry.register(**new)
+    assert fresh["collisions"] == 0
+    assert registry.winner("0789")["logical_agent_id"] == "new-agent"
+    assert registry.winner("0789")["hard_expires_at"] == registry.stamp(new["hard_expires_at"])
+    assert registry.group_winner("a", "old")["logical_agent_id"] == "historical-agent"
+    assert registry.group_winner("b", "new")["logical_agent_id"] == "new-agent"
+    assert registry.incidents() == []
+    assert len(registry.snapshot()) == 2
+
+
+def test_transitive_overlap_chooses_latest_started_and_merged_deadline(registry):
+    for issuer, slot, start, deadline in [
+        ("a", "A", 0, 10),
+        ("b", "B", 9, 15),
+        ("a", "C", 14, 17),
+    ]:
+        registry.register(
+            number="0765", issuer_id=issuer, slot_id=slot,
+            logical_agent_id=f"la-{slot}",
+            started_at=T0+timedelta(minutes=start),
+            hard_expires_at=T0+timedelta(minutes=deadline),
+        )
+    assert registry.winner("0765")["logical_agent_id"] == "la-C"
+    assert registry.group_winner("a", "A")["logical_agent_id"] == "la-C"
+    assert registry.group_winner("b", "B")["hard_expires_at"] == registry.stamp(
+        T0+timedelta(minutes=17)
+    )

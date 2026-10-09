@@ -138,6 +138,27 @@ class AccessMeshApplication:
     async def observe(self, actor: ActorContext) -> dict:
         """Minimal public observation of named active local agents."""
         now = self.clock()
+        if self.messages is not None:
+            locations = await self.messages.active_agent_locations()
+            records = []
+            for item in locations:
+                started = item.get("session_started_at")
+                expiry = item.get("hard_expires_at")
+                if not item.get("public_name") or not started or not expiry:
+                    continue
+                try:
+                    start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    end = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    continue
+                records.append({
+                    "public_name": item["public_name"],
+                    "last_server": item["server_id"],
+                    "session_duration": max(0, int((end - start).total_seconds())),
+                    "last_activity": item.get("last_active_at"),
+                })
+            return {"ok": True, "agents": sorted(records,
+                    key=lambda item: item["public_name"])}
         records = []
         after = ""
         while True:

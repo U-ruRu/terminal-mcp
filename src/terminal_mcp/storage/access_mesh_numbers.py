@@ -111,21 +111,86 @@ class MeshSessionNumbers:
             db.execute('INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?) ON CONFLICT(issuer_id,slot_id) DO UPDATE SET hard_expires_at=MAX(hard_expires_at,excluded.hard_expires_at)', (issuer_id, slot_id, number, logical_agent_id, start, end))
             if attempt_id:
                 db.execute('DELETE FROM access_mesh_number_reservations WHERE attempt_id=?', (attempt_id,))
-            others = db.execute('SELECT issuer_id,slot_id FROM access_mesh_number_claims WHERE number=? AND (issuer_id!=? OR slot_id!=?)', (number, issuer_id, slot_id)).fetchall()
+            others = db.execute(
+                'SELECT issuer_id,slot_id FROM access_mesh_number_claims '
+                'WHERE number=? AND (issuer_id!=? OR slot_id!=?) '
+                'AND started_at<=? AND hard_expires_at>=?',
+                (number, issuer_id, slot_id, end, start)
+            ).fetchall()
             for other in others:
                 db.execute('INSERT OR IGNORE INTO access_mesh_number_incidents VALUES(?,?,?,?,?)', (number, issuer_id, slot_id, f"{other['issuer_id']}:{other['slot_id']}", stamp))
-            winner = db.execute('SELECT logical_agent_id FROM access_mesh_number_claims WHERE number=? ORDER BY started_at DESC,issuer_id DESC,slot_id DESC LIMIT 1', (number,)).fetchone()
-            deadline = db.execute('SELECT MAX(hard_expires_at) FROM access_mesh_number_claims WHERE number=?', (number,)).fetchone()[0]
-        return {'ok': True, 'logical_agent_id': winner['logical_agent_id'], 'hard_expires_at': deadline, 'collisions': len(others)}
+            claims = [dict(row) for row in db.execute(
+                'SELECT * FROM access_mesh_number_claims WHERE number=?',
+                (number,)
+            ).fetchall()]
+            for group in self._groups(claims):
+                if any(row['issuer_id'] == issuer_id and row['slot_id'] == slot_id
+                       for row in group):
+                    chosen = self._group_winner(group)
+                    break
+        return {'ok': True, 'logical_agent_id': chosen['logical_agent_id'],
+                'hard_expires_at': chosen['hard_expires_at'], 'collisions': len(others)}
+
+    @staticmethod
+    def _groups(rows):
+        """Partition claims by overlapping work lifetimes.
+
+        Reuse after expiry creates a fresh identity epoch, while partitioned
+        overlapping grants form one LogicalAgent (including transitive chains).
+        """
+        groups = []
+        current = []
+        latest_end = ""
+        for row in sorted(rows, key=lambda r: (
+            r["started_at"], r["issuer_id"], r["slot_id"]
+        )):
+            if current and row["started_at"] > latest_end:
+                groups.append(current)
+                current = []
+                latest_end = ""
+            current.append(row)
+            latest_end = max(latest_end, row["hard_expires_at"])
+        if current:
+            groups.append(current)
+        return groups
+
+    @staticmethod
+    def _group_winner(group):
+        winner = max(group, key=lambda row: (
+            row["started_at"], row["issuer_id"], row["slot_id"]
+        ))
+        return {**dict(winner), "hard_expires_at":
+                max(item["hard_expires_at"] for item in group)}
 
     def winner(self, number):
+        """Current identity: latest time-overlap group for the four digits."""
         self.validate(number)
         with self.store._connect() as db:
-            winner = db.execute('SELECT * FROM access_mesh_number_claims WHERE number=? ORDER BY started_at DESC,issuer_id DESC,slot_id DESC LIMIT 1', (number,)).fetchone()
-            if not winner:
+            rows = [dict(row) for row in db.execute(
+                "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                (number,),
+            ).fetchall()]
+        groups = self._groups(rows)
+        return self._group_winner(groups[-1]) if groups else None
+
+    def group_winner(self, issuer_id, slot_id):
+        """A historic slot maps only to claims overlapping its own lifetime."""
+        with self.store._connect() as db:
+            original = db.execute(
+                "SELECT * FROM access_mesh_number_claims "
+                "WHERE issuer_id=? AND slot_id=?", (issuer_id, slot_id),
+            ).fetchone()
+            if not original:
                 return None
-            deadline = db.execute('SELECT MAX(hard_expires_at) FROM access_mesh_number_claims WHERE number=?', (number,)).fetchone()[0]
-        return {**dict(winner), 'hard_expires_at': deadline}
+            rows = [dict(row) for row in db.execute(
+                "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                (original["number"],),
+            ).fetchall()]
+        for group in self._groups(rows):
+            if any(row["issuer_id"] == issuer_id and row["slot_id"] == slot_id
+                   for row in group):
+                return self._group_winner(group)
+        return None
 
     def snapshot(self):
         with self.store._connect() as db:

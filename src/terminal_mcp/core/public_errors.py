@@ -49,7 +49,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             validation_error input_validation_failed invalid_request invalid_command invalid_queue
-            invalid_mode invalid_session_number invalid_session_attempt invalid_session_timestamp
+            invalid_mode invalid_state invalid_session_number invalid_session_attempt invalid_session_timestamp
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
             mode_required access_code_required legacy_code_not_allowed invalid_connect_url
             output_item_too_large execution_argument_invalid
@@ -269,6 +269,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
         "session_required": "Сначала запусти сессию",
         "session_expired": "Сессия закончилась",
+        "recipient_not_found": "Получатель не найден",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",
         "fleet_control_invalid_header": (

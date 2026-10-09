@@ -295,6 +295,45 @@ class AccessMeshMessaging:
             "unavailable_peers": unavailable,
         }
 
+    async def active_agent_locations(self):
+        """Return one current location per LogicalAgent, using latest activity."""
+        rows = {item["logical_agent_id"]: item
+                for item in await self._local_recipients()}
+        if self.replication is not None:
+            for peer in self.peers:
+                cursor = ""
+                try:
+                    for _ in range(1 + MAX_RECIPIENTS // 100):
+                        response = await self.replication.request(
+                            peer, "messages/recipients", {"after": cursor, "limit": 100}
+                        )
+                        if response.get("ok") is not True or not isinstance(
+                            response.get("recipients"), list
+                        ):
+                            break
+                        for item in response["recipients"]:
+                            self._validate_recipient(item, peer.instance_id)
+                            known = rows.get(item["logical_agent_id"])
+                            # Lexicographic ISO timestamps are comparable after
+                            # normalization; ties break consistently by server.
+                            if known is None or (
+                                str(item.get("last_active_at") or ""),
+                                item["server_id"],
+                            ) > (
+                                str(known.get("last_active_at") or ""),
+                                known["server_id"],
+                            ):
+                                rows[item["logical_agent_id"]] = item
+                        cursor = response.get("after") or ""
+                        if not cursor:
+                            break
+                except Exception:
+                    logging.getLogger(__name__).debug(
+                        "Agent observation peer temporarily unavailable: %s",
+                        peer.instance_id,
+                    )
+        return list(rows.values())
+
     def _validate_recipient(self, item, peer_id):
         if not isinstance(item, dict) or item.get("server_id") != peer_id:
             raise MeshMessagingError("message_unavailable")
