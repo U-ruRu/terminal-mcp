@@ -238,13 +238,10 @@ async def _message(application, actor, request: MessageInput) -> dict:
         "reply": ManagedOperation.MESSAGE_REPLY,
     }[request.action]
     mesh_messages = getattr(application.service, "access_mesh_messages", None)
-    if (
-        request.action == "ack" and request.message_hash and mesh_messages is not None
-    ):
+    if request.action == "ack" and request.message_hash and mesh_messages is not None:
         from asyncio import to_thread
-        alert_wire = await to_thread(
-            mesh_messages.store.wire, request.message_hash
-        )
+
+        alert_wire = await to_thread(mesh_messages.store.wire, request.message_hash)
         if alert_wire and alert_wire.get("sender_id") == "terminal-mcp-system":
             operation = ManagedOperation.MESSAGE_READ
     if request.action == "recipients":
@@ -667,9 +664,7 @@ def build_role_mcp(
         if mesh:
             actor = _actor(application, role)
             with actor.bind():
-                return await mesh.attach(
-                    actor, session_number=request.session_number
-                )
+                return await mesh.attach(actor, session_number=request.session_number)
         request = SessionInput.model_validate(request)
         raw = await application.session(
             _actor(application, role),
@@ -819,6 +814,16 @@ def build_role_mcp(
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_state")],
         )
         async def task_state(boundary: RuntimeBoundary) -> dict:
+            # Invalid workflow values are a domain error, not a generic
+            # transport validation failure. Other malformed fields still
+            # pass through the strict boundary validator below.
+            arguments = boundary.raw_arguments
+            if "state" in arguments and (
+                type(arguments["state"]) is not str
+                or arguments["state"]
+                not in {"ready", "in_progress", "qa", "blocked", "deferred", "done"}
+            ):
+                return public_error("invalid_state").as_dict()
             request, failure = _validate(boundary, role, "task_state")
             if failure is not None:
                 return failure

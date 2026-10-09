@@ -1,5 +1,5 @@
 """Six-state workflow contract, including upgrades of old SQLite CHECK tables."""
-import sqlite3
+
 import aiosqlite
 import pytest
 from pydantic import ValidationError
@@ -19,13 +19,18 @@ async def test_public_state_accepts_qa_without_cas_or_owner_and_preserves_revisi
     store = TaskStore(db)
     coordinator = TaskCoordinator(store)
     created = await coordinator.mutate(
-        "creator", action="create", namespace="qa-check", task_id="one",
-        title="State independence", isolation_hint="none")
+        "creator",
+        action="create",
+        namespace="qa-check",
+        task_id="one",
+        title="State independence",
+        isolation_hint="none",
+    )
     assert created["ok"]
     base = (await store.get_task("qa-check", "one"))["revision"]
     claim = await coordinator.mutate(
-        "creator", action="claim", namespace="qa-check", task_id="one",
-        claim_intent="test")
+        "creator", action="claim", namespace="qa-check", task_id="one", claim_intent="test"
+    )
     assert claim["ok"]
     events = len(await store.list_events("qa-check", "one"))
 
@@ -39,17 +44,18 @@ async def test_public_state_accepts_qa_without_cas_or_owner_and_preserves_revisi
         assert row["state"] == state and row["revision"] == base
     assert len(await store.list_events("qa-check", "one")) == events + 6
     repeat = await coordinator.mutate(
-        "other-agent", action="state", namespace="qa-check",
-        task_id="one", state="deferred")
+        "other-agent", action="state", namespace="qa-check", task_id="one", state="deferred"
+    )
     assert repeat["ok"]
     assert len(await store.list_events("qa-check", "one")) == events + 6
     with pytest.raises(ValidationError):
-        TaskStateInput.model_validate({
-            "namespace":"qa-check","task_id":"one","state":"qa",
-            "expected_revision":base})
+        TaskStateInput.model_validate(
+            {"namespace": "qa-check", "task_id": "one", "state": "qa", "expected_revision": base}
+        )
     with pytest.raises(ValidationError):
-        TaskStateInput.model_validate({
-            "namespace":"qa-check","task_id":"one","state":"invalid"})
+        TaskStateInput.model_validate(
+            {"namespace": "qa-check", "task_id": "one", "state": "invalid"}
+        )
 
 
 @pytest.mark.asyncio
@@ -74,28 +80,28 @@ async def test_upgrade_old_state_constraint_retains_data_indexes_and_triggers(tm
         assert await repo._migrate_work_items_qa_state(db) is False
         await db.execute("UPDATE work_items SET state='qa' WHERE namespace='original'")
         await db.commit()
-        row = await (await db.execute(
-            "SELECT state,revision FROM work_items WHERE namespace='original'"
-        )).fetchone()
+        row = await (
+            await db.execute("SELECT state,revision FROM work_items WHERE namespace='original'")
+        ).fetchone()
         assert row == ("qa", 7)
-        assert (await (await db.execute(
-            "SELECT event FROM audit_events"
-        )).fetchone())[0] == "qa"
-        assert (await (await db.execute(
-            "SELECT name FROM sqlite_master WHERE name='ix_demo_state'"
-        )).fetchone())[0] == "ix_demo_state"
+        assert (await (await db.execute("SELECT event FROM audit_events")).fetchone())[0] == "qa"
+        assert (
+            await (
+                await db.execute("SELECT name FROM sqlite_master WHERE name='ix_demo_state'")
+            ).fetchone()
+        )[0] == "ix_demo_state"
 
 
 def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
     from fastapi.testclient import TestClient
+    from test_access_mesh_mcp_runtime import call, rpc, settings
+
     from terminal_mcp.app import create_app
-    from test_access_mesh_mcp_runtime import settings, call, rpc
 
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
         tools = rpc(client, "executor", "tools/list").json()["result"]["tools"]
-        state_schema = next(item["inputSchema"] for item in tools
-                            if item["name"] == "task_state")
+        state_schema = next(item["inputSchema"] for item in tools if item["name"] == "task_state")
         assert set(state_schema["properties"]) == {"namespace", "task_id", "state"}
         assert set(state_schema["required"]) == {"namespace", "task_id", "state"}
         assert "qa" in state_schema["properties"]["state"].get("enum", [])
@@ -103,18 +109,40 @@ def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
         number = started["session_number"]
         assert call(client, "executor", "session", {"session_number": number}) == {"ok": True}
         assert call(client, "coordinator", "session", {"session_number": number}) == {"ok": True}
-        created = call(client, "coordinator", "task_manage", {
-            "action": "create", "namespace": "qa-mcp", "task_id": "one",
-            "title": "Public QA state", "isolation_hint": "none",
-        })
+        created = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "create",
+                "namespace": "qa-mcp",
+                "task_id": "one",
+                "title": "Public QA state",
+                "isolation_hint": "none",
+            },
+        )
         assert created["ok"], created
-        changed = call(client, "executor", "task_state", {
-            "namespace": "qa-mcp", "task_id": "one", "state": "qa",
-        })
+        changed = call(
+            client,
+            "executor",
+            "task_state",
+            {
+                "namespace": "qa-mcp",
+                "task_id": "one",
+                "state": "qa",
+            },
+        )
         assert changed == {"ok": True}
-        missing = call(client, "executor", "task_state", {
-            "namespace": "qa-mcp", "task_id": "missing", "state": "qa",
-        })
+        missing = call(
+            client,
+            "executor",
+            "task_state",
+            {
+                "namespace": "qa-mcp",
+                "task_id": "missing",
+                "state": "qa",
+            },
+        )
         assert missing["ok"] is False
         assert missing["error"]["code"] == "task_not_found"
 
@@ -127,26 +155,30 @@ async def test_append_checkpoint_and_exact_comment_dedup_without_revision(tmp_pa
     store = TaskStore(path)
     coordinator = TaskCoordinator(store)
     key = {"namespace": "append", "task_id": "work"}
-    assert (await coordinator.mutate(
-        "author", action="create", **key, title="Appends",
-        isolation_hint="none",
-    ))["ok"]
+    assert (
+        await coordinator.mutate(
+            "author",
+            action="create",
+            **key,
+            title="Appends",
+            isolation_hint="none",
+        )
+    )["ok"]
     rev = (await store.get_task(**key))["revision"]
-    first = await coordinator.mutate(
-        "author", action="comment", **key, comment_text="same text  ")
+    first = await coordinator.mutate("author", action="comment", **key, comment_text="same text  ")
     assert first["ok"], first
     duplicate = await coordinator.mutate(
-        "author", action="comment", **key, comment_text="same text  ")
+        "author", action="comment", **key, comment_text="same text  "
+    )
     assert not duplicate["ok"] and duplicate["code"] == "duplicate_comment"
-    other = await coordinator.mutate(
-        "other", action="comment", **key, comment_text="same text  ")
+    other = await coordinator.mutate("other", action="comment", **key, comment_text="same text  ")
     assert other["ok"]
     different = await coordinator.mutate(
-        "author", action="comment", **key, comment_text="same text")
+        "author", action="comment", **key, comment_text="same text"
+    )
     assert different["ok"]
     for payload in ({"step": 1}, {"step": 1}, {"step": 2}):
-        result = await coordinator.mutate(
-            "other", action="checkpoint", **key, checkpoint=payload)
+        result = await coordinator.mutate("other", action="checkpoint", **key, checkpoint=payload)
         assert result["ok"], result
     saved = await store.get_task(**key)
     assert saved["checkpoint"] == {"step": 2}
@@ -160,33 +192,63 @@ async def test_append_checkpoint_and_exact_comment_dedup_without_revision(tmp_pa
 
 def test_mesh_task_comment_public_minimal_success_and_duplicate(tmp_path):
     from fastapi.testclient import TestClient
+    from test_access_mesh_mcp_runtime import call, rpc, settings
+
     from terminal_mcp.app import create_app
-    from test_access_mesh_mcp_runtime import settings, call, rpc
 
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
-        number = call(client, "access", "session", {"action":"start"})["session_number"]
+        number = call(client, "access", "session", {"action": "start"})["session_number"]
         assert call(client, "executor", "session", {"session_number": number})["ok"]
         assert call(client, "coordinator", "session", {"session_number": number})["ok"]
-        created = call(client, "coordinator", "task_manage", {
-            "action": "create", "namespace": "comments-mcp", "task_id": "one",
-            "title": "Append", "isolation_hint": "none",
-        })
+        created = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "create",
+                "namespace": "comments-mcp",
+                "task_id": "one",
+                "title": "Append",
+                "isolation_hint": "none",
+            },
+        )
         assert created["ok"]
         params = {"namespace": "comments-mcp", "task_id": "one"}
-        accepted = call(client, "executor", "task_comment", {
-            **params, "action": "comment", "comment_text": "test text",
-        })
+        accepted = call(
+            client,
+            "executor",
+            "task_comment",
+            {
+                **params,
+                "action": "comment",
+                "comment_text": "test text",
+            },
+        )
         assert accepted == {"ok": True}
-        duplicate = call(client, "executor", "task_comment", {
-            **params, "action": "comment", "comment_text": "test text",
-        })
+        duplicate = call(
+            client,
+            "executor",
+            "task_comment",
+            {
+                **params,
+                "action": "comment",
+                "comment_text": "test text",
+            },
+        )
         assert duplicate["ok"] is False
         assert duplicate["error"]["code"] == "duplicate_comment"
         for i in range(2):
-            accepted = call(client, "executor", "task_comment", {
-                **params, "action": "checkpoint", "checkpoint": {"step": i},
-            })
+            accepted = call(
+                client,
+                "executor",
+                "task_comment",
+                {
+                    **params,
+                    "action": "checkpoint",
+                    "checkpoint": {"step": i},
+                },
+            )
             assert accepted == {"ok": True}
         catalog = rpc(client, "executor", "tools/list").json()["result"]["tools"]
         schema = next(x["inputSchema"] for x in catalog if x["name"] == "task_comment")
@@ -202,8 +264,11 @@ async def test_task_autogenerated_id_duplicate_signature_is_atomic(tmp_path):
     await repo.initialize()
     coordinator = TaskCoordinator(TaskStore(path))
     args = {
-        "action": "create", "namespace": "dedupe", "title": "Same title",
-        "description": "Same exact description", "isolation_hint": "none",
+        "action": "create",
+        "namespace": "dedupe",
+        "title": "Same title",
+        "description": "Same exact description",
+        "isolation_hint": "none",
     }
     first, second = await asyncio.gather(
         coordinator.mutate("creator", **args),
@@ -218,7 +283,8 @@ async def test_task_autogenerated_id_duplicate_signature_is_atomic(tmp_path):
     assert len(generated_id) > 10
     # An explicit distinct ID always bypasses content deduplication.
     explicit = await coordinator.mutate(
-        "creator", **{**args, "task_id": "explicit-other"},
+        "creator",
+        **{**args, "task_id": "explicit-other"},
     )
     assert explicit["ok"], explicit
     another_author = await coordinator.mutate("other-author", **args)
@@ -227,9 +293,7 @@ async def test_task_autogenerated_id_duplicate_signature_is_atomic(tmp_path):
         "creator", **{**args, "description": "Different description"}
     )
     assert modified["ok"], modified
-    duplicate_id = await coordinator.mutate(
-        "creator", **{**args, "task_id": "explicit-other"}
-    )
+    duplicate_id = await coordinator.mutate("creator", **{**args, "task_id": "explicit-other"})
     assert not duplicate_id["ok"] and duplicate_id["code"] == "task_already_exists"
 
 
@@ -243,9 +307,11 @@ async def test_update_cas_identical_retry_and_stale_conflicts_are_atomic(tmp_pat
     store = TaskStore(path)
     coordinator = TaskCoordinator(store)
     key = {"namespace": "update-cas", "task_id": "one"}
-    assert (await coordinator.mutate(
-        "creator", action="create", **key, title="Initial", isolation_hint="none"
-    ))["ok"]
+    assert (
+        await coordinator.mutate(
+            "creator", action="create", **key, title="Initial", isolation_hint="none"
+        )
+    )["ok"]
     initial = (await store.get_task(**key))["revision"]
     args = {**key, "action": "update", "title": "Updated", "expected_revision": initial}
     first, duplicate = await asyncio.gather(
@@ -263,12 +329,13 @@ async def test_update_cas_identical_retry_and_stale_conflicts_are_atomic(tmp_pat
     other = await coordinator.mutate("different-agent", **args)
     assert not other["ok"] and other["code"] == "revision_conflict"
     changed_payload = await coordinator.mutate(
-        "creator", **{**args, "title": "Different requested title"},
+        "creator",
+        **{**args, "title": "Different requested title"},
     )
     assert not changed_payload["ok"] and changed_payload["code"] == "revision_conflict"
     fresh = await coordinator.mutate(
-        "creator", **{**args, "expected_revision": current["revision"],
-                      "description": "New field"},
+        "creator",
+        **{**args, "expected_revision": current["revision"], "description": "New field"},
     )
     assert fresh["ok"], fresh
     assert (await store.get_task(**key))["revision"] == initial + 2
@@ -276,40 +343,104 @@ async def test_update_cas_identical_retry_and_stale_conflicts_are_atomic(tmp_pat
 
 def test_coordinator_create_update_public_minimal_results(tmp_path):
     from fastapi.testclient import TestClient
+    from test_access_mesh_mcp_runtime import call, settings
+
     from terminal_mcp.app import create_app
-    from test_access_mesh_mcp_runtime import settings, call
 
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
         number = call(client, "access", "session", {"action": "start"})["session_number"]
         assert call(client, "coordinator", "session", {"session_number": number})["ok"]
-        created = call(client, "coordinator", "task_manage", {
-            "action": "create", "namespace": "minimal", "task_id": "one",
-            "title": "Initial", "isolation_hint": "none",
-        })
+        created = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "create",
+                "namespace": "minimal",
+                "task_id": "one",
+                "title": "Initial",
+                "isolation_hint": "none",
+            },
+        )
         assert created == {"ok": True, "task_id": "one"}, created
-        changed = call(client, "coordinator", "task_manage", {
-            "action": "update", "namespace": "minimal", "task_id": "one",
-            "title": "Changed", "expected_revision": 1,
-        })
+        changed = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "update",
+                "namespace": "minimal",
+                "task_id": "one",
+                "title": "Changed",
+                "expected_revision": 1,
+            },
+        )
         assert changed == {"ok": True, "revision": 2}, changed
-        repeated = call(client, "coordinator", "task_manage", {
-            "action": "update", "namespace": "minimal", "task_id": "one",
-            "title": "Changed", "expected_revision": 1,
-        })
+        repeated = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "update",
+                "namespace": "minimal",
+                "task_id": "one",
+                "title": "Changed",
+                "expected_revision": 1,
+            },
+        )
         assert repeated["ok"] is False, repeated
         assert repeated["error"]["code"] == "already_changed"
-        other = call(client, "coordinator", "task_manage", {
-            "action": "update", "namespace": "minimal", "task_id": "one",
-            "title": "Third", "expected_revision": 1,
-        })
+        other = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "update",
+                "namespace": "minimal",
+                "task_id": "one",
+                "title": "Third",
+                "expected_revision": 1,
+            },
+        )
         assert other["error"]["code"] == "revision_conflict"
         # Generated create: identical content is rejected, independent of JSON-RPC id.
         generated = {
-            "action": "create", "namespace": "minimal",
-            "title": "Auto", "description": "Identical", "isolation_hint": "none",
+            "action": "create",
+            "namespace": "minimal",
+            "title": "Auto",
+            "description": "Identical",
+            "isolation_hint": "none",
         }
         initial = call(client, "coordinator", "task_manage", generated, request_id=301)
         assert initial["ok"] and initial["task_id"].startswith("TASK-")
         duplicate = call(client, "coordinator", "task_manage", generated, request_id=302)
         assert duplicate["error"]["code"] == "duplicate_task"
+
+
+def test_public_task_state_invalid_value_returns_invalid_state_not_generic_validation(tmp_path):
+    from fastapi.testclient import TestClient
+    from test_access_mesh_mcp_runtime import call, settings
+
+    from terminal_mcp.app import create_app
+
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        number = call(client, "access", "session", {"action": "start"})["session_number"]
+        assert call(client, "executor", "session", {"session_number": number}) == {"ok": True}
+        for state in ("invalid", None, 123, "QA"):
+            failure = call(
+                client,
+                "executor",
+                "task_state",
+                {"namespace": "any", "task_id": "missing", "state": state},
+            )
+            assert failure["ok"] is False
+            assert failure["error"]["code"] == "invalid_state", failure
+        missing = call(
+            client,
+            "executor",
+            "task_state",
+            {"namespace": "any", "task_id": "missing", "state": "qa"},
+        )
+        assert missing["error"]["code"] == "task_not_found"

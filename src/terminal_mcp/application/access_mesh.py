@@ -86,8 +86,12 @@ class AccessMeshApplication:
         return hashlib.sha256(json.dumps(scope, separators=(",", ":")).encode()).hexdigest()
 
     async def attach(
-        self, actor: ActorContext, *, session_number: str | None = None,
-        issuer_node_id: str | None = None, access_code: str | None = None,
+        self,
+        actor: ActorContext,
+        *,
+        session_number: str | None = None,
+        issuer_node_id: str | None = None,
+        access_code: str | None = None,
     ) -> dict:
         self.require_write(actor)
         if session_number is not None:
@@ -98,14 +102,17 @@ class AccessMeshApplication:
             current = await asyncio.to_thread(self.store.attached_slot, connection)
             if current is not None:
                 bound_number = await asyncio.to_thread(
-                    self.store.numbers.number_for_slot, current.issuer_id, current.slot_id)
+                    self.store.numbers.number_for_slot, current.issuer_id, current.slot_id
+                )
                 if bound_number != session_number:
                     raise AccessMeshError("access_mesh_binding_conflict")
                 slot = current
             else:
                 slot = await asyncio.to_thread(
-                    self.store.attach, issuer_id=winner["issuer_id"],
-                    code=session_number, connection_key=connection,
+                    self.store.attach,
+                    issuer_id=winner["issuer_id"],
+                    code=session_number,
+                    connection_key=connection,
                 )
             # Attach creates the local WorkSession immediately, so another
             # agent can discover this recipient before its first command.
@@ -151,14 +158,15 @@ class AccessMeshApplication:
                     end = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     continue
-                records.append({
-                    "public_name": item["public_name"],
-                    "last_server": item["server_id"],
-                    "session_duration": max(0, int((end - start).total_seconds())),
-                    "last_activity": item.get("last_active_at"),
-                })
-            return {"ok": True, "agents": sorted(records,
-                    key=lambda item: item["public_name"])}
+                records.append(
+                    {
+                        "public_name": item["public_name"],
+                        "last_server": item["server_id"],
+                        "session_duration": max(0, int((end - start).total_seconds())),
+                        "last_activity": item.get("last_active_at"),
+                    }
+                )
+            return {"ok": True, "agents": sorted(records, key=lambda item: item["public_name"])}
         records = []
         after = ""
         while True:
@@ -169,20 +177,32 @@ class AccessMeshApplication:
                 identity = await asyncio.to_thread(self.store.observed_identity, slot, now=now)
                 cycle = identity.get("session_lifecycle") or {}
                 name = identity.get("public_name")
-                if not name or not cycle.get("started_at") or cycle.get("state") not in {
-                    "active", "warning", "draining",
-                } or not identity.get("work_session_id"):
+                if (
+                    not name
+                    or not cycle.get("started_at")
+                    or cycle.get("state")
+                    not in {
+                        "active",
+                        "warning",
+                        "draining",
+                    }
+                    or not identity.get("work_session_id")
+                ):
                     continue
                 start = datetime.fromisoformat(cycle["started_at"])
                 end = datetime.fromisoformat(cycle["hard_expires_at"])
-                records.append({
-                    "public_name": name,
-                    "last_server": self.store.local_node_id,
-                    "session_duration": max(0, int((end - start).total_seconds())),
-                    "last_activity": await asyncio.to_thread(
-                        self.store.last_activity, slot.issuer_id, slot.slot_id,
-                    ),
-                })
+                records.append(
+                    {
+                        "public_name": name,
+                        "last_server": self.store.local_node_id,
+                        "session_duration": max(0, int((end - start).total_seconds())),
+                        "last_activity": await asyncio.to_thread(
+                            self.store.last_activity,
+                            slot.issuer_id,
+                            slot.slot_id,
+                        ),
+                    }
+                )
             if len(slots) < 100:
                 break
             after = slots[-1].logical_agent_id
@@ -265,7 +285,9 @@ class AccessMeshApplication:
         slots = await asyncio.to_thread(self.store.local_slots, after=self._scan_after)
         for slot in slots:
             try:
-                identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+                identity = await asyncio.to_thread(
+                    self.store.local_identity, slot, now=self.clock()
+                )
                 if self.messages is not None:
                     await self.messages.ensure_session_alert(slot, identity)
             except Exception as exc:
@@ -365,13 +387,27 @@ class AccessMeshApplication:
             announcement_deadline = None
             reserved_number = None
             if code is None and self.replication is not None:
-                reserved_number, attempt_id, announcement_deadline = await self.replication.negotiate_number()
+                (
+                    reserved_number,
+                    attempt_id,
+                    announcement_deadline,
+                ) = await self.replication.negotiate_number()
             elif code is None:
                 candidate = f"{secrets.randbelow(10000):04d}"
-                proposed = await asyncio.to_thread(self.store.numbers.reserve, number=candidate, attempt_id=attempt_id, now=self.clock())
+                proposed = await asyncio.to_thread(
+                    self.store.numbers.reserve,
+                    number=candidate,
+                    attempt_id=attempt_id,
+                    now=self.clock(),
+                )
                 reserved_number = proposed.get("number") or proposed["suggested_number"]
                 if not proposed["ok"]:
-                    await asyncio.to_thread(self.store.numbers.reserve, number=reserved_number, attempt_id=attempt_id, now=self.clock())
+                    await asyncio.to_thread(
+                        self.store.numbers.reserve,
+                        number=reserved_number,
+                        attempt_id=attempt_id,
+                        now=self.clock(),
+                    )
             for _ in range(100):
                 allocated = reserved_number or code or f"{secrets.randbelow(10000):04d}"
                 slot_id = "as_" + secrets.token_urlsafe(18)
@@ -420,11 +456,16 @@ class AccessMeshApplication:
                     started_at = event.effective_at or self.clock()
                     if self.replication is not None and announcement_deadline is not None:
                         await self.replication.announce_number(
-                            number=allocated, issuer_id=event.issuer_id,
-                            slot_id=slot_id, logical_agent_id=agent_id,
+                            number=allocated,
+                            issuer_id=event.issuer_id,
+                            slot_id=slot_id,
+                            logical_agent_id=agent_id,
                             started_at=started_at.isoformat(),
-                            hard_expires_at=(started_at + timedelta(seconds=event.policy.duration_seconds)).isoformat(),
-                            attempt_id=attempt_id, deadline=announcement_deadline,
+                            hard_expires_at=(
+                                started_at + timedelta(seconds=event.policy.duration_seconds)
+                            ).isoformat(),
+                            attempt_id=attempt_id,
+                            deadline=announcement_deadline,
                         )
                     return result
                 except AccessMeshError as exc:
@@ -446,6 +487,7 @@ class AccessMeshApplication:
         deadline_at: datetime | None = None,
         receipt_spec=None,
         number_end: dict | None = None,
+        number_start: dict | None = None,
     ) -> dict:
         self.require_write(actor)
         async with self._issuer_lock:
@@ -504,6 +546,7 @@ class AccessMeshApplication:
                     ),
                     mutation_receipt=receipt,
                     mutation_end=number_end,
+                    mutation_start=number_start,
                 )
             except AccessMeshError:
                 raise
@@ -513,6 +556,28 @@ class AccessMeshApplication:
             await self.cleanup()
         except Exception:
             _LOG.exception("Access Mesh cleanup pending after committed issuer event")
+        if number_start is not None and self.replication is not None:
+            try:
+                number = await asyncio.to_thread(
+                    self.store.numbers.number_for_slot,
+                    event.issuer_id,
+                    event.slot_id,
+                )
+                start = event.effective_at or self.clock()
+                deadline = event.deadline_at or (
+                    start + timedelta(seconds=(event.policy or slot.policy).duration_seconds)
+                )
+                await self.replication.announce_start(
+                    number=number,
+                    issuer_id=event.issuer_id,
+                    slot_id=event.slot_id,
+                    event_id=event.event_id,
+                    active_from=number_start["active_from"].isoformat(),
+                    started_at=start.isoformat(),
+                    hard_expires_at=deadline.isoformat(),
+                )
+            except Exception:
+                _LOG.exception("Mesh session start propagation pending")
         return result
 
     async def issuer_session(
@@ -540,16 +605,48 @@ class AccessMeshApplication:
                 if slot is None:
                     result = await self.issue(actor, kind="legacy", receipt_spec=spec)
                     return {"ok": True, "session_number": result["access_code"]}
-                cycle = local_cycle(slot, self.clock())
+                if slot.state != "active" or slot.kind != "legacy":
+                    raise AccessMeshError("access_mode_mismatch")
+                now = self.clock()
+                cycle = await asyncio.to_thread(self.store.merged_cycle, slot, now)
                 if cycle["state"] in {"active", "warning", "draining"}:
                     raise AccessMeshError("session_already_started")
-                if cycle["state"] == "cooldown":
-                    raise AccessMeshError("window_cooldown")
-                if slot.anchor and self.clock() < slot.anchor + timedelta(seconds=slot.policy.duration_seconds + slot.policy.cooldown_seconds):
-                    raise AccessMeshError("window_cooldown")
-                await self.change(actor, slot_id=slot.slot_id, kind="SessionStarted",
-                                  expected_revision=slot.revision, receipt_spec=spec)
-                number = self.store.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
+                if not cycle["started_at"] or not cycle["hard_expires_at"]:
+                    raise AccessMeshError("session_expired")
+                original_start = datetime.fromisoformat(cycle["started_at"])
+                original_end = datetime.fromisoformat(cycle["hard_expires_at"])
+                previous_end = await asyncio.to_thread(
+                    self.store.numbers.end_for_slot, slot.issuer_id, slot.slot_id
+                )
+                # A manually ended window may resume its original, unextended
+                # deadline. Beyond it, wait for normal cooldown before a new
+                # full-duration start. No automatic policy rearm grants writes.
+                if previous_end is not None and now < original_end:
+                    anchor, hard_deadline = original_start, original_end
+                else:
+                    cooldown_end = original_end + timedelta(seconds=slot.policy.cooldown_seconds)
+                    if previous_end is not None:
+                        cooldown_end = max(
+                            cooldown_end,
+                            datetime.fromisoformat(previous_end["ended_at"])
+                            + timedelta(seconds=slot.policy.cooldown_seconds),
+                        )
+                    if now < cooldown_end:
+                        raise AccessMeshError("window_cooldown")
+                    anchor, hard_deadline = now, None
+                await self.change(
+                    actor,
+                    slot_id=slot.slot_id,
+                    kind="SessionStarted",
+                    expected_revision=slot.revision,
+                    receipt_spec=spec,
+                    effective_at=anchor,
+                    deadline_at=hard_deadline,
+                    number_start={"active_from": now},
+                )
+                number = await asyncio.to_thread(
+                    self.store.numbers.number_for_slot, slot.issuer_id, slot.slot_id
+                )
                 if number is None:
                     raise AccessMeshError("invalid_session_number")
                 return {"ok": True, "session_number": number}
@@ -587,7 +684,8 @@ class AccessMeshApplication:
                             else "expired"
                         ),
                         "hard_expires_at": original_deadline.isoformat()
-                        if original_deadline else None,
+                        if original_deadline
+                        else None,
                         "remaining_seconds": 0,
                     }
                 return {
@@ -601,26 +699,35 @@ class AccessMeshApplication:
                     raise AccessMeshError("access_mode_mismatch")
                 if slot.state != "active":
                     raise AccessMeshError("slot_not_armed")
-                if original_deadline is not None and self.clock() >= original_deadline and (
-                    not ended or self.clock() < last_end["ended_at"] + timedelta(
-                        seconds=slot.policy.cooldown_seconds
+                if (
+                    original_deadline is not None
+                    and self.clock() >= original_deadline
+                    and (
+                        not ended
+                        or self.clock()
+                        < last_end["ended_at"] + timedelta(seconds=slot.policy.cooldown_seconds)
                     )
                 ):
                     return {
-                        "ok": False, "code": "session_expired",
-                        "error": "session_expired", "return_to_chat": True,
+                        "ok": False,
+                        "code": "session_expired",
+                        "error": "session_expired",
+                        "return_to_chat": True,
                     }
                 if not ended and cycle["state"] in {"active", "warning", "draining"}:
                     return {
-                        "ok": False, "code": "session_already_started",
+                        "ok": False,
+                        "code": "session_already_started",
                         "error": "session_already_started",
                     }
                 now = self.clock()
                 if ended and previous is not None and original_deadline is not None:
                     if now >= original_deadline:
                         return {
-                            "ok": False, "code": "session_expired",
-                            "error": "session_expired", "return_to_chat": True,
+                            "ok": False,
+                            "code": "session_expired",
+                            "error": "session_expired",
+                            "return_to_chat": True,
                         }
                     cooldown_end = last_end["ended_at"] + timedelta(
                         seconds=slot.policy.cooldown_seconds
@@ -628,15 +735,21 @@ class AccessMeshApplication:
                     if now < cooldown_end:
                         # Resume the original timebox with its original hard deadline.
                         return await self.change(
-                            actor, slot_id=slot.slot_id, kind="SessionStarted",
+                            actor,
+                            slot_id=slot.slot_id,
+                            kind="SessionStarted",
                             expected_revision=slot.revision,
-                            effective_at=previous["start"], deadline_at=original_deadline,
+                            effective_at=previous["start"],
+                            deadline_at=original_deadline,
                             receipt_spec=spec,
                         )
                     # A new authorized window gets its full policy duration.
                     return await self.change(
-                        actor, slot_id=slot.slot_id, kind="SessionStarted",
-                        expected_revision=slot.revision, effective_at=now,
+                        actor,
+                        slot_id=slot.slot_id,
+                        kind="SessionStarted",
+                        expected_revision=slot.revision,
+                        effective_at=now,
                         deadline_at=now + timedelta(seconds=slot.policy.duration_seconds),
                         receipt_spec=spec,
                     )
@@ -644,17 +757,23 @@ class AccessMeshApplication:
                     raise AccessMeshError("window_cooldown")
                 if cycle["state"] == "expired":
                     return {
-                        "ok": False, "code": "session_expired",
-                        "error": "session_expired", "return_to_chat": True,
+                        "ok": False,
+                        "code": "session_expired",
+                        "error": "session_expired",
+                        "return_to_chat": True,
                     }
                 return await self.change(
-                    actor, slot_id=slot.slot_id, kind="SessionStarted",
-                    expected_revision=slot.revision, receipt_spec=spec,
+                    actor,
+                    slot_id=slot.slot_id,
+                    kind="SessionStarted",
+                    expected_revision=slot.revision,
+                    receipt_spec=spec,
                 )
             elif not ended and cycle["state"] in {"active", "warning", "draining"}:
                 number_end = (
                     await asyncio.to_thread(self.store.number_cycle, slot, self.clock())
-                    if action == "end" and mode is None else None
+                    if action == "end" and mode is None
+                    else None
                 )
                 outcome = await self.change(
                     actor,
@@ -669,9 +788,13 @@ class AccessMeshApplication:
                     # not turn a committed end into an apparent failed mutation.
                     try:
                         end_event = next(
-                            (row for row in await asyncio.to_thread(self.store.numbers.end_snapshot)
-                             if row["number"] == number_end["number"]
-                             and row["cycle_key"] == number_end["cycle_key"]), None
+                            (
+                                row
+                                for row in await asyncio.to_thread(self.store.numbers.end_snapshot)
+                                if row["number"] == number_end["number"]
+                                and row["cycle_key"] == number_end["cycle_key"]
+                            ),
+                            None,
                         )
                         if end_event is not None:
                             await self.replication.announce_end(**end_event)

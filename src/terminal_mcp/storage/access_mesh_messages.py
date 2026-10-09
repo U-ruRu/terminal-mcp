@@ -271,11 +271,24 @@ class AccessMeshMessageStore:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._recipient_tx(db, message_hash, agent_id)
-            db.execute(
-                "UPDATE coordination_message_recipients SET read_at=COALESCE(read_at,?) "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (stamp, message_hash, agent_id),
+            message = db.execute(
+                "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?",
+                (message_hash,),
+            ).fetchone()
+            system_alert = bool(
+                message
+                and json.loads(message["wire_json"]).get("sender_id") == "terminal-mcp-system"
             )
+            db.execute(
+                "UPDATE coordination_message_recipients SET "
+                "read_at=COALESCE(read_at,?), "
+                "replied_at=CASE WHEN ? THEN COALESCE(replied_at,?) "
+                "ELSE replied_at END "
+                "WHERE message_hash=? AND recipient_agent_id=?",
+                (stamp, int(system_alert), stamp, message_hash, agent_id),
+            )
+            # Keep system ACK's reply completion atomic with read.
+            # Other alert messages continue to require an actual reply.
             self._queue_receipt_tx(db, message_hash, agent_id)
             row = self._recipient_tx(db, message_hash, agent_id)
             return {

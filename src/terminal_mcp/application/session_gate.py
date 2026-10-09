@@ -368,14 +368,18 @@ class SessionGate:
             if not state.get(pending_key):
                 continue
             pending = [
-                message for message in state.get("pending_messages", [])
-                if (
-                    message.get("mode") == mode
-                    or mode == "alert" and bool(message.get("alert"))
-                )
+                message
+                for message in state.get("pending_messages", [])
+                if (message.get("mode") == mode or mode == "alert" and bool(message.get("alert")))
             ]
             if not pending:
                 pending = list(state.get("pending_messages") or [])
+            if (
+                mode == "alert"
+                and pending
+                and all(message.get("sender") == "terminal-mcp-system" for message in pending)
+            ):
+                required_action = "ack"
             return None, {
                 "ok": False,
                 "code": code,

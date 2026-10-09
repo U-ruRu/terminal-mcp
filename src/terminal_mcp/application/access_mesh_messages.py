@@ -101,8 +101,7 @@ def _failure(code, *, outcome="not_committed"):
         "cannot_message_self": "Нельзя отправить сообщение самому себе",
         "recipient_not_found": "Получатель не найден",
     }
-    return {"ok": False, "code": code, "error": messages.get(code, code),
-            "outcome": outcome}
+    return {"ok": False, "code": code, "error": messages.get(code, code), "outcome": outcome}
 
 
 def _public_name(slot):
@@ -142,11 +141,14 @@ class AccessMeshMessaging:
         cycle = identity.get("session_lifecycle") or {}
         started_at = cycle.get("started_at")
         expiry_text = cycle.get("hard_expires_at")
-        if not started_at or not expiry_text or cycle.get("state") not in {
-            "expired", "cooldown", "draining"
-        }:
+        if (
+            not started_at
+            or not expiry_text
+            or cycle.get("state") not in {"expired", "cooldown", "draining"}
+        ):
             return False
         from datetime import UTC
+
         try:
             expiry = datetime.fromisoformat(expiry_text.replace("Z", "+00:00"))
             if self.mesh.clock().astimezone(UTC) < expiry.astimezone(UTC):
@@ -172,10 +174,14 @@ class AccessMeshMessaging:
         }
         if await asyncio.to_thread(self.store.wire, message_hash) is None:
             await asyncio.to_thread(
-                self.store.accept, wire, [{
-                    "logical_agent_id": identity["logical_agent_id"],
-                    "public_name": identity["public_name"],
-                }],
+                self.store.accept,
+                wire,
+                [
+                    {
+                        "logical_agent_id": identity["logical_agent_id"],
+                        "public_name": identity["public_name"],
+                    }
+                ],
             )
         recipient = await asyncio.to_thread(
             self.store.recipient, message_hash, identity["logical_agent_id"]
@@ -190,7 +196,12 @@ class AccessMeshMessaging:
             if not slots:
                 break
             for slot in slots:
-                effective = await asyncio.to_thread(self.mesh.store.canonical_slot, slot)
+                canonicalize = getattr(self.mesh.store, "canonical_slot", None)
+                effective = (
+                    await asyncio.to_thread(canonicalize, slot)
+                    if canonicalize is not None
+                    else slot
+                )
                 identity = await asyncio.to_thread(
                     self.mesh.store.observed_identity, effective, now=self.mesh.clock()
                 )
@@ -297,8 +308,7 @@ class AccessMeshMessaging:
 
     async def active_agent_locations(self):
         """Return one current location per LogicalAgent, using latest activity."""
-        rows = {item["logical_agent_id"]: item
-                for item in await self._local_recipients()}
+        rows = {item["logical_agent_id"]: item for item in await self._local_recipients()}
         if self.replication is not None:
             for peer in self.peers:
                 cursor = ""
@@ -346,15 +356,35 @@ class AccessMeshMessaging:
 
     async def _target_is_merged_self(self, target: str, logical_agent_id: str) -> bool:
         """Recognize old public_name aliases after LogicalAgent convergence."""
+        # The losing issuer may exist only on another node. Its original
+        # name must still be recognized from durable Mesh claims, even if
+        # there has never been a local attachment for that losing slot.
+        from terminal_mcp.storage.access_mesh import public_name
+
+        number_registry = getattr(self.mesh.store, "numbers", None)
+        claims = (
+            await asyncio.to_thread(number_registry.snapshot) if number_registry is not None else []
+        )
+        for claim in claims:
+            original_name = public_name(claim["issuer_id"], claim["logical_agent_id"])
+            if original_name.casefold() == target.casefold():
+                winner = await asyncio.to_thread(
+                    self.mesh.store.numbers.group_winner,
+                    claim["issuer_id"],
+                    claim["slot_id"],
+                )
+                return winner is not None and winner["logical_agent_id"] == logical_agent_id
+
         cursor = ""
         while True:
-            slots = await asyncio.to_thread(
-                self.mesh.store.local_slots, after=cursor, limit=100
-            )
+            slots = await asyncio.to_thread(self.mesh.store.local_slots, after=cursor, limit=100)
             for slot in slots:
                 if _public_name(slot).casefold() == target.casefold():
-                    effective = await asyncio.to_thread(
-                        self.mesh.store.canonical_slot, slot
+                    canonicalize = getattr(self.mesh.store, "canonical_slot", None)
+                    effective = (
+                        await asyncio.to_thread(canonicalize, slot)
+                        if canonicalize is not None
+                        else slot
                     )
                     return effective.logical_agent_id == logical_agent_id
             if len(slots) < 100:
@@ -607,7 +637,8 @@ class AccessMeshMessaging:
             if message_hash:
                 wire = await asyncio.to_thread(self.store.wire, message_hash)
                 expiry_alert_ack = bool(
-                    wire and wire.get("sender_id") == "terminal-mcp-system"
+                    wire
+                    and wire.get("sender_id") == "terminal-mcp-system"
                     and wire.get("mode") == "alert"
                 )
                 if expiry_alert_ack and text is not None:
@@ -626,14 +657,10 @@ class AccessMeshMessaging:
                 # excluded from its own recipient list.
                 public_caller = {"logical_agent_id": "", "public_name": "anonymous"}
                 try:
-                    public_caller = await self.mesh.resolve(
-                        actor, ManagedOperation.MESSAGE_READ
-                    )
+                    public_caller = await self.mesh.resolve(actor, ManagedOperation.MESSAGE_READ)
                 except Exception:
                     pass
-                return await self.recipients(
-                    public_caller, scope=scope, limit=limit, cursor=cursor
-                )
+                return await self.recipients(public_caller, scope=scope, limit=limit, cursor=cursor)
             # Permit ACK of the current system Alert after the session ends.
             identity = await self.mesh.resolve(
                 actor, ManagedOperation.MESSAGE_READ if expiry_alert_ack else operation

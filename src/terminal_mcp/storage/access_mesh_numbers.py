@@ -1,32 +1,64 @@
 """Durable four-digit Mesh session number reservations and reconciliation."""
-from datetime import UTC, datetime, timedelta
+
 import json
 import re
 import secrets
+from datetime import UTC, datetime, timedelta
+
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
+
 
 class MeshSessionNumbers:
     """Stores temporary reservations and immutable session identities."""
+
     def __init__(self, store):
         self.store = store
         with store._connect() as db:
-            db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_reservations(number TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, expires_at TEXT NOT NULL)')
-            db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_claims(issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, number TEXT NOT NULL, logical_agent_id TEXT NOT NULL, started_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, PRIMARY KEY(issuer_id,slot_id))')
-            db.execute('CREATE INDEX IF NOT EXISTS access_mesh_number_current ON access_mesh_number_claims(number,started_at,issuer_id,slot_id)')
-            db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_incidents(number TEXT NOT NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, collided_with TEXT NOT NULL, detected_at TEXT NOT NULL, PRIMARY KEY(number,issuer_id,slot_id,collided_with))')
-            db.execute('CREATE TABLE IF NOT EXISTS access_mesh_number_ends(number TEXT NOT NULL, cycle_key TEXT NOT NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, event_id TEXT NOT NULL, ended_at TEXT NOT NULL, PRIMARY KEY(number,cycle_key))')
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS access_mesh_number_reservations(number TEXT "
+                "PRIMARY KEY, attempt_id TEXT NOT NULL, expires_at TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS access_mesh_number_claims(issuer_id TEXT NOT "
+                "NULL, slot_id TEXT NOT NULL, number TEXT NOT NULL, logical_agent_id TEXT "
+                "NOT NULL, started_at TEXT NOT NULL, hard_expires_at TEXT NOT NULL, PRIMARY "
+                "KEY(issuer_id,slot_id))"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS access_mesh_number_current ON "
+                "access_mesh_number_claims(number,started_at,issuer_id,slot_id)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS access_mesh_number_incidents(number TEXT NOT "
+                "NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, collided_with TEXT "
+                "NOT NULL, detected_at TEXT NOT NULL, PRIMARY "
+                "KEY(number,issuer_id,slot_id,collided_with))"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS access_mesh_number_ends(number TEXT NOT NULL, "
+                "cycle_key TEXT NOT NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
+                "event_id TEXT NOT NULL, ended_at TEXT NOT NULL, PRIMARY "
+                "KEY(number,cycle_key))"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS access_mesh_number_starts("
+                "event_id TEXT PRIMARY KEY, number TEXT NOT NULL, "
+                "issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
+                "active_from TEXT NOT NULL, started_at TEXT NOT NULL, "
+                "hard_expires_at TEXT NOT NULL)"
+            )
 
     @staticmethod
     def validate(number):
-        if not isinstance(number, str) or not re.fullmatch(r'[0-9]{4}', number):
-            raise AccessMeshError('invalid_session_number')
+        if not isinstance(number, str) or not re.fullmatch(r"[0-9]{4}", number):
+            raise AccessMeshError("invalid_session_number")
         return number
 
     @staticmethod
     def stamp(value):
         if not isinstance(value, datetime) or value.tzinfo is None:
-            raise AccessMeshError('invalid_session_timestamp')
-        return value.astimezone(UTC).isoformat(timespec='microseconds')
+            raise AccessMeshError("invalid_session_timestamp")
+        return value.astimezone(UTC).isoformat(timespec="microseconds")
 
     def _occupied(self, db, number, attempt_id, *, as_of=None):
         # Historical claims survive for attribution but cannot reserve a
@@ -38,7 +70,8 @@ class MeshSessionNumbers:
             tag = self.store.code_tag(issuer, number)
             rows = db.execute(
                 "SELECT anchor,deadline_at,policy_json FROM access_mesh_slot_replicas "
-                "WHERE issuer_id=? AND code_tag=? AND state!='deleted'", (issuer, tag),
+                "WHERE issuer_id=? AND code_tag=? AND state!='deleted'",
+                (issuer, tag),
             ).fetchall()
             for row in rows:
                 policy = json.loads(row["policy_json"])
@@ -54,82 +87,144 @@ class MeshSessionNumbers:
                 if deadline > as_of:
                     return True
         if db.execute(
-            'SELECT 1 FROM access_mesh_number_claims WHERE number=? '
-            'AND hard_expires_at>? LIMIT 1', (number, as_of)
+            "SELECT 1 FROM access_mesh_number_claims WHERE number=? AND hard_expires_at>? LIMIT 1",
+            (number, as_of),
         ).fetchone():
             return True
-        old = db.execute('SELECT attempt_id FROM access_mesh_number_reservations WHERE number=?', (number,)).fetchone()
-        return old is not None and old['attempt_id'] != attempt_id
+        old = db.execute(
+            "SELECT attempt_id FROM access_mesh_number_reservations WHERE number=?", (number,)
+        ).fetchone()
+        return old is not None and old["attempt_id"] != attempt_id
 
     def reserve(self, *, number, attempt_id, now=None):
         self.validate(number)
         if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 128:
-            raise AccessMeshError('invalid_session_attempt')
+            raise AccessMeshError("invalid_session_attempt")
         now = now or datetime.now(UTC)
         stamp = self.stamp(now)
         expires = self.stamp(now + timedelta(minutes=3))
         with self.store._connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            db.execute('DELETE FROM access_mesh_number_reservations WHERE expires_at<=?', (stamp,))
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM access_mesh_number_reservations WHERE expires_at<=?", (stamp,))
             if not self._occupied(db, number, attempt_id, as_of=stamp):
-                db.execute('INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE attempt_id=excluded.attempt_id', (number, attempt_id, expires))
-                return {'ok': True, 'number': number}
+                db.execute(
+                    "INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON "
+                    "CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE "
+                    "attempt_id=excluded.attempt_id",
+                    (number, attempt_id, expires),
+                )
+                return {"ok": True, "number": number}
             for value in secrets.SystemRandom().sample(range(10000), 10000):
-                alternative = f'{value:04d}'
+                alternative = f"{value:04d}"
                 if not self._occupied(db, alternative, attempt_id, as_of=stamp):
-                    db.execute('INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE attempt_id=excluded.attempt_id', (alternative, attempt_id, expires))
-                    return {'ok': False, 'code': 'number_conflict', 'suggested_number': alternative}
-        raise AccessMeshError('session_number_capacity')
+                    db.execute(
+                        "INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON "
+                        "CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE "
+                        "attempt_id=excluded.attempt_id",
+                        (alternative, attempt_id, expires),
+                    )
+                    return {"ok": False, "code": "number_conflict", "suggested_number": alternative}
+        raise AccessMeshError("session_number_capacity")
 
     def release(self, attempt_id, *, keep_number=None):
         with self.store._connect() as db:
-            db.execute('BEGIN IMMEDIATE')
+            db.execute("BEGIN IMMEDIATE")
             if keep_number is None:
-                db.execute('DELETE FROM access_mesh_number_reservations WHERE attempt_id=?', (attempt_id,))
+                db.execute(
+                    "DELETE FROM access_mesh_number_reservations WHERE attempt_id=?", (attempt_id,)
+                )
             else:
                 self.validate(keep_number)
-                db.execute('DELETE FROM access_mesh_number_reservations WHERE attempt_id=? AND number!=?', (attempt_id, keep_number))
+                db.execute(
+                    "DELETE FROM access_mesh_number_reservations WHERE attempt_id=? AND number!=?",
+                    (attempt_id, keep_number),
+                )
 
-    def register(self, *, number, issuer_id, slot_id, logical_agent_id,
-                 started_at, hard_expires_at, attempt_id=None, now=None):
+    def register(
+        self,
+        *,
+        number,
+        issuer_id,
+        slot_id,
+        logical_agent_id,
+        started_at,
+        hard_expires_at,
+        attempt_id=None,
+        now=None,
+    ):
         """Merge immutable identities; later-started session wins future operations."""
         self.validate(number)
         if issuer_id not in self.store.trusted_issuers:
-            raise AccessMeshError('access_mesh_untrusted_peer')
-        if not isinstance(slot_id, str) or not slot_id or not isinstance(logical_agent_id, str) or not logical_agent_id:
-            raise AccessMeshError('invalid_session_identity')
-        start = self.stamp(datetime.fromisoformat(started_at) if isinstance(started_at, str) else started_at)
-        end = self.stamp(datetime.fromisoformat(hard_expires_at) if isinstance(hard_expires_at, str) else hard_expires_at)
+            raise AccessMeshError("access_mesh_untrusted_peer")
+        if (
+            not isinstance(slot_id, str)
+            or not slot_id
+            or not isinstance(logical_agent_id, str)
+            or not logical_agent_id
+        ):
+            raise AccessMeshError("invalid_session_identity")
+        start = self.stamp(
+            datetime.fromisoformat(started_at) if isinstance(started_at, str) else started_at
+        )
+        end = self.stamp(
+            datetime.fromisoformat(hard_expires_at)
+            if isinstance(hard_expires_at, str)
+            else hard_expires_at
+        )
         if end < start:
-            raise AccessMeshError('invalid_session_timestamp')
+            raise AccessMeshError("invalid_session_timestamp")
         stamp = self.stamp(now or datetime.now(UTC))
         with self.store._connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            existing = db.execute('SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?', (issuer_id, slot_id)).fetchone()
-            if existing and (existing['number'], existing['logical_agent_id'], existing['started_at']) != (number, logical_agent_id, start):
-                raise AccessMeshError('session_identity_conflict')
-            db.execute('INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?) ON CONFLICT(issuer_id,slot_id) DO UPDATE SET hard_expires_at=MAX(hard_expires_at,excluded.hard_expires_at)', (issuer_id, slot_id, number, logical_agent_id, start, end))
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
+                (issuer_id, slot_id),
+            ).fetchone()
+            if existing and (
+                existing["number"],
+                existing["logical_agent_id"],
+                existing["started_at"],
+            ) != (number, logical_agent_id, start):
+                raise AccessMeshError("session_identity_conflict")
+            db.execute(
+                "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?) ON "
+                "CONFLICT(issuer_id,slot_id) DO UPDATE SET "
+                "hard_expires_at=MAX(hard_expires_at,excluded.hard_expires_at)",
+                (issuer_id, slot_id, number, logical_agent_id, start, end),
+            )
             if attempt_id:
-                db.execute('DELETE FROM access_mesh_number_reservations WHERE attempt_id=?', (attempt_id,))
+                db.execute(
+                    "DELETE FROM access_mesh_number_reservations WHERE attempt_id=?", (attempt_id,)
+                )
             others = db.execute(
-                'SELECT issuer_id,slot_id FROM access_mesh_number_claims '
-                'WHERE number=? AND (issuer_id!=? OR slot_id!=?) '
-                'AND started_at<=? AND hard_expires_at>=?',
-                (number, issuer_id, slot_id, end, start)
+                "SELECT issuer_id,slot_id FROM access_mesh_number_claims "
+                "WHERE number=? AND (issuer_id!=? OR slot_id!=?) "
+                "AND started_at<=? AND hard_expires_at>=?",
+                (number, issuer_id, slot_id, end, start),
             ).fetchall()
             for other in others:
-                db.execute('INSERT OR IGNORE INTO access_mesh_number_incidents VALUES(?,?,?,?,?)', (number, issuer_id, slot_id, f"{other['issuer_id']}:{other['slot_id']}", stamp))
-            claims = [dict(row) for row in db.execute(
-                'SELECT * FROM access_mesh_number_claims WHERE number=?',
-                (number,)
-            ).fetchall()]
+                db.execute(
+                    "INSERT OR IGNORE INTO access_mesh_number_incidents VALUES(?,?,?,?,?)",
+                    (number, issuer_id, slot_id, f"{other['issuer_id']}:{other['slot_id']}", stamp),
+                )
+            claims = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_claims WHERE number=?", (number,)
+                ).fetchall()
+            ]
             for group in self._groups(claims):
-                if any(row['issuer_id'] == issuer_id and row['slot_id'] == slot_id
-                       for row in group):
+                if any(
+                    row["issuer_id"] == issuer_id and row["slot_id"] == slot_id for row in group
+                ):
                     chosen = self._group_winner(group)
                     break
-        return {'ok': True, 'logical_agent_id': chosen['logical_agent_id'],
-                'hard_expires_at': chosen['hard_expires_at'], 'collisions': len(others)}
+        return {
+            "ok": True,
+            "logical_agent_id": chosen["logical_agent_id"],
+            "hard_expires_at": chosen["hard_expires_at"],
+            "collisions": len(others),
+        }
 
     @staticmethod
     def _groups(rows):
@@ -141,9 +236,7 @@ class MeshSessionNumbers:
         groups = []
         current = []
         latest_end = ""
-        for row in sorted(rows, key=lambda r: (
-            r["started_at"], r["issuer_id"], r["slot_id"]
-        )):
+        for row in sorted(rows, key=lambda r: (r["started_at"], r["issuer_id"], r["slot_id"])):
             if current and row["started_at"] > latest_end:
                 groups.append(current)
                 current = []
@@ -156,20 +249,20 @@ class MeshSessionNumbers:
 
     @staticmethod
     def _group_winner(group):
-        winner = max(group, key=lambda row: (
-            row["started_at"], row["issuer_id"], row["slot_id"]
-        ))
-        return {**dict(winner), "hard_expires_at":
-                max(item["hard_expires_at"] for item in group)}
+        winner = max(group, key=lambda row: (row["started_at"], row["issuer_id"], row["slot_id"]))
+        return {**dict(winner), "hard_expires_at": max(item["hard_expires_at"] for item in group)}
 
     def winner(self, number):
         """Current identity: latest time-overlap group for the four digits."""
         self.validate(number)
         with self.store._connect() as db:
-            rows = [dict(row) for row in db.execute(
-                "SELECT * FROM access_mesh_number_claims WHERE number=?",
-                (number,),
-            ).fetchall()]
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    (number,),
+                ).fetchall()
+            ]
         groups = self._groups(rows)
         return self._group_winner(groups[-1]) if groups else None
 
@@ -177,84 +270,244 @@ class MeshSessionNumbers:
         """A historic slot maps only to claims overlapping its own lifetime."""
         with self.store._connect() as db:
             original = db.execute(
-                "SELECT * FROM access_mesh_number_claims "
-                "WHERE issuer_id=? AND slot_id=?", (issuer_id, slot_id),
+                "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
+                (issuer_id, slot_id),
             ).fetchone()
             if not original:
                 return None
-            rows = [dict(row) for row in db.execute(
-                "SELECT * FROM access_mesh_number_claims WHERE number=?",
-                (original["number"],),
-            ).fetchall()]
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    (original["number"],),
+                ).fetchall()
+            ]
         for group in self._groups(rows):
-            if any(row["issuer_id"] == issuer_id and row["slot_id"] == slot_id
-                   for row in group):
+            if any(row["issuer_id"] == issuer_id and row["slot_id"] == slot_id for row in group):
                 return self._group_winner(group)
         return None
 
+    def start_for_slot(self, issuer_id, slot_id):
+        """Latest manual start of the overlapping historical identity group."""
+        with self.store._connect() as db:
+            original = db.execute(
+                "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
+                (issuer_id, slot_id),
+            ).fetchone()
+            if original is None:
+                return None
+            claims = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    (original["number"],),
+                ).fetchall()
+            ]
+            group = next(
+                (
+                    group
+                    for group in self._groups(claims)
+                    if any(
+                        row["issuer_id"] == issuer_id and row["slot_id"] == slot_id for row in group
+                    )
+                ),
+                None,
+            )
+            if not group:
+                return None
+            keys = {(row["issuer_id"], row["slot_id"]) for row in group}
+            events = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_starts WHERE number=?",
+                    (original["number"],),
+                )
+                if (row["issuer_id"], row["slot_id"]) in keys
+            ]
+        return (
+            max(
+                events,
+                key=lambda row: (
+                    row["active_from"],
+                    row["issuer_id"],
+                    row["slot_id"],
+                    row["event_id"],
+                ),
+            )
+            if events
+            else None
+        )
+
+    def end_for_slot(self, issuer_id, slot_id):
+        """Latest explicit end of this identity group, excluding recycled epochs."""
+        with self.store._connect() as db:
+            original = db.execute(
+                "SELECT number FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
+                (issuer_id, slot_id),
+            ).fetchone()
+            if original is None:
+                return None
+            claims = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_claims WHERE number=?",
+                    (original["number"],),
+                ).fetchall()
+            ]
+            group = next(
+                (
+                    group
+                    for group in self._groups(claims)
+                    if any(
+                        row["issuer_id"] == issuer_id and row["slot_id"] == slot_id for row in group
+                    )
+                ),
+                None,
+            )
+            if not group:
+                return None
+            keys = {(row["issuer_id"], row["slot_id"]) for row in group}
+            ends = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_ends WHERE number=?",
+                    (original["number"],),
+                )
+                if (row["issuer_id"], row["slot_id"]) in keys
+            ]
+        return max(ends, key=lambda row: (row["ended_at"], row["event_id"])) if ends else None
+
+    def record_start(
+        self, *, number, issuer_id, slot_id, event_id, active_from, started_at, hard_expires_at
+    ):
+        self.validate(number)
+        if issuer_id not in self.store.trusted_issuers:
+            raise AccessMeshError("access_mesh_untrusted_peer")
+        if not slot_id or not event_id:
+            raise AccessMeshError("invalid_session_identity")
+        values = [
+            self.stamp(datetime.fromisoformat(value) if isinstance(value, str) else value)
+            for value in (active_from, started_at, hard_expires_at)
+        ]
+        if values[2] < values[1]:
+            raise AccessMeshError("invalid_session_timestamp")
+        with self.store._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT INTO access_mesh_number_starts VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(event_id) DO UPDATE SET active_from=excluded.active_from",
+                (event_id, number, issuer_id, slot_id, *values),
+            )
+        return {"ok": True}
+
+    def start_snapshot(self):
+        with self.store._connect() as db:
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_starts ORDER BY issuer_id,slot_id,event_id"
+                )
+            ]
+
     def snapshot(self):
         with self.store._connect() as db:
-            return [dict(row) for row in db.execute('SELECT * FROM access_mesh_number_claims ORDER BY issuer_id,slot_id').fetchall()]
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_claims ORDER BY issuer_id,slot_id"
+                ).fetchall()
+            ]
 
     def reservations(self, *, now=None):
         stamp = self.stamp(now or datetime.now(UTC))
         with self.store._connect() as db:
-            return [dict(row) for row in db.execute('SELECT * FROM access_mesh_number_reservations WHERE expires_at>?', (stamp,)).fetchall()]
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_reservations WHERE expires_at>?", (stamp,)
+                ).fetchall()
+            ]
 
     def incidents(self):
         with self.store._connect() as db:
-            return [dict(row) for row in db.execute('SELECT * FROM access_mesh_number_incidents ORDER BY number,issuer_id,slot_id').fetchall()]
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_incidents ORDER BY number,issuer_id,slot_id"
+                ).fetchall()
+            ]
 
     def number_for_slot(self, issuer_id, slot_id):
         with self.store._connect() as db:
-            row = db.execute('SELECT number FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?', (issuer_id, slot_id)).fetchone()
-            return row['number'] if row else None
+            row = db.execute(
+                "SELECT number FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
+                (issuer_id, slot_id),
+            ).fetchone()
+            return row["number"] if row else None
 
     def merge_reservations(self, rows, *, now=None):
         """Best-effort anti-entropy for unexpired peer reservations."""
         if not isinstance(rows, list) or len(rows) > 50:
-            raise AccessMeshError('invalid_session_snapshot')
+            raise AccessMeshError("invalid_session_snapshot")
         stamp = self.stamp(now or datetime.now(UTC))
         validated = []
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {'number', 'attempt_id', 'expires_at'}:
-                raise AccessMeshError('invalid_session_snapshot')
-            number = self.validate(row['number'])
-            attempt = row['attempt_id']
+            if not isinstance(row, dict) or set(row) != {"number", "attempt_id", "expires_at"}:
+                raise AccessMeshError("invalid_session_snapshot")
+            number = self.validate(row["number"])
+            attempt = row["attempt_id"]
             if not isinstance(attempt, str) or not 1 <= len(attempt) <= 128:
-                raise AccessMeshError('invalid_session_snapshot')
-            expires = self.stamp(datetime.fromisoformat(row['expires_at']))
+                raise AccessMeshError("invalid_session_snapshot")
+            expires = self.stamp(datetime.fromisoformat(row["expires_at"]))
             if expires > stamp:
                 validated.append((number, attempt, expires))
         with self.store._connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            db.execute('DELETE FROM access_mesh_number_reservations WHERE expires_at<=?', (stamp,))
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM access_mesh_number_reservations WHERE expires_at<=?", (stamp,))
             for number, attempt, expires in validated:
                 if not self._occupied(db, number, attempt, as_of=stamp):
-                    db.execute('INSERT OR IGNORE INTO access_mesh_number_reservations VALUES(?,?,?)', (number, attempt, expires))
-
+                    db.execute(
+                        "INSERT OR IGNORE INTO access_mesh_number_reservations VALUES(?,?,?)",
+                        (number, attempt, expires),
+                    )
 
     def record_end(self, *, number, cycle_key, issuer_id, slot_id, event_id, ended_at):
         self.validate(number)
         if issuer_id not in self.store.trusted_issuers:
-            raise AccessMeshError('access_mesh_untrusted_peer')
-        if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (cycle_key, slot_id, event_id)):
-            raise AccessMeshError('invalid_session_end')
-        stamp = self.stamp(datetime.fromisoformat(ended_at) if isinstance(ended_at, str) else ended_at)
+            raise AccessMeshError("access_mesh_untrusted_peer")
+        if not all(
+            isinstance(value, str) and 1 <= len(value) <= 256
+            for value in (cycle_key, slot_id, event_id)
+        ):
+            raise AccessMeshError("invalid_session_end")
+        stamp = self.stamp(
+            datetime.fromisoformat(ended_at) if isinstance(ended_at, str) else ended_at
+        )
         with self.store._connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            db.execute('INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)',
-                       (number,cycle_key,issuer_id,slot_id,event_id,stamp))
-        return {'ok': True}
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT INTO access_mesh_number_ends VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(number,cycle_key) DO UPDATE SET "
+                "ended_at=MAX(ended_at,excluded.ended_at), "
+                "event_id=CASE WHEN excluded.ended_at>=ended_at "
+                "THEN excluded.event_id ELSE event_id END",
+                (number, cycle_key, issuer_id, slot_id, event_id, stamp),
+            )
+        return {"ok": True}
 
     def end_for_cycle(self, number, cycle_key):
         with self.store._connect() as db:
-            row = db.execute('SELECT ended_at FROM access_mesh_number_ends WHERE number=? AND cycle_key=?',
-                             (number, cycle_key)).fetchone()
-            return row['ended_at'] if row else None
+            row = db.execute(
+                "SELECT ended_at FROM access_mesh_number_ends WHERE number=? AND cycle_key=?",
+                (number, cycle_key),
+            ).fetchone()
+            return row["ended_at"] if row else None
 
     def end_snapshot(self):
         with self.store._connect() as db:
-            return [dict(row) for row in db.execute(
-                'SELECT * FROM access_mesh_number_ends ORDER BY number,cycle_key'
-            ).fetchall()]
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM access_mesh_number_ends ORDER BY number,cycle_key"
+                ).fetchall()
+            ]

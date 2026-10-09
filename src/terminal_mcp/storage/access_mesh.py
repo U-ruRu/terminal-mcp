@@ -14,8 +14,8 @@ import json
 import secrets
 import sqlite3
 from contextvars import ContextVar
-from datetime import UTC, datetime, timedelta
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -32,6 +32,7 @@ from terminal_mcp.core.access_mesh_grants import (
 _mutation_receipt: ContextVar[dict | None] = ContextVar("mesh_issuer_receipt", default=None)
 _mutation_number: ContextVar[dict | None] = ContextVar("mesh_session_number", default=None)
 _mutation_end: ContextVar[dict | None] = ContextVar("mesh_session_end", default=None)
+_mutation_start: ContextVar[dict | None] = ContextVar("mesh_session_start", default=None)
 
 
 def public_name(issuer_id: str, logical_agent_id: str) -> str:
@@ -104,6 +105,7 @@ class AccessMeshStore(LocalAccessMesh):
         self.clock = clock or (lambda: datetime.now(UTC))
         super().__init__(*args, **kwargs)
         from terminal_mcp.storage.access_mesh_numbers import MeshSessionNumbers
+
         self.numbers = MeshSessionNumbers(self)
 
     def _initialize(self) -> None:
@@ -261,8 +263,14 @@ class AccessMeshStore(LocalAccessMesh):
                 "INSERT INTO access_mesh_number_claims "
                 "(issuer_id,slot_id,number,logical_agent_id,started_at,hard_expires_at) "
                 "VALUES(?,?,?,?,?,?)",
-                (event.issuer_id, event.slot_id, number["number"],
-                 event.logical_agent_id, _text(started), _text(expires)),
+                (
+                    event.issuer_id,
+                    event.slot_id,
+                    number["number"],
+                    event.logical_agent_id,
+                    _text(started),
+                    _text(expires),
+                ),
             )
             db.execute(
                 "DELETE FROM access_mesh_number_reservations WHERE attempt_id=?",
@@ -272,9 +280,41 @@ class AccessMeshStore(LocalAccessMesh):
         if event.kind == "SessionEnded" and ending is not None:
             db.execute(
                 "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)",
-                (ending["number"], ending["cycle_key"], event.issuer_id,
-                 event.slot_id, event.event_id, _text(event.effective_at)),
+                (
+                    ending["number"],
+                    ending["cycle_key"],
+                    event.issuer_id,
+                    event.slot_id,
+                    event.event_id,
+                    _text(event.effective_at),
+                ),
             )
+        if event.kind == "SessionStarted":
+            previous = db.execute(
+                "SELECT number FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
+                (event.issuer_id, event.slot_id),
+            ).fetchone()
+            if previous:
+                start_data = _mutation_start.get() or {}
+                active_from = start_data.get("active_from") or self.clock()
+                started_at = event.effective_at or active_from
+                expires = event.deadline_at or (
+                    started_at + timedelta(seconds=slot.policy.duration_seconds)
+                )
+                db.execute(
+                    "INSERT OR IGNORE INTO access_mesh_number_starts "
+                    "(event_id,number,issuer_id,slot_id,active_from,"
+                    "started_at,hard_expires_at) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        event.event_id,
+                        previous["number"],
+                        event.issuer_id,
+                        event.slot_id,
+                        _text(active_from),
+                        _text(started_at),
+                        _text(expires),
+                    ),
+                )
         receipt = _mutation_receipt.get()
         if receipt is not None and receipt["event_id"] == event.event_id:
             self._save_receipt_tx(db, receipt)
@@ -351,31 +391,47 @@ class AccessMeshStore(LocalAccessMesh):
             start = previous.anchor
             end = previous.deadline_at or (
                 start + timedelta(seconds=previous.policy.duration_seconds)
-                if start is not None else None
+                if start is not None
+                else None
             )
-            if (previous.policy.rearm_enabled or end is None or now < end):
+            if previous.policy.rearm_enabled or end is None or now < end:
                 raise AccessMeshError("access_mesh_code_in_use")
             db.execute(
                 "UPDATE access_mesh_slot_replicas SET state='deleted' "
                 "WHERE issuer_id=? AND slot_id=?",
                 (previous.issuer_id, previous.slot_id),
             )
-            old = self._snapshot(db.execute(
-                "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
-                (previous.issuer_id, previous.slot_id),
-            ).fetchone())
+            old = self._snapshot(
+                db.execute(
+                    "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
+                    (previous.issuer_id, previous.slot_id),
+                ).fetchone()
+            )
             stamp = _text(now)
             self._native_slot(db, old, stamp)
             self._queue_cleanup(
-                db, old, job_id=f"recycle:{event.issuer_id}:{event.event_id}",
-                reason="expired_session_number_recycled", stamp=stamp,
+                db,
+                old,
+                job_id=f"recycle:{event.issuer_id}:{event.event_id}",
+                reason="expired_session_number_recycled",
+                stamp=stamp,
                 release_claims=True,
             )
 
-    def apply_event(self, event, *, mutation_receipt=None, mutation_number=None, mutation_end=None, **kwargs):
+    def apply_event(
+        self,
+        event,
+        *,
+        mutation_receipt=None,
+        mutation_number=None,
+        mutation_end=None,
+        mutation_start=None,
+        **kwargs,
+    ):
         token = _mutation_receipt.set(mutation_receipt)
         number_token = _mutation_number.set(mutation_number)
         end_token = _mutation_end.set(mutation_end)
+        start_token = _mutation_start.set(mutation_start)
         try:
             try:
                 return super().apply_event(event, **kwargs)
@@ -391,6 +447,7 @@ class AccessMeshStore(LocalAccessMesh):
                         raise AccessMeshError("access_mesh_code_in_use") from exc
                 raise
         finally:
+            _mutation_start.reset(start_token)
             _mutation_end.reset(end_token)
             _mutation_number.reset(number_token)
             _mutation_receipt.reset(token)
@@ -486,7 +543,6 @@ class AccessMeshStore(LocalAccessMesh):
 
     def canonical_slot(self, slot: SlotSnapshot) -> SlotSnapshot:
         """Translate a historical Mesh alias to the deterministic winner."""
-        number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
         winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
         if winner is None:
             return slot
@@ -526,7 +582,8 @@ class AccessMeshStore(LocalAccessMesh):
             row = db.execute(
                 "SELECT MAX(a.last_active_at) FROM access_mesh_activity a "
                 "JOIN access_mesh_attachments x USING(connection_key) "
-                "WHERE x.issuer_id=? AND x.slot_id=?", (issuer_id, slot_id),
+                "WHERE x.issuer_id=? AND x.slot_id=?",
+                (issuer_id, slot_id),
             ).fetchone()
             return row[0] if row else None
 
@@ -543,21 +600,41 @@ class AccessMeshStore(LocalAccessMesh):
         return [self._snapshot(row) for row in rows]
 
     def merged_cycle(self, slot: SlotSnapshot, now: datetime) -> dict:
-        """Choose the maximum shared expiry; apply end events to current cycle only."""
+        """Project explicit, shared Mesh start/end transitions for this epoch.
+
+        No new WorkSession is silently materialized by policy rearm: after a
+        deadline or explicit end, another Access.start must authorize it.
+        """
         number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
         winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
-        if winner and (winner["issuer_id"], winner["slot_id"]) == (slot.issuer_id, slot.slot_id):
-            started = _parse(winner["started_at"])
-            merged_end = _parse(winner["hard_expires_at"])
-            if slot.anchor == started and merged_end is not None:
-                old_end = slot.deadline_at or slot.anchor + timedelta(seconds=slot.policy.duration_seconds)
-                if merged_end > old_end:
-                    slot = replace(slot, deadline_at=merged_end)
-        cycle = local_cycle(slot, now)
-        if number is not None and winner is not None and cycle["started_at"]:
-            key = f'{winner["issuer_id"]}:{winner["slot_id"]}:{cycle["started_at"]}'
-            if self.numbers.end_for_cycle(number, key) is not None:
-                return {**cycle, "state": "expired", "remaining_seconds": 0}
+        if number is None or winner is None:
+            return local_cycle(slot, now)
+        if (slot.issuer_id, slot.slot_id) != (winner["issuer_id"], winner["slot_id"]):
+            effective = self.slot(winner["issuer_id"], winner["slot_id"])
+            if effective is not None:
+                slot = effective
+        latest_start = self.numbers.start_for_slot(slot.issuer_id, slot.slot_id)
+        start = _parse(winner["started_at"])
+        expiry = _parse(winner["hard_expires_at"])
+        active_from = start
+        if latest_start is not None and _parse(latest_start["active_from"]) >= start:
+            active_from = _parse(latest_start["active_from"])
+            start = _parse(latest_start["started_at"])
+            expiry = _parse(latest_start["hard_expires_at"])
+        if start is None or expiry is None:
+            return local_cycle(slot, now)
+        # The regular SlotPolicy's rearm_enabled flag is an authorization to
+        # request another window, not permission for implicit MCP writes.
+        effective_slot = replace(
+            slot,
+            anchor=start,
+            deadline_at=expiry,
+            policy=replace(slot.policy, rearm_enabled=False),
+        )
+        cycle = local_cycle(effective_slot, now)
+        latest_end = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
+        if latest_end is not None and _parse(latest_end["ended_at"]) >= active_from:
+            return {**cycle, "state": "expired", "remaining_seconds": 0}
         return cycle
 
     def number_cycle(self, slot: SlotSnapshot, now: datetime) -> dict | None:
@@ -572,8 +649,10 @@ class AccessMeshStore(LocalAccessMesh):
         cycle = self.merged_cycle(effective, now)
         if cycle["state"] not in {"active", "warning", "draining"}:
             return None
-        return {"number": number, "cycle_key":
-                f'{winner["issuer_id"]}:{winner["slot_id"]}:{cycle["started_at"]}'}
+        return {
+            "number": number,
+            "cycle_key": f"{winner['issuer_id']}:{winner['slot_id']}:{cycle['started_at']}",
+        }
 
     def observed_identity(self, slot: SlotSnapshot, *, now: datetime | None = None) -> dict:
         """Pure status read. Lifecycle materialization belongs to tick/attach/write admission."""
