@@ -448,6 +448,10 @@ class AccessMeshReplication:
                 await self.sync_starts(peer)
                 await self.sync_ends(peer)
                 await self.sync_incidents(peer)
+                # New number claims can merge already attached LogicalAgents.
+                # Materialize their effective local session promptly, rather
+                # than waiting for an unrelated write to make them reachable.
+                await self.mesh.tick()
                 checked = True
             delivered = await self._deliver(peer)
             if checked or delivered:

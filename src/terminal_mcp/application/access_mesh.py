@@ -283,8 +283,13 @@ class AccessMeshApplication:
 
     async def tick(self) -> None:
         slots = await asyncio.to_thread(self.store.local_slots, after=self._scan_after)
-        for slot in slots:
+        for attached_slot in slots:
             try:
+                # A Mesh collision can make an already attached local alias
+                # point to a newer remote-issued LogicalAgent. Reconcile the
+                # *effective* slot, otherwise the old owner's WorkSession is
+                # rearmed while its winning identity has no local inbox.
+                slot = await asyncio.to_thread(self.store.canonical_slot, attached_slot)
                 identity = await asyncio.to_thread(
                     self.store.local_identity, slot, now=self.clock()
                 )
