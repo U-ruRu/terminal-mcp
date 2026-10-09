@@ -620,7 +620,13 @@ class AccessMeshStore(LocalAccessMesh):
         if latest_start is not None and _parse(latest_start["active_from"]) >= start:
             active_from = _parse(latest_start["active_from"])
             start = _parse(latest_start["started_at"])
-            expiry = _parse(latest_start["hard_expires_at"])
+            # The start event seals its *initial* deadline. Subsequent
+            # SessionUpdated extensions increase the durable group max;
+            # choosing only the start snapshot would expire the live
+            # merged cycle early on every node after a valid extension.
+            started_deadline = _parse(latest_start["hard_expires_at"])
+            if started_deadline is not None:
+                expiry = max(expiry, started_deadline) if expiry else started_deadline
         if start is None or expiry is None:
             return local_cycle(slot, now)
         # The regular SlotPolicy's rearm_enabled flag is an authorization to
