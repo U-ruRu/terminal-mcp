@@ -93,3 +93,48 @@ async def test_online_peers_negotiate_distinct_numbers(tmp_path):
         assert first.store.numbers.winner(first_result['access_code']) is not None
         assert second.store.numbers.winner(first_result['access_code']) is not None
         assert first.store.numbers.winner(second_result['access_code']) is not None
+
+@pytest.mark.asyncio
+async def test_concurrent_same_candidate_never_reuses_live_number(tmp_path):
+    import asyncio
+    import httpx
+    from test_access_mesh_replication_http import Routes, node
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        first, first_rep = await node(tmp_path, 'firstbyte', 'bacloud', routes, client)
+        second, second_rep = await node(tmp_path, 'bacloud', 'firstbyte', routes, client)
+        first_number, second_number = await asyncio.gather(
+            first_rep.negotiate_number(preferred='0456'),
+            second_rep.negotiate_number(preferred='0456'),
+        )
+        assert first_number[0] != second_number[0]
+        first.store.numbers.release(first_number[1])
+        second.store.numbers.release(second_number[1])
+
+
+def test_claims_survive_store_reopen(tmp_path):
+    path = tmp_path / 'reopen.sqlite3'
+    kwargs = dict(local_node_id='one',trusted_issuers=frozenset({'one'}),proof_key=b'unit-test-mesh-secret-key-32bytes')
+    original = AccessMeshStore(path, **kwargs)
+    original.numbers.register(number='0037',issuer_id='one',slot_id='slot',logical_agent_id='la_one',started_at=T0,hard_expires_at=T0+timedelta(minutes=23))
+    reopened = AccessMeshStore(path, **kwargs)
+    assert reopened.numbers.winner('0037')['logical_agent_id'] == 'la_one'
+    assert reopened.numbers.winner('0037')['hard_expires_at'] == reopened.numbers.stamp(T0+timedelta(minutes=23))
+
+@pytest.mark.asyncio
+async def test_offline_peer_allows_local_issuance_before_30_second_budget(tmp_path):
+    """Partitioned node finishes locally within the bounded negotiation window."""
+    import time
+    import httpx
+    from test_access_mesh_replication_http import Routes, node, actor
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        local, replication = await node(tmp_path, 'firstbyte', 'bacloud', routes, client)
+        local.replication = replication
+        routes.offline.add('bacloud')
+        started = time.monotonic()
+        issued = await local.issue(actor())
+        duration = time.monotonic() - started
+        assert issued['ok'] is True
+        assert duration < 30, duration
+        assert local.store.numbers.winner(issued['access_code'])['logical_agent_id'] == issued['logical_agent_id']

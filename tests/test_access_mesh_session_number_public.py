@@ -22,3 +22,5 @@ def test_start_and_attach_share_minimal_number_only(tmp_path):
         assert session['inputSchema']['required'] == ['session_number']
         assert 'issuer_node_id' not in session['inputSchema']['properties']
         assert 'access_code' not in session['inputSchema']['properties']
+        ended = call(client, 'access', 'session', {'action':'end'}, request_id=73)
+        assert ended == {'ok':True}
