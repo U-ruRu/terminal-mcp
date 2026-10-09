@@ -237,6 +237,16 @@ async def _message(application, actor, request: MessageInput) -> dict:
         "ack": ManagedOperation.MESSAGE_ACK,
         "reply": ManagedOperation.MESSAGE_REPLY,
     }[request.action]
+    mesh_messages = getattr(application.service, "access_mesh_messages", None)
+    if (
+        request.action == "ack" and request.message_hash and mesh_messages is not None
+    ):
+        from asyncio import to_thread
+        alert_wire = await to_thread(
+            mesh_messages.store.wire, request.message_hash
+        )
+        if alert_wire and alert_wire.get("sender_id") == "terminal-mcp-system":
+            operation = ManagedOperation.MESSAGE_READ
     if request.action == "recipients":
         # Public discovery is intentionally available before Access attach.
         sender = "anonymous"

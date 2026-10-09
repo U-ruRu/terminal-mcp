@@ -484,6 +484,15 @@ class AccessMeshStore(LocalAccessMesh):
             ).fetchone()
         return self._snapshot(row) if row else None
 
+    def canonical_slot(self, slot: SlotSnapshot) -> SlotSnapshot:
+        """Translate a historical Mesh alias to the deterministic winner."""
+        number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
+        winner = self.numbers.winner(number) if number else None
+        if winner is None:
+            return slot
+        selected = self.slot(winner["issuer_id"], winner["slot_id"])
+        return selected if selected is not None and selected.state == "active" else slot
+
     def attached_slot(self, connection_key: str) -> SlotSnapshot | None:
         with self._connect() as db:
             row = db.execute(
@@ -494,15 +503,7 @@ class AccessMeshStore(LocalAccessMesh):
             ).fetchone()
         if not row:
             return None
-        original = self._snapshot(row)
-        number = self.numbers.number_for_slot(original.issuer_id, original.slot_id)
-        if number is not None:
-            winner = self.numbers.winner(number)
-            if winner is not None:
-                updated = self.slot(winner["issuer_id"], winner["slot_id"])
-                if updated is not None and updated.state == "active":
-                    return updated
-        return original
+        return self.canonical_slot(self._snapshot(row))
 
     def attach(self, *, issuer_id: str, code: str, connection_key: str) -> SlotSnapshot:
         slot = super().attach(issuer_id=issuer_id, code=code, connection_key=connection_key)

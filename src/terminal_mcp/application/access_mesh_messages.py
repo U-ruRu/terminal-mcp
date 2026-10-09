@@ -130,6 +130,58 @@ class AccessMeshMessaging:
     def node_id(self):
         return self.mesh.store.local_node_id
 
+    @staticmethod
+    def _session_alert_hash(node_id, slot, started_at):
+        digest = hashlib.sha256(
+            f"{slot.issuer_id}:{slot.slot_id}:{started_at}".encode()
+        ).hexdigest()[:40]
+        return f"{node_id}:meshmsg:session_alert_{digest}"
+
+    async def ensure_session_alert(self, slot, identity):
+        """Atomically emit one Alert per expired cycle; test pending ACK."""
+        cycle = identity.get("session_lifecycle") or {}
+        started_at = cycle.get("started_at")
+        expiry_text = cycle.get("hard_expires_at")
+        if not started_at or not expiry_text or cycle.get("state") not in {
+            "expired", "cooldown", "draining"
+        }:
+            return False
+        from datetime import UTC
+        try:
+            expiry = datetime.fromisoformat(expiry_text.replace("Z", "+00:00"))
+            if self.mesh.clock().astimezone(UTC) < expiry.astimezone(UTC):
+                return False
+        except (ValueError, TypeError):
+            return False
+        message_hash = self._session_alert_hash(self.node_id, slot, started_at)
+        wire = {
+            "message_hash": message_hash,
+            "origin_node_id": self.node_id,
+            "sender_id": "terminal-mcp-system",
+            "sender_name": "Terminal MCP",
+            "text": "Время сессии истекло, возвращайся в чат с промежуточным отчётом.",
+            "target": identity["public_name"],
+            "mode": "alert",
+            "scope": "local",
+            "require_reply": False,
+            "alert": True,
+            "created_at": expiry_text,
+            "namespace": None,
+            "task_id": None,
+            "reply_to": None,
+        }
+        if await asyncio.to_thread(self.store.wire, message_hash) is None:
+            await asyncio.to_thread(
+                self.store.accept, wire, [{
+                    "logical_agent_id": identity["logical_agent_id"],
+                    "public_name": identity["public_name"],
+                }],
+            )
+        recipient = await asyncio.to_thread(
+            self.store.recipient, message_hash, identity["logical_agent_id"]
+        )
+        return recipient["read_at"] is None
+
     async def _local_recipients(self):
         records = {}
         after = ""
@@ -138,8 +190,9 @@ class AccessMeshMessaging:
             if not slots:
                 break
             for slot in slots:
+                effective = await asyncio.to_thread(self.mesh.store.canonical_slot, slot)
                 identity = await asyncio.to_thread(
-                    self.mesh.store.observed_identity, slot, now=self.mesh.clock()
+                    self.mesh.store.observed_identity, effective, now=self.mesh.clock()
                 )
                 lifecycle = identity.get("session_lifecycle") or {}
                 if (
@@ -148,8 +201,8 @@ class AccessMeshMessaging:
                     or lifecycle.get("state") not in {"active", "warning", "draining"}
                 ):
                     continue
-                records[slot.logical_agent_id] = {
-                    "logical_agent_id": slot.logical_agent_id,
+                records[identity["logical_agent_id"]] = {
+                    "logical_agent_id": identity["logical_agent_id"],
                     "server_id": self.node_id,
                     "public_name": identity["public_name"],
                     "session_state": "active",
@@ -252,6 +305,23 @@ class AccessMeshMessaging:
         if slot is None or item.get("public_name") != _public_name(slot):
             raise MeshMessagingError("message_unavailable")
 
+    async def _target_is_merged_self(self, target: str, logical_agent_id: str) -> bool:
+        """Recognize old public_name aliases after LogicalAgent convergence."""
+        cursor = ""
+        while True:
+            slots = await asyncio.to_thread(
+                self.mesh.store.local_slots, after=cursor, limit=100
+            )
+            for slot in slots:
+                if _public_name(slot).casefold() == target.casefold():
+                    effective = await asyncio.to_thread(
+                        self.mesh.store.canonical_slot, slot
+                    )
+                    return effective.logical_agent_id == logical_agent_id
+            if len(slots) < 100:
+                return False
+            cursor = slots[-1].logical_agent_id
+
     async def _send(
         self,
         actor,
@@ -282,7 +352,10 @@ class AccessMeshMessaging:
             target, scope, namespace, task_id = parent["sender_name"], "fleet", None, None
         if isinstance(target, str) and target.casefold() == "broadcast":
             target = "broadcast"
-        if isinstance(target, str) and target.casefold() == identity["public_name"].casefold():
+        if isinstance(target, str) and (
+            target.casefold() == identity["public_name"].casefold()
+            or await self._target_is_merged_self(target, identity["logical_agent_id"])
+        ):
             raise MeshMessagingError("cannot_message_self")
         payload = {
             "sender_id": identity["logical_agent_id"],
@@ -491,6 +564,15 @@ class AccessMeshMessaging:
             is_read = text is None and message_hash is None
             if recipients and not is_read:
                 raise MeshMessagingError("input_validation_failed")
+            expiry_alert_ack = False
+            if message_hash:
+                wire = await asyncio.to_thread(self.store.wire, message_hash)
+                expiry_alert_ack = bool(
+                    wire and wire.get("sender_id") == "terminal-mcp-system"
+                    and wire.get("mode") == "alert"
+                )
+                if expiry_alert_ack and text is not None:
+                    raise MeshMessagingError("message_ack_required")
             operation = (
                 ManagedOperation.MESSAGE_READ
                 if is_read
@@ -513,7 +595,10 @@ class AccessMeshMessaging:
                 return await self.recipients(
                     public_caller, scope=scope, limit=limit, cursor=cursor
                 )
-            identity = await self.mesh.resolve(actor, operation)
+            # Permit ACK of the current system Alert after the session ends.
+            identity = await self.mesh.resolve(
+                actor, ManagedOperation.MESSAGE_READ if expiry_alert_ack else operation
+            )
             if is_read:
                 return await self.read(
                     identity,

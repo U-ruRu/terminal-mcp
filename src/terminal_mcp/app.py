@@ -350,6 +350,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             replication=access_mesh_replication,
         )
         service.access_mesh_messages = access_mesh_messages
+        access_mesh.messages = access_mesh_messages
 
     application = TerminalApplication(
         service,

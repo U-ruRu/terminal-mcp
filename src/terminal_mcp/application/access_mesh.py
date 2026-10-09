@@ -49,6 +49,7 @@ class AccessMeshApplication:
             self.legacy_enabled = stored_defaults["legacy_enabled"]
         self.registry = ProviderIdentityRegistry()
         self.replication = None
+        self.messages = None
         self._cleanup_lock = asyncio.Lock()
         self._issuer_lock = asyncio.Lock()
         self._issuer_session_lock = asyncio.Lock()
@@ -173,8 +174,14 @@ class AccessMeshApplication:
         if slot is None:
             raise AccessMeshError("session_attach_required")
         if operation in READ_OPERATIONS:
-            return await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
+            observed = await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
+            if self.messages is not None:
+                await self.messages.ensure_session_alert(slot, observed)
+            return observed
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+        alert_pending = False
+        if self.messages is not None:
+            alert_pending = await self.messages.ensure_session_alert(slot, identity)
         # Cleanup can be pending after an expiry first observed by this request.
         # It is local and bounded; remote issuer availability is never involved.
         if identity["cleanup_pending"]:
@@ -185,6 +192,8 @@ class AccessMeshApplication:
         if identity["cleanup_pending"]:
             raise AccessMeshError("access_mesh_cleanup_pending")
         if "work_session_id" not in identity:
+            if alert_pending:
+                raise AccessMeshError("coordination_alert")
             phase = identity["session_lifecycle"]["state"]
             raise AccessMeshError("window_cooldown" if phase == "cooldown" else "session_expired")
         if (
@@ -235,7 +244,9 @@ class AccessMeshApplication:
         slots = await asyncio.to_thread(self.store.local_slots, after=self._scan_after)
         for slot in slots:
             try:
-                await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+                identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+                if self.messages is not None:
+                    await self.messages.ensure_session_alert(slot, identity)
             except Exception as exc:
                 self.last_error = getattr(exc, "code", type(exc).__name__)
                 _LOG.warning("Access Mesh cycle reconciliation failed: %s", self.last_error)
