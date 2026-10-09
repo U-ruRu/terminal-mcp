@@ -201,7 +201,7 @@ class TaskUpdateRequest(TaskRevisionRequest):
     force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
 
-class TaskCheckpointRequest(TaskRevisionRequest):
+class TaskCheckpointRequest(TaskIdentityRequest):
     action: Literal["checkpoint"]
     checkpoint: CheckpointValue
 

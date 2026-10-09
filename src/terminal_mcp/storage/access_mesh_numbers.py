@@ -27,13 +27,20 @@ class MeshSessionNumbers:
             raise AccessMeshError('invalid_session_timestamp')
         return value.astimezone(UTC).isoformat(timespec='microseconds')
 
-    def _occupied(self, db, number, attempt_id):
+    def _occupied(self, db, number, attempt_id, *, as_of=None):
+        # Historical claims survive for attribution but cannot reserve a
+        # finished work window indefinitely. Active grants remain protected
+        # separately: an active/rearmable slot retains its number.
+        as_of = as_of or self.stamp(self.store.clock())
         # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
         for issuer in self.store.trusted_issuers:
             tag = self.store.code_tag(issuer, number)
             if db.execute("SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? AND code_tag=? AND state!='deleted' LIMIT 1", (issuer, tag)).fetchone():
                 return True
-        if db.execute('SELECT 1 FROM access_mesh_number_claims WHERE number=? LIMIT 1', (number,)).fetchone():
+        if db.execute(
+            'SELECT 1 FROM access_mesh_number_claims WHERE number=? '
+            'AND hard_expires_at>? LIMIT 1', (number, as_of)
+        ).fetchone():
             return True
         old = db.execute('SELECT attempt_id FROM access_mesh_number_reservations WHERE number=?', (number,)).fetchone()
         return old is not None and old['attempt_id'] != attempt_id
@@ -48,12 +55,12 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute('DELETE FROM access_mesh_number_reservations WHERE expires_at<=?', (stamp,))
-            if not self._occupied(db, number, attempt_id):
+            if not self._occupied(db, number, attempt_id, as_of=stamp):
                 db.execute('INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE attempt_id=excluded.attempt_id', (number, attempt_id, expires))
                 return {'ok': True, 'number': number}
             for value in secrets.SystemRandom().sample(range(10000), 10000):
                 alternative = f'{value:04d}'
-                if not self._occupied(db, alternative, attempt_id):
+                if not self._occupied(db, alternative, attempt_id, as_of=stamp):
                     db.execute('INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE attempt_id=excluded.attempt_id', (alternative, attempt_id, expires))
                     return {'ok': False, 'code': 'number_conflict', 'suggested_number': alternative}
         raise AccessMeshError('session_number_capacity')
@@ -142,7 +149,7 @@ class MeshSessionNumbers:
             db.execute('BEGIN IMMEDIATE')
             db.execute('DELETE FROM access_mesh_number_reservations WHERE expires_at<=?', (stamp,))
             for number, attempt, expires in validated:
-                if not self._occupied(db, number, attempt):
+                if not self._occupied(db, number, attempt, as_of=stamp):
                     db.execute('INSERT OR IGNORE INTO access_mesh_number_reservations VALUES(?,?,?)', (number, attempt, expires))
 
 

@@ -104,7 +104,7 @@ FULL_VALID = {
         "force_reason": "External dependency state is authoritative",
         "expected_revision": 5,
     },
-    "checkpoint": {**_base("checkpoint"), "checkpoint": ["tested"], "expected_revision": 5},
+     "checkpoint": {**_base("checkpoint"), "checkpoint": ["tested"]},
     "comment": {**_base("comment"), "comment_text": "Investigated current implementation."},
     "relate": {
         **_base("relate"),

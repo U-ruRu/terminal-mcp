@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from typing import Any
@@ -324,6 +325,7 @@ class TaskStore:
         tags: Any = None,
         dependencies=None,
         event_agent_id: str | None = None,
+        dedupe_creator: str | None = None,
         event_payload: Any = None,
         dependency_override: Any = None,
         now: str | None = None,
@@ -337,6 +339,16 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                if dedupe_creator is not None:
+                    matching = await (await db.execute(
+                        "SELECT 1 FROM work_items i JOIN work_events e "
+                        "ON e.namespace=i.namespace AND e.task_id=i.task_id "
+                        "WHERE i.namespace=? AND i.title=? AND i.description=? "
+                        "AND e.event_type='created' AND e.agent_id=? LIMIT 1",
+                        (namespace, title, description, dedupe_creator),
+                    )).fetchone()
+                    if matching is not None:
+                        raise ValueError("duplicate_task")
                 await self._validate_dependency_graph_tx(db, namespace, task_id, normalized)
                 await db.execute(
                     "INSERT INTO work_items(namespace,task_id,title,lane,priority,state,description,next_action,isolation_hint,"
@@ -862,6 +874,13 @@ class TaskStore:
         if "output_refs" in changes:
             changes["output_refs"] = self._normalize_refs(changes["output_refs"])
         normalized = self._normalize_dependencies(namespace, dependencies)
+        cas_fingerprint = None
+        if (event_type == "updated" and event_agent_id is not None
+                and expected_revision is not None
+                and release_claims_reason is None and "state" not in changes):
+            signature = self._json({"changes": changes, "dependencies": normalized
+                                    if dependencies is not None else None})
+            cas_fingerprint = hashlib.sha256(signature.encode("utf-8")).hexdigest()
         columns = {
             "resource": "resource_json",
             "reviews": "reviews_json",
@@ -902,6 +921,19 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                # A previously committed identical write is recognized before
+                # stale-CAS classification or ownership checks.
+                if cas_fingerprint is not None:
+                    replay = await (await db.execute(
+                        "SELECT 1 FROM work_events WHERE namespace=? AND task_id=? "
+                        "AND agent_id=? AND event_type='updated' "
+                        "AND json_extract(payload_json, '$.cas_expected_revision')=? "
+                        "AND json_extract(payload_json, '$.cas_fingerprint')=? LIMIT 1",
+                        (namespace, task_id, event_agent_id,
+                         int(expected_revision), cas_fingerprint),
+                    )).fetchone()
+                    if replay is not None:
+                        raise ValueError("already_changed")
                 await self._assert_claim_snapshot(db, namespace, task_id, expected_claim_ids)
                 exists = await (
                     await db.execute(
@@ -980,6 +1012,9 @@ class TaskStore:
                         ],
                     )
                 stored_event_payload = dict(event_payload or {})
+                if cas_fingerprint is not None:
+                    stored_event_payload["cas_expected_revision"] = int(expected_revision)
+                    stored_event_payload["cas_fingerprint"] = cas_fingerprint
                 if "checkpoint" in stored_event_payload:
                     stored_event_payload["revision"] = int(exists[0]) + 1
                 await db.execute(
@@ -2204,6 +2239,75 @@ class TaskStore:
                 }
             )
         return result
+
+    async def append_checkpoint(self, namespace: str, task_id: str, *,
+                                agent_id: str, checkpoint: Any,
+                                now: str | None = None) -> TaskCommittedRecord:
+        """Append a checkpoint and update the latest pointer without content CAS."""
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                exists = await (await db.execute(
+                    "SELECT 1 FROM work_items WHERE namespace=? AND task_id=?",
+                    (namespace, task_id),
+                )).fetchone()
+                if exists is None:
+                    raise KeyError("task_not_found")
+                await db.execute(
+                    "UPDATE work_items SET checkpoint_json=? "
+                    "WHERE namespace=? AND task_id=?",
+                    (self._json(checkpoint), namespace, task_id),
+                )
+                await db.execute(
+                    "INSERT INTO work_events("
+                    "namespace,task_id,event_type,agent_id,payload_json,created_at,"
+                    "logical_agent_id) VALUES(?,?,?,?,?,?,?)",
+                    (namespace, task_id, "checkpoint", agent_id,
+                     self._json({"checkpoint": checkpoint}), now, agent_id),
+                )
+                committed = await self._committed_record_tx(db, namespace, task_id)
+                await db.commit()
+                return committed
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def append_comment(self, namespace: str, task_id: str, *,
+                             agent_id: str, text: str,
+                             now: str | None = None) -> TaskCommittedRecord:
+        """Exact per-author duplicate detection and append are one transaction."""
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                exists = await (await db.execute(
+                    "SELECT 1 FROM work_items WHERE namespace=? AND task_id=?",
+                    (namespace, task_id),
+                )).fetchone()
+                if exists is None:
+                    raise KeyError("task_not_found")
+                duplicate = await (await db.execute(
+                    "SELECT 1 FROM work_events WHERE namespace=? AND task_id=? "
+                    "AND event_type='comment' AND agent_id=? "
+                    "AND json_extract(payload_json,'$.text')=? LIMIT 1",
+                    (namespace, task_id, agent_id, text),
+                )).fetchone()
+                if duplicate is not None:
+                    raise ValueError("duplicate_comment")
+                await db.execute(
+                    "INSERT INTO work_events("
+                    "namespace,task_id,event_type,agent_id,payload_json,created_at,"
+                    "logical_agent_id) VALUES(?,?,?,?,?,?,?)",
+                    (namespace, task_id, "comment", agent_id,
+                     self._json({"text": text, "kind": "comment"}), now, agent_id),
+                )
+                committed = await self._committed_record_tx(db, namespace, task_id)
+                await db.commit()
+                return committed
+            except Exception:
+                await db.rollback()
+                raise
 
     async def add_event(
         self,

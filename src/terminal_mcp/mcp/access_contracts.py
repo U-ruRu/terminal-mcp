@@ -46,8 +46,6 @@ class MeshTaskCommentInput(StrictRoleInput):
             description="Required for action=checkpoint; saves progress and preserves task state."
         ),
     ] = None
-    expected_revision: ExpectedRevision | None = None
-
     def to_request(self):
         from terminal_mcp.application.task_requests import TaskCheckpointRequest, TaskCommentRequest
 

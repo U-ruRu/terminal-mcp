@@ -838,6 +838,8 @@ def build_role_mcp(
             if mesh:
                 canonical = request.to_request()
                 raw = await application.task(_actor(application, role), canonical)
+                if raw.get("ok"):
+                    return {"ok": True}
                 return _structured(task_result(raw, canonical.action))
             request = TaskCommentInput.model_validate(request)
             canonical = TaskCommentRequest(
@@ -848,6 +850,8 @@ def build_role_mcp(
                 comment_text=request.comment_text,
             )
             raw = await application.task(_actor(application, role), canonical)
+            if raw.get("ok"):
+                return {"ok": True}
             return _structured(task_result(raw, "comment"))
 
     else:
