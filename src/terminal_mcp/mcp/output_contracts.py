@@ -417,8 +417,25 @@ class TaskClaimMutationResult(_SessionAware):
 TaskSuccess = Annotated[TaskMutationResult | TaskClaimMutationResult, Field(discriminator="action")]
 
 
-class TaskOutput(RootModel[TaskSuccess | AccessError]):
-    __success_type__: ClassVar[Any] = TaskSuccess
+class TaskCreateCompact(_Strict):
+    ok: Literal[True]
+    task_id: str
+
+
+class TaskUpdateCompact(_Strict):
+    ok: Literal[True]
+    revision: int
+
+
+class TaskAppendCompact(_Strict):
+    ok: Literal[True]
+
+
+TaskManageSuccess = TaskSuccess | TaskCreateCompact | TaskUpdateCompact | TaskAppendCompact
+
+
+class TaskOutput(RootModel[TaskManageSuccess | AccessError]):
+    __success_type__: ClassVar[Any] = TaskManageSuccess
 
     @classmethod
     def success_schema(cls) -> dict[str, Any]:

@@ -23,7 +23,6 @@ TaskAction = Literal[
     "relate",
     "unrelate",
     "state",
-    "done",
     "archive",
     "review",
 ]

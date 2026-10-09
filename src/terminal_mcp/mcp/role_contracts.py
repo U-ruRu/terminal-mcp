@@ -220,7 +220,6 @@ class TaskManageInput(StrictRoleInput):
                                 "enum": [
                                     "update",
                                     "checkpoint",
-                                    "done",
                                     "archive",
                                     "review",
                                     "relate",
@@ -277,7 +276,6 @@ class TaskManageInput(StrictRoleInput):
         "create",
         "update",
         "checkpoint",
-        "done",
         "archive",
         "review",
         "relate",

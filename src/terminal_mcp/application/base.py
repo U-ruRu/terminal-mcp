@@ -39,7 +39,6 @@ ROLE_TASK_ACTIONS = {
             "create",
             "update",
             "checkpoint",
-            "done",
             "archive",
             "review",
             "relate",

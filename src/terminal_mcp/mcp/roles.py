@@ -28,7 +28,6 @@ from terminal_mcp.application.task_requests import (
     TaskClaimRequest,
     TaskCommentRequest,
     TaskCreateRequest,
-    TaskDoneRequest,
     TaskRelateRequest,
     TaskReleaseRequest,
     TaskReviewRequest,
@@ -144,7 +143,6 @@ _TASK_MANAGE_MODELS = {
     "create": TaskCreateRequest,
     "update": TaskUpdateRequest,
     "checkpoint": TaskCheckpointRequest,
-    "done": TaskDoneRequest,
     "archive": TaskArchiveRequest,
     "review": TaskReviewRequest,
     "relate": TaskRelateRequest,
@@ -885,6 +883,13 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             raw = await application.task(_actor(application, role), canonical)
+            if raw.get("ok"):
+                if request.action == "create":
+                    return {"ok": True, "task_id": raw["task"]["task_id"]}
+                if request.action == "update":
+                    return {"ok": True, "revision": raw["task"]["revision"]}
+                if request.action in {"comment", "checkpoint"}:
+                    return {"ok": True}
             return _structured(task_result(raw, request.action))
 
         @mcp.tool(

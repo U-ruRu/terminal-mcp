@@ -272,3 +272,44 @@ async def test_update_cas_identical_retry_and_stale_conflicts_are_atomic(tmp_pat
     )
     assert fresh["ok"], fresh
     assert (await store.get_task(**key))["revision"] == initial + 2
+
+
+def test_coordinator_create_update_public_minimal_results(tmp_path):
+    from fastapi.testclient import TestClient
+    from terminal_mcp.app import create_app
+    from test_access_mesh_mcp_runtime import settings, call
+
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        number = call(client, "access", "session", {"action": "start"})["session_number"]
+        assert call(client, "coordinator", "session", {"session_number": number})["ok"]
+        created = call(client, "coordinator", "task_manage", {
+            "action": "create", "namespace": "minimal", "task_id": "one",
+            "title": "Initial", "isolation_hint": "none",
+        })
+        assert created == {"ok": True, "task_id": "one"}, created
+        changed = call(client, "coordinator", "task_manage", {
+            "action": "update", "namespace": "minimal", "task_id": "one",
+            "title": "Changed", "expected_revision": 1,
+        })
+        assert changed == {"ok": True, "revision": 2}, changed
+        repeated = call(client, "coordinator", "task_manage", {
+            "action": "update", "namespace": "minimal", "task_id": "one",
+            "title": "Changed", "expected_revision": 1,
+        })
+        assert repeated["ok"] is False, repeated
+        assert repeated["error"]["code"] == "already_changed"
+        other = call(client, "coordinator", "task_manage", {
+            "action": "update", "namespace": "minimal", "task_id": "one",
+            "title": "Third", "expected_revision": 1,
+        })
+        assert other["error"]["code"] == "revision_conflict"
+        # Generated create: identical content is rejected, independent of JSON-RPC id.
+        generated = {
+            "action": "create", "namespace": "minimal",
+            "title": "Auto", "description": "Identical", "isolation_hint": "none",
+        }
+        initial = call(client, "coordinator", "task_manage", generated, request_id=301)
+        assert initial["ok"] and initial["task_id"].startswith("TASK-")
+        duplicate = call(client, "coordinator", "task_manage", generated, request_id=302)
+        assert duplicate["error"]["code"] == "duplicate_task"

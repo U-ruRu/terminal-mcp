@@ -182,6 +182,7 @@ class TaskReleaseRequest(TaskRevisionRequest):
 
 class TaskUpdateRequest(TaskRevisionRequest):
     action: Literal["update"]
+    expected_revision: ExpectedRevision
     title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     lane: TaskLane | None = None
     priority: TaskPriority | None = None
@@ -302,7 +303,6 @@ TaskRequest = Annotated[
     | TaskRelateRequest
     | TaskUnrelateRequest
     | TaskStateRequest
-    | TaskDoneRequest
     | TaskArchiveRequest
     | TaskReviewRequest,
     Field(discriminator="action"),
@@ -318,7 +318,6 @@ TASK_ACTIONS = {
     "relate",
     "unrelate",
     "state",
-    "done",
     "archive",
     "review",
 }
