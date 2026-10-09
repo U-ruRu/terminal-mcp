@@ -85,7 +85,7 @@ from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.work_windows import WorkWindowStore
 from terminal_mcp.terminal.composition import build_execution
 from terminal_mcp.trace import TraceMiddleware
-from terminal_mcp.version import __version__
+from terminal_mcp.version import __release__, __version__
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -604,7 +604,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/live", include_in_schema=False)
     async def live():
-        return {"ok": True, "version": __version__}
+        return {"ok": True, "version": __version__, "release": __release__}
 
     from terminal_mcp.operation_metadata import (
         action_is_consequential,

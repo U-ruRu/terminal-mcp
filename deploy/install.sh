@@ -480,8 +480,69 @@ stage(){
     rm -rf "$STAGED_RELEASE"
     return 1
   fi
-  if ! "$STAGED_RELEASE/bin/pip" install "$SOURCE" >&2; then
+  # Version calculation works on a disposable copy, leaving Git sources unchanged.
+  # The installed wheel and PEP 440 metadata keep the numeric version; a short
+  # commit SHA is exposed independently as the release identifier.
+  BUILD_SOURCE="$STAGED_RELEASE/_build_source"
+  mkdir -p "$BUILD_SOURCE"
+  if ! (cd "$SOURCE" && tar --exclude=.git --exclude=.venv --exclude=__pycache__ -cf - .) \
+      | tar -xf - -C "$BUILD_SOURCE"; then
     rm -rf "$STAGED_RELEASE"
+    echo "Unable to stage isolated build source" >&2
+    return 1
+  fi
+  version_args=(--source "$BUILD_SOURCE" --stamp --output "$STAGED_RELEASE/RELEASE_META.json")
+  # An existing QA deployment is not the released schema baseline.
+  # Anchor its automatic bump to the last confirmed canonical release.
+  prior_release="$ROOT/current"
+  if [ -f "$ROOT/current/QA_RELEASE.json" ]; then
+    while IFS= read -r prior_candidate; do
+      if [ -f "$prior_candidate/CANONICAL_RELEASE.json" ] &&
+         [ ! -f "$prior_candidate/QA_RELEASE.json" ] &&
+         [ -x "$prior_candidate/bin/python" ]; then
+        prior_release="$prior_candidate"
+        break
+      fi
+    done < <(find "$ROOT/releases" -mindepth 1 -maxdepth 1 -type d | sort -r)
+  fi
+  if [ -x "$prior_release/bin/python" ]; then
+    prior_pkg=$("$prior_release/bin/python" -c \
+      'from pathlib import Path; import terminal_mcp; print(Path(terminal_mcp.__file__).resolve().parent)') || {
+      rm -rf "$STAGED_RELEASE"; echo "Cannot read previous package for version bump" >&2; return 1;
+    }
+    version_args+=(--prior-package "$prior_pkg")
+  fi
+  if [ -n "${TERMINAL_MCP_SOURCE_SHA:-}" ]; then
+    version_args+=(--sha "$TERMINAL_MCP_SOURCE_SHA")
+  elif [ -e "$SOURCE/.git" ]; then
+    version_args+=(--source-repo "$SOURCE")
+  elif [[ "${SOURCE##*/}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    # SHA-named git-archive staging directories need no .git metadata.
+    version_args+=(--sha "${SOURCE##*/}")
+  fi
+  if ! python3 "$SOURCE/scripts/release_version.py" "${version_args[@]}" >&2; then
+    rm -rf "$STAGED_RELEASE"
+    echo "Automatic release version calculation failed" >&2
+    return 1
+  fi
+  if ! "$STAGED_RELEASE/bin/pip" install "$BUILD_SOURCE" >&2; then
+    rm -rf "$STAGED_RELEASE"
+    return 1
+  fi
+  rm -rf "$BUILD_SOURCE"
+  # Keep QA builds distinct from canonical releases for the next comparison.
+  # A final promotion opts in with TERMINAL_MCP_DEPLOY_CHANNEL=canonical.
+  release_channel=${TERMINAL_MCP_DEPLOY_CHANNEL:-}
+  if [ -z "$release_channel" ] && [ -f "$ROOT/current/QA_RELEASE.json" ]; then
+    release_channel=qa
+  fi
+  if [ "$release_channel" = qa ]; then
+    cp "$STAGED_RELEASE/RELEASE_META.json" "$STAGED_RELEASE/QA_RELEASE.json"
+  elif [ "$release_channel" = canonical ]; then
+    cp "$STAGED_RELEASE/RELEASE_META.json" "$STAGED_RELEASE/CANONICAL_RELEASE.json"
+  elif [ -n "$release_channel" ]; then
+    rm -rf "$STAGED_RELEASE"
+    echo "Invalid TERMINAL_MCP_DEPLOY_CHANNEL (expected qa or canonical)" >&2
     return 1
   fi
   if [ ! -x "$STAGED_RELEASE/bin/terminal-mcp" ]; then
