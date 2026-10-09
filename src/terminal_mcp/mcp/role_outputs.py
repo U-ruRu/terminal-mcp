@@ -18,6 +18,7 @@ from terminal_mcp.core.public_errors import (
     RecoveryAction,
     error_from_exception,
     normalize_public_error,
+    public_error,
 )
 from terminal_mcp.core.task_projections import (
     Cursor,
@@ -363,18 +364,35 @@ class RoleFailure(_Strict):
     return_to_chat: bool | None = None
 
 
+_INTERNAL_SESSION_ERRORS = {
+    # Internal lifecycle and slot internals must never appear in public MCP.
+    # Keep all machine-specific codes in native storage and log traces.
+    "window_cooldown": "session_expired",
+    "slot_not_armed": "session_expired",
+    "access_mesh_binding_conflict": "invalid_session_number",
+    "access_mesh_slot_not_found": "invalid_session_number",
+    "access_mesh_issuer_required": "invalid_session_number",
+}
+
+
 def role_error_result(raw: dict) -> CallToolResult:
     """Return a handled application failure as transport-successful structured data."""
-    canonical = normalize_public_error(raw).as_dict()
+    normalized = normalize_public_error(raw)
+    exposed = _INTERNAL_SESSION_ERRORS.get(normalized.code)
+    if exposed:
+        normalized = public_error(exposed, outcome=normalized.outcome)
+    canonical = normalized.as_dict()
     body = {key: value for key, value in canonical.items() if key not in {"ok", "error"}}
     pending = (
         canonical.get("details", {}).get("pending_messages", [])
-        if isinstance(canonical.get("details"), dict) else []
+        if isinstance(canonical.get("details"), dict)
+        else []
     )
     first = pending[0] if pending else {}
     action = (
         canonical["details"].get("required_action")
-        if isinstance(canonical.get("details"), dict) else None
+        if isinstance(canonical.get("details"), dict)
+        else None
     )
     data = RoleFailure(
         ok=False,
@@ -404,16 +422,21 @@ async def _session_envelope(application, role: str) -> dict:
     try:
         from terminal_mcp.adapters.actor import actor_for
         from terminal_mcp.adapters.mcp_identity import current_provider_evidence
+
         mesh = application.service.access_mesh
         evidence = current_provider_evidence()
         actor = actor_for(
-            application, transport="mcp", endpoint_role=role, contract_version=1,
+            application,
+            transport="mcp",
+            endpoint_role=role,
+            contract_version=1,
             provider=evidence.provider if evidence else None,
             provider_metadata=evidence.metadata if evidence else {},
         )
         key = mesh.connection_key(actor)
-        slot = (mesh.store.issuer_bound_slot(key) if role == "access"
-                else mesh.store.attached_slot(key))
+        slot = (
+            mesh.store.issuer_bound_slot(key) if role == "access" else mesh.store.attached_slot(key)
+        )
         if slot is not None:
             info = mesh.store.observed_identity(slot, now=mesh.clock())
             cycle = info.get("session_lifecycle") or {}
