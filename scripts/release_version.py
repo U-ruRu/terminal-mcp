@@ -63,10 +63,14 @@ def schema_fingerprint(package: Path) -> str:
         state[f"{name}:{symbol}"] = constant(package / name, symbol)
     for name, symbol in OPTIONAL_STORAGE_REVISIONS:
         try:
-            state[f"{name}:{symbol}"] = constant(package / name, symbol)
+            value = constant(package / name, symbol)
+            if value is not None:
+                state[f"{name}:{symbol}"] = value
         except ValueError:
-            # A v1 Mesh implementation had no dedicated schema counter.
-            state[f"{name}:{symbol}"] = None
+            # Older releases predate this marker. Omitting an absent optional
+            # entry preserves their already-issued schema fingerprint, while
+            # a new nonempty marker correctly triggers a schema bump.
+            continue
     blob = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

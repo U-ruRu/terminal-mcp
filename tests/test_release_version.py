@@ -172,3 +172,21 @@ def test_installer_packs_from_disposable_source_and_uses_canonical_baseline():
     assert "QA_RELEASE.json" in script
     assert "TERMINAL_MCP_DEPLOY_CHANNEL" in script
     assert "scripts/release_version.py" in script
+
+
+def test_legacy_qa_schema_fingerprint_remains_verifiable_after_marker_added(tmp_path):
+    """Adding an optional schema marker must not rehash installed old packages."""
+    import hashlib
+
+    previous = package(tmp_path / "qa-without-mesh-revision")
+    state = {}
+    for name in release_version.SCHEMA_MANIFESTS:
+        state[name] = json.loads((previous / name).read_text())
+    for name, symbol in release_version.STORAGE_REVISIONS:
+        state[f"{name}:{symbol}"] = release_version.constant(previous / name, symbol)
+    source = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    original_hash = hashlib.sha256(source.encode()).hexdigest()
+    assert release_version.schema_fingerprint(previous) == original_hash
+    migrated = package(tmp_path / "new-mesh-schema")
+    (migrated / "storage/access_mesh_numbers.py").write_text("MESH_NUMBERS_SCHEMA_VERSION = 2\n")
+    assert release_version.schema_fingerprint(migrated) != original_hash
