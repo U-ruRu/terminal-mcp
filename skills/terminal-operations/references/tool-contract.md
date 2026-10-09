@@ -106,7 +106,7 @@ Create requires namespace and isolation_hint. A task_id may be supplied; generat
 
 <!-- contract-example: coordinator.task_manage -->
 ```json
-{"action":"done","namespace":"example","task_id":"sample","result":{"summary":"Checks passed","evidence":"retained-log-reference"}}
+{"action":"state","namespace":"example","task_id":"sample","state":"done"}
 ```
 
 Archive requires archive_note or note, in addition to namespace/task_id:
