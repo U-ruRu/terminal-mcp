@@ -99,3 +99,54 @@ async def test_all_responding_peers_finish_without_waiting_for_deadline(tmp_path
         )
         assert result[0] == "9000"
         assert monotonic() - start < 0.4
+
+
+@pytest.mark.asyncio
+async def test_late_conflict_after_decision_is_durable_incident_without_renumber(
+    tmp_path, monkeypatch
+):
+    """A delayed cancellation cannot force a renumber after the deadline."""
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        issuer, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        peers = (FleetPeer("bacloud", "https://bacloud", "key", "token"),)
+        replica = AccessMeshReplication(
+            issuer,
+            FleetConfig("firstbyte", "key", peers, 1.0, 1.0),
+        )
+
+        async def conflicting_after_cancel(peer, path, payload):
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.10)
+                return {
+                    "ok": False,
+                    "code": "number_conflict",
+                    "suggested_number": "0098",
+                }
+
+        monkeypatch.setattr(replica, "request", conflicting_after_cancel)
+        start = monotonic()
+        number, attempt, _deadline = await replica.negotiate_number(
+            preferred="0097", _budget_seconds=0.20
+        )
+        assert number == "0097"
+        assert monotonic() - start < 0.30
+        await asyncio.sleep(0.18)
+        incidents = issuer.store.numbers.incidents()
+        assert len(incidents) == 1
+        row = incidents[0]
+        assert row["number"] == "0097"
+        assert row["slot_id"] == attempt
+        assert row["collided_with"] == "late_reservation:bacloud:0098"
+        # Restarting this store retains the incident.
+        from terminal_mcp.storage.access_mesh import AccessMeshStore
+
+        restarted = AccessMeshStore(
+            issuer.store.path,
+            local_node_id="firstbyte",
+            trusted_issuers=frozenset({"firstbyte", "bacloud"}),
+            proof_key=__import__("test_access_mesh_replication_http").KEY,
+        )
+        assert restarted.numbers.incidents() == incidents

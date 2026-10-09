@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import secrets
+from functools import partial
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException
@@ -72,6 +73,29 @@ class AccessMeshReplication:
         except Exception:
             _LOG.debug("Late Mesh peer reply ignored after budget", exc_info=True)
 
+    def _record_late_reservation_reply(
+        self, task: asyncio.Task, *, number: str, attempt_id: str, peer_id: str
+    ) -> None:
+        """Persist a late conflict without letting it change the issued number."""
+        try:
+            response = task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _LOG.debug("Mesh peer timed out without late reply", exc_info=True)
+            return
+        if not isinstance(response, dict) or response.get("code") != "number_conflict":
+            return
+        try:
+            self.store.numbers.record_late_conflict(
+                number=number,
+                attempt_id=attempt_id,
+                peer_id=peer_id,
+                suggested_number=response.get("suggested_number"),
+            )
+        except Exception:
+            _LOG.exception("Unable to persist delayed number conflict")
+
     @classmethod
     async def _hard_bounded_fanout(cls, requests, *, budget: float) -> None:
         """Never await cancellation acknowledgements past the shared deadline."""
@@ -117,7 +141,7 @@ class AccessMeshReplication:
                     self.request(
                         peer, "numbers/reserve", {"number": number, "attempt_id": attempt_id}
                     )
-                )
+                ): peer.instance_id
                 for peer in self.peers
             }
             pending = set(tasks)
@@ -135,7 +159,7 @@ class AccessMeshReplication:
                     for task in done:
                         try:
                             response = task.result()
-                        except Exception:
+                        except (asyncio.CancelledError, Exception):
                             continue
                         if (
                             isinstance(response, dict)
@@ -151,9 +175,16 @@ class AccessMeshReplication:
             finally:
                 # Cancellation of remote transports is not guaranteed to be
                 # prompt. Never await them after the fixed negotiation cap.
-                for task in tasks:
+                for task, peer_id in tasks.items():
                     if not task.done():
-                        task.add_done_callback(self._consume_abandoned)
+                        task.add_done_callback(
+                            partial(
+                                self._record_late_reservation_reply,
+                                number=number,
+                                attempt_id=attempt_id,
+                                peer_id=peer_id,
+                            )
+                        )
                         task.cancel()
 
             if suggested is not None and loop.time() < negotiation_end:
@@ -202,10 +233,17 @@ class AccessMeshReplication:
             try:
                 await self.request(peer, "numbers/commit", payload)
             finally:
-                await self._deliver(peer)
+                # Release alternative peer reservations even when commit
+                # succeeds only partially. The selected number is already
+                # committed as a durable claim on successful peers.
+                try:
+                    await self.request(peer, "numbers/release", {"attempt_id": attempt_id})
+                finally:
+                    await self._deliver(peer)
 
         await self._hard_bounded_fanout(
-            (publish(peer) for peer in self.peers), budget=budget,
+            (publish(peer) for peer in self.peers),
+            budget=budget,
         )
 
     async def announce_start(self, **event):
@@ -220,7 +258,8 @@ class AccessMeshReplication:
                 await self._deliver(peer)
 
         await self._hard_bounded_fanout(
-            (publish(peer) for peer in self.peers), budget=2.5,
+            (publish(peer) for peer in self.peers),
+            budget=2.5,
         )
 
     async def sync_starts(self, peer):
@@ -537,6 +576,26 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
             return await asyncio.to_thread(mesh.store.numbers.reserve, **payload)
         except AccessMeshError as exc:
             return {"ok": False, "code": exc.code}
+
+    @router.post("/internal/fleet/access-mesh/numbers/release", include_in_schema=False)
+    async def number_release(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) != {"attempt_id"}:
+            raise HTTPException(400, "invalid reservation release")
+        attempt_id = payload["attempt_id"]
+        if (
+            not isinstance(attempt_id, str)
+            or not attempt_id.startswith("nr_")
+            or len(attempt_id) > 128
+        ):
+            raise HTTPException(400, "invalid reservation release")
+        await asyncio.to_thread(mesh.store.numbers.release, attempt_id)
+        return {"ok": True}
 
     @router.post("/internal/fleet/access-mesh/numbers/commit", include_in_schema=False)
     async def number_commit(

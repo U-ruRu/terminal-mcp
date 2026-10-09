@@ -109,7 +109,9 @@ class MeshSessionNumbers:
             if not self._occupied(db, number, attempt_id, as_of=stamp):
                 db.execute(
                     "INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON "
-                    "CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE "
+                    "CONFLICT(number) DO UPDATE SET "
+                    "expires_at=MIN(expires_at,excluded.expires_at) "
+                    "WHERE "
                     "attempt_id=excluded.attempt_id",
                     (number, attempt_id, expires),
                 )
@@ -119,7 +121,9 @@ class MeshSessionNumbers:
                 if not self._occupied(db, alternative, attempt_id, as_of=stamp):
                     db.execute(
                         "INSERT INTO access_mesh_number_reservations VALUES(?,?,?) ON "
-                        "CONFLICT(number) DO UPDATE SET expires_at=excluded.expires_at WHERE "
+                        "CONFLICT(number) DO UPDATE SET "
+                        "expires_at=MIN(expires_at,excluded.expires_at) "
+                        "WHERE "
                         "attempt_id=excluded.attempt_id",
                         (alternative, attempt_id, expires),
                     )
@@ -427,6 +431,38 @@ class MeshSessionNumbers:
                     "SELECT * FROM access_mesh_number_reservations WHERE expires_at>?", (stamp,)
                 ).fetchall()
             ]
+
+    def record_late_conflict(
+        self, *, number: str, attempt_id: str, peer_id: str, suggested_number: str | None = None
+    ):
+        """Audit a peer conflict arriving after this attempt's decision.
+
+        The attempt ID deliberately occupies the incident's slot column:
+        no AccessSlot exists at reservation time and historical real session
+        collision records must never be rewritten.
+        """
+        self.validate(number)
+        if suggested_number is not None:
+            self.validate(suggested_number)
+        if peer_id not in self.store.trusted_issuers:
+            raise AccessMeshError("access_mesh_untrusted_peer")
+        if not isinstance(attempt_id, str) or not attempt_id.startswith("nr_"):
+            raise AccessMeshError("invalid_session_attempt")
+        marker = f"late_reservation:{peer_id}:{suggested_number or 'none'}"
+        with self.store._connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO access_mesh_number_incidents "
+                "(number,issuer_id,slot_id,collided_with,detected_at) "
+                "VALUES(?,?,?,?,?)",
+                (
+                    number,
+                    self.store.local_node_id,
+                    attempt_id,
+                    marker,
+                    self.stamp(datetime.now(UTC)),
+                ),
+            )
+        return {"ok": True}
 
     def incidents(self):
         with self.store._connect() as db:
