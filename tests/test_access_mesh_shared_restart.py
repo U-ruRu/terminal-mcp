@@ -57,6 +57,21 @@ async def test_cross_server_end_and_manual_start_reuses_original_shared_deadline
         restored = await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
         assert restored["logical_agent_id"] == original["logical_agent_id"]
         assert restored["session_lifecycle"]["hard_expires_at"] == shared_deadline
+        # A second manual end of the same original cycle must propagate as
+        # another distinct event; first ACK must not mask this later fence.
+        clock[0] = T0 + timedelta(seconds=65)
+        assert await first.issuer_session(issuer, action="end") == {"ok": True}
+        assert len(first.store.numbers.end_snapshot()) == 2
+        assert len(second.store.numbers.end_snapshot()) == 2
+        with pytest.raises(AccessMeshError):
+            await second.resolve(actor(), ManagedOperation.COMMAND_RUN)
+        clock[0] = T0 + timedelta(seconds=70)
+        repeated_resume = await first.issuer_session(issuer, action="start")
+        assert repeated_resume == {"ok": True, "session_number": "0307"}
+        assert (await second.resolve(actor(), ManagedOperation.COMMAND_RUN))[
+            "logical_agent_id"
+        ] == original["logical_agent_id"]
+
         # Even after the initial deadline, automatic rearm is forbidden.
         clock[0] = T0 + timedelta(minutes=10, seconds=21)
         with pytest.raises(AccessMeshError):

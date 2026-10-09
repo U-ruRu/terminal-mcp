@@ -35,11 +35,38 @@ class MeshSessionNumbers:
                 "KEY(number,issuer_id,slot_id,collided_with))"
             )
             db.execute(
-                "CREATE TABLE IF NOT EXISTS access_mesh_number_ends(number TEXT NOT NULL, "
-                "cycle_key TEXT NOT NULL, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
-                "event_id TEXT NOT NULL, ended_at TEXT NOT NULL, PRIMARY "
-                "KEY(number,cycle_key))"
+                "CREATE TABLE IF NOT EXISTS access_mesh_number_ends("
+                "number TEXT NOT NULL, cycle_key TEXT NOT NULL, "
+                "issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
+                "event_id TEXT NOT NULL, ended_at TEXT NOT NULL, "
+                "PRIMARY KEY(number,cycle_key,event_id))"
             )
+            # A previously deployed table allowed only one end per cycle.
+            # Explicit resume within the original window can be ended again.
+            # Migrate old events atomically and retain historical timestamps.
+            original_pk = next(
+                row[5]
+                for row in db.execute("PRAGMA table_info(access_mesh_number_ends)")
+                if row[1] == "event_id"
+            )
+            if original_pk == 0:
+                db.execute(
+                    "ALTER TABLE access_mesh_number_ends RENAME TO access_mesh_number_ends_old"
+                )
+                db.execute(
+                    "CREATE TABLE access_mesh_number_ends("
+                    "number TEXT NOT NULL, cycle_key TEXT NOT NULL, "
+                    "issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL, "
+                    "event_id TEXT NOT NULL, ended_at TEXT NOT NULL, "
+                    "PRIMARY KEY(number,cycle_key,event_id))"
+                )
+                db.execute(
+                    "INSERT INTO access_mesh_number_ends "
+                    "(number,cycle_key,issuer_id,slot_id,event_id,ended_at) "
+                    "SELECT number,cycle_key,issuer_id,slot_id,event_id,ended_at "
+                    "FROM access_mesh_number_ends_old"
+                )
+                db.execute("DROP TABLE access_mesh_number_ends_old")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS access_mesh_number_starts("
                 "event_id TEXT PRIMARY KEY, number TEXT NOT NULL, "
@@ -395,13 +422,29 @@ class MeshSessionNumbers:
         ]
         if values[2] < values[1]:
             raise AccessMeshError("invalid_session_timestamp")
+        candidate = {
+            "event_id": event_id,
+            "number": number,
+            "issuer_id": issuer_id,
+            "slot_id": slot_id,
+            "active_from": values[0],
+            "started_at": values[1],
+            "hard_expires_at": values[2],
+        }
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            db.execute(
-                "INSERT INTO access_mesh_number_starts VALUES(?,?,?,?,?,?,?) "
-                "ON CONFLICT(event_id) DO UPDATE SET active_from=excluded.active_from",
-                (event_id, number, issuer_id, slot_id, *values),
-            )
+            existing = db.execute(
+                "SELECT * FROM access_mesh_number_starts WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                if dict(existing) != candidate:
+                    raise AccessMeshError("idempotency_conflict")
+            else:
+                db.execute(
+                    "INSERT INTO access_mesh_number_starts VALUES(?,?,?,?,?,?,?)",
+                    tuple(candidate.values()),
+                )
         return {"ok": True}
 
     def start_snapshot(self):
@@ -595,11 +638,7 @@ class MeshSessionNumbers:
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
-                "INSERT INTO access_mesh_number_ends VALUES(?,?,?,?,?,?) "
-                "ON CONFLICT(number,cycle_key) DO UPDATE SET "
-                "ended_at=MAX(ended_at,excluded.ended_at), "
-                "event_id=CASE WHEN excluded.ended_at>=ended_at "
-                "THEN excluded.event_id ELSE event_id END",
+                "INSERT OR IGNORE INTO access_mesh_number_ends VALUES(?,?,?,?,?,?)",
                 (number, cycle_key, issuer_id, slot_id, event_id, stamp),
             )
         return {"ok": True}
@@ -607,7 +646,10 @@ class MeshSessionNumbers:
     def end_for_cycle(self, number, cycle_key):
         with self.store._connect() as db:
             row = db.execute(
-                "SELECT ended_at FROM access_mesh_number_ends WHERE number=? AND cycle_key=?",
+                (
+                    "SELECT ended_at FROM access_mesh_number_ends WHERE number=? AND cycle_key=? "
+                    "ORDER BY ended_at DESC,event_id DESC LIMIT 1"
+                ),
                 (number, cycle_key),
             ).fetchone()
             return row["ended_at"] if row else None
@@ -617,6 +659,6 @@ class MeshSessionNumbers:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM access_mesh_number_ends ORDER BY number,cycle_key"
+                    "SELECT * FROM access_mesh_number_ends ORDER BY number,cycle_key,event_id"
                 ).fetchall()
             ]

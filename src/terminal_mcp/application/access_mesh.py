@@ -787,14 +787,15 @@ class AccessMeshApplication:
                     # Announce after the local atomic end; replication failures do
                     # not turn a committed end into an apparent failed mutation.
                     try:
-                        end_event = next(
+                        end_event = max(
                             (
                                 row
                                 for row in await asyncio.to_thread(self.store.numbers.end_snapshot)
                                 if row["number"] == number_end["number"]
                                 and row["cycle_key"] == number_end["cycle_key"]
                             ),
-                            None,
+                            key=lambda row: (row["ended_at"], row["event_id"]),
+                            default=None,
                         )
                         if end_event is not None:
                             await self.replication.announce_end(**end_event)

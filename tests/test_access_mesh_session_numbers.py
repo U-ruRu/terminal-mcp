@@ -342,3 +342,24 @@ def test_incident_antientropy_pages_are_stable_and_idempotent(registry, tmp_path
     assert cycles == 3
     assert len(received.incidents()) == 63
     assert received.incidents() == registry.incidents()
+
+
+def test_start_replay_is_exact_and_cannot_shift_activation_timestamp(registry):
+    start = {
+        "number": "0044",
+        "issuer_id": "a",
+        "slot_id": "slot",
+        "event_id": "ae_epoch_start",
+        "active_from": T0,
+        "started_at": T0,
+        "hard_expires_at": T0 + timedelta(minutes=5),
+    }
+    assert registry.record_start(**start)["ok"]
+    before = registry.start_snapshot()
+    assert registry.record_start(**start)["ok"]
+    assert registry.start_snapshot() == before
+    with pytest.raises(AccessMeshError, match="idempotency_conflict"):
+        registry.record_start(
+            **{**start, "active_from": T0 + timedelta(minutes=3)},
+        )
+    assert registry.start_snapshot() == before

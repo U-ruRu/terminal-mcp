@@ -784,17 +784,23 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         after, limit = payload.get("after", ""), payload.get("limit", 25)
         if (
             not isinstance(after, str)
-            or len(after) > 300
+            or len(after) > 550
             or type(limit) is not int
             or not 1 <= limit <= 25
         ):
             raise HTTPException(400, "invalid number end snapshot cursor")
         events = await asyncio.to_thread(mesh.store.numbers.end_snapshot)
-        events = [e for e in events if e["number"] + ":" + e["cycle_key"] > after][:limit]
+        events = [
+            e for e in events if e["number"] + ":" + e["cycle_key"] + ":" + e["event_id"] > after
+        ][:limit]
         return {
             "ok": True,
             "ends": events,
-            "next_cursor": events[-1]["number"] + ":" + events[-1]["cycle_key"]
+            "next_cursor": events[-1]["number"]
+            + ":"
+            + events[-1]["cycle_key"]
+            + ":"
+            + events[-1]["event_id"]
             if len(events) == limit
             else None,
         }
