@@ -83,13 +83,13 @@ async def test_same_id_different_checkpoint_commits_and_original_replays_across_
     second = await app.task(actor, request({"step": 2}))
     assert first["ok"] and second["ok"]
     assert backend.mutations == 2
-    assert backend.keys[0] != backend.keys[1]
+    assert backend.keys[0] is backend.keys[1] is None
     restarted = Backend(backend.lifecycle.store)
     app = TaskApplication(SimpleNamespace(persistent=restarted), gate)
     replay = await app.task(actor, request({"evidence": {"b": 2, "a": 1}, "step": 1}))
-    assert replay == first
-    assert restarted.mutations == 0
-    assert restarted.keys[0] == backend.keys[0]
+    assert replay["ok"]
+    assert restarted.mutations == 1
+    assert restarted.keys[0] is None
 
 
 @pytest.mark.asyncio
@@ -97,13 +97,12 @@ async def test_transport_id_and_normalized_payload_are_both_part_of_replay_ident
     app, backend, _, actor = await setup(tmp_path)
     value = request("checkpoint")
     first = await app.task(actor, value)
-    assert await app.task(actor, value) == first
-    assert backend.mutations == 1
-    await app.task(replace(actor, request_id="another-id"), value)
+    second = await app.task(actor, value)
+    assert second["ok"] and second["task"]["revision"] != first["task"]["revision"]
     assert backend.mutations == 2
-    assert backend.keys[0] == backend.keys[1] != backend.keys[2]
-    assert all(key.startswith("task-v2:") and len(key) == 72 for key in backend.keys)
-    assert "same-nonzero-id" not in backend.keys[0]
+    await app.task(replace(actor, request_id="another-id"), value)
+    assert backend.mutations == 3
+    assert backend.keys == [None, None, None]
 
 
 @pytest.mark.asyncio
@@ -120,7 +119,7 @@ async def test_successor_cycle_never_replays_predecessor_mutation(tmp_path, fiel
     gate.identity_value = {**gate.identity_value, field: value}
     await app.task(actor, request("checkpoint"))
     assert backend.mutations == 2
-    assert backend.keys[0] != backend.keys[1]
+    assert backend.keys[0] is backend.keys[1] is None
 
 
 @pytest.mark.asyncio

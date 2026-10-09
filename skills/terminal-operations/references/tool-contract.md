@@ -1,6 +1,6 @@
 # Terminal MCP tool contract
 
-Version: **0.14.2**. Access Mesh V2. Both Executor and Coordinator `session` tools require `access_code` and permit only `action=attach`. The examples use synthetic code `0427`; substitute the code issued privately by Access.
+Version: **0.14.4**. Access Mesh V2. Both Executor and Coordinator `session` tools require `session_number` and permit only `action=attach`. The examples use synthetic code `0427`; substitute the code issued privately by Access.
 
 Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
@@ -29,7 +29,7 @@ Activate an operator-provisioned persistent slot on its issuer:
 
 <!-- contract-example: access.session -->
 ```json
-{"action":"start","mode":"persistent","code":"0427"}
+{"action":"start","mode":"persistent","session_number":"0427"}
 ```
 
 Issuer lifecycle status/end uses the Access binding or the issuer's code:
@@ -48,15 +48,17 @@ Bind each required Executor/Coordinator once:
 
 <!-- contract-example: role.session -->
 ```json
-{"action":"attach","issuer_node_id":"firstbyte","access_code":"0427"}
+{"action":"attach","issuer_node_id":"firstbyte","session_number":"0427"}
 ```
+
+Use a different issuer with its independently issued four-digit session number:
 
 <!-- contract-example: role.session -->
 ```json
-{"action":"attach","access_code":"firstbyte:0427"}
+{"action":"attach","issuer_node_id":"bacloud","session_number":"0427"}
 ```
 
-An unqualified four-digit code requires issuer_node_id. Initial attach is write-once for a connector binding and idempotent for the same slot. Rebinding to a different slot is a structured conflict. Subsequent role operations omit Access Codes and client-selected identity, provider metadata and epochs. Access handles issuer end; role tools do not expose detach or local session start/end.
+The four-digit session_number requires issuer_node_id. Initial attach is write-once for a connector binding and idempotent for the same slot. Rebinding to a different slot is a structured conflict. Subsequent role operations omit Session Numbers and client-selected identity, provider metadata and epochs. Access handles issuer end; role tools do not expose detach or local session start/end.
 
 ## Local lifecycle and policy
 
@@ -72,7 +74,7 @@ Claim/release/lifecycle cleanup preserve explicit state, checkpoint and result. 
 
 `command_run` accepts command, optional queue_id and task_scope. Use returned scope choices (`none`, `all`, `namespace/task_id`). FIFO execution returns a terminal result for fast commands or a cmd_hash for continued reads. Check terminal status and exit_code. Cancellation/recovery remains ownership- and lifecycle-gated.
 
-`command_read` with a known hash reads retained local output across all LogicalAgent without an Access Code or initial attach. With no hash it selects the local all-agent journal. Configured transport authentication still applies.
+`command_read` with a known hash reads retained local output across all LogicalAgent without an Session Number or initial attach. With no hash it selects the local all-agent journal. Configured transport authentication still applies.
 
 <!-- contract-example: executor.command_read -->
 ```json
@@ -166,4 +168,4 @@ Endpoint: `/mcp`.
 
 Legacy compatibility catalog: `session`, `observe`, `message`, `task`, `cmd`, `context`, `health`.
 
-Existing legacy clients keep their session start/end/interrupt and Access Code compatibility path. Those actions are separate from V2 role attach. Native primary acceptance uses Access1/Executor10/Coordinator8 on both FirstByte and BacLOUD; legacy-only tests do not establish it.
+Existing legacy clients keep their session start/end/interrupt and Session Number compatibility path. Those actions are separate from V2 role attach. Native primary acceptance uses Access1/Executor10/Coordinator8 on both FirstByte and BacLOUD; legacy-only tests do not establish it.

@@ -116,7 +116,8 @@ async def test_mutation_success_survives_postcommit_readback_and_projection_fail
     store, coordinator = case
     await create(coordinator)
     await claim(coordinator)
-    original_update = store.update_task_mutation
+    mutation_method = "set_workflow_state" if action == "state" else "update_task_mutation"
+    original_update = getattr(store, mutation_method)
     original_get = store.get_task
 
     async def unavailable(*args, **kwargs):
@@ -128,7 +129,7 @@ async def test_mutation_success_survives_postcommit_readback_and_projection_fail
         monkeypatch.setattr(coordinator, "_decorate", unavailable)
         return committed
 
-    monkeypatch.setattr(store, "update_task_mutation", lose_readback)
+    monkeypatch.setattr(store, mutation_method, lose_readback)
     result = await coordinator.mutate(
         "agent",
         action=action,
@@ -139,7 +140,7 @@ async def test_mutation_success_survives_postcommit_readback_and_projection_fail
     )
     assert result["ok"], result
     assert result["task"]["state"] == expected
-    assert result["task"]["revision"] == 2
+    assert result["task"]["revision"] == (1 if action == "state" else 2)
     saved = await original_get("receipt", "one")
     assert saved["state"] == expected
     assert saved["revision"] == result["task"]["revision"]

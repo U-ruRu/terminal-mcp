@@ -101,7 +101,7 @@ async def refresh_released_task(db, namespace: str, task_id: str, *, now: str) -
     # carrying pre-V2 automatic-state provenance. Keep timestamps/checkpoints/
     # results intact and invalidate stale projections through the task revision.
     await db.execute(
-        "UPDATE work_items SET revision=revision+1,updated_at=? "
+        "UPDATE work_items SET updated_at=? "
         "WHERE namespace=? AND task_id=?",
         (now, namespace, task_id),
     )

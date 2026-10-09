@@ -581,7 +581,7 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
         path = "$"
         for candidate in (
             "issuer_node_id",
-            "access_code",
+            "session_number",
             "mode",
             "code",
             "task_id",

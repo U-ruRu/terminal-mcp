@@ -28,6 +28,20 @@ class CommandApplication(ApplicationCapability):
         mesh = getattr(self.gate, "access_mesh", None)
         if mesh is None:
             return _read_error("capability_not_allowed", "Local mesh journal is disabled")
+        if actor.provider_metadata and getattr(self.gate, "command_state", None):
+            try:
+                resolution = await self.gate.resolve(
+                    actor, None, ManagedOperation.MESSAGE_READ
+                )
+                identity = resolution.identity
+                if identity and identity.get("work_session_id"):
+                    _state, pending = await self.gate.command_state(
+                        actor, identity, "read"
+                    )
+                    if pending is not None:
+                        return pending
+            except Exception:
+                pass
         scope = {"kind": "command.journal", "node_id": mesh.store.local_node_id}
         try:
             after = decode_cursor(cursor, scope)
@@ -55,15 +69,6 @@ class CommandApplication(ApplicationCapability):
             "session_epoch": identity["session_epoch"],
             "access_code": request.code,
         }
-        if actor.transport == "mcp" and actor.request_id not in {None, "", "0"}:
-            return await self.backend.replay_command(
-                request.action,
-                request.command,
-                idempotency_key=f"{identity['work_session_id']}:{actor.request_id}",
-                queue_id=request.queue_id if request.action == "run" else None,
-                task_scope=request.task_scope if request.action == "run" else "none",
-                **options,
-            )
         if request.action == "run":
             return await self.backend.run(
                 request.command, queue_id=request.queue_id, task_scope=request.task_scope, **options
@@ -72,6 +77,21 @@ class CommandApplication(ApplicationCapability):
 
     @application_operation("commands")
     async def cmd(self, actor: ActorContext, request: CmdRequest) -> dict:
+        if request.action == "read" and actor.provider_metadata and (
+            getattr(self.gate, "command_state", None)
+        ):
+            try:
+                attached = await self.gate.resolve(
+                    actor, None, ManagedOperation.MESSAGE_READ
+                )
+                if attached.identity and attached.identity.get("work_session_id"):
+                    _state, pending = await self.gate.command_state(
+                        actor, attached.identity, "read"
+                    )
+                    if pending is not None:
+                        return pending
+            except Exception:
+                pass
         if (
             request.action == "read"
             and request.code is None

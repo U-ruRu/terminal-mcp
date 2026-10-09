@@ -12,7 +12,8 @@ def test_start_and_attach_share_minimal_number_only(tmp_path):
         assert set(started) == {'ok','session_number'}
         assert re.fullmatch(r'[0-9]{4}', started['session_number'])
         repeated = call(client, 'access', 'session', {'action':'start'}, request_id=70)
-        assert repeated == started
+        assert repeated["ok"] is False
+        assert repeated["error"]["code"] == "session_already_started"
         attached = call(client, 'executor', 'session', {'session_number': started['session_number']}, request_id=71)
         assert attached == {'ok':True}
         again = call(client, 'executor', 'session', {'session_number': started['session_number']}, request_id=72)

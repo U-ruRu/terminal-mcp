@@ -40,7 +40,7 @@ class AccessMeshApplication:
         self.task_store = task_store
         self.execution_fence = execution_fence
         self.legacy_enabled = legacy_enabled
-        self.defaults = defaults or SlotPolicy(1200, 60, True, 120, 30)
+        self.defaults = defaults or SlotPolicy(1380, 60, True, 120, 30)
         self.clock = clock or (lambda: datetime.now(UTC))
         self.store.clock = self.clock
         stored_defaults = self.store.defaults()
@@ -292,10 +292,11 @@ class AccessMeshApplication:
         binding = self.connection_key(actor)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
-        request_id = actor.request_id
-        if request_id in {None, "", "0"}:
-            request_id = "fresh:" + secrets.token_urlsafe(18)
-        key = hashlib.sha256(f"{binding}:{request_id}:{fingerprint}".encode()).hexdigest()
+        # JSON-RPC request ids are transport correlation only. Separate
+        # operator requests remain separate even when the connector reuses id.
+        key = hashlib.sha256(
+            f"{binding}:{secrets.token_urlsafe(24)}:{fingerprint}".encode()
+        ).hexdigest()
         return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
 
     @staticmethod
@@ -520,19 +521,43 @@ class AccessMeshApplication:
                 if number is None:
                     raise AccessMeshError("invalid_session_number")
                 return {"ok": True, "session_number": number}
-            if action == "start" and mode == "legacy":
-                if code is not None:
-                    raise AccessMeshError("legacy_code_not_allowed")
-                return await self.issue(actor, kind="legacy", receipt_spec=spec)
+            if action == "start" and mode == "legacy" and code is not None:
+                raise AccessMeshError("legacy_code_not_allowed")
             slot = (
                 await asyncio.to_thread(self.store.code_slot, self.store.local_node_id, code)
                 if code is not None
                 else await asyncio.to_thread(self.store.issuer_bound_slot, binding)
             )
             if slot is None or slot.state == "deleted":
+                if action == "start" and mode == "legacy":
+                    return await self.issue(actor, kind="legacy", receipt_spec=spec)
                 raise AccessMeshError("access_mesh_slot_not_found")
             cycle = local_cycle(slot, self.clock())
+            previous = await asyncio.to_thread(self.store.latest_session_window, slot.slot_id)
+            last_end = await asyncio.to_thread(self.store.latest_session_end, slot.slot_id)
+            ended = bool(
+                last_end and (previous is None or last_end["revision"] > previous["revision"])
+            )
+            original_deadline = None
+            if previous:
+                original_deadline = previous["deadline"] or (
+                    previous["start"] + timedelta(seconds=slot.policy.duration_seconds)
+                )
+            if action == "start" and mode == "legacy" and slot.kind != "legacy":
+                raise AccessMeshError("access_mode_mismatch")
             if action == "status":
+                if ended:
+                    cycle = {
+                        **cycle,
+                        "state": (
+                            "cooldown"
+                            if original_deadline and self.clock() < original_deadline
+                            else "expired"
+                        ),
+                        "hard_expires_at": original_deadline.isoformat()
+                        if original_deadline else None,
+                        "remaining_seconds": 0,
+                    }
                 return {
                     **self._slot_receipt(slot, action),
                     "slot_state": slot.state,
@@ -540,31 +565,61 @@ class AccessMeshApplication:
                     "policy": asdict(slot.policy),
                 }
             if action == "start":
-                if mode != "persistent" or slot.kind != "persistent":
+                if mode not in {"legacy", "persistent"} or slot.kind != mode:
                     raise AccessMeshError("access_mode_mismatch")
                 if slot.state != "active":
                     raise AccessMeshError("slot_not_armed")
-                if cycle["state"] == "cooldown":
-                    raise AccessMeshError("window_cooldown")
-                if cycle["state"] in {"idle", "expired"}:
-                    last_end = await asyncio.to_thread(self.store.last_session_end, slot.slot_id)
-                    if last_end is not None and self.clock() < last_end + timedelta(
+                if original_deadline is not None and self.clock() >= original_deadline and (
+                    not ended or self.clock() < last_end["ended_at"] + timedelta(
                         seconds=slot.policy.cooldown_seconds
-                    ):
-                        raise AccessMeshError("window_cooldown")
-                    # Manual activation also respects the preceding fixed window's cooldown.
-                    if slot.anchor is not None and self.clock() < slot.anchor + timedelta(
-                        seconds=slot.policy.duration_seconds + slot.policy.cooldown_seconds
-                    ):
-                        raise AccessMeshError("window_cooldown")
+                    )
+                ):
+                    return {
+                        "ok": False, "code": "session_expired",
+                        "error": "session_expired", "return_to_chat": True,
+                    }
+                if not ended and cycle["state"] in {"active", "warning", "draining"}:
+                    return {
+                        "ok": False, "code": "session_already_started",
+                        "error": "session_already_started",
+                    }
+                now = self.clock()
+                if ended and previous is not None and original_deadline is not None:
+                    if now >= original_deadline:
+                        return {
+                            "ok": False, "code": "session_expired",
+                            "error": "session_expired", "return_to_chat": True,
+                        }
+                    cooldown_end = last_end["ended_at"] + timedelta(
+                        seconds=slot.policy.cooldown_seconds
+                    )
+                    if now < cooldown_end:
+                        # Resume the original timebox with its original hard deadline.
+                        return await self.change(
+                            actor, slot_id=slot.slot_id, kind="SessionStarted",
+                            expected_revision=slot.revision,
+                            effective_at=previous["start"], deadline_at=original_deadline,
+                            receipt_spec=spec,
+                        )
+                    # A new authorized window gets its full policy duration.
                     return await self.change(
-                        actor,
-                        slot_id=slot.slot_id,
-                        kind="SessionStarted",
-                        expected_revision=slot.revision,
+                        actor, slot_id=slot.slot_id, kind="SessionStarted",
+                        expected_revision=slot.revision, effective_at=now,
+                        deadline_at=now + timedelta(seconds=slot.policy.duration_seconds),
                         receipt_spec=spec,
                     )
-            elif cycle["state"] in {"active", "warning", "draining"}:
+                if cycle["state"] == "cooldown":
+                    raise AccessMeshError("window_cooldown")
+                if cycle["state"] == "expired":
+                    return {
+                        "ok": False, "code": "session_expired",
+                        "error": "session_expired", "return_to_chat": True,
+                    }
+                return await self.change(
+                    actor, slot_id=slot.slot_id, kind="SessionStarted",
+                    expected_revision=slot.revision, receipt_spec=spec,
+                )
+            elif not ended and cycle["state"] in {"active", "warning", "draining"}:
                 number_end = (
                     await asyncio.to_thread(self.store.number_cycle, slot, self.clock())
                     if action == "end" and mode is None else None

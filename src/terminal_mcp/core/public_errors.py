@@ -282,7 +282,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "capability_not_allowed": "This endpoint does not allow the operation.",
         "coordination_alert": "Подтверди Alert через Message",
         "coordination_ack_required": (
-            "Read and acknowledge the pending message before running work."
+            "Acknowledge the pending message before continuing."
         ),
         "session_contract_conflict": (
             "Use the role and contract version that opened the active session. "
@@ -304,8 +304,12 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             result[code] = ErrorSpec(
                 kind, recovery, messages.get(code, code.replace("_", " ").capitalize() + ".")
             )
-    for code in ("capability_not_allowed", "legacy_admission_disabled", "access_denied"):
-        result[code] = ErrorSpec("access", "stop", result[code].message)
+    for code in (
+        "capability_not_allowed", "legacy_admission_disabled", "access_denied",
+        "session_expired",
+    ):
+        spec = result[code]
+        result[code] = ErrorSpec(spec.kind, "stop", spec.message)
     return MappingProxyType(result)
 
 
@@ -369,6 +373,7 @@ class CoordinationRepair(_BoundedValue):
     )
     ack_required_pending: bool = False
     alert_pending: bool = False
+    required_action: Literal["ack", "reply"] | None = None
 
 
 ErrorRepair = ValidationRepair | ConflictRepair | RetryRepair | CoordinationRepair
@@ -389,6 +394,7 @@ class PublicError(_BoundedValue):
     retry: RecoveryAction
     reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     path: str | None = Field(default=None, max_length=MAX_ERROR_PATH)
+    return_to_chat: bool | None = None
 
     @model_validator(mode="after")
     def canonical(self):
@@ -422,7 +428,7 @@ class PublicError(_BoundedValue):
 # Schema-owned paths only. Unknown extra-field names may themselves be secrets.
 PUBLIC_FIELDS = frozenset(
     """
-    issuer_node_id access_code slot_id policy duration_seconds cooldown_seconds
+    issuer_node_id session_number slot_id policy duration_seconds cooldown_seconds
     rearm_enabled release_on_end warning_seconds draining_seconds scope
     request action mode code display_name subject namespace task_id lane state
     operational_status tags detail show_done show_archived limit cursor sender text
@@ -552,6 +558,8 @@ def _repair(code: str, kind: ErrorKind, raw: object) -> ErrorRepair | None:
             pending_messages=tuple(messages),
             ack_required_pending=bool(raw.get("ack_required_pending")),
             alert_pending=bool(raw.get("alert_pending")),
+            required_action=raw.get("required_action")
+            if raw.get("required_action") in {"ack", "reply"} else None,
         )
     expected_type = _REPAIR_TYPES.get(kind)
     if expected_type and isinstance(raw, expected_type):
@@ -603,6 +611,7 @@ def public_error(
         retry=spec.recovery,
         reason=reason,
         path=path,
+        return_to_chat=True if canonical_code == "session_expired" else None,
     )
 
 

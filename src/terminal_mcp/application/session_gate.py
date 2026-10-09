@@ -361,19 +361,31 @@ class SessionGate:
                 )
         except Exception as exc:
             return None, {"ok": False, "code": "message_state_unavailable", "error": str(exc)}
-        if state.get("alert_pending") and action != "cancel":
+        for mode, pending_key, code, required_action in (
+            ("alert", "alert_pending", "coordination_alert", "reply"),
+            ("ack", "ack_required_pending", "coordination_ack_required", "ack"),
+        ):
+            if not state.get(pending_key):
+                continue
+            pending = [
+                message for message in state.get("pending_messages", [])
+                if (
+                    message.get("mode") == mode
+                    or mode == "alert" and bool(message.get("alert"))
+                )
+            ]
+            if not pending:
+                pending = list(state.get("pending_messages") or [])
             return None, {
                 "ok": False,
-                "code": "coordination_alert",
-                "error": "coordination_alert: reply to the pending alert before continuing",
-                **state,
-            }
-        if state.get("ack_required_pending") and action == "run":
-            return None, {
-                "ok": False,
-                "code": "coordination_ack_required",
-                "error": "coordination_ack_required: acknowledge the pending message before run",
-                **state,
+                "code": code,
+                "error": code,
+                "details": {
+                    "pending_messages": pending[:4],
+                    "ack_required_pending": bool(state.get("ack_required_pending")),
+                    "alert_pending": bool(state.get("alert_pending")),
+                    "required_action": required_action,
+                },
             }
         return state, None
 

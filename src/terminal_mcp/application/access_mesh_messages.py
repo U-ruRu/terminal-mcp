@@ -297,18 +297,9 @@ class AccessMeshMessaging:
             "task_id": task_id,
             "reply_to": reply_to,
         }
-        key = {
-            "connection": self.mesh.connection_key(actor),
-            "cycle": identity["work_session_id"],
-            "epoch": identity["session_epoch"],
-            "request": actor.request_id,
-            "payload": payload,
-        }
-        suffix = (
-            hashlib.sha256(canonical(key).encode()).hexdigest()[:40]
-            if actor.request_id is not None
-            else secrets.token_hex(20)
-        )
+        # Explicit outbound sends are distinct regardless of JSON-RPC id
+        # or identical text. Inbound retransmission dedup uses message_hash.
+        suffix = secrets.token_hex(20)
         message_hash = f"{self.node_id}:meshmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:
@@ -509,9 +500,20 @@ class AccessMeshMessaging:
                 if message_hash
                 else ManagedOperation.MESSAGE_SEND
             )
-            identity = await self.mesh.resolve(actor, operation)
             if recipients:
-                return await self.recipients(identity, scope=scope, limit=limit, cursor=cursor)
+                # Discovery works for anonymous callers, but a known caller is
+                # excluded from its own recipient list.
+                public_caller = {"logical_agent_id": "", "public_name": "anonymous"}
+                try:
+                    public_caller = await self.mesh.resolve(
+                        actor, ManagedOperation.MESSAGE_READ
+                    )
+                except Exception:
+                    pass
+                return await self.recipients(
+                    public_caller, scope=scope, limit=limit, cursor=cursor
+                )
+            identity = await self.mesh.resolve(actor, operation)
             if is_read:
                 return await self.read(
                     identity,

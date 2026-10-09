@@ -44,10 +44,11 @@ def test_registered_codes_are_stable_bounded_and_serializable(code):
             "unknown" if ERROR_SPECS[code].kind in {"transient", "internal"} else "not_committed"
         ),
         "retry": ERROR_SPECS[code].recovery,
+        **({"return_to_chat": True} if code == "session_expired" else {}),
     }
     assert 0 < len(value.error) <= MAX_ERROR_MESSAGE
     assert PublicError.model_validate_json(json.dumps(wire)) == value
-    assert len(json.dumps(wire).encode()) < 512
+    assert len(json.dumps(wire, ensure_ascii=False).encode()) < 512
 
 
 def test_catalog_and_public_values_are_immutable():
@@ -543,9 +544,10 @@ def test_session_lifecycle_errors_direct_agent_to_start_session():
     expired = public_error("session_expired")
 
     assert required.retry == "start_session"
-    assert expired.retry == "start_session"
+    assert expired.retry == "stop"
+    assert expired.return_to_chat is True
     assert "session.start" in required.message
-    assert "session.start" in expired.message
+    assert "возвращайся в чат" in expired.message
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 # Terminal MCP architecture
 
-Current application version: **0.14.2**. Durable runtime schema: **21**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
+Current application version: **0.14.4**. Durable runtime schema: **21**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
 
 ## Public boundary
 
@@ -37,7 +37,7 @@ trusted ProviderMetadata + authenticated principal + endpoint role
        native commands/tasks/messages    native commands/tasks/messages
 ```
 
-`ActorContext` carries authenticated transport identity, supported provider metadata, endpoint role and contract version. Provider/principal fields are trusted adapter inputs; tool arguments never choose their own LogicalAgent or session epoch. A four-digit Access Code is resolved in its issuer namespace. Initial attach binds a connector identity to one slot; another slot requires a distinct valid binding context rather than rebinding the existing row.
+`ActorContext` carries authenticated transport identity, supported provider metadata, endpoint role and contract version. Provider/principal fields are trusted adapter inputs; tool arguments never choose their own LogicalAgent or session epoch. A four-digit Session Number is resolved in its issuer namespace. Initial attach binds a connector identity to one slot; another slot requires a distinct valid binding context rather than rebinding the existing row.
 
 Each issuer independently creates its own LogicalAgent and immutable slot kind (`legacy` or `persistent`). A stable issuer-qualified `public_name` identifies that LogicalAgent on both nodes and across roles. Working role bindings are distinct, while the underlying LogicalAgent is shared. There is no fixed single-role WorkSession handoff requirement in V2.
 

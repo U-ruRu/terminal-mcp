@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from functools import wraps
 
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.public_errors import normalize_public_error, public_error
 
 CAPABILITIES = frozenset(
@@ -80,6 +81,27 @@ def application_operation(capability: str):
         async def invoke(self, actor: ActorContext, *args, **kwargs):
             if not self.policy.allows(actor, capability):
                 return public_error("capability_not_allowed").as_dict()
+            if capability in {"observations", "contexts", "health"} and (
+                actor.endpoint_role in {"executor", "coordinator"}
+                and getattr(self.gate, "command_state", None) is not None
+            ):
+                # Public reads remain possible without a work window. For an
+                # attached session, mandatory inbox messages take precedence.
+                try:
+                    resolved = await self.gate.resolve(
+                        actor, None, ManagedOperation.MESSAGE_READ
+                    )
+                    identity = resolved.identity
+                    if identity and identity.get("work_session_id"):
+                        _state, pending = await self.gate.command_state(
+                            actor, identity, capability
+                        )
+                        if pending is not None:
+                            return canonical_application_result(pending)
+                except Exception:
+                    # Do not turn an anonymous read into a session requirement.
+                    # The capability retains its own authorization contract.
+                    pass
             with actor.bind():
                 result = await function(self, actor, *args, **kwargs)
                 return canonical_application_result(result)

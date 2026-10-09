@@ -335,13 +335,13 @@ async def test_lost_ack_duplicate_delivery_and_same_request_have_one_effect(mesh
     first = await fb.message(actor("alice"), text="one message")
     assert first["state"] == "partial" and count(bac, "coordination_messages") == 1
     second = await fb.message(actor("alice"), text="one message")
-    assert first["message_hash"] == second["message_hash"]
+    assert first["message_hash"] != second["message_hash"]
     assert second["state"] == "delivered"
-    assert count(fb, "coordination_messages") == count(bac, "coordination_messages") == 1
-    assert count(bac, "coordination_message_recipients") == 1
+    assert count(fb, "coordination_messages") == count(bac, "coordination_messages") == 2
+    assert count(bac, "coordination_message_recipients") == 2
     changed = await fb.message(actor("alice"), text="different message")
     assert changed["message_hash"] != first["message_hash"]
-    assert count(bac, "coordination_messages") == 2
+    assert count(bac, "coordination_messages") == 3
 
 
 @pytest.mark.asyncio

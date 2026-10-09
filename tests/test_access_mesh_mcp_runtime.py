@@ -111,7 +111,8 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
         replay = call(
             client, "access", "session", {"action": "start"}, request_id=42
         )
-        assert replay == issued
+        assert replay["ok"] is False
+        assert replay["error"]["code"] == "session_already_started"
         binding = {"session_number": issued["session_number"]}
         executor = call(client, "executor", "session", binding)
         assert executor["ok"] is True, executor
@@ -147,8 +148,8 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
     restarted = create_app(config)
     with TestClient(restarted, base_url="https://terminal.example") as client:
         assert (
-            call(client, "access", "session", {"action": "start"}, request_id=42)
-            == issued
+            call(client, "access", "session", {"action": "start"}, request_id=42)["ok"]
+            is False
         )
         state = call(client, "coordinator", "agent_observe", {})
         assert all(set(row) == {"public_name", "last_server", "session_duration", "last_activity"} for row in state["agents"])
@@ -452,7 +453,7 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             },
             request_id=160,
         )
-        assert unowned["error"]["code"] == "owner_required"
+        assert unowned["ok"] and unowned["task"]["state"] == "blocked"
         reclaimed = call(
             client,
             "executor",

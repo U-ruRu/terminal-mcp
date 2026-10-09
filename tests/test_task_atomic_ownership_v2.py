@@ -40,7 +40,7 @@ def audit(store):
 
 OWNED_MUTATIONS = [
     ("checkpoint", {"checkpoint": {"overwrite": True}}, "update_task_mutation"),
-    ("state", {"state": "deferred"}, "update_task_mutation"),
+    ("state", {"state": "deferred"}, "set_workflow_state"),
     ("done", {"result": {"evidence": "finished"}}, "update_task_mutation"),
     ("archive", {"archive_note": "superseded"}, "update_task_mutation"),
     ("update", {"priority": "P0"}, "update_task_mutation"),
@@ -62,7 +62,10 @@ async def test_owner_swap_is_fenced_without_relying_on_task_revision(
     old_claim = (await store.active_claims("atomic", "task"))[0]
 
     async def successor(*args, **kwargs):
-        assert kwargs["expected_claim_ids"] == (old_claim["id"],)
+        if action == "state":
+            assert kwargs["agent_id"] == "owner"
+        else:
+            assert kwargs["expected_claim_ids"] == (old_claim["id"],)
         # Legacy/durable claim changes intentionally do not increment task revision.
         await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
         await store.claim("atomic", "task", "successor", claim_intent="handoff")

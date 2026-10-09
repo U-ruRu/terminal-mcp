@@ -771,7 +771,7 @@ class AgentStore:
                     "FROM coordination_message_recipients r "
                     "JOIN coordination_messages m ON m.message_hash=r.message_hash "
                     "WHERE r.recipient_agent_id=? AND ("
-                    "(m.delivery_mode='notify' AND r.seen_count<5) OR "
+                    "(m.delivery_mode='notify' AND r.seen_count<3) OR "
                     "(m.delivery_mode='ack' AND r.read_at IS NULL) OR "
                     "(m.delivery_mode='alert' AND r.replied_at IS NULL) OR "
                     "(m.delivery_mode='legacy' AND (r.read_at IS NULL OR "

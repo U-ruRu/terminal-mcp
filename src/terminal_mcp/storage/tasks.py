@@ -742,6 +742,90 @@ class TaskStore:
             await db.commit()
         return await self.get_task(namespace, task_id)
 
+    async def set_workflow_state(
+        self, namespace: str, task_id: str, state: str, *,
+        agent_id: str, now: str | None = None,
+        blocker_reason: str | None = None, result: Any = None,
+    ) -> TaskCommittedRecord:
+        """Atomically change only workflow state; content CAS revision is independent.
+
+        Ownership is checked under the same write lock as the state transition.
+        A repeated assignment is a successful no-op with no workflow event.
+        """
+        self._validate_state(state)
+        now = now or utc_text()
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await db.execute(
+                        "SELECT state,cooperative,archived_at,lane,candidate_ref FROM work_items "
+                        "WHERE namespace=? AND task_id=?", (namespace, task_id)
+                    )
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"unknown task: {namespace}/{task_id}")
+                if row[2] is not None:
+                    raise ValueError("archived task cannot change state")
+                claims = await (
+                    await db.execute(
+                        "SELECT owner_id FROM work_claims WHERE namespace=? "
+                        "AND task_id=? AND released_at IS NULL",
+                        (namespace, task_id),
+                    )
+                ).fetchall()
+                if claims and any(claim[0] != agent_id for claim in claims):
+                    # All live co-owners may change the workflow independently.
+                    # An unclaimed task is writable by any authorized task-state caller.
+                    if not bool(row[1]) or agent_id not in {claim[0] for claim in claims}:
+                        raise TaskOwnershipConflict(namespace, task_id)
+                if row[0] != state:
+                    await db.execute(
+                        "UPDATE work_items SET state=?,state_changed_at=?,ready_since=?,"
+                        "updated_at=? WHERE namespace=? AND task_id=?",
+                        (state, now, now if state == "ready" else None,
+                         now, namespace, task_id),
+                    )
+                    await db.execute(
+                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,"
+                        "payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (namespace, task_id, "updated", agent_id,
+                         self._json({"fields": ["state"], "state": state}), now),
+                    )
+                    if row[3] == "review" and state in {"done", "blocked"}:
+                        # Atomic event fanout: the state change and the review
+                        # feedback must commit together, with no CAS content bump.
+                        parents = await (
+                            await db.execute(
+                                "SELECT related_namespace,related_task_id FROM work_relations "
+                                "WHERE namespace=? AND task_id=? AND relation_kind='review_of' "
+                                "ORDER BY related_namespace,related_task_id",
+                                (namespace, task_id),
+                            )
+                        ).fetchall()
+                        payload = {
+                            "review_namespace": namespace, "review_task_id": task_id,
+                            "outcome": state, "candidate_ref": row[4],
+                        }
+                        if state == "blocked":
+                            payload["findings"] = blocker_reason
+                            payload["blocker_reason"] = blocker_reason
+                        else:
+                            payload["result"] = result
+                        for parent_namespace, parent_task_id in parents:
+                            await db.execute(
+                                "INSERT INTO work_events(namespace,task_id,event_type,agent_id,"
+                                "payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                                (parent_namespace, parent_task_id, "review_feedback",
+                                 agent_id, self._json(payload), now),
+                            )
+                committed = await self._committed_record_tx(db, namespace, task_id)
+                await db.commit()
+                return committed
+            except Exception:
+                await db.rollback()
+                raise
+
     async def update_task_mutation(
         self,
         namespace: str,
@@ -839,6 +923,14 @@ class TaskStore:
                 ).fetchone()
                 if exists is None:
                     raise KeyError(f"unknown task: {namespace}/{task_id}")
+                if expected_revision is not None and int(exists[0]) != int(expected_revision):
+                    raise TaskRevisionConflict(namespace, task_id, int(expected_revision), int(exists[0]))
+                current_task = await self._get_task_tx(db, namespace, task_id)
+                unchanged = all(current_task.get(key) == value for key, value in changes.items())
+                if unchanged and dependencies is None and not release_claims_reason and not additional_events:
+                    committed = await self._committed_record_tx(db, namespace, task_id)
+                    await db.commit()
+                    return committed
                 previous_input_refs = self._loads(exists[2], [])
                 previous_output_refs = self._loads(exists[3], [])
                 previous_output_state_id = exists[4]
@@ -1276,22 +1368,6 @@ class TaskStore:
                     await db.execute(
                         "UPDATE work_claims SET claim_intent=? WHERE id=?",
                         (claim_intent, existing[0]),
-                    )
-                    payload = {
-                        "claim_intent": claim_intent,
-                        "owner_kind": owner.kind,
-                        "owner_id": owner.owner_id,
-                    }
-                    await db.execute(
-                        "INSERT INTO work_events(namespace,task_id,event_type,agent_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
-                        (
-                            namespace,
-                            task_id,
-                            "claim_intent_updated",
-                            owner.owner_id,
-                            self._json(payload),
-                            now,
-                        ),
                     )
                     committed = (
                         await self._committed_record_tx(db, namespace, task_id)

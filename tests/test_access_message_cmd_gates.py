@@ -95,8 +95,9 @@ async def test_ack_gate_blocks_only_run_and_surfaces_messages_on_identity_read()
             convert_result=True,
         )
     )
-    assert read["ok"] is True
-    assert read["messages"][0]["mode"] == "ack"
+    assert read["ok"] is False
+    assert read["code"] == "coordination_ack_required"
+    assert read["details"]["required_action"] == "ack"
 
     recovery = body(
         await cmd.run(
@@ -110,7 +111,8 @@ async def test_ack_gate_blocks_only_run_and_surfaces_messages_on_identity_read()
             convert_result=True,
         )
     )
-    assert recovery["ok"] is True
+    assert recovery["ok"] is False
+    assert recovery["code"] == "coordination_ack_required"
 
 
 @pytest.mark.asyncio
@@ -139,5 +141,6 @@ async def test_alert_gate_blocks_work_but_never_blocks_cancel():
             convert_result=True,
         )
     )
-    assert cancelled["ok"] is True
-    assert cancelled["messages"][0]["mode"] == "alert"
+    assert cancelled["ok"] is False
+    assert cancelled["code"] == "coordination_alert"
+    assert cancelled["details"]["required_action"] == "reply"
