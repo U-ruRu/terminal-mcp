@@ -140,7 +140,8 @@ async def test_mutation_success_survives_postcommit_readback_and_projection_fail
     )
     assert result["ok"], result
     assert result["task"]["state"] == expected
-    assert result["task"]["revision"] == (1 if action == "state" else 2)
+    # Workflow state and checkpoint appends are orthogonal to content revision.
+    assert result["task"]["revision"] == (1 if action in {"state", "checkpoint"} else 2)
     saved = await original_get("receipt", "one")
     assert saved["state"] == expected
     assert saved["revision"] == result["task"]["revision"]

@@ -82,6 +82,10 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
                 if role in {"executor", "coordinator"} and tool["name"] == "session":
                     assert schema["required"] == ["session_number"]
                     assert schema["properties"]["action"]["const"] == "attach"
+                elif role == "executor" and tool["name"] == "task_state":
+                    # The public state mutation has precisely three required inputs.
+                    assert set(schema["required"]) == {"namespace", "task_id", "state"}
+                    assert set(schema["properties"]) == {"namespace", "task_id", "state"}
                 else:
                     assert "required" not in schema
             public = client.get(f"/.well-known/oauth-protected-resource/terminal-mcp/{role}/v1/mcp")
@@ -139,7 +143,7 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
         assert end["ok"] is True, end
         ended = call(client, "executor", "command_run", {"command": "true"}, request_id=45)
         assert ended["ok"] is False, ended
-        assert ended["error"]["code"] == "window_cooldown"
+        assert ended["error"]["code"] == "session_expired"
         assert call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)["ok"]
         with sqlite3.connect(config.database_path) as db:
             assert db.execute("select count(*) from access_mesh_slot_replicas").fetchone()[0] == 1
@@ -147,12 +151,14 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
             assert receipts and all("access_code" not in row[0] for row in receipts)
     restarted = create_app(config)
     with TestClient(restarted, base_url="https://terminal.example") as client:
-        assert (
-            call(client, "access", "session", {"action": "start"}, request_id=42)["ok"]
-            is False
-        )
+        resumed = call(client, "access", "session", {"action": "start"}, request_id=42)
+        # Explicit Access.start can resume the same unexpired authorization after end.
+        assert resumed == {"ok": True, "session_number": issued["session_number"]}
         state = call(client, "coordinator", "agent_observe", {})
-        assert all(set(row) == {"public_name", "last_server", "session_duration", "last_activity"} for row in state["agents"])
+        assert all(
+            set(row) == {"public_name", "last_server", "session_duration", "last_activity"}
+            for row in state["agents"]
+        )
         assert call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)["ok"]
 
 
@@ -187,7 +193,9 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
         )
         from terminal_mcp.storage.access_mesh import public_name
         recipient_slot = app.state.access_mesh.store.numbers.winner(receiver["session_number"])
-        recipient_name = public_name(recipient_slot["issuer_id"], recipient_slot["logical_agent_id"])
+        recipient_name = public_name(
+            recipient_slot["issuer_id"], recipient_slot["logical_agent_id"]
+        )
         for role, conversation, slot in (
             ("executor", "sender-exec", sender),
             ("executor", "receiver-exec", receiver),
@@ -479,17 +487,18 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
         assert reclaimed["ok"], reclaimed
         done = call(
             client,
-            "coordinator",
-            "task_manage",
-            {
-                **key,
-                "action": "done",
-                "result": {"verified": True},
-                "expected_revision": stored["revision"],
-            },
+            "executor",
+            "task_state",
+            {**key, "state": "done"},
             request_id=17,
         )
-        assert done["ok"] and done["task"]["state"] == "done", done
+        assert done == {"ok": True}
+        done_task = client.portal.call(
+            app.state.service.task_store.get_task, key["namespace"], key["task_id"]
+        )
+        assert done_task["state"] == "done"
+        # Task state does not increment content revision.
+        assert done_task["revision"] == stored["revision"]
         archive = call(
             client,
             "coordinator",
@@ -498,7 +507,7 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
                 **key,
                 "action": "archive",
                 "archive_note": "verified fixture",
-                "expected_revision": done["task"]["revision"],
+                "expected_revision": done_task["revision"],
             },
             request_id=18,
         )

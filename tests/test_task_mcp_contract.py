@@ -95,14 +95,14 @@ FULL_VALID = {
         "output_refs": ["o"],
         "tags": ["contract"],
         "dependencies": [{"task_id": "TASK-DEP"}],
-        "checkpoint": {"phase": "updated"},
+        # Checkpoint is a distinct append-only action, not a content update.
         "result": {"summary": "updated result"},
         "blocker_reason": "Dependency temporarily unavailable",
         "force": True,
         "force_reason": "External dependency state is authoritative",
         "expected_revision": 5,
     },
-     "checkpoint": {**_base("checkpoint"), "checkpoint": ["tested"]},
+    "checkpoint": {**_base("checkpoint"), "checkpoint": ["tested"]},
     "comment": {**_base("comment"), "comment_text": "Investigated current implementation."},
     "relate": {
         **_base("relate"),
@@ -173,10 +173,17 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
     assert "release_reason" in release["properties"]
     update_props = defs["TaskUpdateRequest"]["properties"]
     assert "isolation_hint" not in update_props
-    assert {"checkpoint", "result", "blocker_reason", "force", "force_reason"} <= set(update_props)
+    assert "checkpoint" not in update_props
+    assert {"result", "blocker_reason", "force", "force_reason"} <= set(update_props)
     assert {"force", "force_reason"} <= set(defs["TaskCreateRequest"]["properties"])
     assert "TaskDoneRequest" not in defs
-    assert set(defs["TaskStateRequest"]["properties"]) == {"action", "code", "namespace", "task_id", "state"}
+    assert set(defs["TaskStateRequest"]["properties"]) == {
+        "action",
+        "code",
+        "namespace",
+        "task_id",
+        "state",
+    }
     assert "candidate_ref" not in defs["TaskReviewRequest"]["properties"]
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["maxItems"] == 3
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["uniqueItems"] is True
@@ -226,9 +233,13 @@ def test_state_accepts_plain_states(state):
 def test_state_context_has_only_minimal_workflow_fields():
     for state in ("ready", "in_progress", "qa", "blocked", "deferred", "done"):
         ADAPTER.validate_python({**_base("state"), "state": state})
-    for key, value in (("result", {}), ("blocker_reason", "waiting"),
-                       ("expected_revision", 1), ("force", True),
-                       ("force_reason", "override")):
+    for key, value in (
+        ("result", {}),
+        ("blocker_reason", "waiting"),
+        ("expected_revision", 1),
+        ("force", True),
+        ("force_reason", "override"),
+    ):
         with pytest.raises(ValidationError):
             ADAPTER.validate_python({**_base("state"), "state": "done", key: value})
 
@@ -615,8 +626,16 @@ def test_generated_discovery_schema_matches_runtime_conditionals():
             ADAPTER.validate_python(payload["request"])
 
     valid = [
-        {"request": {"action": "create", "code": "1234", "namespace": "example",
-                     "isolation_hint": "none", "state": "done", "result": {"ok": True}}},
+        {
+            "request": {
+                "action": "create",
+                "code": "1234",
+                "namespace": "example",
+                "isolation_hint": "none",
+                "state": "done",
+                "result": {"ok": True},
+            }
+        },
         {"request": {**_base("state"), "state": "blocked"}},
         {"request": {**_base("state"), "state": "qa"}},
         {"request": {**_base("state"), "state": "done"}},
@@ -656,8 +675,10 @@ def test_generated_checkpoint_schema_uses_one_of():
 
 
 def test_generated_done_schema_is_absent():
-    tool = {tool.name: tool for tool in build_mcp(
-        _Service(_RecordingBackend()))._tool_manager.list_tools()}["task"]
+    tool = {
+        tool.name: tool
+        for tool in build_mcp(_Service(_RecordingBackend()))._tool_manager.list_tools()
+    }["task"]
     schema = tool.parameters["x-runtime-schema"]
     assert "TaskDoneRequest" not in schema["$defs"]
     validator = Draft202012Validator(schema)
@@ -667,7 +688,9 @@ def test_generated_done_schema_is_absent():
 @pytest.mark.asyncio
 async def test_done_action_is_rejected_before_backend():
     backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}["task"]
+    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
+        "task"
+    ]
     await tool.run({"request": _base("done")}, convert_result=True)
     assert backend.task_calls == []
 

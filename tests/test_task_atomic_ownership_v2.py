@@ -39,8 +39,7 @@ def audit(store):
 
 
 OWNED_MUTATIONS = [
-    ("checkpoint", {"checkpoint": {"overwrite": True}}, "update_task_mutation"),
-    ("state", {"state": "deferred"}, "set_workflow_state"),
+    # State and append-only checkpoints are explicitly claim-independent.
     ("done", {"result": {"evidence": "finished"}}, "update_task_mutation"),
     ("archive", {"archive_note": "superseded"}, "update_task_mutation"),
     ("update", {"priority": "P0"}, "update_task_mutation"),
@@ -81,6 +80,34 @@ async def test_owner_swap_is_fenced_without_relying_on_task_revision(
     assert await store.get_task("atomic", "task") == before
     assert audit(store) == before_events
     assert [row["agent_id"] for row in await store.active_claims("atomic", "task")] == ["successor"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,fields",
+    [
+        ("checkpoint", {"checkpoint": {"after_handoff": True}}),
+        ("state", {"state": "deferred"}),
+    ],
+)
+async def test_state_and_checkpoint_remain_allowed_after_claim_handoff(case, action, fields):
+    store, coordinator = case
+    before = await store.get_task("atomic", "task")
+    await store.release_claims(namespace="atomic", task_id="task", agent_id="owner")
+    await store.claim("atomic", "task", "successor", claim_intent="handoff")
+    result = await coordinator.mutate(
+        "owner", action=action, namespace="atomic", task_id="task", **fields
+    )
+    assert result["ok"], result
+    current = await store.get_task("atomic", "task")
+    assert current["revision"] == before["revision"]
+    assert [c["agent_id"] for c in await store.active_claims("atomic", "task")] == ["successor"]
+    if action == "checkpoint":
+        assert current["checkpoint"] == fields["checkpoint"]
+        assert current["state"] == before["state"]
+    else:
+        assert current["state"] == fields["state"]
+        assert current["checkpoint"] == before["checkpoint"]
 
 
 @pytest.mark.asyncio
@@ -176,16 +203,12 @@ async def test_review_audit_failure_rolls_back_review_and_revision(case):
 
 
 @pytest.mark.asyncio
-async def test_comment_append_remains_valid_during_unrelated_revision_change(case, monkeypatch):
+async def test_comment_append_remains_valid_during_unrelated_revision_change(case):
     store, coordinator = case
-    original = store.add_event
-
-    async def other_writer(*args, **kwargs):
-        assert kwargs.get("expected_revision") is None
-        await store.update_task("atomic", "task", title="Concurrent title")
-        return await original(*args, **kwargs)
-
-    monkeypatch.setattr(store, "add_event", other_writer)
+    # An independent content edit changes revision before the comment. The
+    # append-only side stream must not depend on the previous content revision.
+    await store.update_task("atomic", "task", title="Concurrent title")
+    revision = (await store.get_task("atomic", "task"))["revision"]
     result = await coordinator.mutate(
         "reviewer",
         action="comment",
@@ -194,7 +217,9 @@ async def test_comment_append_remains_valid_during_unrelated_revision_change(cas
         comment_text="Independent observation",
     )
     assert result["ok"], result
-    assert result["task"]["title"] == "Concurrent title"
+    latest = await store.get_task("atomic", "task")
+    assert latest["title"] == "Concurrent title"
+    assert latest["revision"] == revision
     assert len(audit(store)) == 1
 
 
@@ -237,10 +262,16 @@ async def test_side_stream_receipt_survives_all_postcommit_projection_failures(
         "owner", action=action, namespace="atomic", task_id="task", **fields
     )
     assert result["ok"], result
-    assert result["task"]["revision"] == committed["revision"]
-    assert result["task"]["state"] == committed["state"] == "in_progress"
-    assert result["task"]["checkpoint"] == {"keep": 1}
-    assert result["task"]["result"] == {"evidence": "keep"}
+    if action == "comment":
+        # Append-only comment acknowledgement does not carry a mutable
+        # TaskSnapshot and never rereads the task after commit.
+        assert committed is None
+        assert any(event[0] == "comment" for event in audit(store))
+    else:
+        assert result["task"]["revision"] == committed["revision"]
+        assert result["task"]["state"] == committed["state"] == "in_progress"
+        assert result["task"]["checkpoint"] == {"keep": 1}
+        assert result["task"]["result"] == {"evidence": "keep"}
 
 
 @pytest.mark.asyncio
@@ -276,7 +307,9 @@ async def test_committed_receipt_captures_legacy_liveness_before_subsequent_sess
     assert result["ok"] and result["task"]["owner"] is None
     assert result["task"]["state"] == "in_progress"
     current = await coordinator._decorate(await store.get_task("atomic", "task"), details=False)
-    assert current["owner"]["agent_name"] == "owner"
+    # A later unrelated legacy session heartbeat may not resurrect a released
+    # or expired claim; comment attribution itself remains unchanged.
+    assert current["owner"] is None
 
 
 @pytest.mark.asyncio

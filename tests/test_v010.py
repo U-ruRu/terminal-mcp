@@ -837,11 +837,10 @@ def test_mcp_schema_has_unified_task_contract():
         "relate",
         "unrelate",
         "state",
-        "done",
         "archive",
         "review",
     }
-    assert len(request["oneOf"]) == 12
+    assert len(request["oneOf"]) == 11
     assert "payload" not in task["properties"]
     claim = runtime_task["$defs"]["TaskClaimRequest"]
     claim_code = claim["properties"]["code"]["anyOf"][0]
@@ -855,6 +854,7 @@ def test_mcp_schema_has_unified_task_contract():
     assert observe["state"]["anyOf"][0]["enum"] == [
         "ready",
         "in_progress",
+        "qa",
         "blocked",
         "deferred",
         "done",
@@ -862,6 +862,7 @@ def test_mcp_schema_has_unified_task_contract():
     assert observe["operational_status"]["anyOf"][0]["enum"] == [
         "ready",
         "in_progress",
+        "qa",
         "blocked",
         "deferred",
         "done",
