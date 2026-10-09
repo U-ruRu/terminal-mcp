@@ -332,6 +332,46 @@ class AccessMeshStore(LocalAccessMesh):
                 release_claims=slot.state == "deleted" or self._release_at_end(slot),
             )
 
+    def _prepare_new_slot(self, db, event: AccessSlotEvent) -> None:
+        """Release a fully expired, non-rearmable grant in the issuance tx.
+
+        Historic slot and agent attribution remain in durable storage while
+        active code uniqueness is reclaimed for the new lifecycle.
+        """
+        if not event.code_tag:
+            return
+        rows = db.execute(
+            "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? "
+            "AND code_tag=? AND state!='deleted' AND slot_id!=?",
+            (event.issuer_id, event.code_tag, event.slot_id),
+        ).fetchall()
+        now = self.clock()
+        for row in rows:
+            previous = self._snapshot(row)
+            start = previous.anchor
+            end = previous.deadline_at or (
+                start + timedelta(seconds=previous.policy.duration_seconds)
+                if start is not None else None
+            )
+            if (previous.policy.rearm_enabled or end is None or now < end):
+                raise AccessMeshError("access_mesh_code_in_use")
+            db.execute(
+                "UPDATE access_mesh_slot_replicas SET state='deleted' "
+                "WHERE issuer_id=? AND slot_id=?",
+                (previous.issuer_id, previous.slot_id),
+            )
+            old = self._snapshot(db.execute(
+                "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
+                (previous.issuer_id, previous.slot_id),
+            ).fetchone())
+            stamp = _text(now)
+            self._native_slot(db, old, stamp)
+            self._queue_cleanup(
+                db, old, job_id=f"recycle:{event.issuer_id}:{event.event_id}",
+                reason="expired_session_number_recycled", stamp=stamp,
+                release_claims=True,
+            )
+
     def apply_event(self, event, *, mutation_receipt=None, mutation_number=None, mutation_end=None, **kwargs):
         token = _mutation_receipt.set(mutation_receipt)
         number_token = _mutation_number.set(mutation_number)

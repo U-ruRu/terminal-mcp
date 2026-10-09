@@ -1,5 +1,6 @@
 """Durable four-digit Mesh session number reservations and reconciliation."""
 from datetime import UTC, datetime, timedelta
+import json
 import re
 import secrets
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
@@ -35,8 +36,23 @@ class MeshSessionNumbers:
         # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
         for issuer in self.store.trusted_issuers:
             tag = self.store.code_tag(issuer, number)
-            if db.execute("SELECT 1 FROM access_mesh_slot_replicas WHERE issuer_id=? AND code_tag=? AND state!='deleted' LIMIT 1", (issuer, tag)).fetchone():
-                return True
+            rows = db.execute(
+                "SELECT anchor,deadline_at,policy_json FROM access_mesh_slot_replicas "
+                "WHERE issuer_id=? AND code_tag=? AND state!='deleted'", (issuer, tag),
+            ).fetchall()
+            for row in rows:
+                policy = json.loads(row["policy_json"])
+                if policy.get("rearm_enabled", True):
+                    return True
+                anchor = row["anchor"]
+                deadline = row["deadline_at"]
+                if not anchor:
+                    return True
+                if not deadline:
+                    duration = timedelta(seconds=policy["duration_seconds"])
+                    deadline = self.stamp(datetime.fromisoformat(anchor) + duration)
+                if deadline > as_of:
+                    return True
         if db.execute(
             'SELECT 1 FROM access_mesh_number_claims WHERE number=? '
             'AND hard_expires_at>? LIMIT 1', (number, as_of)

@@ -496,6 +496,9 @@ class LocalAccessMesh:
             )
             return changed.rowcount == 1
 
+    def _prepare_new_slot(self, db, event: AccessSlotEvent) -> None:
+        """Hook: native adapters may recycle expired grants in this transaction."""
+
     def apply_event(
         self,
         event: AccessSlotEvent,
@@ -535,6 +538,8 @@ class LocalAccessMesh:
             ):
                 raise AccessMeshError("access_mesh_event_conflict")
             if old is None:
+                if event.kind == "SlotIssued":
+                    self._prepare_new_slot(db, event)
                 if event.kind != "SlotIssued" or issued_kind not in {"legacy", "persistent"}:
                     raise AccessMeshError("access_mesh_unknown_slot")
                 if event.revision != 1:
