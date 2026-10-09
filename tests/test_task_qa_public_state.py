@@ -444,3 +444,33 @@ def test_public_task_state_invalid_value_returns_invalid_state_not_generic_valid
             {"namespace": "any", "task_id": "missing", "state": "qa"},
         )
         assert missing["error"]["code"] == "task_not_found"
+
+
+@pytest.mark.asyncio
+async def test_backend_state_invalid_types_report_invalid_state_not_internal_error(tmp_path):
+    repo = SqliteRepository(tmp_path / "state-invalid.sqlite3", tmp_path / "out.sqlite3")
+    await repo.initialize()
+    store = TaskStore(repo.path)
+    coordinator = TaskCoordinator(store)
+    created = await coordinator.mutate(
+        "creator",
+        action="create",
+        namespace="invalid-state",
+        task_id="one",
+        title="Invalid state",
+        isolation_hint="none",
+    )
+    assert created["ok"]
+    previous = await store.get_task("invalid-state", "one")
+    previous_events = await store.list_events("invalid-state", "one")
+    for value in (None, "", [], {}, "QA", 3, False):
+        failure = await coordinator.mutate(
+            "creator",
+            action="state",
+            namespace="invalid-state",
+            task_id="one",
+            state=value,
+        )
+        assert not failure["ok"] and failure["code"] == "invalid_state", failure
+    assert await store.get_task("invalid-state", "one") == previous
+    assert await store.list_events("invalid-state", "one") == previous_events

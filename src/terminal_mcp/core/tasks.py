@@ -1359,7 +1359,7 @@ class TaskCoordinator:
                         ValidationIssue(
                             error_class="invalid_value",
                             path="state",
-                            description="Change workflow state with action=state or action=done.",
+                            description="Change workflow state using task_state.",
                         ),
                     )
                 ),
@@ -1370,11 +1370,11 @@ class TaskCoordinator:
 
     async def _action_state(self, agent_id, namespace, task_id, **kwargs):
         state = kwargs.get("state")
-        if state not in STATES:
+        if not isinstance(state, str) or state not in STATES:
             return {
                 "ok": False,
-                "code": "input_validation_failed",
-                "error": "task.state: invalid or missing state",
+                "code": "invalid_state",
+                "error": "invalid_state",
                 "warnings": [],
             }
         owner = kwargs.get("_claim_owner")
