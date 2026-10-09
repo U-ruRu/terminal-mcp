@@ -74,7 +74,7 @@ async def issued(f, kind="legacy", **policy):
 
 
 @pytest.mark.asyncio
-async def test_native_cycle_survives_restart_and_rearms_without_issuer(fixture):
+async def test_native_cycle_survives_restart_but_requires_explicit_new_start(fixture):
     f = fixture
     grant = await issued(f)
     attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
@@ -88,15 +88,13 @@ async def test_native_cycle_survives_restart_and_rearms_without_issuer(fixture):
         "work_session_id"
     ] == same["work_session_id"]
     f.clock[0] = T0 + timedelta(seconds=11)
-    with pytest.raises(AccessMeshError, match="window_cooldown"):
+    with pytest.raises(AccessMeshError, match="session_expired"):
         await restarted.resolve(actor(), ManagedOperation.COMMAND_RUN)
     f.clock[0] = T0 + timedelta(seconds=15)
-    next_cycle = await restarted.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert next_cycle["session_epoch"] == same["session_epoch"] + 1
-    assert next_cycle["work_session_id"] != same["work_session_id"]
-    native = await f.native.get_work_session(next_cycle["work_session_id"])
-    assert native.logical_agent_id == grant["logical_agent_id"]
-    assert native.authority_node_id == "firstbyte"
+    # A policy that permits renewal does not grant a new cycle implicitly:
+    # only a subsequent authorized Access.start can reopen the work window.
+    with pytest.raises(AccessMeshError, match="session_expired"):
+        await restarted.resolve(actor(), ManagedOperation.COMMAND_RUN)
     assert f.fence.calls
 
 
@@ -219,14 +217,11 @@ async def test_deadline_override_changes_current_cycle_only_and_native_fence(fix
     current = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
     assert current["work_session_id"] == attached["work_session_id"]
     f.clock[0] = T0 + timedelta(seconds=22)
-    with pytest.raises(AccessMeshError, match="window_cooldown"):
+    with pytest.raises(AccessMeshError, match="session_expired"):
         await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
     f.clock[0] = T0 + timedelta(seconds=25)
-    following = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert following["work_session_id"] != attached["work_session_id"]
-    assert following["hard_expires_at"] == (T0 + timedelta(seconds=35)).isoformat(
-        timespec="microseconds"
-    )
+    with pytest.raises(AccessMeshError, match="session_expired"):
+        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
     assert f.store.slot("firstbyte", grant["slot_id"]).policy.duration_seconds == 10
 
 
@@ -241,7 +236,7 @@ async def test_status_read_does_not_release_claims_or_materialize_next_cycle(fix
     # not materialize a new local work cycle.
     slot = f.store.attached_slot(f.app.connection_key(actor()))
     status = f.store.observed_identity(slot, now=f.clock[0])
-    assert status["session_lifecycle"]["state"] == "active"
+    assert status["session_lifecycle"]["state"] == "expired"
     assert "work_session_id" not in status
     public = await f.app.observe(actor("executor"))
     assert public == {"ok": True, "agents": []}
@@ -249,8 +244,9 @@ async def test_status_read_does_not_release_claims_or_materialize_next_cycle(fix
     old = await f.native.get_work_session(attached["work_session_id"])
     assert old.state == "active"
     await f.app.tick()
-    current = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
-    assert current["session_epoch"] == attached["session_epoch"] + 1
+    with pytest.raises(AccessMeshError, match="session_expired"):
+        await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+    assert (await f.native.get_work_session(attached["work_session_id"])).state != "active"
 
 
 @pytest.mark.asyncio
