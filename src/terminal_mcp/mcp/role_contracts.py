@@ -492,38 +492,14 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
     from terminal_mcp.mcp.access_contracts import AttachInput
 
     if model is AttachInput:
-        # Executor and Coordinator publish the same attach-only schema.
-        # Retain qualified-code compatibility without using nested JSONSchema.
         return {
             "type": "object",
             "properties": {
-                "action": {
-                    "type": "string",
-                    "const": "attach",
-                    "default": "attach",
-                    "description": "Attach to an existing Access session; never start or end here.",
-                },
-                "issuer_node_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128,
-                    "description": (
-                        "Issuer node ID (for example firstbyte or bacloud). "
-                        "Required with an unqualified four-digit access_code."
-                    ),
-                },
-                "access_code": {
-                    "type": "string",
-                    "minLength": 4,
-                    "maxLength": 133,
-                    "pattern": r"^(?:[A-Za-z0-9_.:-]{1,128}:)?[0-9]{4}$",
-                    "description": (
-                        "Required Access Code issued by Access MCP: four digits "
-                        "with issuer_node_id, or issuer-qualified code."
-                    ),
-                },
+                "action": {"type": "string", "const": "attach", "default": "attach"},
+                "session_number": {"type": "string", "minLength": 4, "maxLength": 4,
+                                   "pattern": r"^[0-9]{4}$", "description": "Four-digit session number."},
             },
-            "required": ["access_code"],
+            "required": ["session_number"],
             "additionalProperties": False,
         }
     if model is TaskManageInput:

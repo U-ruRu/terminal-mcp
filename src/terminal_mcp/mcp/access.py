@@ -37,10 +37,7 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
         ),
-        description="Issue a legacy AccessSlot with start(mode='legacy'); activate an existing "
-        "persistent slot with start(mode='persistent',code). Read status or end the "
-        "issuer session. Attach the returned issuer/code once on each execution or "
-        "coordination connector. Local write cycles subsequently rearm automatically.",
+        description="Start an Access session and obtain its four-digit session_number, or end the current session.",
     )
     async def session(*, boundary: RuntimeBoundary) -> dict:
         request, error = validate_boundary(boundary, IssuerSessionInput)
@@ -58,7 +55,7 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
         )
         with actor.bind():
             return await application.service.access_mesh.issuer_session(
-                actor, action=request.action, mode=request.mode, code=request.code
+                actor, action=request.action
             )
 
     install_role_input_contract(

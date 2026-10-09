@@ -342,6 +342,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         persistent_lifecycle.access_mesh = access_mesh
         if fleet_config and fleet_replication:
             access_mesh_replication = AccessMeshReplication(access_mesh, fleet_config)
+            access_mesh.replication = access_mesh_replication
             service.access_mesh_replication = access_mesh_replication
         access_mesh_messages = AccessMeshMessaging(
             access_mesh,

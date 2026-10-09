@@ -20,35 +20,11 @@ from terminal_mcp.mcp.role_contracts import (
 
 class AttachInput(StrictRoleInput):
     action: Literal["attach"] = "attach"
-    issuer_node_id: Annotated[str | None, Field(min_length=1, max_length=128)] = None
-    access_code: Annotated[
-        str, Field(min_length=4, max_length=133, pattern=r"^(?:[A-Za-z0-9_.:-]{1,128}:)?[0-9]{4}$")
-    ]
-
-    @model_validator(mode="after")
-    def issuer_required(self):
-        if not self.issuer_node_id and ":" not in self.access_code:
-            raise ValueError("issuer_node_id is required for an unqualified access_code")
-        return self
+    session_number: Annotated[str, Field(pattern=r"^[0-9]{4}$", description="Four-digit session number, including leading zeros.")]
 
 
 class IssuerSessionInput(StrictRoleInput):
-    action: Literal["start", "end", "status"]
-    mode: Literal["legacy", "persistent"] | None = None
-    code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
-
-    @model_validator(mode="after")
-    def action_fields(self):
-        if self.action == "start":
-            if self.mode is None:
-                raise ValueError("mode is required for start")
-            if self.mode == "persistent" and self.code is None:
-                raise ValueError("code is required for persistent activation")
-            if self.mode == "legacy" and self.code is not None:
-                raise ValueError("code is not accepted when issuing a legacy slot")
-        elif self.mode is not None:
-            raise ValueError("mode is accepted only for start")
-        return self
+    action: Literal["start", "end"]
 
 
 class MeshCommandReadInput(StrictRoleInput):
@@ -132,38 +108,25 @@ class MeshLocalSession(_Strict):
     contract_version: int
 
 
-class MeshSessionOutput(RootModel[MeshLocalSession | AccessError]):
-    __success_type__: ClassVar = MeshLocalSession
-
-
-class IssuerReceipt(_Strict):
+class MeshAttachReceipt(_Strict):
     ok: Literal[True]
-    action: Literal[
-        "start",
-        "end",
-        "status",
-        "create",
-        "policy",
-        "suspend",
-        "resume",
-        "delete",
-        "rotate",
-        "update",
-    ]
-    issuer_node_id: str
-    slot_id: str
-    logical_agent_id: str
-    public_name: str
-    mode: Literal["legacy", "persistent"]
-    revision: int
-    access_code: Annotated[str | None, Field(pattern=r"^[0-9]{4}$")] = None
-    slot_state: Literal["active", "suspended", "deleted"] | None = None
-    session_lifecycle: MeshCycle | None = None
-    policy: MeshPolicy | None = None
 
 
-class IssuerOutput(RootModel[IssuerReceipt | AccessError]):
-    __success_type__: ClassVar = IssuerReceipt
+class MeshSessionOutput(RootModel[MeshAttachReceipt | AccessError]):
+    __success_type__: ClassVar = MeshAttachReceipt
+
+
+class IssuerStartReceipt(_Strict):
+    ok: Literal[True]
+    session_number: Annotated[str, Field(pattern=r"^[0-9]{4}$")]
+
+
+class IssuerEndReceipt(_Strict):
+    ok: Literal[True]
+
+
+class IssuerOutput(RootModel[IssuerStartReceipt | IssuerEndReceipt | AccessError]):
+    __success_type__: ClassVar = IssuerStartReceipt | IssuerEndReceipt
 
 
 class CommandJournalItem(_Strict):

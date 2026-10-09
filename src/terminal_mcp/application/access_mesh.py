@@ -48,6 +48,7 @@ class AccessMeshApplication:
             self.defaults = SlotPolicy(**stored_defaults["policy"])
             self.legacy_enabled = stored_defaults["legacy_enabled"]
         self.registry = ProviderIdentityRegistry()
+        self.replication = None
         self._cleanup_lock = asyncio.Lock()
         self._issuer_lock = asyncio.Lock()
         self._issuer_session_lock = asyncio.Lock()
@@ -84,9 +85,25 @@ class AccessMeshApplication:
         return hashlib.sha256(json.dumps(scope, separators=(",", ":")).encode()).hexdigest()
 
     async def attach(
-        self, actor: ActorContext, *, issuer_node_id: str | None, access_code: str
+        self, actor: ActorContext, *, session_number: str | None = None,
+        issuer_node_id: str | None = None, access_code: str | None = None,
     ) -> dict:
         self.require_write(actor)
+        if session_number is not None:
+            winner = await asyncio.to_thread(self.store.numbers.winner, session_number)
+            if winner is None:
+                raise AccessMeshError("invalid_session_number")
+            connection = self.connection_key(actor)
+            current = await asyncio.to_thread(self.store.attached_slot, connection)
+            if current is not None:
+                bound_number = await asyncio.to_thread(
+                    self.store.numbers.number_for_slot, current.issuer_id, current.slot_id)
+                if bound_number != session_number:
+                    raise AccessMeshError("access_mesh_binding_conflict")
+                return {"ok": True}
+            await asyncio.to_thread(self.store.attach, issuer_id=winner["issuer_id"],
+                                    code=session_number, connection_key=connection)
+            return {"ok": True}
         if isinstance(access_code, str) and ":" in access_code:
             prefix, access_code = access_code.split(":", 1)
             if issuer_node_id and issuer_node_id != prefix:
@@ -298,8 +315,19 @@ class AccessMeshApplication:
         if kind == "legacy" and not self.legacy_enabled:
             raise AccessMeshError("legacy_disabled")
         async with self._issuer_lock:
+            attempt_id = "nr_" + secrets.token_urlsafe(16)
+            announcement_deadline = None
+            reserved_number = None
+            if code is None and self.replication is not None:
+                reserved_number, attempt_id, announcement_deadline = await self.replication.negotiate_number()
+            elif code is None:
+                candidate = f"{secrets.randbelow(10000):04d}"
+                proposed = await asyncio.to_thread(self.store.numbers.reserve, number=candidate, attempt_id=attempt_id, now=self.clock())
+                reserved_number = proposed.get("number") or proposed["suggested_number"]
+                if not proposed["ok"]:
+                    await asyncio.to_thread(self.store.numbers.reserve, number=reserved_number, attempt_id=attempt_id, now=self.clock())
             for _ in range(100):
-                allocated = code or f"{secrets.randbelow(10000):04d}"
+                allocated = reserved_number or code or f"{secrets.randbelow(10000):04d}"
                 slot_id = "as_" + secrets.token_urlsafe(18)
                 agent_id = f"la_{self.store.local_node_id}_" + secrets.token_urlsafe(18)
                 event = AccessSlotEvent(
@@ -342,6 +370,22 @@ class AccessMeshApplication:
                         ),
                         mutation_receipt=receipt,
                     )
+                    started_at = event.effective_at or self.clock()
+                    await asyncio.to_thread(
+                        self.store.numbers.register,
+                        number=allocated, issuer_id=event.issuer_id, slot_id=slot_id,
+                        logical_agent_id=agent_id, started_at=started_at,
+                        hard_expires_at=started_at + timedelta(seconds=event.policy.duration_seconds),
+                        attempt_id=attempt_id,
+                    )
+                    if self.replication is not None and announcement_deadline is not None:
+                        await self.replication.announce_number(
+                            number=allocated, issuer_id=event.issuer_id,
+                            slot_id=slot_id, logical_agent_id=agent_id,
+                            started_at=started_at.isoformat(),
+                            hard_expires_at=(started_at + timedelta(seconds=event.policy.duration_seconds)).isoformat(),
+                            attempt_id=attempt_id, deadline=announcement_deadline,
+                        )
                     return result
                 except AccessMeshError as exc:
                     if exc.code != "access_mesh_code_in_use":
@@ -444,7 +488,29 @@ class AccessMeshApplication:
                     self.store.receipt, spec["request_key"], spec["fingerprint"]
                 )
                 if replay is not None:
+                    if action == "start" and mode is None:
+                        return {"ok": True, "session_number": replay["access_code"]}
+                    if action == "end" and mode is None:
+                        return {"ok": True}
                     return replay
+            if action == "start" and mode is None:
+                slot = await asyncio.to_thread(self.store.issuer_bound_slot, binding)
+                if slot is None:
+                    result = await self.issue(actor, kind="legacy", receipt_spec=spec)
+                    return {"ok": True, "session_number": result["access_code"]}
+                cycle = local_cycle(slot, self.clock())
+                if cycle["state"] in {"active", "warning", "draining"}:
+                    raise AccessMeshError("session_already_started")
+                if cycle["state"] == "cooldown":
+                    raise AccessMeshError("window_cooldown")
+                if slot.anchor and self.clock() < slot.anchor + timedelta(seconds=slot.policy.duration_seconds + slot.policy.cooldown_seconds):
+                    raise AccessMeshError("window_cooldown")
+                await self.change(actor, slot_id=slot.slot_id, kind="SessionStarted",
+                                  expected_revision=slot.revision, receipt_spec=spec)
+                number = self.store.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
+                if number is None:
+                    raise AccessMeshError("invalid_session_number")
+                return {"ok": True, "session_number": number}
             if action == "start" and mode == "legacy":
                 if code is not None:
                     raise AccessMeshError("legacy_code_not_allowed")
@@ -490,14 +556,15 @@ class AccessMeshApplication:
                         receipt_spec=spec,
                     )
             elif cycle["state"] in {"active", "warning", "draining"}:
-                return await self.change(
+                outcome = await self.change(
                     actor,
                     slot_id=slot.slot_id,
                     kind="SessionEnded",
                     expected_revision=slot.revision,
                     receipt_spec=spec,
                 )
+                return {"ok": True} if action == "end" and mode is None else outcome
             result = self._slot_receipt(slot, action)
             receipt = self.store.prepare_receipt(event_id="none", result=result, **spec)
             await asyncio.to_thread(self.store.save_receipt, receipt)
-            return result
+            return {"ok": True} if action == "end" and mode is None else result

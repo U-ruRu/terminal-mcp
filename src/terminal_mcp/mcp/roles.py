@@ -656,7 +656,7 @@ def build_role_mcp(
             actor = _actor(application, role)
             with actor.bind():
                 return await mesh.attach(
-                    actor, issuer_node_id=request.issuer_node_id, access_code=request.access_code
+                    actor, session_number=request.session_number
                 )
         request = SessionInput.model_validate(request)
         raw = await application.session(
@@ -934,8 +934,8 @@ def build_role_mcp(
             text = text.split(" Requires an active managed session;")[0]
             if tool.name == "session":
                 tool.description = (
-                    "Attach this connector once using issuer_node_id and access_code. "
-                    "Access Code is mandatory; action is attach-only. "
+                    "Attach this connector once using session_number. "
+                    "Session number is mandatory; action is attach-only. "
                     "The local binding survives restart and automatic work-cycle rearm. "
                     "Manage issuance and end the shared access cycle through Access MCP. "
                     "Contract updated for Terminal MCP 0.14.1."

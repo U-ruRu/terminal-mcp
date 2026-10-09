@@ -15,6 +15,7 @@ import secrets
 import sqlite3
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
+from dataclasses import replace
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -100,6 +101,8 @@ class AccessMeshStore(LocalAccessMesh):
     def __init__(self, *args, clock=None, **kwargs):
         self.clock = clock or (lambda: datetime.now(UTC))
         super().__init__(*args, **kwargs)
+        from terminal_mcp.storage.access_mesh_numbers import MeshSessionNumbers
+        self.numbers = MeshSessionNumbers(self)
 
     def _initialize(self) -> None:
         super()._initialize()
@@ -411,7 +414,17 @@ class AccessMeshStore(LocalAccessMesh):
                 WHERE a.connection_key=?""",
                 (connection_key,),
             ).fetchone()
-        return self._snapshot(row) if row else None
+        if not row:
+            return None
+        original = self._snapshot(row)
+        number = self.numbers.number_for_slot(original.issuer_id, original.slot_id)
+        if number is not None:
+            winner = self.numbers.winner(number)
+            if winner is not None:
+                updated = self.slot(winner["issuer_id"], winner["slot_id"])
+                if updated is not None and updated.state == "active":
+                    return updated
+        return original
 
     def attach(self, *, issuer_id: str, code: str, connection_key: str) -> SlotSnapshot:
         slot = super().attach(issuer_id=issuer_id, code=code, connection_key=connection_key)
@@ -441,6 +454,19 @@ class AccessMeshStore(LocalAccessMesh):
             ).fetchall()
         return [self._snapshot(row) for row in rows]
 
+    def merged_cycle(self, slot: SlotSnapshot, now: datetime) -> dict:
+        """Use the latest shared deadline without rewriting original slot history."""
+        number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
+        winner = self.numbers.winner(number) if number is not None else None
+        if winner and (winner["issuer_id"], winner["slot_id"]) == (slot.issuer_id, slot.slot_id):
+            started = _parse(winner["started_at"])
+            merged_end = _parse(winner["hard_expires_at"])
+            if slot.anchor == started and merged_end is not None:
+                old_end = slot.deadline_at or slot.anchor + timedelta(seconds=slot.policy.duration_seconds)
+                if merged_end > old_end:
+                    slot = replace(slot, deadline_at=merged_end)
+        return local_cycle(slot, now)
+
     def observed_identity(self, slot: SlotSnapshot, *, now: datetime | None = None) -> dict:
         """Pure status read. Lifecycle materialization belongs to tick/attach/write admission."""
         now = _utc(now or datetime.now(UTC))
@@ -452,7 +478,7 @@ class AccessMeshStore(LocalAccessMesh):
             if row is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
             slot = self._snapshot(row)
-            cycle = local_cycle(slot, now)
+            cycle = self.merged_cycle(slot, now)
             current = db.execute(
                 "SELECT l.*,s.state FROM access_mesh_local_sessions l "
                 "JOIN logical_agent_work_sessions s USING(work_session_id) "
@@ -503,7 +529,7 @@ class AccessMeshStore(LocalAccessMesh):
             if row is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
             slot = self._snapshot(row)
-            cycle = local_cycle(slot, now)
+            cycle = self.merged_cycle(slot, now)
             current = db.execute(
                 """SELECT l.*,s.state FROM access_mesh_local_sessions l
                 JOIN logical_agent_work_sessions s USING(work_session_id)

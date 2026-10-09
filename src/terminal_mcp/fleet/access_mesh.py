@@ -62,6 +62,69 @@ class AccessMeshReplication:
             peer for peer in self.config.peers if peer.instance_id in self.store.trusted_issuers
         )
 
+    async def negotiate_number(self, *, preferred: str | None = None):
+        """One 30-second admission budget; unresponsive peers cannot veto a start."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 27.0  # Reserve final 3s for the issuance announcement.
+        attempt_id = "nr_" + secrets.token_urlsafe(16)
+        number = preferred or f"{secrets.randbelow(10000):04d}"
+        while True:
+            local = await asyncio.to_thread(self.store.numbers.reserve, number=number, attempt_id=attempt_id)
+            if not local["ok"]:
+                number = local["suggested_number"]
+                if loop.time() < deadline:
+                    continue
+                raise AccessMeshError("session_number_capacity")
+            if not self.peers:
+                return number, attempt_id, loop.time() + 3.0
+            budget = deadline - loop.time()
+            if budget <= 0:
+                return number, attempt_id, loop.time() + 3.0
+            try:
+                outcomes = await asyncio.wait_for(
+                    asyncio.gather(*(self.request(peer, "numbers/reserve", {"number": number, "attempt_id": attempt_id}) for peer in self.peers), return_exceptions=True),
+                    timeout=budget,
+                )
+            except TimeoutError:
+                return number, attempt_id, loop.time() + 3.0
+            proposed = next((outcome.get("suggested_number") for outcome in outcomes if isinstance(outcome, dict) and outcome.get("code") == "number_conflict" and outcome.get("suggested_number")), None)
+            if proposed and loop.time() < deadline:
+                number = proposed
+                continue
+            if all(isinstance(outcome, dict) and outcome.get("ok") is True for outcome in outcomes):
+                return number, attempt_id, loop.time() + 3.0
+            # At least one peer did not respond: finish the bounded negotiation window.
+            await asyncio.sleep(max(0.0, deadline - loop.time()))
+            return number, attempt_id, loop.time() + 3.0
+
+    async def announce_number(self, *, number, issuer_id, slot_id, logical_agent_id,
+                              started_at, hard_expires_at, attempt_id, deadline):
+        payload = dict(number=number, issuer_id=issuer_id, slot_id=slot_id,
+                       logical_agent_id=logical_agent_id, started_at=started_at,
+                       hard_expires_at=hard_expires_at, attempt_id=attempt_id)
+        budget = deadline - asyncio.get_running_loop().time()
+        if budget > 0 and self.peers:
+            try:
+                await asyncio.wait_for(asyncio.gather(
+                    *(self.request(peer, "numbers/commit", payload) for peer in self.peers),
+                    return_exceptions=True), timeout=budget)
+            except TimeoutError:
+                pass
+
+    async def sync_numbers(self, peer):
+        cursor = ""
+        while True:
+            result = await self.request(peer, "numbers/snapshot", {"after": cursor, "limit": 25})
+            if result.get("ok") is not True or not isinstance(result.get("claims"), list):
+                raise AccessMeshError("invalid_session_snapshot")
+            if isinstance(result.get("reservations"), list):
+                await asyncio.to_thread(self.store.numbers.merge_reservations, result["reservations"])
+            for claim in result["claims"]:
+                await asyncio.to_thread(self.store.numbers.register, **claim)
+            cursor = result.get("next_cursor")
+            if not cursor:
+                return
+
     async def request(self, peer, path: str, payload: dict) -> dict:
         if peer.instance_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
@@ -176,6 +239,7 @@ class AccessMeshReplication:
                 or now - self._last_snapshot_pass[peer.instance_id] >= 30
             ):
                 await self._snapshot(peer)
+                await self.sync_numbers(peer)
                 checked = True
             delivered = await self._deliver(peer)
             if checked or delivered:
@@ -309,5 +373,41 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         except AccessMeshError as exc:
             return {"ok": False, "code": exc.code}
         return {"ok": True, "outcome": outcome}
+
+    @router.post("/internal/fleet/access-mesh/numbers/reserve", include_in_schema=False)
+    async def number_reserve(payload: dict, x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")):
+        authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) != {"number", "attempt_id"}:
+            raise HTTPException(400, "invalid reservation")
+        try:
+            return await asyncio.to_thread(mesh.store.numbers.reserve, **payload)
+        except AccessMeshError as exc:
+            return {"ok": False, "code": exc.code}
+
+    @router.post("/internal/fleet/access-mesh/numbers/commit", include_in_schema=False)
+    async def number_commit(payload: dict, x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")):
+        peer_id = authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if payload.get("issuer_id") != peer_id:
+            raise HTTPException(400, "issuer does not match authenticated peer")
+        try:
+            return await asyncio.to_thread(mesh.store.numbers.register, **payload)
+        except (AccessMeshError, TypeError, ValueError) as exc:
+            return {"ok": False, "code": getattr(exc, "code", "invalid_session_registration")}
+
+    @router.post("/internal/fleet/access-mesh/numbers/snapshot", include_in_schema=False)
+    async def number_snapshot(payload: dict, x_terminal_mcp_peer: str = Header(default=""), authorization: str = Header(default="")):
+        authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) - {"after", "limit"}:
+            raise HTTPException(400, "invalid number snapshot")
+        after, limit = payload.get("after", ""), payload.get("limit", 25)
+        if not isinstance(after, str) or len(after) > 300 or type(limit) is not int or not 1 <= limit <= 50:
+            raise HTTPException(400, "invalid number snapshot cursor")
+        rows = await asyncio.to_thread(mesh.store.numbers.snapshot)
+        rows = [r for r in rows if (r["issuer_id"]+":"+r["slot_id"]) > after][:limit]
+        reservations = await asyncio.to_thread(mesh.store.numbers.reservations)
+        return {"ok": True, "claims": rows, "reservations": reservations[:50], "next_cursor": (rows[-1]["issuer_id"]+":"+rows[-1]["slot_id"]) if len(rows) == limit else None}
 
     return router
