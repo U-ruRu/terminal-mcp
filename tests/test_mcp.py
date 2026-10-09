@@ -314,11 +314,10 @@ def test_mcp_tools_advertise_canonical_access_surface():
         "relate",
         "unrelate",
         "state",
-        "done",
         "archive",
         "review",
     }
-    assert len(task_request["oneOf"]) == 12
+    assert len(task_request["oneOf"]) == 11
     assert "payload" not in task["properties"]
     claim_code = runtime_task["$defs"]["TaskClaimRequest"]["properties"]["code"]["anyOf"][0]
     assert claim_code["minLength"] == 4
