@@ -311,6 +311,25 @@ class AccessMeshReplication:
             if not cursor:
                 return
 
+    async def sync_incidents(self, peer):
+        """Anti-entropy for late reservation and true identity collisions."""
+        cursor = ""
+        while True:
+            response = await self.request(
+                peer,
+                "numbers/incidents",
+                {"after": cursor, "limit": 25},
+            )
+            if response.get("ok") is not True or not isinstance(response.get("incidents"), list):
+                raise AccessMeshError("invalid_session_snapshot")
+            await asyncio.to_thread(self.store.numbers.merge_incidents, response["incidents"])
+            following = response.get("next_cursor")
+            if not following:
+                return
+            if not isinstance(following, str) or following == cursor:
+                raise AccessMeshError("invalid_session_snapshot")
+            cursor = following
+
     async def request(self, peer, path: str, payload: dict) -> dict:
         if peer.instance_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
@@ -428,6 +447,7 @@ class AccessMeshReplication:
                 await self.sync_numbers(peer)
                 await self.sync_starts(peer)
                 await self.sync_ends(peer)
+                await self.sync_incidents(peer)
                 checked = True
             delivered = await self._deliver(peer)
             if checked or delivered:
@@ -666,6 +686,39 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
             return await asyncio.to_thread(mesh.store.numbers.record_start, **payload)
         except (AccessMeshError, ValueError, TypeError) as exc:
             return {"ok": False, "code": getattr(exc, "code", "invalid_session_start")}
+
+    @router.post("/internal/fleet/access-mesh/numbers/incidents", include_in_schema=False)
+    async def number_incidents(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) - {"after", "limit"}:
+            raise HTTPException(400, "invalid incident snapshot")
+        after = payload.get("after", "")
+        limit = payload.get("limit", 25)
+        if type(limit) is not int or not 1 <= limit <= 25:
+            raise HTTPException(400, "invalid incident page size")
+        if not isinstance(after, str) or len(after) > 1000:
+            raise HTTPException(400, "invalid incident cursor")
+        try:
+            after_key = tuple(json.loads(after)) if after else None
+            rows = await asyncio.to_thread(
+                mesh.store.numbers.incident_page, after=after_key, limit=limit
+            )
+        except (AccessMeshError, ValueError, TypeError) as exc:
+            raise HTTPException(400, "invalid incident cursor") from exc
+        cursor = (
+            json.dumps(
+                [rows[-1][key] for key in ("number", "issuer_id", "slot_id", "collided_with")],
+                separators=(",", ":"),
+            )
+            if len(rows) == limit
+            else None
+        )
+        return {"ok": True, "incidents": rows, "next_cursor": cursor}
 
     @router.post("/internal/fleet/access-mesh/numbers/starts", include_in_schema=False)
     async def number_starts(

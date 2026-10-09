@@ -1,9 +1,11 @@
 """Collision and reservation invariants for partition-tolerant Mesh numbers."""
 
 from datetime import UTC, datetime, timedelta
+
 import pytest
-from terminal_mcp.storage.access_mesh import AccessMeshStore
+
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
+from terminal_mcp.storage.access_mesh import AccessMeshStore
 
 T0 = datetime(2026, 10, 9, tzinfo=UTC)
 
@@ -101,7 +103,8 @@ def test_invalid_number_and_untrusted_issuer(registry):
 async def test_http_number_replication_converges_future_identity(tmp_path):
     """Independent partition-issued claims converge, originals stay immutable."""
     import httpx
-    from test_access_mesh_replication_http import Routes, node, actor, T0
+    from test_access_mesh_replication_http import T0, Routes, actor, node
+
     from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
     routes = Routes()
@@ -133,7 +136,7 @@ async def test_http_number_replication_converges_future_identity(tmp_path):
 @pytest.mark.asyncio
 async def test_online_peers_negotiate_distinct_numbers(tmp_path):
     import httpx
-    from test_access_mesh_replication_http import Routes, node, actor
+    from test_access_mesh_replication_http import Routes, actor, node
 
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
@@ -152,6 +155,7 @@ async def test_online_peers_negotiate_distinct_numbers(tmp_path):
 @pytest.mark.asyncio
 async def test_concurrent_same_candidate_never_reuses_live_number(tmp_path):
     import asyncio
+
     import httpx
     from test_access_mesh_replication_http import Routes, node
 
@@ -195,8 +199,9 @@ def test_claims_survive_store_reopen(tmp_path):
 async def test_offline_peer_allows_local_issuance_before_30_second_budget(tmp_path):
     """Partitioned node finishes locally within the bounded negotiation window."""
     import time
+
     import httpx
-    from test_access_mesh_replication_http import Routes, node, actor
+    from test_access_mesh_replication_http import Routes, actor, node
 
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
@@ -217,7 +222,8 @@ async def test_offline_peer_allows_local_issuance_before_30_second_budget(tmp_pa
 @pytest.mark.asyncio
 async def test_mesh_end_fences_all_attached_nodes_and_ignores_stale_cycle(tmp_path):
     import httpx
-    from test_access_mesh_replication_http import Routes, node, actor, T0
+    from test_access_mesh_replication_http import T0, Routes, actor, node
+
     from terminal_mcp.core.managed_sessions import ManagedOperation
 
     routes = Routes()
@@ -302,3 +308,37 @@ def test_transitive_overlap_chooses_latest_started_and_merged_deadline(registry)
     assert registry.group_winner("b", "B")["hard_expires_at"] == registry.stamp(
         T0 + timedelta(minutes=17)
     )
+
+
+def test_incident_antientropy_pages_are_stable_and_idempotent(registry, tmp_path):
+    from terminal_mcp.storage.access_mesh import AccessMeshStore
+
+    for idx in range(63):
+        assert registry.record_late_conflict(
+            number=f"{idx:04d}",
+            attempt_id=f"nr_delayed-{idx:03d}",
+            peer_id="b",
+            suggested_number="9999",
+        )["ok"]
+    received = AccessMeshStore(
+        tmp_path / "new-incident-replica.db",
+        local_node_id="b",
+        trusted_issuers=frozenset({"a", "b"}),
+        proof_key=b"unit-test-mesh-secret-key-32bytes",
+    ).numbers
+    cursor = None
+    cycles = 0
+    while True:
+        rows = registry.incident_page(after=cursor, limit=25)
+        if not rows:
+            break
+        cycles += 1
+        assert received.merge_incidents(rows) == len(rows)
+        assert received.merge_incidents(rows) == 0
+        last = rows[-1]
+        cursor = tuple(last[field] for field in ("number", "issuer_id", "slot_id", "collided_with"))
+        if len(rows) < 25:
+            break
+    assert cycles == 3
+    assert len(received.incidents()) == 63
+    assert received.incidents() == registry.incidents()

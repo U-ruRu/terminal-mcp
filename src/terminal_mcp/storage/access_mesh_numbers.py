@@ -473,6 +473,79 @@ class MeshSessionNumbers:
                 ).fetchall()
             ]
 
+    def incident_page(
+        self, *, after: tuple[str, str, str, str] | None = None, limit: int = 25
+    ) -> list[dict]:
+        """Durable, keyset-paginated collision audit for new Mesh members."""
+        if type(limit) is not int or not 1 <= limit <= 25:
+            raise AccessMeshError("invalid_session_snapshot")
+        if after is not None and (
+            not isinstance(after, tuple)
+            or len(after) != 4
+            or not all(isinstance(part, str) for part in after)
+        ):
+            raise AccessMeshError("invalid_session_snapshot")
+        with self.store._connect() as db:
+            sql = (
+                "SELECT * FROM access_mesh_number_incidents "
+                + (
+                    "WHERE (number,issuer_id,slot_id,collided_with) > (?,?,?,?) "
+                    if after is not None
+                    else ""
+                )
+                + "ORDER BY number,issuer_id,slot_id,collided_with LIMIT ?"
+            )
+            return [
+                dict(row)
+                for row in db.execute(
+                    sql,
+                    (*after, limit) if after is not None else (limit,),
+                )
+            ]
+
+    def merge_incidents(self, rows: list[dict]) -> int:
+        """Merge peer-discovered collisions without rewriting their authors."""
+        if not isinstance(rows, list) or len(rows) > 25:
+            raise AccessMeshError("invalid_session_snapshot")
+        validated = []
+        for item in rows:
+            if not isinstance(item, dict) or set(item) != {
+                "number",
+                "issuer_id",
+                "slot_id",
+                "collided_with",
+                "detected_at",
+            }:
+                raise AccessMeshError("invalid_session_snapshot")
+            number = self.validate(item["number"])
+            issuer = item["issuer_id"]
+            if issuer not in self.store.trusted_issuers:
+                raise AccessMeshError("access_mesh_untrusted_peer")
+            slot = item["slot_id"]
+            collided = item["collided_with"]
+            if (
+                not isinstance(slot, str)
+                or not 1 <= len(slot) <= 256
+                or not isinstance(collided, str)
+                or not 1 <= len(collided) <= 256
+            ):
+                raise AccessMeshError("invalid_session_snapshot")
+            try:
+                detected_at = self.stamp(datetime.fromisoformat(item["detected_at"]))
+            except (TypeError, ValueError) as exc:
+                raise AccessMeshError("invalid_session_snapshot") from exc
+            validated.append((number, issuer, slot, collided, detected_at))
+        with self.store._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            before = db.total_changes
+            db.executemany(
+                "INSERT OR IGNORE INTO access_mesh_number_incidents "
+                "(number,issuer_id,slot_id,collided_with,detected_at) "
+                "VALUES(?,?,?,?,?)",
+                validated,
+            )
+            return db.total_changes - before
+
     def number_for_slot(self, issuer_id, slot_id):
         with self.store._connect() as db:
             row = db.execute(
