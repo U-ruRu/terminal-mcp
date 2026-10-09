@@ -212,6 +212,7 @@ class AccessMeshMessaging:
                     or lifecycle.get("state") not in {"active", "warning", "draining"}
                 ):
                     continue
+                previous = records.get(identity["logical_agent_id"])
                 records[identity["logical_agent_id"]] = {
                     "logical_agent_id": identity["logical_agent_id"],
                     "server_id": self.node_id,
@@ -224,6 +225,13 @@ class AccessMeshMessaging:
                         self.store.activity, slot.issuer_id, slot.slot_id
                     ),
                 }
+                # More than one historical alias may have live attachments
+                # to the same winner on this server. Keep the most recent
+                # activity regardless of slot scan order.
+                latest = records[identity["logical_agent_id"]]["last_active_at"]
+                earlier = previous.get("last_active_at") if previous else None
+                if earlier is not None and (latest is None or earlier > latest):
+                    records[identity["logical_agent_id"]]["last_active_at"] = earlier
                 if len(records) > MAX_RECIPIENTS:
                     raise MeshMessagingError("output_item_too_large")
             after = slots[-1].logical_agent_id

@@ -67,3 +67,43 @@ async def test_preexisting_losing_attach_is_visible_under_winner_without_reconne
         assert sent["ok"], sent
         recipient = messaging.store.recipient(sent["message_hash"], winner["logical_agent_id"])
         assert recipient is not None
+
+
+@pytest.mark.asyncio
+async def test_multiple_old_and_winning_attachments_keep_latest_activity_on_one_node(tmp_path):
+    from datetime import timedelta
+
+    from test_access_mesh_replication_http import T0
+
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        first, f_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        second, s_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
+        losing_slot = await second.issue(actor(), code="0792")
+        assert (await second.attach(actor(), session_number="0792")) == {"ok": True}
+        winning_slot = await first.issue(actor(), code="0792")
+        await f_rep.tick()
+        await s_rep.tick()
+        second_conn = replace(
+            actor(),
+            principal_id="other-fixture",
+            provider_metadata={"openai/subject": "other", "openai/session": "secondary"},
+        )
+        assert (await second.attach(second_conn, session_number="0792")) == {"ok": True}
+        assert (
+            second.store.attached_slot(second.connection_key(second_conn)).logical_agent_id
+            == winning_slot["logical_agent_id"]
+        )
+        loser_connection = second.connection_key(actor())
+        second.store.touch(loser_connection, now=T0 + timedelta(seconds=4))
+        second.store.touch(second.connection_key(second_conn), now=T0 + timedelta(seconds=2))
+        messaging = AccessMeshMessaging(second, AgentStore(second.store.path))
+        recipients = await messaging._local_recipients()
+        assert (
+            len(recipients) == 1
+            and recipients[0]["logical_agent_id"] == (winning_slot["logical_agent_id"])
+        )
+        assert recipients[0]["last_active_at"] == (T0 + timedelta(seconds=4)).isoformat(
+            timespec="microseconds"
+        )
+        assert losing_slot["logical_agent_id"] != winning_slot["logical_agent_id"]
