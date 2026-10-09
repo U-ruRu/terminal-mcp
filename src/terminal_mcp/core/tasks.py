@@ -1349,6 +1349,21 @@ class TaskCoordinator:
         return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_update(self, agent_id, namespace, task_id, **kwargs):
+        if kwargs.get("checkpoint") is not None:
+            return public_error(
+                "input_validation_failed",
+                reason="constraint_violation",
+                path="checkpoint",
+                details=ValidationRepair(
+                    validation_errors=(
+                        ValidationIssue(
+                            error_class="invalid_value",
+                            path="checkpoint",
+                            description="Use the append-only checkpoint action.",
+                        ),
+                    )
+                ),
+            ).as_dict()
         if kwargs.get("state") is not None:
             return public_error(
                 "input_validation_failed",

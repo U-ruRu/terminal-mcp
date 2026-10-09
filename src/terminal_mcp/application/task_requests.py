@@ -195,7 +195,7 @@ class TaskUpdateRequest(TaskRevisionRequest):
     output_refs: OutputRefs | None = None
     tags: Tags | None = None
     dependencies: TaskDependencies | None = None
-    checkpoint: CheckpointValue | None = None
+    # Checkpoints are strictly append-only via TaskCheckpointRequest.
     result: ResultValue | None = None
     blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = None
     force: bool = False
