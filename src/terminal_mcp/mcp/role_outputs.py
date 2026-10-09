@@ -143,6 +143,14 @@ class TaskClaimOutput(_RoleOutput, RootModel[TaskClaimSuccessWire | AccessError]
     __success_type__ = TaskClaimSuccessWire
 
 
+class TaskStateSuccess(_Strict):
+    ok: Literal[True]
+
+
+class TaskStateOutput(_RoleOutput, RootModel[TaskStateSuccess | AccessError]):
+    __success_type__ = TaskStateSuccess
+
+
 class TaskGetSnapshotSuccess(_Strict):
     ok: Literal[True]
     detail: Literal["snapshot"]
@@ -309,7 +317,7 @@ ROLE_OUTPUT_MODELS = {
     ("executor", "command_cancel"): CmdOutput,
     ("executor", "command_recovery"): CmdOutput,
     ("executor", "task_claim"): TaskClaimOutput,
-    ("executor", "task_state"): TaskOutput,
+    ("executor", "task_state"): TaskStateOutput,
     ("executor", "task_comment"): TaskOutput,
     ("executor", "message"): MessageOutput,
     ("coordinator", "session"): RoleSessionOutput,

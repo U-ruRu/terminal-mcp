@@ -126,9 +126,6 @@ class TaskStateInput(StrictRoleInput):
     namespace: Namespace
     task_id: TaskId
     state: TaskState
-    expected_revision: ExpectedRevision | None = None
-    blocker_reason: Annotated[str | None, Field(min_length=1, max_length=4000)] = None
-    result: ResultValue | None = None
 
 
 class TaskCommentInput(StrictRoleInput):
@@ -500,6 +497,19 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
                                    "pattern": r"^[0-9]{4}$", "description": "Four-digit session number."},
             },
             "required": ["session_number"],
+            "additionalProperties": False,
+        }
+    if model is TaskStateInput:
+        return {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string", "minLength": 1, "maxLength": 120},
+                "task_id": {"type": "string", "minLength": 1, "maxLength": 120},
+                "state": {"type": "string", "enum": [
+                    "ready", "in_progress", "qa", "blocked", "deferred", "done"
+                ]},
+            },
+            "required": ["namespace", "task_id", "state"],
             "additionalProperties": False,
         }
     if model is TaskManageInput:

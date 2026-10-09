@@ -25,8 +25,8 @@ from terminal_mcp.storage.tasks import (
 )
 
 LANES = ("implementation", "review", "release", "integration", "general")
-STATES = ("ready", "in_progress", "blocked", "deferred", "done")
-OPERATIONAL_STATUSES = ("ready", "in_progress", "blocked", "deferred", "done")
+STATES = ("ready", "in_progress", "qa", "blocked", "deferred", "done")
+OPERATIONAL_STATUSES = ("ready", "in_progress", "qa", "blocked", "deferred", "done")
 PRIORITIES = ("P0", "P1", "P2", "P3")
 ACTIONS = (
     "create",
@@ -1360,10 +1360,10 @@ class TaskCoordinator:
                 blocker_reason=kwargs.get("blocker_reason"),
                 result=kwargs.get("result"),
             )
-        except TaskOwnershipConflict:
-            return self._ownership_conflict_result()
-        except (KeyError, ValueError) as exc:
-            return {"ok": False, "error": f"task.state: {exc}", "warnings": []}
+        except KeyError:
+            return {"ok": False, "code": "task_not_found", "error": "task_not_found"}
+        except ValueError:
+            return {"ok": False, "code": "invalid_state", "error": "invalid_state"}
         return await self._result(namespace, task_id, [], committed_task=committed)
 
     async def _action_done(self, agent_id, namespace, task_id, **kwargs):

@@ -109,10 +109,11 @@ async def test_atomic_claim_release_foreign_owner_and_duplicate_create(tmp_path)
         "agent2", action="claim", **args, claim_intent="competing"
     )
     assert not foreign["ok"] and foreign["code"] == "already_claimed"
-    denied_state = await coordinator.mutate(
-        "agent2", action="state", **args, state="done"
+    foreign_state = await coordinator.mutate(
+        "agent2", action="state", **args, state="qa"
     )
-    assert not denied_state["ok"] and denied_state["code"] == "owner_required"
+    assert foreign_state["ok"]
+    assert (await store.get_task("ops", "claim"))["state"] == "qa"
     denied_release = await coordinator.mutate("agent2", action="release", **args)
     assert not denied_release["ok"] and denied_release["code"] == "not_owner"
 
@@ -123,7 +124,7 @@ async def test_atomic_claim_release_foreign_owner_and_duplicate_create(tmp_path)
     assert not await store.active_claims("ops", "claim")
     after = await store.get_task("ops", "claim")
     assert after["revision"] == before["revision"]
-    assert after["state"] == before["state"]
+    assert after["state"] == "qa"
 
 
 @pytest.mark.asyncio

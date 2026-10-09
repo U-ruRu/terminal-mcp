@@ -24,7 +24,7 @@ from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 from terminal_mcp.storage.work_windows import install_work_window_schema
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -188,7 +188,7 @@ class SqliteRepository:
                     namespace TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
                     lane TEXT NOT NULL CHECK(lane IN ('implementation','review','release','integration','general')),
                     priority INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL CHECK(state IN ('ready','in_progress','blocked','deferred','done')),
+                    state TEXT NOT NULL CHECK(state IN ('ready','in_progress','qa','blocked','deferred','done')),
                     description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
                     isolation_hint TEXT NOT NULL DEFAULT 'none',
                     resource_json TEXT NOT NULL DEFAULT '{}', reviews_json TEXT NOT NULL DEFAULT '[]',
@@ -620,6 +620,7 @@ class SqliteRepository:
         await self._migrate_work_items_explicit_state(db)
         # Schema v19: task input/output refs and output-state-bound review history.
         await self._migrate_task_refs(db)
+        await self._migrate_work_items_qa_state(db)
         await db.execute(
             "UPDATE work_items SET state_changed_at=COALESCE(state_changed_at,updated_at)"
         )
@@ -1123,6 +1124,72 @@ class SqliteRepository:
             )
         return True
 
+    async def _migrate_work_items_qa_state(self, db):
+        """Add QA to the SQLite CHECK while preserving rows, indexes and triggers."""
+        import re
+
+        row = await (await db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'"
+        )).fetchone()
+        if not row or not row[0]:
+            raise RuntimeError("work_items table is missing")
+        old_sql = row[0]
+        if re.search(r"state\s+IN\s*\([^)]*'qa'", old_sql, flags=re.I):
+            return False
+
+        expanded = re.sub(
+            r"(state\s+IN\s*\(\s*'ready'\s*,\s*'in_progress'\s*,\s*)'blocked'",
+            r"\1'qa','blocked'", old_sql, count=1, flags=re.I,
+        )
+        if expanded == old_sql:
+            raise RuntimeError("unrecognized work_items state constraint")
+        replacement = re.sub(
+            r'(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
+            r'(?:\"work_items\"|\`work_items\`|\[work_items\]|work_items)\b',
+            "CREATE TABLE work_items_qa_v22", expanded, count=1,
+        )
+        # Quoted table names are followed by a quote, not a word boundary.
+        if replacement == expanded:
+            replacement = re.sub(
+                r'(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
+                r'(?:\"work_items\"|\`work_items\`|\[work_items\]|work_items)',
+                "CREATE TABLE work_items_qa_v22", expanded, count=1,
+            )
+        if replacement == expanded:
+            raise RuntimeError("could not prepare QA migration")
+        columns = [item[1] for item in await (
+            await db.execute("PRAGMA table_info(work_items)")
+        ).fetchall()]
+        column_list = ",".join('"' + col.replace('"', '""') + '"' for col in columns)
+        saved = await (await db.execute(
+            "SELECT type,sql FROM sqlite_master WHERE tbl_name='work_items' "
+            "AND type IN ('index','trigger') AND sql IS NOT NULL"
+        )).fetchall()
+
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys=OFF")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute("DROP TABLE IF EXISTS work_items_qa_v22")
+            await db.execute(replacement)
+            await db.execute(
+                f"INSERT INTO work_items_qa_v22 ({column_list}) "
+                f"SELECT {column_list} FROM work_items"
+            )
+            await db.execute("DROP TABLE work_items")
+            await db.execute("ALTER TABLE work_items_qa_v22 RENAME TO work_items")
+            for _, definition in saved:
+                await db.execute(definition)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.execute("PRAGMA foreign_keys=ON")
+        if (await (await db.execute("PRAGMA foreign_key_check")).fetchall()):
+            raise RuntimeError("QA workflow migration broke foreign keys")
+        return True
+
     async def _migrate_work_items_explicit_state(self, db):
         row = await (
             await db.execute(
@@ -1148,7 +1215,7 @@ class SqliteRepository:
                     ),
                     priority INTEGER NOT NULL DEFAULT 0,
                     state TEXT NOT NULL CHECK(
-                        state IN ('ready','in_progress','blocked','deferred','done')
+                        state IN ('ready','in_progress','qa','blocked','deferred','done')
                     ),
                     description TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
                     isolation_hint TEXT NOT NULL DEFAULT 'none',

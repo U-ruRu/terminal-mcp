@@ -236,9 +236,15 @@ async def test_status_read_does_not_release_claims_or_materialize_next_cycle(fix
     await issued(f)
     attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
     f.clock[0] = T0 + timedelta(seconds=16)
-    status = await f.app.observe(actor("executor"))
+    # The public Agent Observe surface now contains four fields per active
+    # named agent. Inspect the pure internal status to verify that reads do
+    # not materialize a new local work cycle.
+    slot = f.store.attached_slot(f.app.connection_key(actor()))
+    status = f.store.observed_identity(slot, now=f.clock[0])
     assert status["session_lifecycle"]["state"] == "active"
     assert "work_session_id" not in status
+    public = await f.app.observe(actor("executor"))
+    assert public == {"ok": True, "agents": []}
     assert not f.store.pending_cleanup()
     old = await f.native.get_work_session(attached["work_session_id"])
     assert old.state == "active"

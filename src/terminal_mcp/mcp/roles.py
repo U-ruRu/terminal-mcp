@@ -821,6 +821,8 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             raw = await application.task(_actor(application, role), canonical)
+            if raw.get("ok"):
+                return {"ok": True}
             return _structured(task_result(raw, "state"))
 
         @mcp.tool(

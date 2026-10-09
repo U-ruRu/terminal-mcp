@@ -48,6 +48,7 @@ class Cursor(RootModel[str]):
 class TaskState(StrEnum):
     ready = "ready"
     in_progress = "in_progress"
+    qa = "qa"
     blocked = "blocked"
     deferred = "deferred"
     done = "done"
@@ -56,6 +57,7 @@ class TaskState(StrEnum):
 class TaskOperationalStatus(StrEnum):
     ready = "ready"
     in_progress = "in_progress"
+    qa = "qa"
     blocked = "blocked"
     deferred = "deferred"
     done = "done"

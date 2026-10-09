@@ -12,7 +12,7 @@ from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.storage.sqlite_observability import cancellation_safe_connection
 
 LANES = frozenset({"implementation", "review", "release", "integration", "general"})
-STATES = frozenset({"ready", "in_progress", "blocked", "deferred", "done"})
+STATES = frozenset({"ready", "in_progress", "qa", "blocked", "deferred", "done"})
 REVIEW_DIMENSIONS = frozenset({"A", "C", "R"})
 
 
@@ -765,20 +765,9 @@ class TaskStore:
                 ).fetchone()
                 if row is None:
                     raise KeyError(f"unknown task: {namespace}/{task_id}")
-                if row[2] is not None:
-                    raise ValueError("archived task cannot change state")
-                claims = await (
-                    await db.execute(
-                        "SELECT owner_id FROM work_claims WHERE namespace=? "
-                        "AND task_id=? AND released_at IS NULL",
-                        (namespace, task_id),
-                    )
-                ).fetchall()
-                if claims and any(claim[0] != agent_id for claim in claims):
-                    # All live co-owners may change the workflow independently.
-                    # An unclaimed task is writable by any authorized task-state caller.
-                    if not bool(row[1]) or agent_id not in {claim[0] for claim in claims}:
-                        raise TaskOwnershipConflict(namespace, task_id)
+                # State is an independent workflow value: any admitted caller
+                # may assign any valid state regardless of claims, archives,
+                # dependencies, result, or content revision.
                 if row[0] != state:
                     await db.execute(
                         "UPDATE work_items SET state=?,state_changed_at=?,ready_since=?,"

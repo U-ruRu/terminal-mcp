@@ -225,23 +225,9 @@ class TaskUnrelateRequest(TaskRelationRequest):
     action: Literal["unrelate"]
 
 
-class TaskStateRequest(TaskRevisionRequest):
+class TaskStateRequest(TaskIdentityRequest):
     action: Literal["state"]
     state: TaskState
-    blocker_reason: Annotated[str, Field(min_length=1, max_length=4000)] | None = Field(
-        default=None,
-        description=(
-            "Optional note; simple workflow state changes never require blocker_reason."
-        ),
-    )
-    result: ResultValue | None = Field(
-        default=None,
-        description=(
-            "Optional legacy metadata; simple workflow state changes do not modify result."
-        ),
-    )
-    force: bool = False
-    force_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
 
 class TaskDoneRequest(TaskRevisionRequest):

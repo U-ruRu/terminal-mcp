@@ -340,7 +340,7 @@ class ValidationRepair(_BoundedValue):
     )
 
 
-TaskState = Literal["ready", "in_progress", "blocked", "deferred", "done"]
+TaskState = Literal["ready", "in_progress", "qa", "blocked", "deferred", "done"]
 
 
 class ConflictRepair(_BoundedValue):
