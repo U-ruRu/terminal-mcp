@@ -42,6 +42,9 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
                 assert schema["properties"]["session_number"]["type"] == "string"
                 assert "issuer_node_id" not in schema["properties"]
                 assert "allOf" not in schema
+            elif role == "executor" and tool.name == "task_state":
+                assert set(schema["required"]) == {"namespace", "task_id", "state"}
+                assert "allOf" not in schema
             else:
                 assert "required" not in schema and "allOf" not in schema
             matrix = schema["x-terminal-mcp-action-matrix"]

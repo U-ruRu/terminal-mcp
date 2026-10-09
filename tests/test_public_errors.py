@@ -546,8 +546,8 @@ def test_session_lifecycle_errors_direct_agent_to_start_session():
     assert required.retry == "start_session"
     assert expired.retry == "stop"
     assert expired.return_to_chat is True
-    assert "session.start" in required.message
-    assert "возвращайся в чат" in expired.message
+    assert required.message == "Сначала запусти сессию"
+    assert expired.message == "Сессия закончилась"
 
 
 @pytest.mark.parametrize(

@@ -78,6 +78,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "reconcile",
             """
             conflict revision_conflict task_revision_conflict stale_revision
+            not_owner task_already_exists number_conflict command_already_finished
             duplicate_comment duplicate_task already_changed
             candidate_mismatch candidate_ref_frozen output_state_changed output_state_missing
             owner_required claim_conflict task_claim_conflict wip_limit_exceeded

@@ -34,7 +34,10 @@ def test_role_catalogs_are_exact_and_identity_free():
             schema = tool.parameters
             assert schema["type"] == "object"
             assert "properties" in schema
-            assert "required" not in schema
+            if role == "executor" and _name == "task_state":
+                assert set(schema.get("required", [])) == {"namespace", "task_id", "state"}
+            else:
+                assert "required" not in schema
             forbidden = {
                 "code",
                 "sender",
@@ -113,7 +116,10 @@ def test_planning_schema_is_typed_relaxed_runtime_superset():
         assert schema["type"] == "object"
         assert isinstance(schema["properties"], dict)
         runtime = model.model_json_schema()
-        assert "required" not in schema
+        if model.__name__ in {"TaskStateInput", "AttachInput"}:
+            assert schema["required"]
+        else:
+            assert "required" not in schema
         assert set(runtime.get("properties", ())) == set(schema.get("properties", ()))
 
 
@@ -209,13 +215,18 @@ def test_planning_schema_accepts_invalid_values_for_runtime_validation():
     from jsonschema import Draft202012Validator
 
     for role in ("executor", "coordinator"):
-        for _name, tool in _tool_map(role).items():
+        for name, tool in _tool_map(role).items():
             validator = Draft202012Validator(tool.parameters)
-            validator.validate({})
-            validator.validate(
-                {key: {"malformed": [None, 12]} for key in tool.parameters["properties"]}
-            )
-            validator.validate({"unexpected_field": "runtime owns validation"})
+            if role == "executor" and name == "task_state":
+                assert list(validator.iter_errors({}))
+                validator.validate({"namespace": "x", "task_id": "y", "state": "qa"})
+            else:
+                validator.validate({})
+                validator.validate(
+                    {key: {"malformed": [None, 12]}
+                     for key in tool.parameters["properties"]}
+                )
+                validator.validate({"unexpected_field": "runtime owns validation"})
     assert "isolation_hint" in _tool_map("coordinator")["task_manage"].description
     assert "claim_intent" in _tool_map("executor")["task_claim"].description
 

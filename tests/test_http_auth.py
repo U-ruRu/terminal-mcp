@@ -271,6 +271,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert tasks_request["properties"]["state"]["anyOf"][0]["enum"] == [
             "ready",
             "in_progress",
+            "qa",
             "blocked",
             "deferred",
             "done",
@@ -286,7 +287,6 @@ def test_bearer_actions_and_openapi(tmp_path):
             "relate",
             "unrelate",
             "state",
-            "done",
             "archive",
             "review",
         }
@@ -333,7 +333,7 @@ def test_bearer_actions_and_openapi(tmp_path):
         assert "durable handoff history" in task_request_props["release_reason"]["description"]
 
         task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
-        assert task_card["state"]["enum"] == ["ready", "in_progress", "blocked", "deferred", "done"]
+        assert task_card["state"]["enum"] == [ "ready", "in_progress", "qa", "blocked", "deferred", "done"]
         assert "isolation_hint" in task_card
         assert "blocking_dependencies" in task_card
         assert "open dependencies is blocked" in task_card["operational_status"]["description"]

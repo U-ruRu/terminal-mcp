@@ -269,6 +269,7 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert observe["state"]["anyOf"][0]["enum"] == [
         "ready",
         "in_progress",
+        "qa",
         "blocked",
         "deferred",
         "done",
@@ -276,6 +277,7 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert observe["operational_status"]["anyOf"][0]["enum"] == [
         "ready",
         "in_progress",
+        "qa",
         "blocked",
         "deferred",
         "done",
