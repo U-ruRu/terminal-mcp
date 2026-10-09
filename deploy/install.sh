@@ -495,22 +495,40 @@ stage(){
   # An existing QA deployment is not the released schema baseline.
   # Anchor its automatic bump to the last confirmed canonical release.
   prior_release="$ROOT/current"
+  stable_found=false
   if [ -f "$ROOT/current/QA_RELEASE.json" ]; then
     while IFS= read -r prior_candidate; do
       if [ -f "$prior_candidate/CANONICAL_RELEASE.json" ] &&
          [ ! -f "$prior_candidate/QA_RELEASE.json" ] &&
          [ -x "$prior_candidate/bin/python" ]; then
         prior_release="$prior_candidate"
+        stable_found=true
         break
       fi
     done < <(find "$ROOT/releases" -mindepth 1 -maxdepth 1 -type d | sort -r)
+    if [ "$stable_found" = false ]; then
+      # Release retention may remove all old canonical wheels.
+      # Pin the last confirmed baseline outside the pruned release tree.
+      baseline_file="$ROOT/CANONICAL_BASELINE.json"
+      if [ ! -f "$baseline_file" ]; then
+        baseline_file="$SOURCE/release/canonical_baseline.json"
+      fi
+      if [ ! -f "$baseline_file" ]; then
+        rm -rf "$STAGED_RELEASE"
+        echo "No canonical version baseline for QA update" >&2
+        return 1
+      fi
+      version_args+=(--prior-baseline "$baseline_file")
+    fi
   fi
-  if [ -x "$prior_release/bin/python" ]; then
-    prior_pkg=$("$prior_release/bin/python" -c \
-      'from pathlib import Path; import terminal_mcp; print(Path(terminal_mcp.__file__).resolve().parent)') || {
-      rm -rf "$STAGED_RELEASE"; echo "Cannot read previous package for version bump" >&2; return 1;
-    }
-    version_args+=(--prior-package "$prior_pkg")
+  if [ "$stable_found" = true ] || [ ! -f "$ROOT/current/QA_RELEASE.json" ]; then
+    if [ -x "$prior_release/bin/python" ]; then
+      prior_pkg=$("$prior_release/bin/python" -c \
+        'from pathlib import Path; import terminal_mcp; print(Path(terminal_mcp.__file__).resolve().parent)') || {
+        rm -rf "$STAGED_RELEASE"; echo "Cannot read prior package" >&2; return 1;
+      }
+      version_args+=(--prior-package "$prior_pkg")
+    fi
   fi
   if [ -n "${TERMINAL_MCP_SOURCE_SHA:-}" ]; then
     version_args+=(--sha "$TERMINAL_MCP_SOURCE_SHA")
@@ -769,6 +787,9 @@ activate(){
     if curl -fsS "$HEALTH_URL" >/dev/null; then
       if check_public_fleet_ingress && check_public_console_ingress; then
         install_cli_link
+        if [ -f "$new/CANONICAL_RELEASE.json" ]; then
+          cp "$new/RELEASE_META.json" "$ROOT/CANONICAL_BASELINE.json"
+        fi
         if [ -n "$old" ]; then
           runtime_python "$new" -m terminal_mcp.deployment.retention releases "$ROOT/releases" "$new" "$old"
         else

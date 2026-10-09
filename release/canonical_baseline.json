@@ -1,0 +1,7 @@
+{
+  "code_fingerprint": "f68db9ff726673e76958bf66a57ebc6d18046088410b0c0be037bde4ad9c8b15",
+  "commit_sha": "c0df7a2",
+  "description": "Confirmed canonical 0.14.4 baseline, pinned across QA deployment retention.",
+  "schema_fingerprint": "c8eeb87dd1aaa75c6ea48e8bfdcad99d38bbbf7e4b6506caad954a86c3ca90fe",
+  "version": "0.14.4"
+}

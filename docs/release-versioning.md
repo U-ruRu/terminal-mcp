@@ -29,7 +29,10 @@ schema-contract tests must pass before release. Every SQLite schema
 migration must update its explicit schema revision. After a QA test
 deployment, the installer uses the most recent confirmed canonical
 release as the version baseline rather than incrementing from an
-unreleased QA build.
+unreleased QA build. After release retention prunes canonical wheels,
+the committed `release/canonical_baseline.json` preserves the 0.14.4
+reference until the next canonical promotion writes
+`/opt/terminal-mcp/CANONICAL_BASELINE.json`.
 
 For builds from a source tree with `.git`, the SHA is detected.
 For Git archives, name the extracted directory after its Git SHA or

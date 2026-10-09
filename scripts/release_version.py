@@ -75,22 +75,40 @@ def code_fingerprint(package: Path) -> str:
     return digest.hexdigest()
 
 
-def calculate(package: Path, prior: Path | None) -> dict[str, object]:
+def calculate(
+    package: Path, prior: Path | None, baseline: dict[str, object] | None = None
+) -> dict[str, object]:
     candidate = semantic_version(package)
     next_schema_hash = schema_fingerprint(package)
     next_code_hash = code_fingerprint(package)
-    if prior is None:
+    if prior is not None and baseline is not None:
+        raise ValueError("use either prior package or pinned prior baseline")
+    if prior is not None:
+        previous = semantic_version(prior)
+        old_schema_hash = schema_fingerprint(prior)
+        old_code_hash = code_fingerprint(prior)
+    elif baseline is not None:
+        previous = tuple(int(part) for part in str(baseline["version"]).split("."))
+        if len(previous) != 3:
+            raise ValueError("baseline version must contain three numeric digits")
+        old_schema_hash = str(baseline["schema_fingerprint"])
+        old_code_hash = str(baseline["code_fingerprint"])
+        if any(len(value) != 64 for value in (old_schema_hash, old_code_hash)):
+            raise ValueError("baseline fingerprints must be SHA256 hashes")
+    else:
+        previous = None
+        old_schema_hash = None
+        old_code_hash = None
+    if previous is None:
         version = candidate
         kind = "initial"
-        previous: tuple[int, int, int] | None = None
     else:
-        previous = semantic_version(prior)
         if previous[0] != 0 or candidate[0] != 0:
             raise ValueError("automatic prerelease bump requires major digit 0")
-        if schema_fingerprint(prior) != next_schema_hash:
+        if old_schema_hash != next_schema_hash:
             version = (0, previous[1] + 1, 0)
             kind = "schema"
-        elif code_fingerprint(prior) != next_code_hash:
+        elif old_code_hash != next_code_hash:
             version = (0, previous[1], previous[2] + 1)
             kind = "code"
         else:
@@ -143,6 +161,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="project directory")
     parser.add_argument("--prior-package", type=Path, help="installed package directory")
+    parser.add_argument("--prior-baseline", type=Path, help="last stable schema/code fingerprints")
     parser.add_argument("--sha", help="commit SHA provided by build pipeline")
     parser.add_argument("--source-repo", type=Path, help="git checkout for fallback commit SHA")
     parser.add_argument("--output", type=Path, help="write RELEASE_META.json")
@@ -154,7 +173,10 @@ def main() -> None:
     prior = args.prior_package
     if prior and not (prior / "version.py").is_file():
         parser.error("prior package is missing version.py")
-    result = calculate(package, prior)
+    baseline = None
+    if args.prior_baseline:
+        baseline = json.loads(args.prior_baseline.read_text(encoding="utf-8"))
+    result = calculate(package, prior, baseline=baseline)
     sha = resolve_sha(args.sha, args.source_repo)
     if args.stamp:
         if (args.source / ".git").exists():
