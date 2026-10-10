@@ -1,6 +1,6 @@
 # Terminal MCP architecture
 
-Current application version: **0.14.4**. Durable runtime schema: **22**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
+Current application version: **0.14.4**. Durable runtime schema: **23**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
 
 ## Public boundary
 
