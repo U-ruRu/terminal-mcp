@@ -1,6 +1,6 @@
 # Terminal MCP architecture
 
-Current application version: **0.14.4**. Durable runtime schema: **23**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
+Current application version: **0.14.4**. Durable runtime schema: **24**. Access Mesh V2 adds its transactional grant/session/receipt tables through its store initialization; the general runtime schema number is not a complete binary rollback compatibility check.
 
 ## Public boundary
 
@@ -98,7 +98,7 @@ Command launch replay uses durable reservations where a unique server-observed o
 
 ## Native local-first messaging
 
-Message acceptance writes coordination_messages, recipient rows and local message metadata atomically on the server handling the connector call. Native message obligations use the same rows and expire with the message 24 hours after its original created_at. scope=local is the default. Legacy scope=fleet is terminally disabled and creates no message or receipt peer job. Recipient discovery uses only active local attachments, so replicated identity records and attachments on another node do not make a local recipient. The new per-node message IDs use `:localmsg:`; old `:meshmsg:` rows are left physically unchanged but are invisible to inbox/history/ACK/gates. Pending old message/receipt jobs receive a terminal marker idempotently without delivery ACKs; no historical message migration or timestamp repair runs. Task/session/event replication remains independent.
+Message acceptance writes coordination_messages, recipient rows and local message metadata atomically on the server handling the connector call. Native message obligations use the same rows and expire with the message 24 hours after its original created_at. scope=local is the default. Legacy scope=fleet is terminally disabled and creates no message or receipt peer job. Recipient discovery uses only active local attachments, so replicated identity records and attachments on another node do not make a local recipient. The new per-node message IDs use `:localmsg:`; old `:meshmsg:` rows are left physically unchanged but are invisible to inbox/history/ACK/gates. Pending old message/receipt jobs receive a terminal marker idempotently without delivery ACKs; no historical message migration or timestamp repair runs. The former cross-node `queued` and `partial` message-delivery states belong to the retired protocol only; the new node-local send returns a persisted local delivery result without remote queue status. Task/session/event replication remains independent.
 
 New local sends report `delivered` when at least one local recipient is committed, or a structured no-recipient error before message creation. Message calls do not wait for or enqueue peer forwarding. Legacy unacknowledged message jobs survive only as terminal diagnostic rows until the parent message expires; restart never resumes them. Peer message endpoints return a terminal `feature_disabled` response after peer authentication and request-size checks.
 
