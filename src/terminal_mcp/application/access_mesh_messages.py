@@ -114,6 +114,9 @@ class AccessMeshMessaging:
     def __init__(self, mesh_runtime, agent_store, replication=None):
         self.mesh = mesh_runtime
         self.agent_store = agent_store
+        # Limit managed AccessMesh gates to the new local protocol only.
+        # Other legacy AgentStore consumers keep their independent contracts.
+        self.agent_store.message_local_prefix = f"{mesh_runtime.store.local_node_id}:localmsg:"
         # Keep coordination-obligation TTL on the same clock as message storage.
         self.agent_store.message_clock = mesh_runtime.clock
         self.replication = replication
@@ -138,7 +141,7 @@ class AccessMeshMessaging:
         digest = hashlib.sha256(
             f"{slot.issuer_id}:{slot.slot_id}:{started_at}".encode()
         ).hexdigest()[:40]
-        return f"{node_id}:meshmsg:session_alert_{digest}"
+        return f"{node_id}:localmsg:session_alert_{digest}"
 
     async def ensure_session_alert(self, slot, identity):
         """Atomically emit one Alert per expired cycle; test pending ACK."""
@@ -450,7 +453,7 @@ class AccessMeshMessaging:
         # Explicit outbound sends are distinct regardless of JSON-RPC id
         # or identical text. Inbound retransmission dedup uses message_hash.
         suffix = secrets.token_hex(20)
-        message_hash = f"{self.node_id}:meshmsg:{suffix}"
+        message_hash = f"{self.node_id}:localmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:
             await self.flush_for_call(message_hash=message_hash)

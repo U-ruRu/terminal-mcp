@@ -771,7 +771,13 @@ class AgentStore:
                 "r.read_at,r.replied_at,r.reply_message_hash "
                 "FROM coordination_message_recipients r "
                 "JOIN coordination_messages m ON m.message_hash=r.message_hash "
-                "WHERE r.recipient_agent_id=? AND julianday(m.created_at)>julianday(?) AND ("
+                + (
+                    "JOIN access_mesh_messages x ON x.message_hash=m.message_hash "
+                    "AND substr(x.message_hash,1,?)=? "
+                    if getattr(self, "message_local_prefix", None)
+                    else ""
+                )
+                + "WHERE r.recipient_agent_id=? AND julianday(m.created_at)>julianday(?) AND ("
                 "(m.delivery_mode='notify' AND r.seen_count<3) OR "
                 "(m.delivery_mode='ack' AND r.read_at IS NULL) OR "
                 "(m.delivery_mode='alert' AND r.replied_at IS NULL) OR "
@@ -781,7 +787,12 @@ class AgentStore:
             )
             clock = getattr(self, "message_clock", None)
             now = clock() if callable(clock) else datetime.now(UTC)
-            params = [agent_id, (now - timedelta(hours=24)).isoformat()]
+            prefix = getattr(self, "message_local_prefix", None)
+            params = [
+                *([len(prefix), prefix] if prefix else []),
+                agent_id,
+                (now - timedelta(hours=24)).isoformat(),
+            ]
             if limit is not None:
                 query += " LIMIT ? OFFSET ?"
                 params.extend((max(1, int(limit)), max(0, int(offset))))

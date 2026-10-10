@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from pathlib import Path
 
 MESSAGE_TTL = timedelta(hours=24)
 CUTOVER_REASON = "delivery_stopped_local_cutover"
+LOCAL_MESSAGE_TAG = ":localmsg:"
 
 
 def parse_creation_time(text):
@@ -44,6 +46,7 @@ class AccessMeshMessageStore:
         self.clock = now_provider or (lambda: datetime.now(UTC))
         self.path = Path(path)
         self.local_node_id = local_node_id
+        self.local_prefix = f"{local_node_id}{LOCAL_MESSAGE_TAG}"
         with self.connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS access_mesh_messages (
@@ -87,6 +90,40 @@ class AccessMeshMessageStore:
         finally:
             db.close()
 
+    def health_probe(self) -> bool:
+        """Verify local write, read and recipient access without durable effects.
+
+        The savepoint rollback removes all inserted message and event rows. No
+        peer delivery, outbox or session/task state is involved in this probe.
+        """
+        now = self.clock().isoformat()
+        message_hash = f"{self.local_prefix}health-{secrets.token_hex(12)}"
+        with self.connect() as db:
+            db.execute("SAVEPOINT local_message_health")
+            try:
+                db.execute(
+                    "INSERT INTO coordination_messages("
+                    "message_hash,sender_agent_id,target_name,text,created_at,delivery_mode) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (message_hash, "health-sender", "health-recipient", "health", now, "notify"),
+                )
+                db.execute(
+                    "INSERT INTO coordination_message_recipients(message_hash,recipient_agent_id) "
+                    "VALUES(?,?)",
+                    (message_hash, "health-recipient"),
+                )
+                wire = {"message_hash": message_hash, "created_at": now}
+                db.execute(
+                    "INSERT INTO access_mesh_messages("
+                    "message_hash,wire_json,origin_node_id,receipt_json) VALUES(?,?,?,?)",
+                    (message_hash, canonical(wire), self.local_node_id, "{}"),
+                )
+                record = self._recipient_tx(db, message_hash, "health-recipient")
+                return record["message_hash"] == message_hash
+            finally:
+                db.execute("ROLLBACK TO local_message_health")
+                db.execute("RELEASE local_message_health")
+
     def activity(self, issuer_id, slot_id):
         """Observe local attachment activity without materializing a session."""
         with self.connect() as db:
@@ -118,6 +155,8 @@ class AccessMeshMessageStore:
         )
 
     def wire(self, message_hash):
+        if not message_hash.startswith(self.local_prefix):
+            return None
         with self.connect() as db:
             row = db.execute(
                 "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?", (message_hash,)
@@ -128,6 +167,8 @@ class AccessMeshMessageStore:
         return wire if unexpired(wire, self.clock()) else None
 
     def _receipt_tx(self, db, message_hash):
+        if not message_hash.startswith(self.local_prefix):
+            raise MeshMessagingError("message_not_found")
         row = db.execute(
             "SELECT receipt_json FROM access_mesh_messages WHERE message_hash=?", (message_hash,)
         ).fetchone()
@@ -191,9 +232,9 @@ class AccessMeshMessageStore:
 
     def accept(self, wire, recipients, *, peers=(), excluded=(), reply_author=None):
         """Commit one node-local message; peer forwarding is permanently retired."""
-        if peers:
-            raise MeshMessagingError("feature_disabled")
         message_hash = wire["message_hash"]
+        if peers or not message_hash.startswith(self.local_prefix):
+            raise MeshMessagingError("feature_disabled")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute(
@@ -268,6 +309,8 @@ class AccessMeshMessageStore:
             return self._acceptance_receipt_tx(db, message_hash)
 
     def _recipient_tx(self, db, message_hash, agent_id):
+        if not message_hash.startswith(self.local_prefix):
+            raise MeshMessagingError("message_not_found")
         row = db.execute(
             "SELECT * FROM coordination_message_recipients "
             "WHERE message_hash=? AND recipient_agent_id=?",
@@ -309,8 +352,9 @@ class AccessMeshMessageStore:
                 "read_at=COALESCE(read_at,?), "
                 "replied_at=CASE WHEN ? THEN COALESCE(replied_at,?) "
                 "ELSE replied_at END "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (stamp, int(system_alert), stamp, message_hash, agent_id),
+                "WHERE message_hash=? AND recipient_agent_id=? "
+                "AND (read_at IS NULL OR (?=1 AND replied_at IS NULL))",
+                (stamp, int(system_alert), stamp, message_hash, agent_id, int(system_alert)),
             )
             # Keep system ACK's reply completion atomic with read.
             # Other alert messages continue to require an actual reply.
@@ -342,13 +386,18 @@ class AccessMeshMessageStore:
 
     def page(self, agent_id, *, history=False, before=0, limit=21, namespace=None, task_id=None):
         where = [
-            "julianday(m.created_at)>julianday(?)",
+            "substr(x.message_hash,1,?)=? AND julianday(m.created_at)>julianday(?)",
             "(r.recipient_agent_id IS NOT NULL OR m.sender_agent_id=?)"
             if history
             else "r.recipient_agent_id IS NOT NULL AND (r.read_at IS NULL OR "
             "(m.require_reply=1 AND m.delivery_mode!='ack' AND r.replied_at IS NULL))",
         ]
-        params = [agent_id, (self.clock() - MESSAGE_TTL).isoformat()]
+        params = [
+            agent_id,
+            len(self.local_prefix),
+            self.local_prefix,
+            (self.clock() - MESSAGE_TTL).isoformat(),
+        ]
         if history:
             params.append(agent_id)
         if before:
@@ -372,21 +421,19 @@ class AccessMeshMessageStore:
         return [dict(row) for row in rows]
 
     def _local_cutover_report_tx(self, db, now):
-        rows = db.execute("SELECT message_hash,wire_json FROM access_mesh_messages").fetchall()
+        """Only diagnose new local rows; historic payloads are disposable.
+
+        Malformed legacy timestamps, orphan old receipts and old peer records
+        are deliberately not migration prerequisites.
+        """
+        rows = db.execute(
+            "SELECT message_hash,wire_json FROM access_mesh_messages "
+            "WHERE substr(message_hash,1,?)=?",
+            (len(self.local_prefix), self.local_prefix),
+        ).fetchall()
         pending = db.execute(
             "SELECT kind,COUNT(*) AS count FROM access_mesh_message_outbox "
             "WHERE acked_at IS NULL AND terminal_at IS NULL GROUP BY kind"
-        ).fetchall()
-        missing = db.execute(
-            "SELECT o.message_hash FROM access_mesh_message_outbox o "
-            "LEFT JOIN access_mesh_messages m ON m.message_hash=o.message_hash "
-            "WHERE o.acked_at IS NULL AND o.terminal_at IS NULL AND m.message_hash IS NULL"
-        ).fetchall()
-        inconsistent = db.execute(
-            "SELECT r.message_hash FROM coordination_message_recipients r "
-            "JOIN access_mesh_messages x ON x.message_hash=r.message_hash "
-            "LEFT JOIN coordination_messages m ON m.message_hash=r.message_hash "
-            "WHERE m.message_hash IS NULL"
         ).fetchall()
         result = {
             "retained": 0,
@@ -406,24 +453,16 @@ class AccessMeshMessageStore:
                     result["retained"] += 1
             except (ValueError, TypeError, KeyError, OverflowError) as exc:
                 result["blockers"].append({"message_hash": row["message_hash"], "reason": str(exc)})
-        for row in missing:
-            result["blockers"].append(
-                {"message_hash": row["message_hash"], "reason": "orphan_outbox"}
-            )
-        for row in inconsistent:
-            result["blockers"].append(
-                {"message_hash": row["message_hash"], "reason": "missing_message_link"}
-            )
         return result
 
     def local_cutover_report(self, *, now=None):
-        """Non-mutating inventory. Invalid source time/links block activation."""
+        """Non-mutating new-local-message and retired-job summary."""
         now = now or self.clock()
         with self.connect() as db:
             return self._local_cutover_report_tx(db, now)
 
     def activate_local_cutover(self, *, now=None):
-        """Atomically validate and terminalize old jobs without ACKing them."""
+        """Terminalize old peer jobs without restoring/inspecting old messages."""
         now = now or self.clock()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -448,8 +487,11 @@ class AccessMeshMessageStore:
                 row[0]
                 for row in db.execute(
                     "SELECT message_hash FROM access_mesh_messages WHERE "
-                    "julianday(json_extract(wire_json,'$.created_at'))<=julianday(?)",
-                    (cutoff,),
+                    "substr(message_hash,1,?)=? AND "
+                    "CASE WHEN json_valid(wire_json) "
+                    "THEN julianday(json_extract(wire_json,'$.created_at'))<=julianday(?) "
+                    "ELSE 0 END",
+                    (len(self.local_prefix), self.local_prefix, cutoff),
                 )
             ]
             for message_hash in ids:

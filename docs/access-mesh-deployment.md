@@ -47,7 +47,7 @@ For an existing Unix executor split, follow [the split-service procedure](archit
 
 Activate FirstByte, check its actual version, local services, local storage and Access/Executor/Coordinator discovery, then activate BacLOUD and repeat. Temporary partial peer delivery while versions differ is a transition state, not a passed acceptance result. Confirm both servers run the exact intended SHA before testing cross-node behavior.
 
-After both activations, verify issuer grant catchup, deadline/revocation propagation, local message lifecycle/expiry and health components. Confirm legacy message outbox rows are terminalized rather than retried, while non-message Mesh replication continues to converge. Monitor retries/errors and cleanup backlog. Health collection ok is distinct from overall healthy/status. Preserve the deployment journal and installer compatibility decisions.
+After both activations, verify issuer grant catchup, deadline/revocation propagation, local message lifecycle/expiry and health components. Confirm legacy message/receipt outbox rows have terminal reasons rather than delivery ACKs, without new retry attempts; old messages are ignored and unrelated Mesh replication continues to converge. Never roll back to a binary that re-enables the retired message worker while pending legacy rows still exist; use a separately approved compatible rollback build. Monitor retries/errors and cleanup backlog. Health collection ok is distinct from overall healthy/status. Preserve the deployment journal and installer compatibility decisions.
 
 ## 4. Native acceptance matrix
 

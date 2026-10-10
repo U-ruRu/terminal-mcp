@@ -239,58 +239,67 @@ async def test_ttl_boundary_ack_does_not_extend_reply_has_own_ttl_and_restart_pr
 
 
 @pytest.mark.asyncio
-async def test_cutover_blocks_ambiguous_time_and_never_queues_new_remote_receipt(mesh_pair):
+async def test_old_invalid_message_is_ignored_and_outbox_finalizes_without_ack(mesh_pair):
+    """Malformed old wire/receipt metadata must not obstruct the new protocol."""
     local = mesh_pair.nodes["firstbyte"]
-    recipient = {
-        "logical_agent_id": "carol",
-        "public_name": _public_name(local.mesh.store.slots["carol"]),
-    }
-    legacy = {
-        "protocol": 1,
-        "message_hash": "bacloud:meshmsg:legacy-inbound",
-        "origin_node_id": "bacloud",
-        "sender_id": "alice",
-        "sender_name": _public_name(local.mesh.store.slots["alice"]),
-        "target": recipient["public_name"],
-        "text": "retained legacy inbound",
-        "created_at": local.mesh.now.isoformat(),
-        "mode": "ack",
-        "require_reply": False,
-        "alert": False,
-        "namespace": None,
-        "task_id": None,
-        "scope": "fleet",
-        "reply_to": None,
-    }
-    local.store.accept(legacy, [recipient])
-    ack = await local.message(actor("carol"), message_hash=legacy["message_hash"])
-    assert ack["ok"]
-    reply = await local.message(
-        actor("carol", request_id="legacy-local-reply"),
-        message_hash=legacy["message_hash"],
-        text="reply stays on this node",
-    )
-    assert reply["ok"] and reply["scope"] == "local"
-    assert reply["target"] == _public_name(local.mesh.store.slots["alice"])
-    assert local.store.wire(reply["message_hash"])["reply_to"] == legacy["message_hash"]
-    assert local.store.pending() == []
+    legacy_id = "bacloud:meshmsg:legacy-inbound"
     with local.store.connect() as db:
-        assert (
-            db.execute(
-                "SELECT COUNT(*) FROM access_mesh_message_outbox WHERE kind='receipt'"
-            ).fetchone()[0]
-            == 0
+        db.execute(
+            "INSERT INTO coordination_messages(message_hash,sender_agent_id,target_name,text,"
+            "created_at,require_reply,alert,delivery_mode) VALUES(?,?,?,?,?,?,?,?)",
+            (legacy_id, "alice", "broadcast", "old confidential data", "bad-time", 1, 1, "alert"),
+        )
+        db.execute(
+            "INSERT INTO coordination_message_recipients(message_hash,recipient_agent_id) "
+            "VALUES(?,?)",
+            (legacy_id, "carol"),
+        )
+        db.execute(
+            "INSERT INTO access_mesh_messages(message_hash,wire_json,origin_node_id,receipt_json) "
+            "VALUES(?,?,?,?)",
+            (legacy_id, '{"created_at":"ambiguous"}', "bacloud", "{}"),
+        )
+        db.execute(
+            "INSERT INTO access_mesh_message_outbox(peer_id,kind,event_key,payload_json,"
+            "message_hash,attempts,acked_at) VALUES(?,?,?,?,?,?,NULL)",
+            ("bacloud", "receipt", "legacy-receipt-1", "{}", legacy_id, 91),
         )
 
-        db.execute(
-            "UPDATE access_mesh_messages SET wire_json="
-            "json_set(wire_json,'$.created_at','ambiguous') WHERE message_hash=?",
-            (legacy["message_hash"],),
-        )
+    assert local.store.wire(legacy_id) is None
+    assert await local.agent_store.message_obligations("carol") == []
+    assert not (await local.message(actor("carol"), history=True, detail="full"))["messages"]
+    assert (await local.message(actor("carol"), message_hash=legacy_id))[
+        "code"
+    ] == "message_not_found"
+    assert (await local.message(actor("carol"), message_hash=legacy_id, text="reply"))[
+        "code"
+    ] == "message_not_found"
     report = local.store.local_cutover_report()
-    assert report["blockers"] and report["blockers"][0]["message_hash"] == legacy["message_hash"]
-    with pytest.raises(MeshMessagingError, match="migration_blocked"):
-        local.store.activate_local_cutover()
+    assert report["blockers"] == [] and report["retained"] == 0
+    first = local.store.activate_local_cutover()
+    second = local.store.activate_local_cutover()
+    assert first["processed_jobs"] == 1 and second["processed_jobs"] == 0
+    with local.store.connect() as db:
+        row = db.execute(
+            "SELECT attempts,acked_at,terminal_reason FROM access_mesh_message_outbox"
+        ).fetchone()
+        assert tuple(row) == (91, None, CUTOVER_REASON)
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM coordination_messages WHERE message_hash=?", (legacy_id,)
+            ).fetchone()[0]
+            == 1
+        )
+    assert local.store.prune_expired() == 0  # cleanup never deletes old junk
+    await local.start()
+    await local.tick()
+    await local.stop()
+    with local.store.connect() as db:
+        row = db.execute(
+            "SELECT attempts,acked_at,terminal_reason FROM access_mesh_message_outbox"
+        ).fetchone()
+        assert tuple(row) == (91, None, CUTOVER_REASON)
+    assert not mesh_pair.calls
 
 
 @pytest.mark.asyncio
@@ -302,7 +311,7 @@ async def test_storage_rejects_new_peer_delivery_jobs_before_commit(mesh_pair):
     }
     wire = {
         "protocol": 1,
-        "message_hash": "firstbyte:meshmsg:peer-forwarding-must-stay-disabled",
+        "message_hash": "firstbyte:localmsg:peer-forwarding-must-stay-disabled",
         "origin_node_id": "firstbyte",
         "sender_id": "alice",
         "sender_name": _public_name(local.mesh.store.slots["alice"]),
@@ -356,3 +365,83 @@ async def test_legacy_peer_message_request_is_terminally_rejected_without_queue(
     }
     with local.store.connect() as db:
         assert db.execute("SELECT COUNT(*) FROM access_mesh_message_outbox").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_local_ack_once_no_duplicate_receipt_event_or_expiry_renewal(mesh_pair):
+    local = mesh_pair.nodes["firstbyte"]
+    recipient = _public_name(local.mesh.store.slots["carol"])
+    sent = await local.message(actor("alice"), text="exactly one ACK", target=recipient, mode="ack")
+    assert sent["ok"]
+    message_id = sent["message_hash"]
+    created = local.store.wire(message_id)["created_at"]
+    before = local.mesh.now
+    # Keep the test identity alive so its ACK contract is isolated from the
+    # independent 15-minute work-session expiry policy.
+    for slot in local.mesh.store.slots.values():
+        slot.expires_at = before + timedelta(days=2)
+    first = await local.message(actor("carol"), message_hash=message_id)
+    assert first["ok"]
+    with local.store.connect() as db:
+        first_receipt = db.execute(
+            "SELECT read_at FROM coordination_message_recipients "
+            "WHERE message_hash=? AND recipient_agent_id='carol'",
+            (message_id,),
+        ).fetchone()[0]
+        event_count = db.execute(
+            "SELECT count(*) FROM instance_events WHERE event_type='message.receipt' "
+            "AND entity_id=?",
+            (message_id,),
+        ).fetchone()[0]
+    local.mesh.now = before + timedelta(hours=6)
+    again = await local.message(actor("carol"), message_hash=message_id)
+    assert again["ok"] and again["state"] == first["state"]
+    with local.store.connect() as db:
+        assert (
+            db.execute(
+                "SELECT read_at FROM coordination_message_recipients "
+                "WHERE message_hash=? AND recipient_agent_id='carol'",
+                (message_id,),
+            ).fetchone()[0]
+            == first_receipt
+        )
+        assert (
+            db.execute(
+                "SELECT count(*) FROM instance_events WHERE event_type='message.receipt' "
+                "AND entity_id=?",
+                (message_id,),
+            ).fetchone()[0]
+            == event_count
+        )
+    assert local.store.wire(message_id)["created_at"] == created
+    local.mesh.now = before + timedelta(hours=24)
+    assert local.store.wire(message_id) is None
+
+
+@pytest.mark.asyncio
+async def test_local_health_probe_is_transactional_and_detects_missing_storage(mesh_pair):
+    local = mesh_pair.nodes["firstbyte"]
+    tables = (
+        "coordination_messages",
+        "coordination_message_recipients",
+        "access_mesh_messages",
+        "instance_events",
+        "access_mesh_message_outbox",
+    )
+    with local.store.connect() as db:
+        counts_before = [
+            db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in tables
+        ]
+    assert local.store.health_probe() is True
+    assert local.store.health_probe() is True
+    with local.store.connect() as db:
+        counts_after = [
+            db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in tables
+        ]
+    assert counts_before == counts_after
+    with local.store.connect() as db:
+        db.execute("DROP TABLE access_mesh_messages")  # isolated test DB only
+    import sqlite3
+
+    with pytest.raises(sqlite3.OperationalError):
+        local.store.health_probe()

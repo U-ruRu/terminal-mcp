@@ -547,7 +547,7 @@ async def test_large_fleet_envelope_is_rejected_before_local_or_peer_commit(mesh
 async def test_oversized_peer_acceptance_proof_rolls_back_all_obligations(mesh_pair):
     fb = mesh_pair.nodes["firstbyte"]
     sent = await fb.message(actor("alice"), text="template", scope="local")
-    wire = {**fb.store.wire(sent["message_hash"]), "message_hash": "firstbyte:meshmsg:large-proof"}
+    wire = {**fb.store.wire(sent["message_hash"]), "message_hash": "firstbyte:localmsg:large-proof"}
     recipients = [
         {
             "logical_agent_id": f"{index}:" + "a" * 150,
