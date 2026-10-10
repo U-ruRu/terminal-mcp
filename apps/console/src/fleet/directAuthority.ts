@@ -1,5 +1,5 @@
 import { ConsoleClient, ConsoleHttpError, type FetchLike } from '../api/client'
-import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, PersistentMutationResult, TaskReadModel } from '../api/models'
+import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetMutationResult, MeshVpnStatus, MeshVpnResult, PersistentMutationResult, TaskReadModel } from '../api/models'
 import type { ProfileRestoreResult } from '../connections/types'
 
 type ConnectedRestore = Extract<ProfileRestoreResult, { status: 'connected' }>
@@ -23,6 +23,18 @@ export class BrowserDirectAuthorityClient {
 
   fleetControl(instanceId: string): Promise<ManagedFleetControlReadModel> {
     return this.withClient(instanceId, (client) => client.fleetControl())
+  }
+
+  meshVpnStatus(instanceId: string): Promise<MeshVpnStatus> {
+    return this.withClient(instanceId, (client) => client.meshVpnStatus())
+  }
+
+  meshVpnMutation(
+    instanceId: string,
+    action: 'prepare' | 'enroll' | 'activate' | 'backend' | 'switch' | 'revoke',
+    body: Record<string, unknown>,
+  ): Promise<MeshVpnResult> {
+    return this.withClient(instanceId, (client) => client.meshVpnMutation(action, body))
   }
 
   fleetEnrollment(instanceId: string) {

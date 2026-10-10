@@ -4,13 +4,16 @@ import asyncio
 import base64
 import secrets
 from collections.abc import Iterable
+from dataclasses import replace
+from pathlib import Path
 
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from terminal_mcp.fleet.config import FleetConfig, FleetPeer
+from terminal_mcp.fleet.config import FleetConfig, FleetPeer, select_peer_transport
 from terminal_mcp.fleet.control_storage import FleetControlError
+from terminal_mcp.mesh_vpn import prune_detached_peers
 
 
 class ManagedFleetControl:
@@ -191,9 +194,7 @@ class ManagedFleetControl:
             if peer_instance_id == self.store.control_node_id:
                 return peer_instance_id
             node = await self.store.managed_node(peer_instance_id)
-            if node is not None and (
-                node.get("state") != "detached" or allow_detached_peer
-            ):
+            if node is not None and (node.get("state") != "detached" or allow_detached_peer):
                 return peer_instance_id
             if first_apply_control_node_id and peer_instance_id == first_apply_control_node_id:
                 return peer_instance_id
@@ -213,13 +214,19 @@ class ManagedFleetControl:
                 (material.get("origin"), material.get("public_key"), material.get("auth_token"))
             )
         ):
-            return FleetPeer(
-                node_id,
-                str(material["origin"]),
-                str(material["public_key"]),
-                str(material["auth_token"]),
+            return select_peer_transport(
+                FleetPeer(
+                    node_id,
+                    str(material["origin"]),
+                    str(material["public_key"]),
+                    str(material["auth_token"]),
+                ),
+                self.bootstrap_config.peer_transports_path,
             )
-        return self.bootstrap_config.peers_by_id.get(node_id)
+        peer = self.bootstrap_config.peers_by_id.get(node_id)
+        if peer is None:
+            return None
+        return select_peer_transport(peer, self.bootstrap_config.peer_transports_path)
 
     async def _forward_mutation_response(
         self, node_id: str, operation: str, payload: dict | None = None
@@ -350,6 +357,11 @@ class ManagedFleetControl:
         raise FleetControlError("control_operation_invalid")
 
     def _replace_runtime_config(self, config: FleetConfig) -> None:
+        config = replace(
+            config,
+            peer_transports_path=self.bootstrap_config.peer_transports_path,
+            mesh_vpn_state_dir=self.bootstrap_config.mesh_vpn_state_dir,
+        )
         self.config = config
         for target in self.runtime_targets:
             if hasattr(target, "config"):
@@ -371,6 +383,7 @@ class ManagedFleetControl:
                     self.config.replication_interval_seconds,
                     self.config.request_timeout_seconds,
                     self.config.local_auth_token,
+                    self.bootstrap_config.peer_transports_path,
                 )
             )
         return identity
@@ -387,6 +400,7 @@ class ManagedFleetControl:
                 self.config.replication_interval_seconds,
                 self.config.request_timeout_seconds,
                 self.config.local_auth_token,
+                self.bootstrap_config.peer_transports_path,
             )
         )
         return identity
@@ -811,19 +825,12 @@ class ManagedFleetControl:
         }
         bootstrap_tokens.update(managed_tokens)
 
-        if (
-            self.is_control_node
-            and incoming_control
-            and incoming_control != self.store.node_id
-        ):
+        if self.is_control_node and incoming_control and incoming_control != self.store.node_id:
             identity = await self._ensure_local_identity()
             presented_local_token = managed_tokens.get(self.store.node_id)
-            if (
-                not presented_local_token
-                or not secrets.compare_digest(
-                    presented_local_token,
-                    str(identity.get("ingress_token") or ""),
-                )
+            if not presented_local_token or not secrets.compare_digest(
+                presented_local_token,
+                str(identity.get("ingress_token") or ""),
             ):
                 raise FleetControlError("control_rejoin_credential_required")
 
@@ -863,9 +870,7 @@ class ManagedFleetControl:
                 # idempotent release after our client stopped waiting. Do not turn
                 # that post-commit acknowledgement race into a false detach failure.
                 pass
-            await self.store.claim_local_control_authority(
-                policy=self.policy_controller.snapshot()
-            )
+            await self.store.claim_local_control_authority(policy=self.policy_controller.snapshot())
             self._sync_control_node(self.store.control_node_id)
             return acknowledgement
 
@@ -884,11 +889,19 @@ class ManagedFleetControl:
             self.bootstrap_config.replication_interval_seconds,
             self.bootstrap_config.request_timeout_seconds,
             None,
+            self.bootstrap_config.peer_transports_path,
         )
         self._replace_runtime_config(config)
 
     async def _apply_local(self, state: dict) -> None:
         if not state.get("managed"):
+            if self.bootstrap_config.mesh_vpn_state_dir:
+                await asyncio.to_thread(
+                    prune_detached_peers,
+                    Path(self.bootstrap_config.mesh_vpn_state_dir),
+                    Path(self.bootstrap_config.peer_transports_path),
+                    set(),
+                )
             await self._restore_local_policy()
             self._restore_bootstrap_runtime(use_peers=state.get("mesh") is None)
             return
@@ -925,6 +938,13 @@ class ManagedFleetControl:
             and node.get("state") != "detached"
             and node.get("node_id") != self.config.instance_id
         ]
+        if self.bootstrap_config.mesh_vpn_state_dir:
+            await asyncio.to_thread(
+                prune_detached_peers,
+                Path(self.bootstrap_config.mesh_vpn_state_dir),
+                Path(self.bootstrap_config.peer_transports_path),
+                {node["node_id"] for node in active_nodes},
+            )
         material = {item["node_id"]: item for item in await self.store.managed_peer_material()}
         missing = [node["node_id"] for node in active_nodes if node["node_id"] not in material]
         revisions = state.get("revisions") or {}
@@ -937,11 +957,14 @@ class ManagedFleetControl:
             return
 
         peers = tuple(
-            FleetPeer(
-                node_id,
-                str(material[node_id]["origin"]),
-                str(material[node_id]["public_key"]),
-                str(material[node_id]["auth_token"]),
+            select_peer_transport(
+                FleetPeer(
+                    node_id,
+                    str(material[node_id]["origin"]),
+                    str(material[node_id]["public_key"]),
+                    str(material[node_id]["auth_token"]),
+                ),
+                self.bootstrap_config.peer_transports_path,
             )
             for node_id in sorted(material)
             if any(node["node_id"] == node_id for node in active_nodes)
@@ -958,6 +981,7 @@ class ManagedFleetControl:
             self.config.replication_interval_seconds,
             self.config.request_timeout_seconds,
             local_auth_token,
+            self.bootstrap_config.peer_transports_path,
         )
         self._replace_runtime_config(new_config)
         await self.store.mark_managed_applied(
@@ -1065,8 +1089,7 @@ class ManagedFleetControl:
                         raise RuntimeError(str(body.get("code") or "control_apply_failed"))
                     acknowledged = body.get("control")
                     if not isinstance(acknowledged, dict) or (
-                        self._topology_signature(acknowledged)
-                        != self._topology_signature(state)
+                        self._topology_signature(acknowledged) != self._topology_signature(state)
                     ):
                         raise RuntimeError("control_apply_not_converged")
                     await self.store.mark_managed_applied(

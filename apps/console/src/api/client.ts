@@ -17,6 +17,8 @@ import type {
   ManagedFleetControlReadModel,
   ManagedFleetEnrollment,
   ManagedFleetMutationResult,
+  MeshVpnResult,
+  MeshVpnStatus,
   PersistentMutationResult,
   TaskCollectionReadModel,
   TaskReadModel,
@@ -148,6 +150,31 @@ export class ConsoleClient {
       blockers: Array.isArray(payload.blockers) ? payload.blockers.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : undefined,
       payload,
     }
+  }
+
+  async meshVpnStatus(): Promise<MeshVpnStatus> {
+    const raw = await this.request('/actions/fleet/control/transport')
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ConsoleContractError('$', 'Mesh VPN status was not an object')
+    }
+    const item = raw as Record<string, unknown>
+    if (item.ok !== true || typeof item.prepared !== 'boolean') {
+      throw new ConsoleContractError('$.prepared', 'invalid Mesh VPN status')
+    }
+    return item as MeshVpnStatus
+  }
+
+  async meshVpnMutation(
+    action: 'prepare' | 'enroll' | 'activate' | 'backend' | 'switch' | 'revoke',
+    body: Record<string, unknown> = {},
+  ): Promise<MeshVpnResult> {
+    const raw = await this.request('/actions/fleet/control/transport/' + action, {
+      method: 'POST', body: JSON.stringify(body),
+    })
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof (raw as Record<string, unknown>).ok !== 'boolean') {
+      throw new ConsoleContractError('$', 'invalid Mesh VPN mutation receipt')
+    }
+    return raw as MeshVpnResult
   }
 
   async fleetControl(): Promise<ManagedFleetControlReadModel> {

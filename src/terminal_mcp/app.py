@@ -66,6 +66,7 @@ from terminal_mcp.http.fleet_v1 import (
     build_fleet_v1_source_router,
 )
 from terminal_mcp.http.managed_sessions import build_managed_sessions_router
+from terminal_mcp.http.mesh_vpn_control import build_mesh_vpn_control_router
 from terminal_mcp.http.pairing import build_pairing_router
 from terminal_mcp.http.persistent import build_persistent_router
 from terminal_mcp.http.persistent_fleet import build_persistent_fleet_router
@@ -518,9 +519,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # authentication MUST use that same pinned trust/token material.
         mesh_peer_auth = PinnedAccessMeshPeerAuth(fleet_config)
         app.include_router(build_access_mesh_router(access_mesh, mesh_peer_auth))
-        app.include_router(
-            build_access_mesh_message_router(access_mesh_messages, mesh_peer_auth)
-        )
+        app.include_router(build_access_mesh_message_router(access_mesh_messages, mesh_peer_auth))
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:
             app.include_router(
@@ -559,6 +558,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.include_router(
                 build_fleet_control_router(
                     managed_fleet_control, fleet_replication, application=application.fleet_control
+                )
+            )
+            app.include_router(
+                build_mesh_vpn_control_router(
+                    managed_fleet_control, application.fleet_control, settings
                 )
             )
     app.include_router(build_pairing_router(settings, auth, pairing_store))

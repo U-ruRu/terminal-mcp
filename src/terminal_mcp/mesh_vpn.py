@@ -491,6 +491,49 @@ async def proxy_server(*, overlay_ip: str, port: int, upstream_port: int) -> Non
         await server.serve_forever()
 
 
+def revoke_peer(state_dir: Path, peer_id: str, transports_path: Path) -> dict:
+    """Revoke the live WireGuard peer and routing override, retaining public HTTPS."""
+    _instance_id(peer_id, "peer_id")
+    local_file = state_dir / "local.json"
+    if not local_file.is_file():
+        return {"peer": peer_id, "revoked": False}
+    local = _load(local_file)
+    peer_file = state_dir / "peers" / f"{peer_id}.json"
+    if peer_file.exists():
+        peer = _load(peer_file)
+        interface = local["interface"]
+        current = subprocess.run(
+            ["wg", "show", interface, "public-key"], capture_output=True, text=True
+        )
+        if current.returncode == 0:
+            if current.stdout.strip() != local["wireguard_public_key"]:
+                raise VPNError("refusing to mutate interface with unexpected WireGuard identity")
+            _run("wg", "set", interface, "peer", peer["wireguard_public_key"], "remove")
+        peer_file.unlink()
+    overrides = _load(transports_path) if transports_path.exists() else {}
+    if peer_id in overrides:
+        overrides.pop(peer_id)
+        _atomic_json(transports_path, overrides)
+    return {"peer": peer_id, "revoked": True}
+
+
+def prune_detached_peers(
+    state_dir: Path, transports_path: Path, allowed_node_ids: set[str],
+) -> list[str]:
+    """Drop WireGuard trust after authoritative Mesh membership removal."""
+    if not (state_dir / "local.json").exists():
+        return []
+    peers_dir = state_dir / "peers"
+    if not peers_dir.is_dir():
+        return []
+    removed = []
+    for path in sorted(peers_dir.glob("*.json")):
+        if path.stem not in allowed_node_ids:
+            revoke_peer(state_dir, path.stem, transports_path)
+            removed.append(path.stem)
+    return removed
+
+
 def set_backend(state_dir: Path, preference: str) -> dict:
     if preference not in BACKENDS:
         raise VPNError("invalid backend")

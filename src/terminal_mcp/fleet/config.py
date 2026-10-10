@@ -29,6 +29,8 @@ class FleetConfig:
     replication_interval_seconds: float
     request_timeout_seconds: float
     local_auth_token: str | None = None
+    peer_transports_path: str = ""
+    mesh_vpn_state_dir: str = ""
 
     @property
     def peers_by_id(self) -> dict[str, FleetPeer]:
@@ -155,6 +157,17 @@ def load_peer_transports(path: str) -> dict[str, dict[str, str]]:
     return overrides
 
 
+def select_peer_transport(peer: FleetPeer, path: str) -> FleetPeer:
+    """Apply a local transport preference only after Fleet peer trust exists."""
+    override = load_peer_transports(path).get(peer.instance_id) if path else None
+    if not override:
+        return peer
+    return FleetPeer(
+        peer.instance_id, override["origin"], peer.public_key, peer.auth_token,
+        "wireguard", peer.bootstrap_origin or peer.origin,
+    )
+
+
 def build_fleet_config(settings) -> FleetConfig | None:
     raw_instance_id = settings.fleet_instance_id.strip()
     raw_private_key = settings.fleet_signing_private_key.strip()
@@ -177,7 +190,8 @@ def build_fleet_config(settings) -> FleetConfig | None:
     instance_id = _instance_id(raw_instance_id, "fleet_instance_id")
     private_key = _validate_private_key(raw_private_key)
 
-    transport_overrides = load_peer_transports(getattr(settings, "fleet_peer_transports_path", ""))
+    transport_path = getattr(settings, "fleet_peer_transports_path", "")
+    transport_overrides = load_peer_transports(transport_path)
     peers: list[FleetPeer] = []
     seen = {instance_id}
     for index, item in enumerate(payload):
@@ -210,8 +224,10 @@ def build_fleet_config(settings) -> FleetConfig | None:
                 public_origin if override else None,
             )
         )
-    if unexpected := set(transport_overrides) - (seen - {instance_id}):
-        raise ValueError(f"wireguard transport has unknown peers: {sorted(unexpected)}")
+    # Managed Fleet Control can enroll trusted peers after bootstrap; a stored
+    # override is dormant until the trusted managed peer becomes active.
+    if instance_id in transport_overrides:
+        raise ValueError("self transport override is forbidden")
 
     interval = float(settings.fleet_replication_interval_sec)
     timeout = float(settings.fleet_request_timeout_sec)
@@ -219,4 +235,8 @@ def build_fleet_config(settings) -> FleetConfig | None:
         raise ValueError("fleet_replication_interval_sec must be positive")
     if timeout <= 0:
         raise ValueError("fleet_request_timeout_sec must be positive")
-    return FleetConfig(instance_id, private_key, tuple(peers), interval, timeout)
+    return FleetConfig(
+        instance_id, private_key, tuple(peers), interval, timeout,
+        peer_transports_path=transport_path,
+        mesh_vpn_state_dir=getattr(settings, "mesh_vpn_state_dir", ""),
+    )

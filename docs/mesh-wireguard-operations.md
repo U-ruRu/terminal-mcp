@@ -154,3 +154,50 @@ run authenticated internal HTTP and partition recovery QA before cutover.
 Both temporary interfaces, private keys and userspace staging binary were
 removed. Existing Terminal MCP services returned HTTP 200 and retained
 the original public HTTPS Mesh route. No production switch was made.
+
+## Android Console — Fleet Control integration
+
+The mobile Console's **Connections → Mesh → server card → Private Mesh tunnel**
+section is an operator-facing control plane for the *same* Fleet membership
+and Ed25519 trust authority already used by add/move/detach.
+
+1. Add or move both servers into the same managed Mesh in Connections.
+   Ensure the topology has converged and the mobile application can still
+   reach both public HTTPS endpoints independently.
+2. Expand Private Mesh tunnel on each server; enter the unique private overlay
+   IP and its public UDP endpoint. Select `auto`, `kernel`, or `userspace`
+   and press Prepare identity. A new private key stays local; the signed
+   public offer becomes available over the paired operator API.
+3. Choose the other server and **Exchange signed keys**. The Console reads
+   *fresh* signed offers from both paired nodes and submits each to the other.
+   Each server verifies its peer against the currently authoritative managed
+   Mesh signing key, identity, signature and ten-minute expiry. A local
+   HTTP request cannot silently create new Mesh membership/trust.
+4. Start the WireGuard tunnel independently on both nodes. This requires
+   the service operator to have permission to install and start the two
+   systemd units; restricted installations return a failure receipt rather
+   than expanding permissions. Userspace mode requires wireguard-go installed.
+5. Inspect live tunnel status and, after handshake and private application
+   health checks pass, switch the desired peer to WireGuard. The server
+   enforces the **expected Mesh topology revision** before applying the
+   route. Fleet and Mesh runtime config updates immediately from the
+   atomic override without replacing OAuth/Access identity. The original
+   HTTPS route remains paired and is an explicit rollback action.
+6. To stop using the private route, switch the peer back to HTTPS. Removing
+   a server from the managed Mesh is an authority mutation: its peers'
+   local reconciliation removes obsolete WireGuard keys and origin overrides.
+   On disconnected peers this completes when the latest topology is applied,
+   and the app reports synchronization state separately.
+
+New local operator routes are `GET /actions/fleet/control/transport` and
+`POST /actions/fleet/control/transport/{prepare,enroll,activate,backend,switch,revoke}`.
+They are registered only when managed Fleet Control is enabled, use the
+existing paired/operator authorization, prohibit arbitrary shell commands,
+and return operation outcomes without private keys or Fleet bearer tokens.
+Android Console refreshes VPN state only when its panel is opened or after
+an operator action; it does not introduce additional continuous polling.
+
+The private WireGuard tunnel is not a mobile device VPN. The mobile
+application acts as the trusted **control plane**, while WireGuard remains
+server-to-server data transport. Failed tunnel activation never silently
+promotes an unverified route; HTTPS remains usable for recovery.

@@ -301,3 +301,175 @@ def test_service_install_generates_opt_in_units_without_activation(tmp_path):
     assert install_units(root, units, "/usr/local/bin/terminal-mcp") == names
     with pytest.raises(VPNError, match="different content"):
         install_units(root, units, "/another/path")
+
+
+def test_detached_peer_removes_routes_keys_and_transport(tmp_path, monkeypatch):
+    from terminal_mcp.mesh_vpn import prune_detached_peers
+
+    directory = tmp_path / "vpn"
+    (directory / "peers").mkdir(parents=True)
+    (directory / "local.json").write_text(
+        json.dumps(local("bacloud", "10.244.12.2", "88.119.171.230:53148"))
+    )
+    (directory / "peers" / "firstbyte.json").write_text(
+        json.dumps(
+            create_offer(
+                local("firstbyte", "10.244.12.1", "185.244.172.75:53148"), signer()[0], now=1_000
+            )["payload"]
+        )
+    )
+    overrides = tmp_path / "transports.json"
+    overrides.write_text(
+        json.dumps(
+            {
+                "firstbyte": {
+                    "mode": "wireguard",
+                    "origin": "http://10.244.12.1:18080",
+                    "interface": "tmcpwg",
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "terminal_mcp.mesh_vpn.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    assert prune_detached_peers(directory, overrides, set()) == ["firstbyte"]
+    assert not (directory / "peers" / "firstbyte.json").exists()
+    assert _load(overrides) == {}
+    assert prune_detached_peers(directory, overrides, set()) == []
+
+
+def test_dynamic_managed_peer_uses_transport_override(tmp_path):
+    from terminal_mcp.fleet.config import FleetPeer, select_peer_transport
+
+    public_origin = "https://external.example"
+    original = FleetPeer("remote", public_origin, "trusted-signing-key", "trusted-bearer")
+    overrides = tmp_path / "mesh-transports.json"
+    overrides.write_text(
+        json.dumps(
+            {
+                "remote": {
+                    "mode": "wireguard",
+                    "origin": "http://10.244.12.1:18080",
+                    "interface": "tmcpwg",
+                }
+            }
+        )
+    )
+    peer = select_peer_transport(original, str(overrides))
+    assert peer.origin == "http://10.244.12.1:18080"
+    assert peer.bootstrap_origin == public_origin
+    assert peer.public_key == original.public_key
+    assert peer.auth_token == original.auth_token
+    assert select_peer_transport(original, "") == original
+    assert select_peer_transport(original, str(tmp_path / "missing.json")) == original
+
+
+def test_mobile_operator_api_enforces_managed_peer_and_pinned_key(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from terminal_mcp.http.mesh_vpn_control import build_mesh_vpn_control_router
+
+    private, public = signer()
+    root = tmp_path / "vpn"
+    transports = tmp_path / "routes.json"
+
+    class Controller:
+        config = SimpleNamespace(instance_id="bacloud", signing_private_key=private)
+
+        def __init__(self):
+            self.reconciles = 0
+
+        async def reconcile_local(self):
+            self.reconciles += 1
+
+    controller = Controller()
+
+    class Application:
+        async def state(self, actor):
+            assert actor.endpoint_role == "operator"
+            return {
+                "ok": True,
+                "control": {
+                    "managed": True,
+                    "nodes": [
+                        {"node_id": "bacloud", "mesh_id": "prod", "state": "active"},
+                        {
+                            "node_id": "firstbyte",
+                            "mesh_id": "prod",
+                            "state": "active",
+                            "public_key": public,
+                        },
+                        {
+                            "node_id": "other",
+                            "mesh_id": "unrelated",
+                            "state": "active",
+                            "public_key": public,
+                        },
+                    ],
+                    "revisions": {"topology": 3},
+                },
+            }
+
+    settings = SimpleNamespace(
+        mesh_vpn_state_dir=str(root), fleet_peer_transports_path=str(transports)
+    )
+    monkeypatch.setattr(
+        "terminal_mcp.http.mesh_vpn_control.ActorContext.from_admission",
+        lambda *args, **kwargs: SimpleNamespace(endpoint_role="operator"),
+    )
+    monkeypatch.setattr(
+        "terminal_mcp.http.mesh_vpn_control.current_admission_context", lambda: None
+    )
+    monkeypatch.setattr(
+        "terminal_mcp.mesh_vpn._run",
+        lambda *args, **kwargs: (PRIVATE if args == ("wg", "genkey") else PUBLIC).encode(),
+    )
+    app = FastAPI()
+    app.include_router(build_mesh_vpn_control_router(controller, Application(), settings))
+    with TestClient(app) as browser:
+        base = "/actions/fleet/control/transport"
+        assert browser.get(base).json()["prepared"] is False
+        prepared = browser.post(
+            base + "/prepare",
+            json={
+                "backend": "kernel",
+                "overlay_ip": "10.244.12.2",
+                "endpoint": "88.119.171.230:53148",
+            },
+        ).json()
+        assert prepared["ok"] is True
+        assert browser.get(base).json()["offer"]["payload"]["instance_id"] == "bacloud"
+        remote = create_offer(
+            local("firstbyte", "10.244.12.1", "185.244.172.75:53148"),
+            private,
+            now=int(__import__("time").time()),
+        )
+        assert (
+            browser.post(base + "/enroll", json={"peer_id": "other", "offer": remote}).json()["ok"]
+            is False
+        )
+        assert (
+            browser.post(base + "/enroll", json={"peer_id": "firstbyte", "offer": remote}).json()[
+                "ok"
+            ]
+            is True
+        )
+        response = browser.post(
+            base + "/switch",
+            json={"peer_id": "firstbyte", "mode": "wireguard", "expected_topology_revision": 2},
+        ).json()
+        assert response["ok"] is False
+        assert controller.reconciles == 0
+        assert (
+            browser.post(
+                base + "/switch",
+                json={"peer_id": "firstbyte", "mode": "https", "expected_topology_revision": 3},
+            ).json()["ok"]
+            is True
+        )
+        assert controller.reconciles == 1
+        assert browser.post(base + "/revoke", json={"peer_id": "firstbyte"}).json()["ok"]
+        assert controller.reconciles == 2

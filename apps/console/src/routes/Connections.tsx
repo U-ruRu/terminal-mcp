@@ -12,6 +12,7 @@ import { useI18n } from '../i18n/useI18n'
 import { ConfirmationDialog, FeedbackState, IconButton, IconButtonRow } from '../components/UiPrimitives'
 import { returnToState } from '../navigation/context'
 import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
+import { MeshVpnPanel } from './MeshVpnPanel'
 
 type ControlObservation = {
   control?: ManagedFleetControlReadModel
@@ -1061,6 +1062,23 @@ export function Connections() {
                           </div>
                           <IconButton className="membership-commit" icon="apply" variant="primary" label={t('connections.applyMembership')} busy={membershipMutation?.phase === 'pending'} disabled={controlBusy || !connectionIsLive} onClick={() => void changeMembership(profile.instanceId, membershipTarget)} />
                         </div>
+                      ) : null}
+                      {routeMeshId && membership.kind === 'mesh' && observed?.control?.managed && connectionIsLive ? (
+                        <MeshVpnPanel
+                          instanceId={profile.instanceId}
+                          nodeId={member?.nodeId ?? profile.instanceId}
+                          client={client}
+                          peers={profiles
+                            .filter((candidate) => candidate.instanceId !== profile.instanceId
+                              && membershipFor(candidate).kind === 'mesh'
+                              && membershipFor(candidate).meshId === membership.meshId)
+                            .map((candidate) => ({
+                              instanceId: candidate.instanceId,
+                              nodeId: membershipFor(candidate).node?.nodeId ?? candidate.instanceId,
+                              displayName: candidate.displayName,
+                            }))}
+                          expectedTopologyRevision={observed.control.revisions.topology}
+                        />
                       ) : null}
                       <p className={'mutation-status-slot connection-card-status-slot ' + (membershipMutation?.phase === 'failed' || member?.lastError || observed?.error || state?.status === 'error' ? 'connection-error' : 'muted')} role={member?.lastError || observed?.error || state?.status === 'error' ? 'alert' : membershipMutation ? 'status' : undefined} aria-live={member?.lastError || observed?.error || state?.status === 'error' || membershipMutation ? 'polite' : undefined}>
                         {state?.status === 'error'

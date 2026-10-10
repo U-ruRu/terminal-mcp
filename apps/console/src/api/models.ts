@@ -373,6 +373,38 @@ export type ManagedFleetControlReadModel = {
   updatedAt: string
 }
 
+export type MeshVpnOffer = {
+  payload: Record<string, unknown>
+  signature: string
+}
+
+export type MeshVpnStatus = {
+  ok: boolean
+  node_id: string
+  prepared: boolean
+  backend: 'auto' | 'kernel' | 'userspace' | null
+  overlay_ip: string | null
+  endpoint: string | null
+  tunnel: {
+    interface: string
+    running: boolean
+    configured_backend: string
+    peer_count: number
+    handshakes: Record<string, number>
+  } | null
+  peers: Array<{ node_id: string; enrolled: boolean; mode: 'https' | 'wireguard' }>
+  offer: MeshVpnOffer | null
+}
+
+export type MeshVpnResult = {
+  ok: boolean
+  code?: string
+  error?: string
+  restart_required?: boolean
+  peer_id?: string
+  transport?: 'https' | 'wireguard'
+}
+
 export type ManagedFleetEnrollment = {
   nodeId: string
   origin: string
