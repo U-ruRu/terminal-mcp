@@ -74,6 +74,8 @@ from terminal_mcp.http.provider_identity_fleet import build_provider_identity_fl
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.access import build_access_mcp
+from terminal_mcp.mcp.event_server import MCPEventsAdapter
+from terminal_mcp.mcp.event_store import MCPEventStore
 from terminal_mcp.mcp.roles import build_role_mcp
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.metrics import Metrics
@@ -390,6 +392,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
 
+    mcp_event_store = MCPEventStore(settings.database_path, managed_authority_node_id)
+    mcp_events = MCPEventsAdapter(
+        mcp.streamable_http_app(),
+        mcp_event_store,
+        reconcile=service.reconcile_agent_sessions,
+    )
+    executor_events = MCPEventsAdapter(executor_mcp.streamable_http_app(), mcp_event_store)
+    coordinator_events = MCPEventsAdapter(coordinator_mcp.streamable_http_app(), mcp_event_store)
+    access_events = (
+        MCPEventsAdapter(access_mcp.streamable_http_app(), mcp_event_store) if access_mcp else None
+    )
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         events.start()
@@ -452,7 +466,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await stack.enter_async_context(coordinator_mcp.session_manager.run())
                 if access_mcp:
                     await stack.enter_async_context(access_mcp.session_manager.run())
-                yield
+                await mcp_events.start()
+                try:
+                    yield
+                finally:
+                    await mcp_events.stop()
         finally:
             if access_mesh_messages:
                 await access_mesh_messages.stop()
@@ -481,6 +499,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.access_mesh_messages = access_mesh_messages
     app.state.access_mesh_replication = access_mesh_replication
     app.state.access_mcp = access_mcp
+    app.state.mcp_events = mcp_events
     app.state.executor_mcp = executor_mcp
     app.state.coordinator_mcp = coordinator_mcp
     app.state.settings = settings
@@ -596,17 +615,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(build_managed_sessions_router(service))
     app.include_router(build_console_router(service, settings))
     app.include_router(build_admin_router(settings, credentials, oauth_store, terminal, service))
-    app.router.routes.append(
-        Mount("/terminal-mcp/executor/v1/mcp", app=executor_mcp.streamable_http_app())
-    )
-    app.router.routes.append(
-        Mount("/terminal-mcp/coordinator/v1/mcp", app=coordinator_mcp.streamable_http_app())
-    )
+    app.router.routes.append(Mount("/terminal-mcp/executor/v1/mcp", app=executor_events))
+    app.router.routes.append(Mount("/terminal-mcp/coordinator/v1/mcp", app=coordinator_events))
     if access_mcp:
-        app.router.routes.append(
-            Mount("/terminal-mcp/access/v1/mcp", app=access_mcp.streamable_http_app())
-        )
-    app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))
+        app.router.routes.append(Mount("/terminal-mcp/access/v1/mcp", app=access_events))
+    app.router.routes.append(Mount("/mcp", app=mcp_events))
 
     @app.get("/health/live", include_in_schema=False)
     async def live():
