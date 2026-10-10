@@ -7,23 +7,14 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Attach this connector once using session_number. Session number is mandatory; action is attach-only. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.\nArguments: action?:string (default=\"attach\"; SCHEMA_FALLBACK {\"const\":\"attach\",\"title\":\"Action\"}); session_number:string (pattern=\"^[0-9]{4}$\"; SCHEMA_FALLBACK {\"description\":\"Four-digit session number, including leading zeros.\",\"title\":\"Session Number\"}). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle.\nReturns: MeshAttachReceipt{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Attach this connector once using session_number. Session number is mandatory; action is attach-only. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:string (default=\"attach\"; SCHEMA_FALLBACK {\"const\":\"attach\"}); session_number:string (pattern=\"^[0-9]{4}$\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle.\nReturns: MeshAttachReceipt{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "action": {
-            "const": "attach",
-            "default": "attach",
-            "type": "string"
-          },
-          "session_number": {
-            "pattern": "^[0-9]{4}$",
-            "type": "string"
-          }
+          "action": {},
+          "session_number": {}
         },
-        "required": [
-          "session_number"
-        ],
         "type": "object",
         "x-terminal-mcp-action-matrix": {
           "attach": {
@@ -88,62 +79,18 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read one canonical task as snapshot, detail, or history. Available without an active work cycle or Access Code.\nArguments: required [namespace, task_id]; optional [detail, history_kind, limit, cursor]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: detail chooses snapshot, detail or history; history_kind and cursor apply to history.\nReturns: inline:ONE_OF(TaskGetSnapshotSuccess,TaskGetDetailSuccess,TaskGetHistorySuccess) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read one canonical task as snapshot, detail, or history. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); detail?:\"snapshot\"|\"detail\"|\"history\" (default=\"snapshot\"); history_kind?:\"comments\"|\"events\"|\"reviews\"|\"output_states\" (default=\"events\"); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: detail chooses snapshot, detail or history; history_kind and cursor apply to history.\nReturns: inline:ONE_OF(TaskGetSnapshotSuccess,TaskGetDetailSuccess,TaskGetHistorySuccess) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "cursor": {
-            "anyOf": [
-              {
-                "maxLength": 512,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "detail": {
-            "default": "snapshot",
-            "enum": [
-              "snapshot",
-              "detail",
-              "history"
-            ],
-            "type": "string"
-          },
-          "history_kind": {
-            "default": "events",
-            "enum": [
-              "comments",
-              "events",
-              "reviews",
-              "output_states"
-            ],
-            "type": "string"
-          },
-          "limit": {
-            "default": 20,
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "namespace": {
-            "maxLength": 120,
-            "minLength": 1,
-            "type": "string"
-          },
-          "task_id": {
-            "maxLength": 120,
-            "minLength": 1,
-            "type": "string"
-          }
+          "cursor": {},
+          "detail": {},
+          "history_kind": {},
+          "limit": {},
+          "namespace": {},
+          "task_id": {}
         },
-        "required": [
-          "namespace",
-          "task_id"
-        ],
         "type": "object",
         "x-terminal-mcp-action-matrix": {
           "read": {
@@ -214,95 +161,17 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read a bounded page of canonical TaskListItem records. Available without an active work cycle or Access Code.\nArguments: required [(none)]; optional [namespace, lane, state, tags, limit, cursor]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination.\nReturns: TaskListSuccess{ok:true,tasks:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read a bounded page of canonical TaskListItem records. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace?:string(1..120)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination.\nReturns: TaskListSuccess{ok:true,tasks:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "cursor": {
-            "anyOf": [
-              {
-                "maxLength": 512,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "lane": {
-            "anyOf": [
-              {
-                "enum": [
-                  "implementation",
-                  "review",
-                  "release",
-                  "integration",
-                  "general"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "limit": {
-            "default": 20,
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "namespace": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "state": {
-            "anyOf": [
-              {
-                "enum": [
-                  "ready",
-                  "in_progress",
-                  "qa",
-                  "blocked",
-                  "deferred",
-                  "done"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "tags": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "maxItems": 50,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
+          "cursor": {},
+          "lane": {},
+          "limit": {},
+          "namespace": {},
+          "state": {},
+          "tags": {}
         },
         "type": "object",
         "x-terminal-mcp-action-matrix": {
@@ -377,672 +246,45 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. checkpoint needs checkpoint; state needs state; comment needs comment_text; review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; archive needs archive_note. Attach this connector once; writes use its local work cycle.\nArguments: required [action, namespace]; optional [task_id, expected_revision, isolation_hint, request_id, title, lane, priority, state, description, next_action, resource_context, cooperative, checkpoint, candidate_ref, input_refs, output_refs, result, tags, dependencies, blocker_reason, relation_kind, related_namespace, related_task_id, archive_note, note, dimensions, verdict, evidence, comment_text, force, force_reason]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nConditions: ALL_OF(IF action==\"create\" => requires(isolation_hint) | IF action in [\"update\",\"checkpoint\",\"archive\",\"review\",\"relate\",\"unrelate\",\"state\",\"comment\"] => requires(task_id) | IF action==\"checkpoint\" => requires(checkpoint) | IF action in [\"relate\",\"unrelate\"] => requires(relation_kind,related_task_id) | IF action==\"state\" => requires(state) | IF action==\"review\" => requires(dimensions,verdict) | IF action==\"comment\" => requires(comment_text) | IF action==\"archive\" => require_at_least_one(archive_note,note)).\nRuntime rules: create requires isolation_hint; non-create mutation actions require task_id; archive needs archive_note or note; action-dependent requirements come from TaskManageInput; canonical TaskRequest action variants enforce operation-specific fields and runtime transitions after boundary validation; their exact variants are the source for offline cross-check; request_id is a create operation identity: only reuse on transport retry of the same create; creating state=done requires a non-null result; when archiving, archive_note or note must be non-null; canonical mutation state checks remain authoritative.\nReturns: inline:ONE_OF(TaskMutationResult,TaskClaimMutationResult) | TaskCreateCompact{ok:true,task_id:string} | TaskUpdateCompact{ok:true,revision:integer} | TaskAppendCompact{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. checkpoint needs checkpoint; state needs state; comment needs comment_text; review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; archive needs either non-null archive_note or non-null note. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"create\"|\"update\"|\"checkpoint\"|\"archive\"|\"review\"|\"relate\"|\"unrelate\"|\"state\"|\"comment\"; namespace:string(1..120); task_id?:string(1..120)? (default=null); expected_revision?:int (>=1; <=9223372036854775807)? (default=null); isolation_hint?:string(1..160)? (default=null); request_id?:string(1..128) (pattern=\"^[A-Za-z0-9._:-]+$\")? (default=null); title?:string(1..200)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); priority?:\"P0\"|\"P1\"|\"P2\"|\"P3\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); description?:string(0..8000)? (default=null); next_action?:string(0..2000)? (default=null); resource_context?:{  } (SCHEMA_FALLBACK {\"x-maxSerializedBytes\":8192})? (default=null); cooperative?:boolean? (default=null); checkpoint?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":4000,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":16384}? (default=null); candidate_ref?:string(0..200)? (default=null); input_refs?:string(1..512)[] (items<=64)? (default=null); output_refs?:string(1..512)[] (items<=64)? (default=null); result?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":16384,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":32768}? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); dependencies?:TaskDependency[] (items<=100)? (default=null); blocker_reason?:string(1..4000)? (default=null); relation_kind?:string(1..64)? (default=null); related_namespace?:string(1..120)? (default=null); related_task_id?:string(1..120)? (default=null); archive_note?:string(1..4000)? (default=null); note?:string(1..2000)? (default=null); dimensions?:SCHEMA_FALLBACK {\"anyOf\":[{\"items\":{\"enum\":[\"A\",\"C\",\"R\"],\"type\":\"string\"},\"maxItems\":3,\"minItems\":1,\"type\":\"array\"},{\"type\":\"null\"}],\"default\":null,\"uniqueItems\":true}; verdict?:\"NON_BLOCKING\"|\"BLOCKING\"? (default=null); evidence?:{  } (SCHEMA_FALLBACK {\"x-maxSerializedBytes\":16384})? (default=null); comment_text?:string(1..4000)? (default=null); force?:boolean (default=false); force_reason?:string(1..2000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReferenced input types: TaskDependency={ task_id:string(1..120); namespace?:string(1..120)? (default=null); additional_fields: forbidden }.\nServer action field policy: create: allowed fields [action, candidate_ref, checkpoint, cooperative, dependencies, description, force, force_reason, input_refs, isolation_hint, lane, namespace, next_action, output_refs, priority, request_id, resource_context, result, state, tags, task_id, title]; required non-null [action, isolation_hint, namespace]; all other named inputs rejected as extra_forbidden; update: allowed fields [action, blocker_reason, candidate_ref, cooperative, dependencies, description, expected_revision, force, force_reason, input_refs, lane, namespace, next_action, output_refs, priority, resource_context, result, tags, task_id, title]; required non-null [action, expected_revision, namespace, task_id]; all other named inputs rejected as extra_forbidden; checkpoint: allowed fields [action, checkpoint, namespace, task_id]; required non-null [action, checkpoint, namespace, task_id]; all other named inputs rejected as extra_forbidden; archive: allowed fields [action, archive_note, expected_revision, namespace, note, task_id]; required non-null [action, namespace, task_id]; all other named inputs rejected as extra_forbidden; review: allowed fields [action, dimensions, evidence, expected_revision, namespace, task_id, verdict]; required non-null [action, dimensions, namespace, task_id, verdict]; all other named inputs rejected as extra_forbidden; relate: allowed fields [action, expected_revision, namespace, related_namespace, related_task_id, relation_kind, task_id]; required non-null [action, namespace, related_task_id, relation_kind, task_id]; all other named inputs rejected as extra_forbidden; unrelate: allowed fields [action, expected_revision, namespace, related_namespace, related_task_id, relation_kind, task_id]; required non-null [action, namespace, related_task_id, relation_kind, task_id]; all other named inputs rejected as extra_forbidden; state: allowed fields [action, namespace, state, task_id]; required non-null [action, namespace, state, task_id]; all other named inputs rejected as extra_forbidden; comment: allowed fields [action, comment_text, namespace, task_id]; required non-null [action, comment_text, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nConditions: ALL_OF(IF action==\"create\" => requires(isolation_hint) | IF action in [\"update\",\"checkpoint\",\"archive\",\"review\",\"relate\",\"unrelate\",\"state\",\"comment\"] => requires(task_id) | IF action==\"checkpoint\" => requires(checkpoint) | IF action in [\"relate\",\"unrelate\"] => requires(relation_kind,related_task_id) | IF action==\"state\" => requires(state) | IF action==\"review\" => requires(dimensions,verdict) | IF action==\"comment\" => requires(comment_text) | IF action==\"archive\" => require_at_least_one(archive_note,note)).\nRuntime rules: create requires non-null isolation_hint. update requires non-null expected_revision (minimum 1) and task_id. For every action the accepted field whitelist, required fields and extra_forbidden policy are compiled from _TASK_MANAGE_MODELS, not from the permissive union.; checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text; relate/unrelate require non-null relation_kind and related_task_id.; archive requires at least one non-null archive_note or note; either is sufficient. create with state=done requires non-null result.; The handler serializes with exclude_none=True and exclude_unset=True; update description:null is omitted/no change, while tags:[] explicitly replaces the stored list with an empty list. Other explicit non-null collection values replace, not append.; relation_kind is an open string(1..64), not an enum. For relation_kind=review_of on relate: source lane must be review; parent candidate_ref must be nonempty; no different review_of parent; source candidate_ref if set must match parent, otherwise it is bound from parent. Possible errors review_task_required, missing_parent_candidate, ambiguous_review_parent, candidate_conflict.; Canonical update/mutation state transitions and task revision checks remain enforced by the existing server; an omitted optional field may mean no mutation.; request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id..\nReturns: inline:ONE_OF(TaskMutationResult,TaskClaimMutationResult) | TaskCreateCompact{ok:true,task_id:string} | TaskUpdateCompact{ok:true,revision:integer} | TaskAppendCompact{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "$defs": {
-          "TaskDependency": {
-            "additionalProperties": false,
-            "properties": {
-              "namespace": {
-                "anyOf": [
-                  {
-                    "maxLength": 120,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null
-              },
-              "task_id": {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "task_id"
-            ],
-            "type": "object"
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "create"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "isolation_hint"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "enum": [
-                    "update",
-                    "checkpoint",
-                    "archive",
-                    "review",
-                    "relate",
-                    "unrelate",
-                    "state",
-                    "comment"
-                  ]
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "task_id"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "checkpoint"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "checkpoint"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "enum": [
-                    "relate",
-                    "unrelate"
-                  ]
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "relation_kind",
-                "related_task_id"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "state"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "state"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "review"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "dimensions",
-                "verdict"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "comment"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "comment_text"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "archive"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "anyOf": [
-                {
-                  "required": [
-                    "archive_note"
-                  ]
-                },
-                {
-                  "required": [
-                    "note"
-                  ]
-                }
-              ]
-            }
-          }
-        ],
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "action": {
-            "enum": [
-              "create",
-              "update",
-              "checkpoint",
-              "archive",
-              "review",
-              "relate",
-              "unrelate",
-              "state",
-              "comment"
-            ],
-            "type": "string"
-          },
-          "archive_note": {
-            "anyOf": [
-              {
-                "maxLength": 4000,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "blocker_reason": {
-            "anyOf": [
-              {
-                "maxLength": 4000,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "candidate_ref": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "checkpoint": {
-            "anyOf": [
-              {
-                "oneOf": [
-                  {
-                    "maxLength": 4000,
-                    "type": "string"
-                  },
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "array"
-                  }
-                ],
-                "x-maxSerializedBytes": 16384
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "comment_text": {
-            "anyOf": [
-              {
-                "maxLength": 4000,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "cooperative": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "dependencies": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/$defs/TaskDependency"
-                },
-                "maxItems": 100,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "description": {
-            "anyOf": [
-              {
-                "maxLength": 8000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "dimensions": {
-            "anyOf": [
-              {
-                "items": {
-                  "enum": [
-                    "A",
-                    "C",
-                    "R"
-                  ],
-                  "type": "string"
-                },
-                "maxItems": 3,
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "uniqueItems": true
-          },
-          "evidence": {
-            "anyOf": [
-              {
-                "type": "object",
-                "x-maxSerializedBytes": 16384
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "expected_revision": {
-            "anyOf": [
-              {
-                "maximum": 9223372036854775807,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "force": {
-            "default": false,
-            "type": "boolean"
-          },
-          "force_reason": {
-            "anyOf": [
-              {
-                "maxLength": 2000,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "input_refs": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxLength": 512,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "maxItems": 64,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "isolation_hint": {
-            "anyOf": [
-              {
-                "maxLength": 160,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "lane": {
-            "anyOf": [
-              {
-                "enum": [
-                  "implementation",
-                  "review",
-                  "release",
-                  "integration",
-                  "general"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "namespace": {
-            "maxLength": 120,
-            "minLength": 1,
-            "type": "string"
-          },
-          "next_action": {
-            "anyOf": [
-              {
-                "maxLength": 2000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "note": {
-            "anyOf": [
-              {
-                "maxLength": 2000,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "output_refs": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxLength": 512,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "maxItems": 64,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "priority": {
-            "anyOf": [
-              {
-                "enum": [
-                  "P0",
-                  "P1",
-                  "P2",
-                  "P3"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "related_namespace": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "related_task_id": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "relation_kind": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "request_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9._:-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "resource_context": {
-            "anyOf": [
-              {
-                "type": "object",
-                "x-maxSerializedBytes": 8192
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "result": {
-            "anyOf": [
-              {
-                "oneOf": [
-                  {
-                    "maxLength": 16384,
-                    "type": "string"
-                  },
-                  {
-                    "type": "object"
-                  },
-                  {
-                    "type": "array"
-                  }
-                ],
-                "x-maxSerializedBytes": 32768
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "state": {
-            "anyOf": [
-              {
-                "enum": [
-                  "ready",
-                  "in_progress",
-                  "qa",
-                  "blocked",
-                  "deferred",
-                  "done"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "tags": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "maxItems": 50,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "task_id": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "title": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "verdict": {
-            "anyOf": [
-              {
-                "enum": [
-                  "NON_BLOCKING",
-                  "BLOCKING"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
+          "action": {},
+          "archive_note": {},
+          "blocker_reason": {},
+          "candidate_ref": {},
+          "checkpoint": {},
+          "comment_text": {},
+          "cooperative": {},
+          "dependencies": {},
+          "description": {},
+          "dimensions": {},
+          "evidence": {},
+          "expected_revision": {},
+          "force": {},
+          "force_reason": {},
+          "input_refs": {},
+          "isolation_hint": {},
+          "lane": {},
+          "namespace": {},
+          "next_action": {},
+          "note": {},
+          "output_refs": {},
+          "priority": {},
+          "related_namespace": {},
+          "related_task_id": {},
+          "relation_kind": {},
+          "request_id": {},
+          "resource_context": {},
+          "result": {},
+          "state": {},
+          "tags": {},
+          "task_id": {},
+          "title": {},
+          "verdict": {}
         },
-        "required": [
-          "action",
-          "namespace"
-        ],
         "type": "object",
         "x-terminal-mcp-action-matrix": {
           "archive": {
@@ -1191,69 +433,18 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read a bounded dependency/relation graph rooted at one task. Available without an active work cycle or Access Code.\nArguments: required [namespace, task_id]; optional [direction, kinds, limit, cursor]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nReturns: TaskGraphSuccess{ok:true,nodes:array,edges:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read a bounded dependency/relation graph rooted at one task. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); direction?:\"both\"|\"incoming\"|\"outgoing\" (default=\"both\"); kinds?:string(1..64)[] (items<=32)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: TaskGraphSuccess{ok:true,nodes:array,edges:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "cursor": {
-            "anyOf": [
-              {
-                "maxLength": 512,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "direction": {
-            "default": "both",
-            "enum": [
-              "both",
-              "incoming",
-              "outgoing"
-            ],
-            "type": "string"
-          },
-          "kinds": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "maxItems": 32,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "limit": {
-            "default": 20,
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "namespace": {
-            "maxLength": 120,
-            "minLength": 1,
-            "type": "string"
-          },
-          "task_id": {
-            "maxLength": 120,
-            "minLength": 1,
-            "type": "string"
-          }
+          "cursor": {},
+          "direction": {},
+          "kinds": {},
+          "limit": {},
+          "namespace": {},
+          "task_id": {}
         },
-        "required": [
-          "namespace",
-          "task_id"
-        ],
         "type": "object",
         "x-terminal-mcp-action-matrix": {
           "read": {
@@ -1330,9 +521,10 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read compact current LogicalAgent, WorkWindow, and WorkSession state. Available without an active work cycle or Access Code.\nArguments: (none). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nReturns: MeshAgentObserve{ok:true,agents:array} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read compact current LogicalAgent, WorkWindow, and WorkSession state. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): (none).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: MeshAgentObserve{ok:true,agents:array} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {},
         "type": "object",
         "x-terminal-mcp-action-matrix": {
@@ -1401,201 +593,25 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.\nArguments: required [action]; optional [text, target, message_hash, mode, require_reply, alert, limit, cursor, detail, namespace, task_id, scope]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nConditions: ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text)).\nRuntime rules: send requires text and forbids message_hash; ack requires message_hash and forbids text; reply requires both; read/history/recipients forbid text and message_hash; recipient resolution and current session are runtime checks; message scope is local or fleet; local is default for mesh roles.\nReturns: inline:ONE_OF(MessageListResult,MessageSendResult,MessageAcknowledgeResult,MessageReplyResult,MessageRecipientsResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"send\"|\"read\"|\"ack\"|\"reply\"|\"history\"|\"recipients\"; text?:string(0..16384)? (default=null); target?:string(1..120)? (default=null); message_hash?:string(1..128)? (default=null); mode?:\"notify\"|\"ack\"|\"alert\"? (default=null); require_reply?:boolean (default=false); alert?:boolean (default=false); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null); detail?:\"summary\"|\"full\" (default=\"summary\"); namespace?:string(1..120)? (default=null); task_id?:string(1..120)? (default=null); scope?:\"local\"|\"fleet\" (default=\"local\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nConditions: ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text)).\nRuntime rules: send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden).; Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours.; For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack.; namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target..\nReturns: inline:ONE_OF(MessageListResult,MessageSendResult,MessageAcknowledgeResult,MessageReplyResult,MessageRecipientsResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "send"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "text"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "ack"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "message_hash"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "reply"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "message_hash",
-                "text"
-              ]
-            }
-          }
-        ],
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "action": {
-            "enum": [
-              "send",
-              "read",
-              "ack",
-              "reply",
-              "history",
-              "recipients"
-            ],
-            "type": "string"
-          },
-          "alert": {
-            "default": false,
-            "type": "boolean"
-          },
-          "cursor": {
-            "anyOf": [
-              {
-                "maxLength": 512,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "detail": {
-            "default": "summary",
-            "enum": [
-              "summary",
-              "full"
-            ],
-            "type": "string"
-          },
-          "limit": {
-            "default": 20,
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "message_hash": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "enum": [
-                  "notify",
-                  "ack",
-                  "alert"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "namespace": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "require_reply": {
-            "default": false,
-            "type": "boolean"
-          },
-          "scope": {
-            "default": "local",
-            "enum": [
-              "local",
-              "fleet"
-            ],
-            "type": "string"
-          },
-          "target": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "task_id": {
-            "anyOf": [
-              {
-                "maxLength": 120,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "text": {
-            "anyOf": [
-              {
-                "maxLength": 16384,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
+          "action": {},
+          "alert": {},
+          "cursor": {},
+          "detail": {},
+          "limit": {},
+          "message_hash": {},
+          "mode": {},
+          "namespace": {},
+          "require_reply": {},
+          "scope": {},
+          "target": {},
+          "task_id": {},
+          "text": {}
         },
-        "required": [
-          "action"
-        ],
         "type": "object",
         "x-terminal-mcp-action-matrix": {
           "ack": {
@@ -1731,14 +747,12 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.\nArguments: extended?:boolean (default=false; SCHEMA_FALLBACK {\"title\":\"Extended\"}). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nReturns: ExtendedHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow,auth_mode?:union,identity:HealthIdentityDiagnostic} | CompactHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): extended?:boolean (default=false).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: ExtendedHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow,auth_mode?:union,identity:HealthIdentityDiagnostic} | CompactHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "extended": {
-            "default": false,
-            "type": "boolean"
-          }
+          "extended": {}
         },
         "type": "object",
         "x-terminal-mcp-action-matrix": {

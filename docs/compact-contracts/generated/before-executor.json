@@ -1028,7 +1028,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Apply the canonical task state machine for a task owned by the current LogicalAgent. Attach this connector once; writes use its local work cycle.",
+      "description": "Set a valid task state as any admitted agent, including on a task claimed by someone else. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1123,7 +1123,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Append comment_text with action='comment' (the default), or save checkpoint with action='checkpoint' and optional expected_revision. Checkpoint updates preserve task state and history. Writes require this connector's attached local work cycle.",
+      "description": "Append comment_text with action='comment' (the default), or save checkpoint with action='checkpoint' and a checkpoint payload. Checkpoint updates preserve task state and history. Writes require this connector's attached local work cycle.",
       "inputSchema": {
         "properties": {
           "action": {

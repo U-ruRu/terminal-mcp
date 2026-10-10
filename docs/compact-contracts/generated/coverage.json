@@ -1,17 +1,17 @@
 {
   "access.session": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/action"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "action"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.IssuerSessionInput",
     "output_fallback": "strict-contracts.json:access.session.outputSchema",
-    "published_input_sha256": "897e7af484024d9fd0d3ba31d62f89d1fd8fc7cff299cc7445dfd4869236311c",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "ba680c57cde45fd915c82f4ebed9dcdddac49219194774eadddfcf7d1c98be00",
     "published_output_sha256": "d2fa8cde0c81b4a85725a1ab806212f0076b35779d3a923ff50615c0dcb757db",
     "required_fields": [
       "action"
@@ -27,6 +27,7 @@
     "strict_output_sha256": "e60e257ccb14147ccc2b0d22f90c1905c6bd6a8d05c3c80d58e7cdb6d5a18bd5"
   },
   "coordinator.agent_observe": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
     "exact_input_fallbacks": [],
@@ -34,7 +35,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.AgentObserveInput",
     "output_fallback": "strict-contracts.json:coordinator.agent_observe.outputSchema",
-    "published_input_sha256": "0bd98ecbf6fce117f4df6188d3239bd46fc057dc04455159736428c8577bbea1",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "5a7142eb5ec1c1341dc74f8874b7cde5a471dc3869832cd74e94cb469e8f69fa",
     "published_output_sha256": "31aa8931299dc19baa2c1322bcb8628e7758e92a805939b1b0f9833adc1ec3ee",
     "required_fields": [],
     "runtime_annotations": [],
@@ -42,18 +44,18 @@
     "strict_output_sha256": "3c152adf49d762df881503bdbd1efe95a85128f6d094be59f43f75c9264e71ed"
   },
   "coordinator.health": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/extended"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "extended"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.HealthInput",
     "output_fallback": "strict-contracts.json:coordinator.health.outputSchema",
-    "published_input_sha256": "de60001b8ab651bc366c80b2e7a9e66a4ffee007f63c9ab35a87b20c2fcde88c",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "0928fc09008ae2479878707588815993de7102c401f402e78872022130d3982c",
     "published_output_sha256": "e28db2011fe3ad7967daafcb90c4b79c51dbfe29557a66d1bfccea364ab7cbc5",
     "required_fields": [],
     "runtime_annotations": [],
@@ -61,25 +63,12 @@
     "strict_output_sha256": "ee20ebe65cb858d5fd37c50e357ad27363e8b3dfcaaf01d65af07735c3dd62aa"
   },
   "coordinator.message": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [
       "ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
-    "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/alert",
-      "$/properties/cursor",
-      "$/properties/detail",
-      "$/properties/limit",
-      "$/properties/message_hash",
-      "$/properties/mode",
-      "$/properties/namespace",
-      "$/properties/require_reply",
-      "$/properties/scope",
-      "$/properties/target",
-      "$/properties/task_id",
-      "$/properties/text"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "action",
       "text",
@@ -98,7 +87,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
     "output_fallback": "strict-contracts.json:coordinator.message.outputSchema",
-    "published_input_sha256": "1c257020c8533cd68e388740290ed008dfaef36b6ce8fadda8f0691b9ff61047",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
     "published_output_sha256": "be75f47f00504d4a616ec5dfff148be398ce2bd82ec7995423fd6024f6eb9eee",
     "required_fields": [
       "action"
@@ -107,28 +97,33 @@
       {
         "anchor": "def validate_mode(self):",
         "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "send requires text and forbids message_hash; ack requires message_hash and forbids text; reply requires both"
+        "text": "send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden)."
       },
       {
-        "anchor": "elif self.action in {\"read\", \"history\", \"recipients\"}:",
-        "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "read/history/recipients forbid text and message_hash; recipient resolution and current session are runtime checks"
+        "anchor": "Legacy scope='fleet' requests return",
+        "source": "src/terminal_mcp/mcp/roles.py",
+        "text": "Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours."
       },
       {
-        "anchor": "scope: Literal[\"local\", \"fleet\"] = \"local\"",
-        "source": "src/terminal_mcp/mcp/access_contracts.py",
-        "text": "message scope is local or fleet; local is default for mesh roles"
+        "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")",
+        "source": "src/terminal_mcp/application/access_mesh_messages.py",
+        "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack."
+      },
+      {
+        "anchor": "if (namespace is None) != (task_id is None):",
+        "source": "src/terminal_mcp/application/access_mesh_messages.py",
+        "text": "namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target."
       }
     ],
     "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
     "strict_output_sha256": "2af296b4bf62a50983a6595018792c4d7d4234b294ea5bc76e387fd92c30f1ee"
   },
   "coordinator.session": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
     "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/session_number"
+      "$/properties/action"
     ],
     "input_fields": [
       "action",
@@ -137,7 +132,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.AttachInput",
     "output_fallback": "strict-contracts.json:coordinator.session.outputSchema",
-    "published_input_sha256": "761d309e9985318ad58ce558cb83d2952d4db327df0e77c01741e616aabff2c3",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "6b21e30a3ab2a8105f10c53d2d44b6843453a6212cf129f2b03fb6475a5456b9",
     "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
     "required_fields": [
       "session_number"
@@ -153,16 +149,10 @@
     "strict_output_sha256": "dc8da2e47f7437d4d50f98f3c0a62c34f5f031735ee6f2ecbd301dab0f118212"
   },
   "coordinator.task_get": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/cursor",
-      "$/properties/detail",
-      "$/properties/history_kind",
-      "$/properties/limit",
-      "$/properties/namespace",
-      "$/properties/task_id"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "namespace",
       "task_id",
@@ -174,7 +164,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.TaskGetInput",
     "output_fallback": "strict-contracts.json:coordinator.task_get.outputSchema",
-    "published_input_sha256": "1e70bdc7b2916f6bfc0e053a0c6be53b6558a09d958539e1ba06e4679194b92d",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "605af92bdbf8b105543a36938079ac604c65c8ae3613f3c94b34114e9dce9b9a",
     "published_output_sha256": "f9d407b35a2df5e5d44aee953699da04ab2875e740826970da3eae0d89e81758",
     "required_fields": [
       "namespace",
@@ -191,16 +182,10 @@
     "strict_output_sha256": "b5ead5b6978dd5b369f4dcf8a20f60bf68e8f4c4b2b2716b0ce68d9fe0bfc44c"
   },
   "coordinator.task_graph": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/cursor",
-      "$/properties/direction",
-      "$/properties/kinds",
-      "$/properties/limit",
-      "$/properties/namespace",
-      "$/properties/task_id"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "namespace",
       "task_id",
@@ -212,7 +197,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.TaskGraphInput",
     "output_fallback": "strict-contracts.json:coordinator.task_graph.outputSchema",
-    "published_input_sha256": "5c085ab2197df1b4589846aeedb21fc5161edd2cf02ec18104ee435d07bf0216",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "827fd9e723f652668a3ab767db895ed1bd68f005713c13ffa21e34647b76849e",
     "published_output_sha256": "29a8bc5289a78db90dac34fd5a5541790299b8366afde56041e44a3952756401",
     "required_fields": [
       "namespace",
@@ -223,16 +209,10 @@
     "strict_output_sha256": "aadecb7f6ef6b3050621836ec8f7ddaa549d7574e3419d507a33d34f4b250eb1"
   },
   "coordinator.task_list": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/cursor",
-      "$/properties/lane",
-      "$/properties/limit",
-      "$/properties/namespace",
-      "$/properties/state",
-      "$/properties/tags"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "namespace",
       "lane",
@@ -244,7 +224,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.TaskListInput",
     "output_fallback": "strict-contracts.json:coordinator.task_list.outputSchema",
-    "published_input_sha256": "1ba0cb1892e832c5320c468fb56c78dbc31765e2a71b2e73e541e79289ab6f29",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "089be66501818cbc3961f3acd088a54e780289ba1d86f29c4d70da105217200e",
     "published_output_sha256": "4a3dcb3a38c724e0963c51e182a53d58c3c873f9e5feb4c33d77964bf4dcc228",
     "required_fields": [],
     "runtime_annotations": [
@@ -258,44 +239,451 @@
     "strict_output_sha256": "9e1147987d039b8954f8acea3709b928fce8e3492ca0eef2640a25b404843537"
   },
   "coordinator.task_manage": {
+    "action_models": {
+      "archive": {
+        "allowed": [
+          "action",
+          "archive_note",
+          "expected_revision",
+          "namespace",
+          "note",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskArchiveRequest",
+        "source_schema_sha256": "80c994809c2a92e426d262fd9f606ee98289f1e7b25c1f6c111524e78222e063"
+      },
+      "checkpoint": {
+        "allowed": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskCheckpointRequest",
+        "source_schema_sha256": "2ac076014022f5a80cce43c15ba84c523e394c84434168bccd35c4d763a8f837"
+      },
+      "comment": {
+        "allowed": [
+          "action",
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskCommentRequest",
+        "source_schema_sha256": "24d73341362e42a129ca275c921fbd078cf91fb6f256320203c9b6151b1e9d37"
+      },
+      "create": {
+        "allowed": [
+          "action",
+          "candidate_ref",
+          "checkpoint",
+          "cooperative",
+          "dependencies",
+          "description",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "namespace",
+          "next_action",
+          "output_refs",
+          "priority",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "task_id",
+          "title"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "comment_text",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "note",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "isolation_hint",
+          "namespace"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskCreateRequest",
+        "source_schema_sha256": "cdcf142869819e693d15152ccd1957104a6346f34813dc2b71edf536b6e0a9d5"
+      },
+      "relate": {
+        "allowed": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskRelateRequest",
+        "source_schema_sha256": "e25cfe5a3cef357081f37df25a7875817a2d3e68accc7d92a4322a427c15bf7b"
+      },
+      "review": {
+        "allowed": [
+          "action",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "namespace",
+          "task_id",
+          "verdict"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title"
+        ],
+        "required_non_null": [
+          "action",
+          "dimensions",
+          "namespace",
+          "task_id",
+          "verdict"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskReviewRequest",
+        "source_schema_sha256": "ea334133cd953154b48c04cf921236b4b6daf6fecf6d77dbebac8d364e350917"
+      },
+      "state": {
+        "allowed": [
+          "action",
+          "namespace",
+          "state",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "tags",
+          "title",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "state",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskStateRequest",
+        "source_schema_sha256": "601876ae57e5ea56443db67a62922d3ab642dd4d1477e4d13580c2fa79af0cbf"
+      },
+      "unrelate": {
+        "allowed": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskUnrelateRequest",
+        "source_schema_sha256": "250dd9b66d9af8160924dab8cb88ffc5cc35613ff2a1d70b0abb8ace89712fdd"
+      },
+      "update": {
+        "allowed": [
+          "action",
+          "blocker_reason",
+          "candidate_ref",
+          "cooperative",
+          "dependencies",
+          "description",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "lane",
+          "namespace",
+          "next_action",
+          "output_refs",
+          "priority",
+          "resource_context",
+          "result",
+          "tags",
+          "task_id",
+          "title"
+        ],
+        "closed": true,
+        "forbidden": [
+          "archive_note",
+          "checkpoint",
+          "comment_text",
+          "dimensions",
+          "evidence",
+          "isolation_hint",
+          "note",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "state",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskUpdateRequest",
+        "source_schema_sha256": "8f9f6ffd9699226b591e43d44b48b176c0490cfc43787cddd51a627bf7d33a8e"
+      }
+    },
     "baseline_description_preserved": true,
     "conditions": [
       "ALL_OF(IF action==\"create\" => requires(isolation_hint) | IF action in [\"update\",\"checkpoint\",\"archive\",\"review\",\"relate\",\"unrelate\",\"state\",\"comment\"] => requires(task_id) | IF action==\"checkpoint\" => requires(checkpoint) | IF action in [\"relate\",\"unrelate\"] => requires(relation_kind,related_task_id) | IF action==\"state\" => requires(state) | IF action==\"review\" => requires(dimensions,verdict) | IF action==\"comment\" => requires(comment_text) | IF action==\"archive\" => require_at_least_one(archive_note,note))"
     ],
     "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/archive_note",
-      "$/properties/blocker_reason",
-      "$/properties/candidate_ref",
-      "$/properties/checkpoint",
-      "$/properties/comment_text",
-      "$/properties/cooperative",
-      "$/properties/dependencies",
-      "$/properties/description",
+      "$/properties/checkpoint/anyOf",
       "$/properties/dimensions",
-      "$/properties/evidence",
-      "$/properties/expected_revision",
-      "$/properties/force",
-      "$/properties/force_reason",
-      "$/properties/input_refs",
-      "$/properties/isolation_hint",
-      "$/properties/lane",
-      "$/properties/namespace",
-      "$/properties/next_action",
-      "$/properties/note",
-      "$/properties/output_refs",
-      "$/properties/priority",
-      "$/properties/related_namespace",
-      "$/properties/related_task_id",
-      "$/properties/relation_kind",
-      "$/properties/request_id",
-      "$/properties/resource_context",
-      "$/properties/result",
-      "$/properties/state",
-      "$/properties/tags",
-      "$/properties/task_id",
-      "$/properties/title",
-      "$/properties/verdict"
+      "$/properties/evidence/anyOf",
+      "$/properties/resource_context/anyOf",
+      "$/properties/result/anyOf"
     ],
     "input_fields": [
       "action",
@@ -332,10 +720,13 @@
       "force",
       "force_reason"
     ],
-    "local_types": [],
+    "local_types": [
+      "TaskDependency"
+    ],
     "model": "terminal_mcp.mcp.role_contracts.TaskManageInput",
     "output_fallback": "strict-contracts.json:coordinator.task_manage.outputSchema",
-    "published_input_sha256": "2b81b40c1ff4953e572367e08b1f7dd8656c78d99da4f5fb43ed819cad6460e2",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "2d47b8aeda9c7f9bee9da4fb68c42337c0119627b05eb0af7079f078cdf54ac7",
     "published_output_sha256": "919a129625ef6ed837a5969d44faf36a95bc9e571be9422e6a0e5f0a6df5d70b",
     "required_fields": [
       "action",
@@ -343,42 +734,57 @@
     ],
     "runtime_annotations": [
       {
-        "anchor": "class TaskManageInput",
-        "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "create requires isolation_hint; non-create mutation actions require task_id; archive needs archive_note or note; action-dependent requirements come from TaskManageInput"
+        "anchor": "_TASK_MANAGE_MODELS =",
+        "source": "src/terminal_mcp/mcp/roles.py",
+        "text": "create requires non-null isolation_hint. update requires non-null expected_revision (minimum 1) and task_id. For every action the accepted field whitelist, required fields and extra_forbidden policy are compiled from _TASK_MANAGE_MODELS, not from the permissive union."
       },
       {
-        "anchor": "TaskRequest =",
+        "anchor": "class TaskCheckpointRequest",
         "source": "src/terminal_mcp/application/task_requests.py",
-        "text": "canonical TaskRequest action variants enforce operation-specific fields and runtime transitions after boundary validation; their exact variants are the source for offline cross-check"
+        "text": "checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text; relate/unrelate require non-null relation_kind and related_task_id."
+      },
+      {
+        "anchor": "class TaskArchiveRequest",
+        "source": "src/terminal_mcp/application/task_requests.py",
+        "text": "archive requires at least one non-null archive_note or note; either is sufficient. create with state=done requires non-null result."
+      },
+      {
+        "anchor": "model_dump(exclude_none=True, exclude_unset=True)",
+        "source": "src/terminal_mcp/mcp/roles.py",
+        "text": "The handler serializes with exclude_none=True and exclude_unset=True; update description:null is omitted/no change, while tags:[] explicitly replaces the stored list with an empty list. Other explicit non-null collection values replace, not append."
+      },
+      {
+        "anchor": "if relation_kind == \"review_of\":",
+        "source": "src/terminal_mcp/storage/tasks.py",
+        "text": "relation_kind is an open string(1..64), not an enum. For relation_kind=review_of on relate: source lane must be review; parent candidate_ref must be nonempty; no different review_of parent; source candidate_ref if set must match parent, otherwise it is bound from parent. Possible errors review_task_required, missing_parent_candidate, ambiguous_review_parent, candidate_conflict."
+      },
+      {
+        "anchor": "async def _action_update(",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "Canonical update/mutation state transitions and task revision checks remain enforced by the existing server; an omitted optional field may mean no mutation."
       },
       {
         "anchor": "Create operation identity. Reuse only on transport retries",
         "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "request_id is a create operation identity: only reuse on transport retry of the same create"
-      },
-      {
-        "anchor": "class TaskCreateRequest",
-        "source": "src/terminal_mcp/application/task_requests.py",
-        "text": "creating state=done requires a non-null result; when archiving, archive_note or note must be non-null; canonical mutation state checks remain authoritative"
+        "text": "request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id."
       }
     ],
     "strict_input_sha256": "dac0417375adab7c6951517317975ac95efb2bbad9f309957b9cad399408ff8d",
     "strict_output_sha256": "7f0fe70f08af4caba47a01386d3a8361cd4d7f19455f6ff35500c477100520c0"
   },
   "executor.command_cancel": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/cmd_hash"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "cmd_hash"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.CommandCancelInput",
     "output_fallback": "strict-contracts.json:executor.command_cancel.outputSchema",
-    "published_input_sha256": "c1d00bc3740f9c6998a9c128a8677b3944804fab511ad2890d50b6e100b5f227",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "34a48eb2758bb7387da73c356dc49183ef0ba33845021d00bf255a26a169e048",
     "published_output_sha256": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
     "required_fields": [
       "cmd_hash"
@@ -388,13 +794,10 @@
     "strict_output_sha256": "14c98739ced16742aa2b143b0e50cb06f6bc26daad6f41718f9a0e82f4fbeb20"
   },
   "executor.command_read": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/cmd_hash",
-      "$/properties/cursor",
-      "$/properties/limit"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "cmd_hash",
       "limit",
@@ -403,7 +806,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.MeshCommandReadInput",
     "output_fallback": "strict-contracts.json:executor.command_read.outputSchema",
-    "published_input_sha256": "d4af12349aa47cccacca894089e2c02a22b28517ccdfc303500c8ca63eb63fe5",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "ae048e876f9c082f9dc752b6463ed7942a7da5e0aba77ef90b66d1426311545c",
     "published_output_sha256": "41b4302fee5cc10a7e3eb51bd2f39bdfd47472c55bd0f949239b97cb10da416b",
     "required_fields": [],
     "runtime_annotations": [],
@@ -411,18 +815,18 @@
     "strict_output_sha256": "8148e53ec2ab68efcbeeea98520136bef88cc291659ce6dee3c421a3544d280a"
   },
   "executor.command_recovery": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/command"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "command"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.CommandRecoveryInput",
     "output_fallback": "strict-contracts.json:executor.command_recovery.outputSchema",
-    "published_input_sha256": "9874246720e4b45833ed397d3ac3e8d69bf969c416e148920f150737c1101e40",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "45798bd91f1e34c6141a2cc9193bfc7e34380bfea74214c9c6a90d440e2f9815",
     "published_output_sha256": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
     "required_fields": [
       "command"
@@ -432,13 +836,10 @@
     "strict_output_sha256": "14c98739ced16742aa2b143b0e50cb06f6bc26daad6f41718f9a0e82f4fbeb20"
   },
   "executor.command_run": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/command",
-      "$/properties/queue_id",
-      "$/properties/task_scope"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "command",
       "queue_id",
@@ -447,7 +848,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.CommandRunInput",
     "output_fallback": "strict-contracts.json:executor.command_run.outputSchema",
-    "published_input_sha256": "ab04083af99a60776a26d9703f0ceabe54fe4d9d81c9987532ef9cbbf7c95bea",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "9d07ca55a0b1b63c3a49f0761d4aaacf2ff47c2e11bf99470d8971195cf02ab4",
     "published_output_sha256": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
     "required_fields": [
       "command"
@@ -463,25 +865,12 @@
     "strict_output_sha256": "14c98739ced16742aa2b143b0e50cb06f6bc26daad6f41718f9a0e82f4fbeb20"
   },
   "executor.message": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [
       "ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
-    "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/alert",
-      "$/properties/cursor",
-      "$/properties/detail",
-      "$/properties/limit",
-      "$/properties/message_hash",
-      "$/properties/mode",
-      "$/properties/namespace",
-      "$/properties/require_reply",
-      "$/properties/scope",
-      "$/properties/target",
-      "$/properties/task_id",
-      "$/properties/text"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "action",
       "text",
@@ -500,7 +889,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
     "output_fallback": "strict-contracts.json:executor.message.outputSchema",
-    "published_input_sha256": "1c257020c8533cd68e388740290ed008dfaef36b6ce8fadda8f0691b9ff61047",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
     "published_output_sha256": "be75f47f00504d4a616ec5dfff148be398ce2bd82ec7995423fd6024f6eb9eee",
     "required_fields": [
       "action"
@@ -509,28 +899,33 @@
       {
         "anchor": "def validate_mode(self):",
         "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "send requires text and forbids message_hash; ack requires message_hash and forbids text; reply requires both"
+        "text": "send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden)."
       },
       {
-        "anchor": "elif self.action in {\"read\", \"history\", \"recipients\"}:",
-        "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "read/history/recipients forbid text and message_hash; recipient resolution and current session are runtime checks"
+        "anchor": "Legacy scope='fleet' requests return",
+        "source": "src/terminal_mcp/mcp/roles.py",
+        "text": "Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours."
       },
       {
-        "anchor": "scope: Literal[\"local\", \"fleet\"] = \"local\"",
-        "source": "src/terminal_mcp/mcp/access_contracts.py",
-        "text": "message scope is local or fleet; local is default for mesh roles"
+        "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")",
+        "source": "src/terminal_mcp/application/access_mesh_messages.py",
+        "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack."
+      },
+      {
+        "anchor": "if (namespace is None) != (task_id is None):",
+        "source": "src/terminal_mcp/application/access_mesh_messages.py",
+        "text": "namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target."
       }
     ],
     "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
     "strict_output_sha256": "2af296b4bf62a50983a6595018792c4d7d4234b294ea5bc76e387fd92c30f1ee"
   },
   "executor.session": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
     "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/session_number"
+      "$/properties/action"
     ],
     "input_fields": [
       "action",
@@ -539,7 +934,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.AttachInput",
     "output_fallback": "strict-contracts.json:executor.session.outputSchema",
-    "published_input_sha256": "761d309e9985318ad58ce558cb83d2952d4db327df0e77c01741e616aabff2c3",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "6b21e30a3ab2a8105f10c53d2d44b6843453a6212cf129f2b03fb6475a5456b9",
     "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
     "required_fields": [
       "session_number"
@@ -555,18 +951,54 @@
     "strict_output_sha256": "dc8da2e47f7437d4d50f98f3c0a62c34f5f031735ee6f2ecbd301dab0f118212"
   },
   "executor.task_claim": {
+    "action_models": {
+      "claim": {
+        "allowed": [
+          "action",
+          "claim_intent",
+          "expected_revision",
+          "namespace",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "release_reason"
+        ],
+        "required_non_null": [
+          "action",
+          "claim_intent",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskClaimRequest",
+        "source_schema_sha256": "8705a3222692aaf55c2ef7ff6ecb42f1cf899fa56be614ac50aefd7bc740064f"
+      },
+      "release": {
+        "allowed": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "release_reason",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "claim_intent"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskReleaseRequest",
+        "source_schema_sha256": "d2ea315a0904c0941effbf007aa6d689049f83d54e85d8ca334810e131acf50f"
+      }
+    },
     "baseline_description_preserved": true,
     "conditions": [
       "ALL_OF(IF action==\"claim\" => requires(claim_intent))"
     ],
-    "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/claim_intent",
-      "$/properties/expected_revision",
-      "$/properties/namespace",
-      "$/properties/release_reason",
-      "$/properties/task_id"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "action",
       "namespace",
@@ -578,7 +1010,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.TaskClaimInput",
     "output_fallback": "strict-contracts.json:executor.task_claim.outputSchema",
-    "published_input_sha256": "b7c4737b3ff85f9d8d52dfbd0a480175128ba2d5e87d90a2bc475c3d2496b63c",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "831b7a74af5fa0b8fc7db4885ee29d88d2b867e613085ae8f90e9a98e3522826",
     "published_output_sha256": "f2abd1f73ab1ae6bad029a2aee3d6439b55c44ac83ef4a338e8d7a4b510a207e",
     "required_fields": [
       "action",
@@ -587,23 +1020,65 @@
     ],
     "runtime_annotations": [
       {
-        "anchor": "class TaskClaimInput",
-        "source": "src/terminal_mcp/mcp/role_contracts.py",
-        "text": "claim requires claim_intent; release_reason may be required when an existing live claim is released, determined from current state"
+        "anchor": "class TaskClaimRequest",
+        "source": "src/terminal_mcp/application/task_requests.py",
+        "text": "claim requires claim_intent as a non-null string(1..160); release forbids claim_intent. claim forbids release_reason. Action-specific allowed fields and extra_forbidden rules derive from TaskClaimRequest and TaskReleaseRequest."
+      },
+      {
+        "anchor": "kwargs.get(\"release_reason\") or \"released_by_owner\"",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "release_reason is optional even when an existing live claim is released; when omitted, runtime uses released_by_owner; idempotent not-claimed release also needs no reason."
       }
     ],
     "strict_input_sha256": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
     "strict_output_sha256": "df31418185ed3920b889e90249d20ae4e1e6cb643d1a6cbc99d1ea6ddd32c717"
   },
   "executor.task_comment": {
+    "action_models": {
+      "checkpoint": {
+        "allowed": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "comment_text"
+        ],
+        "required_non_null": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskCheckpointRequest",
+        "source_schema_sha256": "2ac076014022f5a80cce43c15ba84c523e394c84434168bccd35c4d763a8f837"
+      },
+      "comment": {
+        "allowed": [
+          "action",
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "closed": true,
+        "forbidden": [
+          "checkpoint"
+        ],
+        "required_non_null": [
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "source": "terminal_mcp.application.task_requests.TaskCommentRequest",
+        "source_schema_sha256": "24d73341362e42a129ca275c921fbd078cf91fb6f256320203c9b6151b1e9d37"
+      }
+    },
     "baseline_description_preserved": true,
     "conditions": [],
     "exact_input_fallbacks": [
-      "$/properties/action",
-      "$/properties/checkpoint",
-      "$/properties/comment_text",
-      "$/properties/namespace",
-      "$/properties/task_id"
+      "$/properties/checkpoint/anyOf"
     ],
     "input_fields": [
       "action",
@@ -615,7 +1090,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.MeshTaskCommentInput",
     "output_fallback": "strict-contracts.json:executor.task_comment.outputSchema",
-    "published_input_sha256": "a8c551329fc3c78bde091cc995ba5f3d61cc0da986186a16372a343522b035e5",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "bf3f4057c881a2268ee65fa2c86440ada5ce24959a586b77d6f375a21c6e1d17",
     "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
     "required_fields": [
       "namespace",
@@ -625,23 +1101,17 @@
       {
         "anchor": "def to_request(self):",
         "source": "src/terminal_mcp/mcp/access_contracts.py",
-        "text": "comment requires comment_text; checkpoint requires checkpoint payload; action selects the canonical request model"
+        "text": "comment (default action) requires non-null comment_text and rejects checkpoint. checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields including expected_revision are forbidden; checkpoint does not accept expected_revision."
       }
     ],
     "strict_input_sha256": "947fa128f5f553c22321bd7d86845b374dac515d1dcd97a0146c4652493e9039",
     "strict_output_sha256": "2c5b603519f7f78eaf52713629ca5a15bfcbc6172dc2f6506656cfba0b541526"
   },
   "executor.task_list": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/cursor",
-      "$/properties/lane",
-      "$/properties/limit",
-      "$/properties/namespace",
-      "$/properties/state",
-      "$/properties/tags"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "namespace",
       "lane",
@@ -653,7 +1123,8 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.TaskListInput",
     "output_fallback": "strict-contracts.json:executor.task_list.outputSchema",
-    "published_input_sha256": "1ba0cb1892e832c5320c468fb56c78dbc31765e2a71b2e73e541e79289ab6f29",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "089be66501818cbc3961f3acd088a54e780289ba1d86f29c4d70da105217200e",
     "published_output_sha256": "4a3dcb3a38c724e0963c51e182a53d58c3c873f9e5feb4c33d77964bf4dcc228",
     "required_fields": [],
     "runtime_annotations": [
@@ -667,13 +1138,10 @@
     "strict_output_sha256": "9e1147987d039b8954f8acea3709b928fce8e3492ca0eef2640a25b404843537"
   },
   "executor.task_state": {
+    "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/namespace",
-      "$/properties/state",
-      "$/properties/task_id"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "namespace",
       "task_id",
@@ -682,14 +1150,21 @@
     "local_types": [],
     "model": "terminal_mcp.mcp.role_contracts.TaskStateInput",
     "output_fallback": "strict-contracts.json:executor.task_state.outputSchema",
-    "published_input_sha256": "73242e05726106e1829b85b588179108cfd65c63b1009807069a9a5956b7530a",
+    "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+    "published_input_sha256": "bd7c30645e2b874a12fbb8ebae4c9709a33320e99bdf0a932834fd3bf912a804",
     "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
     "required_fields": [
       "namespace",
       "state",
       "task_id"
     ],
-    "runtime_annotations": [],
+    "runtime_annotations": [
+      {
+        "anchor": "async def _action_state(",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "Any admitted agent may set a valid task state irrespective of another agent's live claim/ownership; task existence and admission remain required; do not imply own claim is needed."
+      }
+    ],
     "strict_input_sha256": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",
     "strict_output_sha256": "784766b97bac0cf5b68ed1d309f6f2505530037f32f15dc1528893a14bb8c6fc"
   }

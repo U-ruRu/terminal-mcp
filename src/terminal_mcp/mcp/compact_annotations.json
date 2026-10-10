@@ -36,55 +36,80 @@
   ],
   "*.message": [
     {
-      "text": "send requires text and forbids message_hash; ack requires message_hash and forbids text; reply requires both",
+      "text": "send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden).",
       "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "def validate_mode(self):"
     },
     {
-      "text": "read/history/recipients forbid text and message_hash; recipient resolution and current session are runtime checks",
-      "source": "src/terminal_mcp/mcp/role_contracts.py",
-      "anchor": "elif self.action in {\"read\", \"history\", \"recipients\"}:"
+      "text": "Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours.",
+      "source": "src/terminal_mcp/mcp/roles.py",
+      "anchor": "Legacy scope='fleet' requests return"
     },
     {
-      "text": "message scope is local or fleet; local is default for mesh roles",
-      "source": "src/terminal_mcp/mcp/access_contracts.py",
-      "anchor": "scope: Literal[\"local\", \"fleet\"] = \"local\""
+      "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack.",
+      "source": "src/terminal_mcp/application/access_mesh_messages.py",
+      "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")"
+    },
+    {
+      "text": "namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target.",
+      "source": "src/terminal_mcp/application/access_mesh_messages.py",
+      "anchor": "if (namespace is None) != (task_id is None):"
     }
   ],
   "executor.task_comment": [
     {
-      "text": "comment requires comment_text; checkpoint requires checkpoint payload; action selects the canonical request model",
+      "text": "comment (default action) requires non-null comment_text and rejects checkpoint. checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields including expected_revision are forbidden; checkpoint does not accept expected_revision.",
       "source": "src/terminal_mcp/mcp/access_contracts.py",
       "anchor": "def to_request(self):"
     }
   ],
   "executor.task_claim": [
     {
-      "text": "claim requires claim_intent; release_reason may be required when an existing live claim is released, determined from current state",
-      "source": "src/terminal_mcp/mcp/role_contracts.py",
-      "anchor": "class TaskClaimInput"
+      "text": "claim requires claim_intent as a non-null string(1..160); release forbids claim_intent. claim forbids release_reason. Action-specific allowed fields and extra_forbidden rules derive from TaskClaimRequest and TaskReleaseRequest.",
+      "source": "src/terminal_mcp/application/task_requests.py",
+      "anchor": "class TaskClaimRequest"
+    },
+    {
+      "text": "release_reason is optional even when an existing live claim is released; when omitted, runtime uses released_by_owner; idempotent not-claimed release also needs no reason.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "kwargs.get(\"release_reason\") or \"released_by_owner\""
     }
   ],
   "coordinator.task_manage": [
     {
-      "text": "create requires isolation_hint; non-create mutation actions require task_id; archive needs archive_note or note; action-dependent requirements come from TaskManageInput",
-      "source": "src/terminal_mcp/mcp/role_contracts.py",
-      "anchor": "class TaskManageInput"
+      "text": "create requires non-null isolation_hint. update requires non-null expected_revision (minimum 1) and task_id. For every action the accepted field whitelist, required fields and extra_forbidden policy are compiled from _TASK_MANAGE_MODELS, not from the permissive union.",
+      "source": "src/terminal_mcp/mcp/roles.py",
+      "anchor": "_TASK_MANAGE_MODELS ="
     },
     {
-      "text": "canonical TaskRequest action variants enforce operation-specific fields and runtime transitions after boundary validation; their exact variants are the source for offline cross-check",
+      "text": "checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text; relate/unrelate require non-null relation_kind and related_task_id.",
       "source": "src/terminal_mcp/application/task_requests.py",
-      "anchor": "TaskRequest ="
+      "anchor": "class TaskCheckpointRequest"
     },
     {
-      "text": "request_id is a create operation identity: only reuse on transport retry of the same create",
+      "text": "archive requires at least one non-null archive_note or note; either is sufficient. create with state=done requires non-null result.",
+      "source": "src/terminal_mcp/application/task_requests.py",
+      "anchor": "class TaskArchiveRequest"
+    },
+    {
+      "text": "The handler serializes with exclude_none=True and exclude_unset=True; update description:null is omitted/no change, while tags:[] explicitly replaces the stored list with an empty list. Other explicit non-null collection values replace, not append.",
+      "source": "src/terminal_mcp/mcp/roles.py",
+      "anchor": "model_dump(exclude_none=True, exclude_unset=True)"
+    },
+    {
+      "text": "relation_kind is an open string(1..64), not an enum. For relation_kind=review_of on relate: source lane must be review; parent candidate_ref must be nonempty; no different review_of parent; source candidate_ref if set must match parent, otherwise it is bound from parent. Possible errors review_task_required, missing_parent_candidate, ambiguous_review_parent, candidate_conflict.",
+      "source": "src/terminal_mcp/storage/tasks.py",
+      "anchor": "if relation_kind == \"review_of\":"
+    },
+    {
+      "text": "Canonical update/mutation state transitions and task revision checks remain enforced by the existing server; an omitted optional field may mean no mutation.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "async def _action_update("
+    },
+    {
+      "text": "request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id.",
       "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "Create operation identity. Reuse only on transport retries"
-    },
-    {
-      "text": "creating state=done requires a non-null result; when archiving, archive_note or note must be non-null; canonical mutation state checks remain authoritative",
-      "source": "src/terminal_mcp/application/task_requests.py",
-      "anchor": "class TaskCreateRequest"
     }
   ],
   "executor.command_run": [
@@ -99,6 +124,13 @@
       "text": "detail chooses snapshot, detail or history; history_kind and cursor apply to history",
       "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "class TaskGetInput"
+    }
+  ],
+  "executor.task_state": [
+    {
+      "text": "Any admitted agent may set a valid task state irrespective of another agent's live claim/ownership; task existence and admission remain required; do not imply own claim is needed.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "async def _action_state("
     }
   ]
 }

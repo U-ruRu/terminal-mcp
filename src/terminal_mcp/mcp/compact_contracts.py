@@ -313,8 +313,21 @@ class SchemaRenderer:
                 if "default" in schema
                 else ""
             )
-        # Any union with siblings (default, discriminator, constraints, etc.)
-        # is an indivisible exact fallback until an equivalence proof exists.
+        # JSON Schema default is merely an annotation: it can be moved
+        # outside an otherwise standalone, exactly nullable union.
+        if (
+            set(schema) == {"anyOf", "default"}
+            and len(schema["anyOf"]) == 2
+            and schema["anyOf"].count({"type": "null"}) == 1
+        ):
+            other = next(branch for branch in schema["anyOf"] if branch != {"type": "null"})
+            return (
+                self.render(other, depth=depth + 1, at=at + "/anyOf")
+                + "? (default="
+                + encoded(schema["default"]).decode()
+                + ")"
+            )
+        # Unrecognized union siblings are never silently dropped.
         if ("anyOf" in schema or "oneOf" in schema) and len(schema) != 1:
             self.fallbacks.append(at)
             return "SCHEMA_FALLBACK " + encoded(schema).decode()
@@ -569,6 +582,100 @@ def source_digests() -> dict[str, str]:
     return {f: sha((ROOT / f).read_bytes()) for f in names}
 
 
+def action_models(role: str, name: str) -> dict[str, type]:
+    """Canonical post-boundary validators, not the permissive role union."""
+    if (role, name) == ("coordinator", "task_manage"):
+        from terminal_mcp.mcp.roles import _TASK_MANAGE_MODELS
+
+        return dict(_TASK_MANAGE_MODELS)
+    if (role, name) == ("executor", "task_claim"):
+        from terminal_mcp.application.task_requests import TaskClaimRequest, TaskReleaseRequest
+
+        return {"claim": TaskClaimRequest, "release": TaskReleaseRequest}
+    if (role, name) == ("executor", "task_comment"):
+        from terminal_mcp.application.task_requests import TaskCheckpointRequest, TaskCommentRequest
+
+        return {"comment": TaskCommentRequest, "checkpoint": TaskCheckpointRequest}
+    return {}
+
+
+def action_contracts(role: str, name: str, properties: dict) -> tuple[list[str], dict]:
+    """Generate full per-action whitelists/required fields from real server models."""
+    selected = action_models(role, name)
+    if not selected:
+        return [], {}
+    rows = []
+    closure = {}
+    available = set(properties)
+    for action, model in selected.items():
+        # Only fields actually accepted by the public surface can be offered.
+        allowed = set(model.model_fields) & available
+        required = {f for f in allowed if model.model_fields[f].is_required()}
+        # The outer public boundary can supply a default discriminator before
+        # canonical conversion (e.g. MeshTaskCommentInput defaults to comment).
+        # It is not a required field in the original client request.
+        surface_action = contract_models(role)[name].model_fields.get("action")
+        if (
+            surface_action is not None
+            and not surface_action.is_required()
+            and surface_action.default == action
+        ):
+            required.discard("action")
+        # Require specific non-null values only where model annotation disallows None.
+        # This distinction is crucial for nullable fields in the outer role boundary.
+        model_schema = model.model_json_schema()
+        if model_schema.get("additionalProperties") is not False:
+            raise ValueError(f"Canonical {model.__name__} became open")
+        if not required.issubset(allowed):
+            raise ValueError(f"Unreachable canonical requirement in {model.__name__}")
+        extras = sorted(available - allowed)
+        payload = {
+            "source": model.__module__ + "." + model.__qualname__,
+            "source_schema_sha256": sha(encoded(model_schema)),
+            "allowed": sorted(allowed),
+            "required_non_null": sorted(required),
+            "forbidden": extras,
+            "closed": True,
+        }
+        closure[action] = payload
+        rows.append(
+            f"{action}: allowed fields [{', '.join(payload['allowed'])}]; "
+            f"required non-null [{', '.join(payload['required_non_null']) or '(none)'}]; "
+            "all other named inputs rejected as extra_forbidden"
+        )
+    # Ensure no newly introduced server action can silently disappear from discovery.
+    if (role, name) == ("coordinator", "task_manage"):
+        from terminal_mcp.application.base import ROLE_TASK_ACTIONS
+
+        expected = set(ROLE_TASK_ACTIONS["coordinator"])
+        if expected != set(selected):
+            raise ValueError(f"Coordinator action roster drift {expected ^ set(selected)}")
+    return rows, closure
+
+
+def transport_input_schema(strict_schema: dict, effective_before: dict) -> dict:
+    """Advertise field names, not business assertions. All validation reaches the server.
+
+    MCP tools require an object schema; a non-object JSON RPC arguments payload
+    can still be rejected at the protocol layer. Unknown keys must pass through.
+    """
+    properties = strict_schema.get("properties", {})
+    output = {
+        "type": "object",
+        "description": (
+            "Transport envelope only. Every named argument is advisory; server "
+            "validates strict types, required fields, action restrictions and bounds "
+            "and returns bounded structured errors."
+        ),
+        "properties": {name: {} for name in properties},
+        "additionalProperties": True,
+    }
+    matrix = effective_before.get("x-terminal-mcp-action-matrix")
+    if matrix is not None:
+        output["x-terminal-mcp-action-matrix"] = copy.deepcopy(matrix)
+    return output
+
+
 def compile_tool(
     role: str, item: dict, model: type, notes: list[dict], strict_output: dict
 ) -> tuple[dict, dict, dict]:
@@ -578,37 +685,39 @@ def compile_tool(
     Draft202012Validator.check_schema(strict_input)
     Draft202012Validator.check_schema(strict_output)
     assert strict_input.get("type") == "object"
-    renderer = SchemaRenderer(strict_input, f"{role}.{item['name']}.input")
-    props = strict_input.get("properties", {})
-    required = set(strict_input.get("required", []))
+    # Structural RKB rule: discard schema-annotation metadata in schema context
+    # before rendering. Never strip literal user keys named title/description.
+    descriptive_input = strip_annotations(strict_input)
+    renderer = SchemaRenderer(descriptive_input, f"{role}.{item['name']}.input")
+    props = descriptive_input.get("properties", {})
+    required = set(descriptive_input.get("required", []))
     fields = [
         f"{k}{'' if k in required else '?'}:{renderer.render(v, at='$/properties/' + k)}"
         for k, v in props.items()
     ]
-    conds = rules(strict_input, renderer.render)
-    renderer.definitions()  # Validate recursive local $ref closure before publishing.
+    conds = rules(descriptive_input, renderer.render)
     published = copy.deepcopy(item)
-    # Strict input replaces only the permissive planning projection in the
-    # offline future catalogue. Actual runtime model/handler is untouched.
-    published["inputSchema"] = strip_annotations(strict_input)
-    matrix = item.get("inputSchema", {}).get("x-terminal-mcp-action-matrix")
-    if matrix is not None:
-        published["inputSchema"]["x-terminal-mcp-action-matrix"] = copy.deepcopy(matrix)
+    # All future client-side validation apart from the protocol-level
+    # object envelope is advisory. Strict input stays in the source sidecar
+    # and remains exactly the existing FastMCP runtime boundary.
+    published["inputSchema"] = transport_input_schema(strict_input, item["inputSchema"])
     # Keep the existing SDK-compatible flat outputSchema; exact nested output
     # is a separately published, checked fallback and visible in coverage.
-    if len(fields) <= 5:
-        brief_arguments = "; ".join(fields) if fields else "(none)"
-    else:
-        mandatory = ", ".join(k for k in props if k in required) or "(none)"
-        optional = ", ".join(k for k in props if k not in required) or "(none)"
-        # The adjacent strict inputSchema and its local $defs are self-contained.
-        # Do not duplicate lengthy types/defaults/bounds in agent prose.
-        brief_arguments = f"required [{mandatory}]; optional [{optional}]"
+    action_lines, action_coverage = action_contracts(role, item["name"], props)
+    local_defs = renderer.definitions()
     lines = [
         item.get("description") or "",
-        "Arguments: " + brief_arguments + ". InputSchema carries exact types, bounds, "
-        "defaults, alternatives and tool-local $defs.",
+        "The public inputSchema is a permissive transport envelope (names only); "
+        "all conditions below are enforced by the server with compact structured errors.",
+        "Arguments (field? means optional; Type? means nullable): "
+        + ("; ".join(fields) if fields else "(none)")
+        + ".",
+        "The server rejects unknown fields, invalid types, values, bounds and alternatives.",
     ]
+    if local_defs:
+        lines.append("Referenced input types: " + "; ".join(local_defs) + ".")
+    if action_lines:
+        lines.append("Server action field policy: " + "; ".join(action_lines) + ".")
     if conds:
         lines.append("Conditions: " + "; ".join(conds) + ".")
     if notes:
@@ -637,6 +746,8 @@ def compile_tool(
             for note in notes
         ],
         "baseline_description_preserved": True,
+        "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
+        "action_models": action_coverage,
     }
     Draft202012Validator.check_schema(published["inputSchema"])
     Draft202012Validator.check_schema(published["outputSchema"])

@@ -108,9 +108,7 @@ def test_strict_input_output_refs_and_digest_preserved(compiled):
 
 @pytest.mark.parametrize("role", ["executor", "coordinator"])
 def test_task_list_valid_invalid_strict_parity(role, compiled):
-    schema = next(
-        t["inputSchema"] for t in compiled["after"][role]["tools"] if t["name"] == "task_list"
-    )
+    schema = compiled["strict"][role + ".task_list"]["inputSchema"]
     model = c.contract_models(role)["task_list"]
     for request, allowed in (
         ({}, True),
@@ -131,9 +129,7 @@ def test_task_list_valid_invalid_strict_parity(role, compiled):
 
 @pytest.mark.parametrize("role", ["executor", "coordinator"])
 def test_message_conditional_requirements_and_runtime_only_rules(role, compiled):
-    schema = next(
-        t["inputSchema"] for t in compiled["after"][role]["tools"] if t["name"] == "message"
-    )
+    schema = compiled["strict"][role + ".message"]["inputSchema"]
     model = c.contract_models(role)["message"]
     fixtures = (
         ({"action": "send", "text": "hello"}, True),
@@ -161,15 +157,14 @@ def test_message_conditional_requirements_and_runtime_only_rules(role, compiled)
     rules = " ".join(
         note["text"] for note in compiled["coverage"][role + ".message"]["runtime_annotations"]
     )
-    assert "forbids message_hash" in rules and "forbid text" in rules
+    assert "message_hash must be absent or null" in rules
+    assert "text must be absent or null" in rules
     assert "scope" in rules
 
 
 def test_coordinator_task_manage_conditions_and_operation_roster(compiled):
     role = "coordinator"
-    schema = next(
-        t["inputSchema"] for t in compiled["after"][role]["tools"] if t["name"] == "task_manage"
-    )
+    schema = compiled["strict"][role + ".task_manage"]["inputSchema"]
     model = c.contract_models(role)["task_manage"]
     from terminal_mcp.mcp.roles import _TASK_MANAGE_MODELS
 
@@ -208,14 +203,13 @@ def test_coordinator_task_manage_conditions_and_operation_roster(compiled):
     )
     assert "archive_note" in rendered and "isolation_hint" in rendered
     notes = compiled["coverage"]["coordinator.task_manage"]["runtime_annotations"]
-    assert any("TaskRequest" in n["text"] for n in notes)
+    assert any("expected_revision" in n["text"] for n in notes)
+    assert len(compiled["coverage"]["coordinator.task_manage"]["action_models"]) == 9
     assert any("request_id" in n["text"] for n in notes)
 
 
 def test_access_attachment_and_comment_requests(compiled):
-    schema = next(
-        t["inputSchema"] for t in compiled["after"]["executor"]["tools"] if t["name"] == "session"
-    )
+    schema = compiled["strict"]["executor.session"]["inputSchema"]
     model = c.contract_models("executor")["session"]
     for args, allowed in (
         ({"session_number": "0001"}, True),
@@ -257,7 +251,7 @@ def test_schema_annotations_are_context_sensitive_and_unknown_fails_closed():
         "SCHEMA_FALLBACK" in rendered and c.encoded(val["x-future-constraint"]).decode() in rendered
     )
     mixed = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None}
-    assert "SCHEMA_FALLBACK" in r.render(mixed)
+    assert r.render(mixed) == "string? (default=null)"
     assert r.fallbacks
     with pytest.raises(ValueError, match="Unresolved"):
         r.render({"$ref": "#/$defs/Missing"})

@@ -7,21 +7,13 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Start an Access session and obtain its four-digit session_number, or end the current session.\nArguments: action:string (SCHEMA_FALLBACK {\"enum\":[\"start\",\"end\"],\"title\":\"Action\"}). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: start issues a four-digit session_number; end ends the shared access cycle.\nReturns: IssuerStartReceipt{ok:true,session_number:string} | IssuerEndReceipt{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Start an Access session and obtain its four-digit session_number, or end the current session.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"start\"|\"end\".\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: start issues a four-digit session_number; end ends the shared access cycle.\nReturns: IssuerStartReceipt{ok:true,session_number:string} | IssuerEndReceipt{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
-        "additionalProperties": false,
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
         "properties": {
-          "action": {
-            "enum": [
-              "start",
-              "end"
-            ],
-            "type": "string"
-          }
+          "action": {}
         },
-        "required": [
-          "action"
-        ],
         "type": "object",
         "x-terminal-mcp-action-matrix": {
           "end": {

@@ -83,8 +83,10 @@ def test_manual_roster_sources_and_minimal_boundaries(key):
     strict=model.model_json_schema()
     assert strict == SIDECAR[key]["inputSchema"], key
     assert set(item["inputSchema"]["properties"])==set(strict.get("properties",{})),key
-    assert item["inputSchema"].get("required",[]) == strict.get("required",[]),key
-    assert item["inputSchema"].get("additionalProperties") is False,key
+    assert not item["inputSchema"].get("required",[]),key
+    assert item["inputSchema"].get("additionalProperties") is True,key
+    assert all(not spec for spec in item["inputSchema"]["properties"].values()),key
+    assert Draft202012Validator(item["inputSchema"]).is_valid(CASES[key][1]),key
     assert all(f in item["description"] for f in strict.get("properties",{})),key
     Draft202012Validator.check_schema(item["inputSchema"])
     valid,invalid=CASES[key]
@@ -143,8 +145,24 @@ def rpc(client,role,name,args,index):
     assert json.loads(result["content"][0]["text"])==payload
     return payload,len(resp.content),len(json.dumps(result,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode())
 
+def apply_future_catalogues(app):
+    """Swap only discovery schemas/descriptions in an isolated process, no deploy."""
+    for role in ROLES:
+        server = getattr(app.state, f"{role}_mcp")
+        intended = {item["name"]: item for item in CATALOGS[role]}
+        for tool in server._tool_manager.list_tools():
+            tool.parameters = intended[tool.name]["inputSchema"]
+            tool.description = intended[tool.name]["description"]
+        actual = [
+            t.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for t in asyncio.run(server.list_tools())
+        ]
+        assert actual == CATALOGS[role], role
+
+
 def test_isolated_mcp_wire_19_invalid_and_many_valid(tmp_path):
     app=create_app(make_settings(tmp_path))
+    apply_future_catalogues(app)
     error_rows=[]
     with TestClient(app,base_url="https://qa-bravo3.example") as client:
         for i,(key,(valid,invalid)) in enumerate(CASES.items(),1):
@@ -175,8 +193,8 @@ def test_isolated_mcp_wire_19_invalid_and_many_valid(tmp_path):
                                "structured_bytes":len(json.dumps(obj,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()),
                                "error_bytes":len(json.dumps(obj["error"],sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()),
                                "path":obj["error"].get("path")})
-    dest=ROOT/"docs/compact-contracts/qa-bravo3-wire-metrics.json"
-    dest.write_text(json.dumps({"candidate":SHA,"errors":error_rows},indent=2)+"\n",encoding="utf-8")
+    dest=ROOT/"docs/compact-contracts/qa-echo3-wire-metrics.json"
+    dest.write_text(json.dumps({"qa_parent":SHA,"errors":error_rows},indent=2)+"\n",encoding="utf-8")
     assert len(error_rows)==23
 
 @pytest.mark.parametrize("key,payload,canonical,source_path",[
@@ -246,11 +264,12 @@ def test_update_null_omits_field_but_empty_list_preserved():
     assert empty_payload["tags"] == []
 
 
-def test_checkpoint_description_falsely_advertises_expected_revision():
+def test_checkpoint_description_no_longer_advertises_expected_revision():
     item=next(t for t in CATALOGS["executor"] if t["name"]=="task_comment")
-    assert "optional expected_revision" in item["description"]
+    assert "optional expected_revision" not in item["description"]
+    assert "checkpoint does not accept expected_revision" in item["description"]
     payload={"action":"checkpoint","namespace":"qa","task_id":"t","checkpoint":"ok","expected_revision":1}
-    assert list(Draft202012Validator(item["inputSchema"]).iter_errors(payload))
+    assert not list(Draft202012Validator(item["inputSchema"]).iter_errors(payload))
     with pytest.raises(ValidationError) as exc:
         MeshTaskCommentInput.model_validate(payload)
     assert exc.value.errors(include_input=False)[0]["type"]=="extra_forbidden"
@@ -263,4 +282,5 @@ def test_relation_kind_open_ended_but_review_of_has_runtime_semantics():
              "relation_kind":"qa_arbitrary_rel","related_task_id":"u"}
     assert not list(Draft202012Validator(item["inputSchema"]).iter_errors(payload))
     assert TaskRelateRequest.model_validate({**payload,"code":None})
-    assert "review_of source task must use lane=review" not in item["description"]
+    assert "source lane must be review" in item["description"]
+    assert "relation_kind is an open string" in item["description"]
