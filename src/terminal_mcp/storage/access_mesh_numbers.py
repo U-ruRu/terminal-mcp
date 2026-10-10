@@ -413,7 +413,16 @@ class MeshSessionNumbers:
         return max(ends, key=lambda row: (row["ended_at"], row["event_id"])) if ends else None
 
     def record_start(
-        self, *, number, issuer_id, slot_id, event_id, active_from, started_at, hard_expires_at
+        self,
+        *,
+        number,
+        issuer_id,
+        slot_id,
+        event_id,
+        active_from,
+        started_at,
+        hard_expires_at,
+        source_peer_id=None,
     ):
         self.validate(number)
         if issuer_id not in self.store.trusted_issuers:
@@ -442,7 +451,22 @@ class MeshSessionNumbers:
                 (event_id,),
             ).fetchone()
             if existing is not None:
-                if dict(existing) != candidate:
+                changed = {field for field in candidate if existing[field] != candidate[field]}
+                if changed == {"active_from"} and source_peer_id is not None:
+                    # Previous builds synthesized receiver-local activation
+                    # timestamps while replaying SessionStarted. The original
+                    # issuer is authoritative for precisely this one field.
+                    # Relayed stale replicas cannot rewrite issuer history.
+                    if issuer_id == self.store.local_node_id and source_peer_id != issuer_id:
+                        return {"ok": True}
+                    if source_peer_id == issuer_id and issuer_id != self.store.local_node_id:
+                        db.execute(
+                            "UPDATE access_mesh_number_starts SET active_from=? WHERE event_id=?",
+                            (candidate["active_from"], event_id),
+                        )
+                    else:
+                        raise AccessMeshError("idempotency_conflict")
+                elif changed:
                     raise AccessMeshError("idempotency_conflict")
             else:
                 db.execute(

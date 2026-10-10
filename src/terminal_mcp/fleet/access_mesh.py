@@ -318,7 +318,9 @@ class AccessMeshReplication:
             if response.get("ok") is not True or not isinstance(response.get("starts"), list):
                 raise AccessMeshError("invalid_session_start_snapshot")
             for item in response["starts"]:
-                await asyncio.to_thread(self.store.numbers.record_start, **item)
+                await asyncio.to_thread(
+                    self.store.numbers.record_start, **item, source_peer_id=peer.instance_id
+                )
             cursor = response.get("next_cursor")
             if not cursor:
                 return
@@ -781,7 +783,9 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         if payload["issuer_id"] != peer:
             raise HTTPException(400, "issuer does not match authenticated peer")
         try:
-            return await asyncio.to_thread(mesh.store.numbers.record_start, **payload)
+            return await asyncio.to_thread(
+                mesh.store.numbers.record_start, **payload, source_peer_id=peer
+            )
         except (AccessMeshError, ValueError, TypeError) as exc:
             return {"ok": False, "code": getattr(exc, "code", "invalid_session_start")}
 

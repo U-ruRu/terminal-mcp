@@ -299,9 +299,16 @@ class AccessMeshStore(LocalAccessMesh):
                 "SELECT number FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),
             ).fetchone()
-            if previous:
-                start_data = _mutation_start.get() or {}
-                active_from = start_data.get("active_from") or self.clock()
+            start_data = _mutation_start.get()
+            # A relayed SessionStarted event carries the original window anchor
+            # but not the manual activation time. Never invent active_from using
+            # the receiver's clock: /numbers/starts carries issuer-authored time.
+            # A local native start without the extra metadata still records its
+            # immutable event timestamp to preserve its existing contract.
+            if previous and (start_data is not None or event.issuer_id == self.local_node_id):
+                active_from = (
+                    (start_data or {}).get("active_from") or event.effective_at or self.clock()
+                )
                 started_at = event.effective_at or active_from
                 expires = event.deadline_at or (
                     started_at + timedelta(seconds=slot.policy.duration_seconds)
