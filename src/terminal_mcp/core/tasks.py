@@ -62,6 +62,18 @@ def _warning(code: str, message: str, *, task_id=None, severity="warning", **con
     return item
 
 
+class TaskCreateResult(dict):
+    """Public mapping plus a private audit flag for a replayed create receipt.
+
+    No new wire/schema field is published: the attribute is only inspected by the
+    persistent backend before it appends a post-commit audit event.
+    """
+
+    def __init__(self, result: dict, *, replayed: bool):
+        super().__init__(result)
+        self.replayed = replayed
+
+
 class TaskCoordinator:
     """Durable task workflow with hard ownership/dependency gates and explicit evidence."""
 
@@ -1057,12 +1069,15 @@ class TaskCoordinator:
                         agent_id, namespace, request_id, fingerprint
                     )
                     if saved is not None:
-                        return await self._result(
-                            namespace,
-                            saved["task_id"],
-                            warnings,
-                            committed_task=saved,
-                            include_description=kwargs.get("description") is not None,
+                        return TaskCreateResult(
+                            await self._result(
+                                namespace,
+                                saved["task_id"],
+                                warnings,
+                                committed_task=saved,
+                                include_description=kwargs.get("description") is not None,
+                            ),
+                            replayed=True,
                         )
                 except Exception:
                     # A read failure also leaves the commit status unknown.
@@ -1094,12 +1109,15 @@ class TaskCoordinator:
             }
         if not getattr(committed, "replayed", False):
             self._inc("terminal_mcp_tasks_created_total")
-        return await self._result(
-            namespace,
-            task_id,
-            warnings,
-            committed_task=committed,
-            include_description=kwargs.get("description") is not None,
+        return TaskCreateResult(
+            await self._result(
+                namespace,
+                task_id,
+                warnings,
+                committed_task=committed,
+                include_description=kwargs.get("description") is not None,
+            ),
+            replayed=bool(getattr(committed, "replayed", False)),
         )
 
     async def _action_claim(self, agent_id, namespace, task_id, **kwargs):

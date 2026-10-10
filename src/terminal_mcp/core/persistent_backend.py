@@ -2210,7 +2210,12 @@ class PersistentBackend:
                         **kwargs,
                     )
                     actual_task = result.get("task") if isinstance(result, dict) else None
-                    if result.get("ok") and actual_task:
+                    # Returning an already committed create receipt must not
+                    # append a second persistent audit event.
+                    replayed_create = (
+                        action == "create" and getattr(result, "replayed", False)
+                    )
+                    if result.get("ok") and actual_task and not replayed_create:
                         try:
                             await self.task_store.add_event(
                                 actual_task["namespace"],

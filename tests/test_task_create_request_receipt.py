@@ -150,6 +150,13 @@ def test_live_mcp_task_manage_receipt_is_stable_across_retries(tmp_path):
         assert replay["task_id"] == original["task_id"]
         with sqlite3.connect(config.database_path) as db:
             key = ("http-receipts", original["task_id"])
+            # A transport replay must not emit a second persistent audit event.
+            audit_count = db.execute(
+                "SELECT count(*) FROM work_events "
+                "WHERE namespace=? AND task_id=? AND event_type='persistent_mutation'",
+                key,
+            ).fetchone()[0]
+            assert audit_count == 1, audit_count
             assert (
                 db.execute(
                     "SELECT count(*) FROM work_events "
