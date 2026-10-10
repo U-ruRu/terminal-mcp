@@ -513,7 +513,7 @@ class AccessMeshMessaging:
             if row["read_at"]
             else ("seen" if row["first_seen_at"] else "delivered")
         )
-        return {
+        result = {
             "message_hash": row["message_hash"],
             "sender": wire["sender_name"],
             "target": row["target_name"],
@@ -532,6 +532,33 @@ class AccessMeshMessaging:
             "reply_message_hash": row["reply_message_hash"],
             "reply_to": wire["reply_to"],
         }
+
+        if "delivery_recipients" in row:
+            result["deliveries"] = [
+                {
+                    "public_name": receipt["public_name"],
+                    "state": "replied"
+                    if receipt["replied_at"]
+                    else "read"
+                    if receipt["read_at"]
+                    else "seen"
+                    if receipt["first_seen_at"]
+                    else "delivered",
+                    **{
+                        key: receipt[key]
+                        for key in (
+                            "first_seen_at",
+                            "last_seen_at",
+                            "seen_count",
+                            "read_at",
+                            "replied_at",
+                            "reply_message_hash",
+                        )
+                    },
+                }
+                for receipt in row["delivery_recipients"]
+            ]
+        return result
 
     async def read(
         self,
@@ -581,13 +608,25 @@ class AccessMeshMessaging:
             "messages": page,
             "next_cursor": next_cursor,
         }
-        if not history and page:
+        incoming_hashes = {
+            row["message_hash"]
+            for row in raw[: len(page)]
+            if row["recipient_agent_id"] == identity["logical_agent_id"]
+        }
+        if incoming_hashes:
+            # A recipient sees an incoming message in either inbox or history.
+            # Outgoing history is a read-only projection of other recipients.
             # Reserve and validate the surfaced shape before acknowledging anything.
             stamp = utc_text(self.mesh.clock())
             surfaced = [dict(item) for item in page]
             for item in surfaced:
+                if item["message_hash"] not in incoming_hashes:
+                    continue
                 if item["mode"] == "notify":
-                    item.update(state="read", acknowledged=True)
+                    item.update(
+                        state="replied" if item["state"] == "replied" else "read",
+                        acknowledged=True,
+                    )
                     if detail == "full":
                         item["read_at"] = item.get("read_at") or stamp
                 elif item["state"] == "delivered":
@@ -606,7 +645,7 @@ class AccessMeshMessaging:
             await asyncio.to_thread(
                 self.store.surface,
                 identity["logical_agent_id"],
-                [row["message_hash"] for row in raw[: len(page)]],
+                sorted(incoming_hashes),
                 stamp,
             )
             result = projected

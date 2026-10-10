@@ -408,8 +408,10 @@ class AccessMeshMessageStore:
             params.extend([namespace, task_id])
         params.append(limit)
         with self.connect() as db:
+            # Keep message pagination and recipient facts in one read snapshot.
+            db.execute("BEGIN")
             rows = db.execute(
-                "SELECT x.sequence,m.*,x.wire_json,r.recipient_agent_id,r.read_at,"
+                "SELECT x.sequence,m.*,x.wire_json,x.receipt_json,r.recipient_agent_id,r.read_at,"
                 "r.first_seen_at,r.last_seen_at,r.seen_count,r.replied_at,r.reply_message_hash "
                 "FROM coordination_messages m JOIN access_mesh_messages x USING(message_hash) "
                 "LEFT JOIN coordination_message_recipients r ON r.message_hash=m.message_hash "
@@ -418,7 +420,57 @@ class AccessMeshMessageStore:
                 + " ORDER BY x.sequence DESC LIMIT ?",
                 params,
             ).fetchall()
-        return [dict(row) for row in rows]
+            result = [dict(row) for row in rows]
+            outgoing = {
+                row["message_hash"]: row
+                for row in result
+                if row["sender_agent_id"] == agent_id and row["recipient_agent_id"] is None
+            }
+            if outgoing:
+                # Do not join recipients before LIMIT: a broadcast is still one
+                # message, one sequence and one cursor position.
+                placeholders = ",".join("?" for _ in outgoing)
+                receipts = {message_hash: [] for message_hash in outgoing}
+                for row in db.execute(
+                    "SELECT * FROM coordination_message_recipients "
+                    f"WHERE message_hash IN ({placeholders}) ORDER BY recipient_agent_id",
+                    tuple(outgoing),
+                ):
+                    receipts[row["message_hash"]].append(dict(row))
+                for message_hash, row in outgoing.items():
+                    row.update(self._sender_status(receipts[message_hash]))
+                    names = {
+                        item["logical_agent_id"]: item["public_name"]
+                        for item in json.loads(row["receipt_json"])["deliveries"]
+                    }
+                    row["delivery_recipients"] = [
+                        {**receipt, "public_name": names.get(receipt["recipient_agent_id"])}
+                        for receipt in receipts[message_hash]
+                    ]
+        return result
+
+    @staticmethod
+    def _sender_status(recipients):
+        """Project recipient facts without creating/surfacing a sender receipt.
+
+        For broadcast, scalar progress is reached only by ALL recipients; its
+        timestamp is when the final recipient reached it. A reply reference is
+        unambiguous only for a directed/single-recipient delivery.
+        """
+        if not recipients:
+            return {}
+        result = {}
+        for key in ("first_seen_at", "read_at", "replied_at"):
+            values = [row[key] for row in recipients]
+            result[key] = max(values) if all(values) else None
+        result["last_seen_at"] = max(
+            (row["last_seen_at"] for row in recipients if row["last_seen_at"]), default=None
+        )
+        result["seen_count"] = min(row["seen_count"] or 0 for row in recipients)
+        result["reply_message_hash"] = (
+            recipients[0]["reply_message_hash"] if len(recipients) == 1 else None
+        )
+        return result
 
     def _local_cutover_report_tx(self, db, now):
         """Only diagnose new local rows; historic payloads are disposable.
