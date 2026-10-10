@@ -24,6 +24,68 @@ After forward migration auth.sqlite3 is the ONLY active source for these six
 relations. The runtime fails closed when any legacy identity table still exists
 in its working database. Paths must be physically distinct, including hardlinks.
 
+## Binding protected identity to this installation (B3 continuity)
+
+The protected database, existing Access verifier key and independent
+identity-anchor file are a three-part installation identity. The new file
+is adjacent to the protected database (AUTH.identity-anchor, for example
+auth.sqlite3.identity-anchor), outside both the replaceable auth SQLite file
+and the disposable working database. It contains a random 256-bit installation
+nonce with a format identifier. It is created exclusively (O_EXCL), mode 0600,
+and never overwritten by bootstrap, migration, clean, or ordinary restarts.
+
+The migration-completion row contains the same nonce and an HMAC-SHA256 proof
+keyed by the pre-existing Access verifier key. Every startup, inspect,
+idempotent migration and clean verifies: (1) the complete protected Foundation
+and OAuth/console schema; (2) its completed migration marker; (3) equality of
+the protected database nonce with the external immutable anchor; and
+(4) the proof under that installation's existing verifier key. A foreign
+fully-initialized auth SQLite fails even if its schema is identical, its
+clients are empty and it was initialized under the SAME verifier key. No
+OAuth credentials, keys, grant permissions, token expiry or rotation are
+changed by this provenance check.
+
+A legitimate first install has no prior protected DB, verifier key or anchor,
+and has either no runtime database or only empty constructor-created Access
+Mesh metadata. Foundation creates its standard verifier key, then fresh
+identity bootstrap exclusively creates and seals the anchor and marker before
+the server accepts traffic. Presence of historical state forbids silently
+regenerating an installation identity.
+
+An offline forward migration first verifies existing protected Foundation and
+all legacy identity relations, saves recoverable SQLite snapshots, then
+exclusively creates the installation anchor and authenticates the new marker
+in the attached transaction. If a migration is killed before COMMIT, the
+legacy source remains intact. A fully written pending anchor is reused by a
+subsequent offline forward retry; it cannot be overwritten with a new nonce.
+An incomplete anchor fails closed and requires reviewed recovery of the
+pre-migration state rather than an automatic reset.
+
+Keep the protected auth SQLite, the Access verifier key, the immutable
+identity anchor, and config together as a single backup and recovery unit.
+The authoritative backup inventory includes the external anchor when
+present or required by the auth marker. Clean's quarantine backup also
+preserves it independently. After an authorized restore, verify the
+database, key and anchor all belong to the same installation and inspect
+reports isolated before permitting startup or clean. If the anchor is
+missing, malformed, permissions-insecure or mismatched, stop and recover
+the correct anchor and auth from a consistent trusted backup; never copy
+a new foreign DB over the existing one or adopt its generated nonce.
+
+Inspect differentiates new-install, legacy-present (pre-migration Foundation
+verified), isolated, missing-protected-auth, incompatible-protected-auth,
+untrusted-protected-auth and conflicting-identity-sources. Legacy-present
+does not authorize clean.
+
+An older snapshot from the SAME installation may still carry a correct
+anchor and HMAC yet precede later token rotations or revocations. Identity
+provenance does not establish freshness of mutable authorization records.
+The restore runbook must preserve the current auth state and require an
+explicit operator review of changes made after the snapshot; it must not
+silently replace current live auth. A general mutation-synchronized
+anti-rollback authority needs separate product design and is outside
+this repair. No credential rotation is performed here.
+
 ## Controlled offline forward migration
 
 1. Stage and verify the exact new release SHA. Stop terminal-mcp.service and

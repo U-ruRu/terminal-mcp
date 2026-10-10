@@ -10,18 +10,25 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import time
 from contextlib import closing
 from pathlib import Path
 
-from terminal_mcp.auth.foundation import AUTH_SCHEMA_VERSION
+from terminal_mcp.auth.access_key import AccessVerifierKeyStore
+from terminal_mcp.auth.foundation import AUTH_SCHEMA_VERSION, AuthFoundationError
 
 
 class IdentityMigrationError(RuntimeError):
     """Refuse an ambiguous or unsafe identity migration."""
+
+
+class IdentityLineageError(IdentityMigrationError):
+    """A well-formed protected database belongs to another installation."""
 
 
 # These six relations form a single consistency unit.  Device exchange writes
@@ -106,7 +113,12 @@ FOUNDATION_TABLES = frozenset(
         "auth_provider_bindings",
     }
 )
-MIGRATION_SCHEMA = "(version INTEGER PRIMARY KEY, migrated_at INTEGER NOT NULL)"
+MIGRATION_SCHEMA = (
+    "(version INTEGER PRIMARY KEY,migrated_at INTEGER NOT NULL,"
+    "lineage_nonce TEXT NOT NULL,lineage_proof TEXT NOT NULL)"
+)
+_LINEAGE_CONTEXT = b"terminal-mcp/oauth-identity-lineage/v1\x00"
+_ANCHOR_MAGIC = b"TMC-OAUTH-INSTALL-ANCHOR-v1\n"
 MIGRATION_VERSION = 1
 
 
@@ -209,21 +221,126 @@ def _assert_foundation(conn: sqlite3.Connection, schema: str, auth_path: Path) -
         raise IdentityMigrationError("protected AuthFoundation foreign-key violation")
 
 
-def _assert_marker(conn: sqlite3.Connection, schema: str) -> None:
+def _lineage_key(auth: Path) -> bytes:
+    """Existing verifier key is the independent immutable installation anchor.
+
+    Never create/rotate key material during an identity verification or transfer.
+    """
+    keyfile = auth.with_name(auth.name + ".access-key")
+    try:
+        return AccessVerifierKeyStore(keyfile).load_or_create(allow_create=False)
+    except (AuthFoundationError, OSError) as exc:
+        raise IdentityMigrationError("protected Access verifier key is unavailable") from exc
+
+
+def _anchor_path(auth: Path) -> Path:
+    return auth.with_name(auth.name + ".identity-anchor")
+
+
+def _anchor_nonce(auth: Path) -> str:
+    """Read only: the immutable installation witness outside auth.sqlite3."""
+    path = _anchor_path(auth)
+    try:
+        if path.stat().st_mode & 0o077:
+            raise IdentityLineageError("protected installation anchor permissions are insecure")
+        raw = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise IdentityLineageError("protected installation anchor is missing") from exc
+    except OSError as exc:
+        raise IdentityLineageError("protected installation anchor is unreadable") from exc
+    if not raw.startswith(_ANCHOR_MAGIC):
+        raise IdentityLineageError("protected installation anchor is corrupt")
+    try:
+        nonce = raw[len(_ANCHOR_MAGIC) :].decode("ascii")
+        if len(nonce) != 64 or len(bytes.fromhex(nonce)) != 32:
+            raise ValueError("invalid anchor nonce")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise IdentityLineageError("protected installation anchor is corrupt") from exc
+    return nonce
+
+
+def _create_anchor(auth: Path, nonce: str) -> None:
+    """Never overwrite an identity, even if a foreign database uses the same key."""
+    path = _anchor_path(auth)
+    payload = _ANCHOR_MAGIC + nonce.encode("ascii")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise IdentityLineageError("protected installation anchor already exists") from exc
+    with os.fdopen(fd, "wb") as out:
+        out.write(payload)
+        out.flush()
+        os.fsync(out.fileno())
+    parent_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _backup_anchor(auth: Path, destination: Path) -> None:
+    """Snapshot independent identity witness; never expose nonce in logs."""
+    from shutil import copyfileobj
+
+    path = _anchor_path(auth)
+    _anchor_nonce(auth)
+    with path.open("rb") as source:
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            copyfileobj(source, out)
+            out.flush()
+            os.fsync(out.fileno())
+
+
+def _lineage_proof(auth: Path, nonce: str) -> str:
+    if not isinstance(nonce, str):
+        raise IdentityMigrationError("protected auth installation lineage is malformed")
+    try:
+        raw_nonce = bytes.fromhex(nonce)
+    except ValueError as exc:
+        raise IdentityMigrationError("protected auth installation lineage is malformed") from exc
+    if len(raw_nonce) != 32 or len(nonce) != 64:
+        raise IdentityMigrationError("protected auth installation lineage is malformed")
+    return hmac.new(_lineage_key(auth), _LINEAGE_CONTEXT + raw_nonce, hashlib.sha256).hexdigest()
+
+
+def _new_lineage(auth: Path, *, allow_pending_anchor: bool = False) -> tuple[str, str]:
+    # After an interrupted forward transfer the legacy source is unchanged.
+    # Reusing its pending external anchor allows a safe offline retry.
+    if allow_pending_anchor and _anchor_path(auth).exists():
+        nonce = _anchor_nonce(auth)
+    else:
+        nonce = secrets.token_hex(32)
+        _create_anchor(auth, nonce)
+    return nonce, _lineage_proof(auth, nonce)
+
+
+def _assert_marker(conn: sqlite3.Connection, schema: str, auth: Path) -> None:
     with closing(sqlite3.connect(":memory:")) as expected:
         expected.execute(f'CREATE TABLE "{MARKER}" {MIGRATION_SCHEMA}')
         required = _object_sql(expected, "main", "table", MARKER)
     if _ddl_fingerprint(_object_sql(conn, schema, "table", MARKER)) != _ddl_fingerprint(required):
         raise IdentityMigrationError("OAuth isolation migration marker is missing or invalid")
-    rows = conn.execute(f'SELECT version FROM {schema}."{MARKER}"').fetchall()
-    if rows != [(MIGRATION_VERSION,)]:
+    rows = conn.execute(
+        f'SELECT version,lineage_nonce,lineage_proof FROM {schema}."{MARKER}"'
+    ).fetchall()
+    if len(rows) != 1 or rows[0][0] != MIGRATION_VERSION:
         raise IdentityMigrationError("OAuth isolation migration has not completed")
+    _, nonce, proof = rows[0]
+    if not isinstance(nonce, str) or _anchor_nonce(auth) != nonce:
+        raise IdentityLineageError(
+            "protected auth installation lineage mismatch: external anchor differs"
+        )
+    if not isinstance(proof, str) or not hmac.compare_digest(proof, _lineage_proof(auth, nonce)):
+        raise IdentityLineageError(
+            "protected auth installation lineage mismatch: restore matching authorized store"
+        )
 
 
 def _assert_authoritative_auth(conn: sqlite3.Connection, schema: str, auth: Path) -> None:
     _assert_foundation(conn, schema, auth)
     _assert_table_schemas(conn, schema, require_complete=True)
-    _assert_marker(conn, schema)
+    _assert_marker(conn, schema, auth)
 
 
 def _audit_sequence(conn: sqlite3.Connection, schema: str) -> int | None:
@@ -249,7 +366,9 @@ def _copy_audit_sequence(conn: sqlite3.Connection, source: str, dest: str) -> No
     original = _audit_sequence(conn, source)
     copied = _audit_sequence(conn, dest)
     if original is None:
-        if copied is not None:
+        # CREATE TABLE ... AUTOINCREMENT may establish an empty destination
+        # sqlite_sequence entry (seq=0) even if the source never issued IDs.
+        if copied not in (None, 0):
             raise IdentityMigrationError("audit destination sequence conflict")
         return
     if copied is not None and copied > original:
@@ -273,7 +392,7 @@ def _open_readonly(path: Path) -> sqlite3.Connection:
 def _fresh_install(main: Path, auth: Path) -> bool:
     # A previously configured node keeps its verifier key through clean start.
     verifier = auth.with_name(auth.name + ".access-key")
-    if auth.exists() or verifier.exists():
+    if auth.exists() or verifier.exists() or _anchor_path(auth).exists():
         return False
     if not main.exists():
         return True
@@ -306,11 +425,13 @@ def initialize_fresh_identity(main: Path, auth: Path) -> None:
         _assert_table_schemas(db, "main", require_complete=True)
         if _object_sql(db, "main", "table", MARKER):
             raise IdentityMigrationError("fresh identity marker already exists")
+        nonce, proof = _new_lineage(auth)
         with db:
             db.execute(f'CREATE TABLE "{MARKER}" {MIGRATION_SCHEMA}')
             db.execute(
-                f'INSERT INTO "{MARKER}"(version,migrated_at) VALUES(?,?)',
-                (MIGRATION_VERSION, int(time.time())),
+                f'INSERT INTO "{MARKER}"(version,migrated_at,lineage_nonce,lineage_proof)'
+                " VALUES(?,?,?,?)",
+                (MIGRATION_VERSION, int(time.time()), nonce, proof),
             )
         _assert_authoritative_auth(db, "main", auth)
 
@@ -377,6 +498,8 @@ def _make_backups(main: Path, auth: Path, backup_dir: Path) -> None:
     os.chmod(backup_dir, 0o700)
     _backup_file(main, backup_dir / "runtime.before.sqlite3")
     _backup_file(auth, backup_dir / "auth.before.sqlite3")
+    if _anchor_path(auth).exists():
+        _backup_anchor(auth, backup_dir / "auth.identity-anchor.before")
     (backup_dir / "README.txt").write_text(
         "Offline pre-migration SQLite snapshots. Preserve the corresponding "
         "configuration, access verifier key, environment and service release. "
@@ -387,39 +510,69 @@ def _make_backups(main: Path, auth: Path, backup_dir: Path) -> None:
 
 
 def inspect(main: Path, auth: Path) -> dict:
+    """Read-only readiness classification; never invent missing authorization.
+
+    A legacy working database is not ready if the protected Foundation is
+    missing or corrupt, regardless of how many OAuth tables it contains.
+    """
     main, auth = check_paths(main, auth)
-    with closing(sqlite3.connect(":memory:")) as con:
-        if main.exists():
-            con.execute("ATTACH DATABASE ? AS runtime", (str(main),))
-        else:
-            if _fresh_install(main, auth):
-                return {"status": "new-install", "runtime_tables": 0, "auth_tables": 0}
-            if not auth.is_file():
-                return {"status": "invalid-protected-auth", "runtime_tables": 0}
-            with closing(_open_readonly(auth)) as protected:
-                tables = _existing(protected, "main")
-                try:
-                    _assert_authoritative_auth(protected, "main", auth)
-                    state = "isolated"
-                except (IdentityMigrationError, sqlite3.Error):
-                    state = "invalid-protected-auth"
-                return {"status": state, "runtime_tables": 0, "auth_tables": len(tables)}
-        if auth.exists():
-            con.execute("ATTACH DATABASE ? AS authorization", (str(auth),))
-        source = _existing(con, "runtime")
-        target = _existing(con, "authorization") if auth.exists() else set()
-        source_counts = _counts(con, "runtime", source)
-        target_counts = _counts(con, "authorization", target) if auth.exists() else {}
-        if source:
-            state = "legacy-present"
-        elif not auth.is_file():
-            state = "invalid-protected-auth"
-        else:
+    if _fresh_install(main, auth):
+        return {"status": "new-install", "runtime_tables": 0, "auth_tables": 0}
+
+    if not main.exists():
+        if not auth.is_file():
+            return {"status": "missing-protected-auth", "runtime_tables": 0, "auth_tables": 0}
+        with closing(_open_readonly(auth)) as protected:
+            protected_tables = _existing(protected, "main")
             try:
+                _assert_authoritative_auth(protected, "main", auth)
+                state = "isolated"
+            except IdentityLineageError:
+                state = "untrusted-protected-auth"
+            except (IdentityMigrationError, sqlite3.Error):
+                state = "incompatible-protected-auth"
+            return {
+                "status": state,
+                "runtime_tables": 0,
+                "auth_tables": len(protected_tables),
+            }
+
+    with closing(sqlite3.connect(":memory:")) as con:
+        con.execute("ATTACH DATABASE ? AS runtime", (str(main),))
+        source = _existing(con, "runtime")
+        source_counts = _counts(con, "runtime", source)
+        if not auth.is_file():
+            return {
+                "status": "missing-protected-auth",
+                "runtime_tables": len(source),
+                "auth_tables": 0,
+                "runtime_rows": sum(source_counts.values()),
+                "auth_rows": 0,
+            }
+        con.execute("ATTACH DATABASE ? AS authorization", (str(auth),))
+        target = _existing(con, "authorization")
+        target_counts = _counts(con, "authorization", target)
+        try:
+            if source:
+                # Legacy status requires a valid Foundation AND no competing
+                # committed identity source. Authenticate a pre-existing
+                # marker rather than silently hiding a foreign protected DB.
+                _assert_foundation(con, "authorization", auth)
+                _assert_table_schemas(con, "authorization")
+                if _object_sql(con, "authorization", "table", MARKER):
+                    _assert_marker(con, "authorization", auth)
+                    state = "conflicting-identity-sources"
+                elif sum(target_counts.values()):
+                    state = "conflicting-identity-sources"
+                else:
+                    state = "legacy-present"
+            else:
                 _assert_authoritative_auth(con, "authorization", auth)
                 state = "isolated"
-            except (IdentityMigrationError, sqlite3.Error):
-                state = "invalid-protected-auth"
+        except IdentityLineageError:
+            state = "untrusted-protected-auth"
+        except (IdentityMigrationError, sqlite3.Error):
+            state = "incompatible-protected-auth"
         return {
             "status": state,
             "runtime_tables": len(source),
@@ -488,7 +641,7 @@ def migrate(
             if _audit_sequence(probe, destination) is not None:
                 raise IdentityMigrationError("existing audit sequence in destination")
         if reverse:
-            _assert_marker(probe, "protected")
+            _assert_marker(probe, "protected", auth)
         elif _object_sql(probe, "protected", "table", MARKER):
             raise IdentityMigrationError("existing migration marker; manual review required")
         _audit_sequence(probe, source)
@@ -539,17 +692,16 @@ def migrate(
             if _fingerprint(con, source) != _fingerprint(con, destination):
                 raise IdentityMigrationError("copied identity verification failed")
             if not reverse:
-                con.execute(
-                    "CREATE TABLE IF NOT EXISTS auth.oauth_identity_migration("
-                    "version INTEGER PRIMARY KEY, migrated_at INTEGER NOT NULL)"
-                )
-                if con.execute("SELECT 1 FROM auth.oauth_identity_migration").fetchone():
+                con.execute(f'CREATE TABLE IF NOT EXISTS auth."{MARKER}" {MIGRATION_SCHEMA}')
+                if con.execute(f'SELECT 1 FROM auth."{MARKER}"').fetchone():
                     raise IdentityMigrationError(
                         "existing migration marker; manual review required"
                     )
+                nonce, proof = _new_lineage(auth, allow_pending_anchor=True)
                 con.execute(
-                    "INSERT INTO auth.oauth_identity_migration(version,migrated_at) VALUES(?,?)",
-                    (MIGRATION_VERSION, int(time.time())),
+                    f'INSERT INTO auth."{MARKER}"'
+                    "(version,migrated_at,lineage_nonce,lineage_proof) VALUES(?,?,?,?)",
+                    (MIGRATION_VERSION, int(time.time()), nonce, proof),
                 )
             else:
                 con.execute("DROP TABLE IF EXISTS auth.oauth_identity_migration")
@@ -616,6 +768,7 @@ def clean_working_data(
     quarantine_dir.mkdir(parents=True, mode=0o700)
     os.chmod(quarantine_dir, 0o700)
     _backup_file(auth, quarantine_dir / "auth.before.sqlite3")
+    _backup_anchor(auth, quarantine_dir / "auth.identity-anchor.before")
     moved: list[tuple[Path, Path]] = []
     try:
         for label, path in (("runtime", main), ("output", output)):
