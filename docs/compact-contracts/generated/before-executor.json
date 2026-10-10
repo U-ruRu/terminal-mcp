@@ -91,7 +91,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read bounded TaskListItem records for work orientation; the agent selects work. Available without an active work cycle or Access Code.",
+      "description": "Read bounded TaskListItem records for work orientation. By default excludes done and archived; state='done' includes only non-archived done tasks. namespace=None spans namespaces; state/lane/tags filter the results. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "cursor": {

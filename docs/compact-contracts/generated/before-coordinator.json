@@ -91,7 +91,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read one canonical task as snapshot, detail, or history. Available without an active work cycle or Access Code.",
+      "description": "Read one canonical task as snapshot, detail, or history. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "cursor": {
@@ -187,7 +187,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read a bounded page of canonical TaskListItem records. Available without an active work cycle or Access Code.",
+      "description": "Read a bounded page of canonical TaskListItem records. Default excludes done and archived. state='done' includes only non-archived done tasks. namespace=None spans namespaces; state/lane/tags are filters. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "cursor": {

@@ -2478,6 +2478,108 @@
           "title": "MessageMode",
           "type": "string"
         },
+        "MessageRecipientReceipt": {
+          "additionalProperties": false,
+          "description": "Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock.",
+          "properties": {
+            "first_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Seen At"
+            },
+            "last_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Seen At"
+            },
+            "public_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Public Name"
+            },
+            "read_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Read At"
+            },
+            "replied_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replied At"
+            },
+            "reply_message_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "seen_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seen Count"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "MessageRecipientReceipt",
+          "type": "object"
+        },
         "MessageRecipientsResult": {
           "additionalProperties": false,
           "properties": {
@@ -2589,6 +2691,21 @@
               ],
               "default": null,
               "title": "Delivered To"
+            },
+            "deliveries": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/MessageRecipientReceipt"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deliveries"
             },
             "delivery_errors": {
               "anyOf": [
@@ -9707,6 +9824,108 @@
           "title": "MessageMode",
           "type": "string"
         },
+        "MessageRecipientReceipt": {
+          "additionalProperties": false,
+          "description": "Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock.",
+          "properties": {
+            "first_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Seen At"
+            },
+            "last_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Seen At"
+            },
+            "public_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Public Name"
+            },
+            "read_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Read At"
+            },
+            "replied_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replied At"
+            },
+            "reply_message_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "seen_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seen Count"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "MessageRecipientReceipt",
+          "type": "object"
+        },
         "MessageRecord": {
           "additionalProperties": false,
           "properties": {
@@ -9748,6 +9967,21 @@
               ],
               "default": null,
               "title": "Delivered To"
+            },
+            "deliveries": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/MessageRecipientReceipt"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deliveries"
             },
             "delivery_errors": {
               "anyOf": [
@@ -11290,6 +11524,108 @@
           "title": "MessageMode",
           "type": "string"
         },
+        "MessageRecipientReceipt": {
+          "additionalProperties": false,
+          "description": "Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock.",
+          "properties": {
+            "first_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Seen At"
+            },
+            "last_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Seen At"
+            },
+            "public_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Public Name"
+            },
+            "read_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Read At"
+            },
+            "replied_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replied At"
+            },
+            "reply_message_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "seen_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seen Count"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "MessageRecipientReceipt",
+          "type": "object"
+        },
         "MessageRecord": {
           "additionalProperties": false,
           "properties": {
@@ -11331,6 +11667,21 @@
               ],
               "default": null,
               "title": "Delivered To"
+            },
+            "deliveries": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/MessageRecipientReceipt"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deliveries"
             },
             "delivery_errors": {
               "anyOf": [
@@ -13081,6 +13432,108 @@
           "title": "MessageMode",
           "type": "string"
         },
+        "MessageRecipientReceipt": {
+          "additionalProperties": false,
+          "description": "Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock.",
+          "properties": {
+            "first_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Seen At"
+            },
+            "last_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Seen At"
+            },
+            "public_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Public Name"
+            },
+            "read_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Read At"
+            },
+            "replied_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replied At"
+            },
+            "reply_message_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "seen_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seen Count"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "MessageRecipientReceipt",
+          "type": "object"
+        },
         "MessageRecord": {
           "additionalProperties": false,
           "properties": {
@@ -13122,6 +13575,21 @@
               ],
               "default": null,
               "title": "Delivered To"
+            },
+            "deliveries": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/MessageRecipientReceipt"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deliveries"
             },
             "delivery_errors": {
               "anyOf": [
@@ -14912,6 +15380,108 @@
           "title": "MessageMode",
           "type": "string"
         },
+        "MessageRecipientReceipt": {
+          "additionalProperties": false,
+          "description": "Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock.",
+          "properties": {
+            "first_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Seen At"
+            },
+            "last_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Seen At"
+            },
+            "public_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Public Name"
+            },
+            "read_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Read At"
+            },
+            "replied_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replied At"
+            },
+            "reply_message_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "seen_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seen Count"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "MessageRecipientReceipt",
+          "type": "object"
+        },
         "MessageRecord": {
           "additionalProperties": false,
           "properties": {
@@ -14953,6 +15523,21 @@
               ],
               "default": null,
               "title": "Delivered To"
+            },
+            "deliveries": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/MessageRecipientReceipt"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deliveries"
             },
             "delivery_errors": {
               "anyOf": [
@@ -16141,6 +16726,108 @@
           "title": "MessageMode",
           "type": "string"
         },
+        "MessageRecipientReceipt": {
+          "additionalProperties": false,
+          "description": "Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock.",
+          "properties": {
+            "first_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "First Seen At"
+            },
+            "last_seen_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Seen At"
+            },
+            "public_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Public Name"
+            },
+            "read_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Read At"
+            },
+            "replied_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replied At"
+            },
+            "reply_message_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "seen_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seen Count"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MessageState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "MessageRecipientReceipt",
+          "type": "object"
+        },
         "MessageRecipientsResult": {
           "additionalProperties": false,
           "properties": {
@@ -16252,6 +16939,21 @@
               ],
               "default": null,
               "title": "Delivered To"
+            },
+            "deliveries": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/MessageRecipientReceipt"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deliveries"
             },
             "delivery_errors": {
               "anyOf": [
