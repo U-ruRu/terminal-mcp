@@ -3,7 +3,7 @@
 WireGuard is the preferred **inter-server** transport after enrollment. It
 protects the channel and reduces Cloudflare dependency. Fleet's existing
 Ed25519 identity, authenticated internal HTTP endpoints, bearer tokens,
-Access issuer checks and durable message/outbox contracts remain in force.
+Access issuer checks and durable non-message replication contracts remain in force. Native agent messaging is node-local; legacy message outbox rows are terminal diagnostics only and are never resumed over WireGuard or HTTPS.
 Each **outgoing peer** independently selects `https` or `wireguard`; mixed
 mode is supported. Neither transport is an automatic trust substitute.
 

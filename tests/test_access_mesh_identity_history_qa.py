@@ -1,5 +1,6 @@
 """Acceptance: a Mesh collision changes future identity, never historical authors."""
 
+import json
 import sqlite3
 from datetime import timedelta
 
@@ -83,27 +84,34 @@ async def test_collision_preserves_task_claim_comment_message_and_command_histor
         messages = AccessMeshMessaging(first, AgentStore(first.store.path))
         first.messages = messages
         message_hash = "firstbyte:meshmsg:historic-accepted-before-merge"
-        committed = messages.store.accept(
-            {
-                "message_hash": message_hash,
-                "origin_node_id": "firstbyte",
-                "created_at": T0.isoformat(),
-                "sender_id": old_id,
-                "sender_name": first_claim["public_name"],
-                "text": "before convergence",
-                "target": "broadcast",
-                "mode": "notify",
-                "scope": "local",
-                "require_reply": False,
-                "alert": False,
-                "namespace": None,
-                "task_id": None,
-                "reply_to": None,
-            },
-            [],
-        )
-        assert committed["ok"], committed
-
+        # Existing distributed-history bytes stay unchanged, but the new API
+        # deliberately cannot create or read a legacy :meshmsg: message.
+        with messages.store.connect() as legacy_db:
+            legacy_db.execute(
+                "INSERT INTO coordination_messages(message_hash,sender_agent_id,target_name,"
+                "text,created_at,require_reply,alert,delivery_mode) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    message_hash,
+                    old_id,
+                    "broadcast",
+                    "before convergence",
+                    T0.isoformat(),
+                    0,
+                    0,
+                    "notify",
+                ),
+            )
+            legacy_db.execute(
+                "INSERT INTO access_mesh_messages("
+                "message_hash,wire_json,origin_node_id,receipt_json) VALUES(?,?,?,?)",
+                (
+                    message_hash,
+                    json.dumps({"message_hash": message_hash, "created_at": T0.isoformat()}),
+                    "firstbyte",
+                    "{}",
+                ),
+            )
+        assert messages.store.wire(message_hash) is None
         with sqlite3.connect(first.store.path) as db:
             db.execute(
                 "INSERT INTO commands(hash,cmd,status,started_at) VALUES(?,?,?,?)",

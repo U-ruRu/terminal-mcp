@@ -204,24 +204,13 @@ async def test_local_broadcast_never_calls_peer_and_excludes_sender(mesh_pair):
 async def test_fleet_commits_local_first_deduplicates_and_preserves_identity(mesh_pair):
     net = mesh_pair
     fb, bac = net.nodes["firstbyte"], net.nodes["bacloud"]
-
-    def local_first(source, peer, path, payload):
-        if source == "firstbyte" and path.endswith("deliver"):
-            assert fb.store.wire(payload["message"]["message_hash"])
-            assert count(fb, "coordination_message_recipients") == 1
-
-    net.before_request = local_first
-    result = await fb.message(actor("alice"), text="fleet", target="broadcast")
-    assert result["ok"] and result["state"] == "delivered", result
-    assert result["recipient_count"] == 2
-    assert count(fb, "coordination_message_recipients") == 1
-    assert count(bac, "coordination_message_recipients") == 1
-    assert not await bac.agent_store.message_journal("carol")
-    incoming = await bac.message(actor("bob", role="executor"))
-    assert len(incoming["messages"]) == 1
-    assert incoming["messages"][0]["sender"] == _public_name(fb.mesh.store.slots["alice"])
-    assert incoming["messages"][0]["message_hash"] == result["message_hash"]
-    assert not await bac.agent_store.message_journal("expired")
+    result = await fb.message(
+        actor("alice"), text="retired fleet", target="broadcast", scope="fleet"
+    )
+    assert result["ok"] is False and result["code"] == "feature_disabled"
+    assert count(fb, "coordination_messages") == 0
+    assert count(bac, "coordination_messages") == 0
+    assert not net.calls
 
 
 @pytest.mark.asyncio
@@ -235,39 +224,23 @@ async def test_fleet_commits_local_first_deduplicates_and_preserves_identity(mes
 async def test_directed_agent_attached_on_both_nodes_gets_each_local_inbox(
     mesh_pair, source, destination, sender, recipient
 ):
-    """Peer excluded=broadcast dedup must not suppress directed delivery."""
+    """Dual attachment participates independently in each node-local exchange."""
     net = mesh_pair
     origin, remote = net.nodes[source], net.nodes[destination]
-    # Bob is normally attached only on BacLOUD. Simulate dual attachment,
-    # just as both production role consumers attach the same issuer slot.
     origin.mesh.store.attached.add(recipient)
     assert recipient in remote.mesh.store.attached
     target = _public_name(origin.mesh.store.slots[recipient])
 
     receipt = await origin.message(
         actor(sender, role="executor"),
-        text="deliver to both local inboxes",
+        text="deliver only to this node",
         target=target,
-        scope="fleet",
+        scope="local",
     )
-    assert receipt["ok"] is True, receipt
-    assert receipt["state"] == "delivered"
-    # The delivery receipt counts distinct LogicalAgents globally (one),
-    # while both node-local inboxes must persist the directed message.
-    assert receipt["recipient_count"] == 1
-    msg_hash = receipt["message_hash"]
+    assert receipt["ok"] is True and receipt["recipient_count"] == 1
     assert count(origin, "coordination_message_recipients") == 1
-    assert count(remote, "coordination_message_recipients") == 1
-    local = await origin.message(actor(recipient, role="coordinator"))
-    on_remote = await remote.message(actor(recipient, role="coordinator"))
-    assert any(row["message_hash"] == msg_hash for row in local["messages"])
-    assert any(row["message_hash"] == msg_hash for row in on_remote["messages"])
-
-    # Lost-ACK retry must not insert duplicates into either local inbox.
-    response = await origin.flush(message_hash=msg_hash)
-    assert response is None
-    assert count(origin, "coordination_message_recipients") == 1
-    assert count(remote, "coordination_message_recipients") == 1
+    assert count(remote, "coordination_message_recipients") == 0
+    assert not net.calls
 
 
 @pytest.mark.asyncio
@@ -286,50 +259,27 @@ async def test_first_contact_send_read_ack_reply_history(
     origin.mesh.store.attached.discard(recipient)
     target = _public_name(origin.mesh.store.slots[recipient])
     sent = await origin.message(
-        actor(sender, role=role), text="need reply", target=target, alert=True
+        actor(sender, role=role), text="remote-only recipient", target=target, alert=True
     )
-    assert sent["ok"] and sent["state"] == "delivered", sent
-    message_hash = sent["message_hash"]
-    obligations = await remote.agent_store.message_obligations(recipient)
-    assert len(obligations) == 1 and obligations[0]["alert"]
-    before_calls = len(net.calls)
-    read = await remote.message(actor(recipient), detail="full")
-    assert read["ok"] and len(read["messages"]) == 1
-    assert len(net.calls) == before_calls
-    ack = await remote.message(actor(recipient), message_hash=message_hash)
-    assert ack["ok"] and len(net.calls) == before_calls
-    assert len(await remote.agent_store.message_obligations(recipient)) == 1
-    replied = await remote.message(actor(recipient), message_hash=message_hash, text="resolved")
-    assert replied["ok"] and replied["reply_to"] == message_hash, replied
-    assert await remote.agent_store.message_obligations(recipient) == []
-    await remote.tick()
-    assert origin.store.receipt(message_hash)["deliveries"][0]["state"] == "replied"
-    history = await remote.message(actor(recipient), history=True, detail="full")
-    assert {message_hash, replied["message_hash"]} <= {
-        row["message_hash"] for row in history["messages"]
-    }
-    assert any(
-        row["message_hash"] == replied["message_hash"]
-        for row in (await origin.message(actor(sender), history=True))["messages"]
-    )
+    assert sent["ok"] is False and sent["code"] == "recipient_not_found"
+    assert count(origin, "coordination_messages") == 0
+    assert count(remote, "coordination_messages") == 0
+    assert not net.calls
 
 
 @pytest.mark.asyncio
 async def test_offline_peer_retains_local_success_and_outbox_survives_restart(mesh_pair):
     net, fb = mesh_pair, mesh_pair.nodes["firstbyte"]
     net.offline.add("bacloud")
-    result = await fb.message(actor("alice"), text="survives partition")
+    result = await fb.message(actor("alice"), text="local despite peer partition")
     assert result["ok"] and result["outcome"] == "committed"
-    assert result["state"] == "partial" and result["pending_peers"] == ["bacloud"]
-    assert result["delivery_errors"][0]["code"] == "message_unavailable"
+    assert result["state"] == "delivered" and result["pending_peers"] == []
+    assert fb.store.pending() == []
     restarted = AccessMeshMessaging(fb.mesh, fb.agent_store, net.transport("firstbyte"))
-    net.nodes["firstbyte"] = restarted
-    assert len(restarted.store.pending()) == 1
-    net.offline.clear()
-    await restarted.tick()
-    assert restarted.store.receipt(result["message_hash"])["state"] == "delivered"
-    assert not restarted.store.pending()
-    assert len(await net.nodes["bacloud"].agent_store.message_journal("bob")) == 1
+    assert restarted.store.wire(result["message_hash"]) is not None
+    assert restarted.store.pending() == []
+    assert count(net.nodes["bacloud"], "coordination_messages") == 0
+    assert not net.calls
 
 
 @pytest.mark.asyncio
@@ -338,15 +288,13 @@ async def test_lost_ack_duplicate_delivery_and_same_request_have_one_effect(mesh
     fb, bac = net.nodes["firstbyte"], net.nodes["bacloud"]
     net.drop_ack_once = True
     first = await fb.message(actor("alice"), text="one message")
-    assert first["state"] == "partial" and count(bac, "coordination_messages") == 1
     second = await fb.message(actor("alice"), text="one message")
-    assert first["message_hash"] != second["message_hash"]
-    assert second["state"] == "delivered"
-    assert count(fb, "coordination_messages") == count(bac, "coordination_messages") == 2
-    assert count(bac, "coordination_message_recipients") == 2
     changed = await fb.message(actor("alice"), text="different message")
-    assert changed["message_hash"] != first["message_hash"]
-    assert count(bac, "coordination_messages") == 3
+    assert first["state"] == second["state"] == changed["state"] == "delivered"
+    assert len({first["message_hash"], second["message_hash"], changed["message_hash"]}) == 3
+    assert count(fb, "coordination_messages") == 3
+    assert count(bac, "coordination_messages") == 0
+    assert not net.calls
 
 
 @pytest.mark.asyncio
@@ -371,23 +319,16 @@ async def test_keyset_pagination_does_not_skip_consumed_inbox_rows(mesh_pair):
 @pytest.mark.asyncio
 async def test_recipient_discovery_is_unique_active_scoped_and_public(mesh_pair):
     fb = mesh_pair.nodes["firstbyte"]
-    first = await fb.message(actor("alice"), recipients=True, limit=1)
-    assert first["ok"] and first["next_cursor"]
-    assert len(first["recipients"]) == 1
-    recipient = first["recipients"][0]
-    assert set(recipient) == {
-        "public_name",
-        "session_state",
-        "session_started_at",
-        "hard_expires_at",
-        "remaining_seconds",
-        "last_active_at",
-    }
+    result = await fb.message(actor("alice"), recipients=True, limit=1)
+    assert result["ok"] and result["next_cursor"] is None
+    assert len(result["recipients"]) == 1
+    recipient = result["recipients"][0]
+    assert recipient["public_name"] == _public_name(fb.mesh.store.slots["carol"])
     assert recipient["remaining_seconds"] == 900
-    second = await fb.message(actor("alice"), recipients=True, limit=1, cursor=first["next_cursor"])
-    assert second["ok"] and second["next_cursor"] is None
-    assert second["recipients"][0]["public_name"] != recipient["public_name"]
-    invalid = await fb.message(actor("carol"), recipients=True, cursor=first["next_cursor"])
+    assert _public_name(fb.mesh.store.slots["bob"]) not in {
+        item["public_name"] for item in result["recipients"]
+    }
+    invalid = await fb.message(actor("carol"), recipients=True, cursor="not-a-cursor")
     assert not invalid["ok"] and invalid["code"] == "invalid_cursor"
 
 
@@ -409,10 +350,10 @@ async def test_reply_failure_is_atomic_and_retry_releases_obligation_once(mesh_p
     with fb.store.connect() as db:
         db.execute("DROP TRIGGER reject_reply")
     replied = await fb.message(actor("carol"), text="reply", message_hash=message_hash)
-    assert replied["ok"]
     again = await fb.message(actor("carol", "another-id"), text="reply", message_hash=message_hash)
-    assert again["message_hash"] == replied["message_hash"]
-    assert count(fb, "coordination_messages") == 2
+    assert replied["ok"] and again["ok"]
+    assert again["message_hash"] != replied["message_hash"]
+    assert count(fb, "coordination_messages") == 3
     assert not await fb.agent_store.message_obligations("carol")
 
 
@@ -439,14 +380,10 @@ async def test_attribution_receipts_and_peer_auth_reject_forgery(mesh_pair):
     sent = await fb.message(actor("alice"), text="original")
     wire = fb.store.wire(sent["message_hash"])
     result = await bac.handle_peer("untrusted", "deliver", {"message": wire, "excluded": []})
-    assert result["ok"] is False
-    tampered = {**wire, "sender_name": "forged"}
-    result = await bac.handle_peer("firstbyte", "deliver", {"message": tampered, "excluded": []})
-    assert result["code"] == "sender_not_authorized"
-    wrong = await bac.message(actor("alice"), message_hash=sent["message_hash"])
-    assert wrong["code"] == "message_forbidden"
-    expired = await bac.message(actor("expired"), text="cannot send")
-    assert expired["code"] == "session_expired"
+    assert result["ok"] is False and result["code"] == "access_denied"
+    result = await bac.handle_peer("firstbyte", "deliver", {"message": wire, "excluded": []})
+    assert result["ok"] is False and result["code"] == "feature_disabled"
+    assert count(bac, "coordination_messages") == 0
 
 
 def test_http_router_checks_peer_auth_and_request_size():
@@ -455,6 +392,9 @@ def test_http_router_checks_peer_auth_and_request_size():
 
         async def handle_peer(self, peer_id, kind, payload):
             return {"ok": True, "peer": peer_id, "kind": kind, "payload": payload}
+
+        async def handle_locations_peer(self, peer_id, payload):
+            return {"ok": True, "peer": peer_id, "kind": "locations", "payload": payload}
 
     auth = SimpleNamespace(
         authenticate=lambda peer, token: (
@@ -474,6 +414,12 @@ def test_http_router_checks_peer_auth_and_request_size():
         assert response.json()["peer"] == "firstbyte"
         assert client.post(path, content="x" * 70000, headers=headers).status_code == 413
         assert client.post(path, content="[]", headers=headers).status_code == 400
+
+        presence_path = "/internal/fleet/access-mesh/agents/locations"
+        assert client.post(presence_path, json={}).status_code == 401
+        presence = client.post(presence_path, json={"limit": 10}, headers=headers)
+        assert presence.status_code == 200, presence.text
+        assert presence.json()["kind"] == "locations"
 
 
 @pytest.mark.asyncio
@@ -566,9 +512,6 @@ async def test_public_send_returns_durable_receipt_within_total_peer_budget(
     mesh_pair, monkeypatch, occupied_lock
 ):
     fb = mesh_pair.nodes["firstbyte"]
-    monkeypatch.setattr(
-        "terminal_mcp.application.access_mesh_messages.PUBLIC_DELIVERY_BUDGET_SECONDS", 0.05
-    )
 
     async def offline(*args, **kwargs):
         await asyncio.Event().wait()
@@ -579,35 +522,24 @@ async def test_public_send_returns_durable_receipt_within_total_peer_budget(
     started = time.monotonic()
     try:
         result = await asyncio.wait_for(
-            fb.message(actor("alice"), text="accepted while peer is stalled"), timeout=0.8
+            fb.message(actor("alice"), text="local while peer path is stalled"), timeout=0.8
         )
     finally:
         if occupied_lock:
             fb._flush_lock.release()
     assert time.monotonic() - started < 0.8
     assert result["ok"] and result["outcome"] == "committed"
-    assert result["state"] == "partial" and result["pending_peers"] == ["bacloud"]
-    assert fb.store.wire(result["message_hash"])
-    assert len(fb.store.pending()) == 1
-    assert count(fb, "coordination_message_recipients") == 1
+    assert result["state"] == "delivered" and result["pending_peers"] == []
+    assert fb.store.pending() == []
 
 
 @pytest.mark.asyncio
 async def test_large_fleet_envelope_is_rejected_before_local_or_peer_commit(mesh_pair):
     fb = mesh_pair.nodes["firstbyte"]
-    template = fb.mesh.store.slots["carol"]
-    for index in range(160):
-        agent_id = f"recipient-{index}-" + "x" * 135
-        fb.mesh.store.slots[agent_id] = SimpleNamespace(
-            **{**vars(template), "logical_agent_id": agent_id, "slot_id": agent_id}
-        )
-        fb.mesh.store.attached.add(agent_id)
-    result = await fb.message(actor("alice"), text="\U0001f600" * 12000, scope="fleet")
-    assert result["ok"] is False and result["code"] == "output_item_too_large", result
-    assert result["outcome"] == "not_committed"
+    result = await fb.message(actor("alice"), text="legacy fleet", scope="fleet")
+    assert result["ok"] is False and result["code"] == "feature_disabled"
     assert count(fb, "coordination_messages") == 0
-    assert count(fb, "coordination_message_recipients") == 0
-    assert not fb.store.pending()
+    assert fb.store.pending() == []
     assert not mesh_pair.calls
 
 
@@ -615,7 +547,7 @@ async def test_large_fleet_envelope_is_rejected_before_local_or_peer_commit(mesh
 async def test_oversized_peer_acceptance_proof_rolls_back_all_obligations(mesh_pair):
     fb = mesh_pair.nodes["firstbyte"]
     sent = await fb.message(actor("alice"), text="template", scope="local")
-    wire = {**fb.store.wire(sent["message_hash"]), "message_hash": "firstbyte:meshmsg:large-proof"}
+    wire = {**fb.store.wire(sent["message_hash"]), "message_hash": "firstbyte:localmsg:large-proof"}
     recipients = [
         {
             "logical_agent_id": f"{index}:" + "a" * 150,
@@ -631,14 +563,17 @@ async def test_oversized_peer_acceptance_proof_rolls_back_all_obligations(mesh_p
     assert count(fb, "coordination_message_recipients") == before_recipients
     assert fb.store.wire(wire["message_hash"]) is None
 
+
 @pytest.mark.asyncio
 async def test_directed_self_send_has_distinct_error_and_no_side_effect(mesh_pair):
     fb = mesh_pair.nodes["firstbyte"]
     sender_name = _public_name(fb.mesh.store.slots["alice"])
     before = count(fb, "coordination_messages")
     response = await fb.message(
-        actor("alice"), text="must never be inserted",
-        scope="local", target=sender_name,
+        actor("alice"),
+        text="must never be inserted",
+        scope="local",
+        target=sender_name,
     )
     assert response == {
         "ok": False,

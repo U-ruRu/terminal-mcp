@@ -30,7 +30,9 @@ from terminal_mcp.storage.sqlite_observability import (
 )
 from terminal_mcp.storage.work_windows import install_work_window_schema
 
-SCHEMA_VERSION = 23
+# The local-message schema increment (24) includes the previously accepted
+# bounded SQLite integrity-health probe from revision 23.
+SCHEMA_VERSION = 24
 HEALTH_INTEGRITY_CACHE_SECONDS = 30.0
 HEALTH_INTEGRITY_TIMEOUT_SECONDS = 3.0
 

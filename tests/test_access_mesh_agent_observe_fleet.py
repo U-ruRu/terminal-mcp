@@ -30,7 +30,7 @@ def test_agent_observe_uses_latest_remote_activity_and_four_fields(tmp_path):
             peers = (SimpleNamespace(instance_id="bacloud"),)
 
             async def request(self, peer, path, payload):
-                assert path == "messages/recipients"
+                assert path == "agents/locations"
                 return {"ok": True, "recipients": [remote], "after": None}
 
         messages.replication = Peer()

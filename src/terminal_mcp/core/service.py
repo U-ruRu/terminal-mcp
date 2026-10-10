@@ -806,9 +806,16 @@ class TerminalService:
                     messaging = getattr(self, "access_mesh_messages", None)
                     if messaging is not None:
                         running = messaging._task is not None and not messaging._task.done()
+                        failure = None
+                        try:
+                            probe_ok = await asyncio.to_thread(messaging.store.health_probe)
+                            if not probe_ok:
+                                failure = "local_message_storage_probe_failed"
+                        except Exception:
+                            failure = "local_message_storage_probe_failed"
                         state = (
                             "failed"
-                            if not running
+                            if failure or not running
                             else "degraded"
                             if messaging.last_error
                             else "healthy"
@@ -816,6 +823,14 @@ class TerminalService:
                         mesh_components["access_mesh_messages"] = {
                             "status": state,
                             "ok": state == "healthy",
+                            "reason": failure
+                            or (
+                                "local_message_cleanup_not_running"
+                                if not running
+                                else "local_message_cleanup_failed"
+                                if messaging.last_error
+                                else None
+                            ),
                         }
                     replication = getattr(self, "access_mesh_replication", None)
                     if replication is not None:

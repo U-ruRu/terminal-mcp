@@ -114,8 +114,15 @@ class AccessMeshMessaging:
     def __init__(self, mesh_runtime, agent_store, replication=None):
         self.mesh = mesh_runtime
         self.agent_store = agent_store
+        # Limit managed AccessMesh gates to the new local protocol only.
+        # Other legacy AgentStore consumers keep their independent contracts.
+        self.agent_store.message_local_prefix = f"{mesh_runtime.store.local_node_id}:localmsg:"
+        # Keep coordination-obligation TTL on the same clock as message storage.
+        self.agent_store.message_clock = mesh_runtime.clock
         self.replication = replication
-        self.store = AccessMeshMessageStore(agent_store.path, mesh_runtime.store.local_node_id)
+        self.store = AccessMeshMessageStore(
+            agent_store.path, mesh_runtime.store.local_node_id, now_provider=mesh_runtime.clock
+        )
         self._flush_lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._task = None
@@ -133,8 +140,8 @@ class AccessMeshMessaging:
     def _session_alert_hash(node_id, slot, started_at):
         digest = hashlib.sha256(
             f"{slot.issuer_id}:{slot.slot_id}:{started_at}".encode()
-        ).hexdigest()[:40]
-        return f"{node_id}:meshmsg:session_alert_{digest}"
+        ).hexdigest()[:24]
+        return f"{node_id}:localmsg:session_alert_{digest}"
 
     async def ensure_session_alert(self, slot, identity):
         """Atomically emit one Alert per expired cycle; test pending ACK."""
@@ -239,12 +246,12 @@ class AccessMeshMessaging:
                 break
         return list(records.values())
 
-    async def _targets(self, wire, excluded):
-        # A reply returns to the parent message's originating execution node.
-        # A second attachment of its sender must not consume that reply locally
-        # and exclude the node where the sender is reading the original thread.
-        if wire.get("reply_to") and wire["reply_to"].split(":meshmsg:", 1)[0] != self.node_id:
-            return []
+    async def _targets(self, wire, excluded=()):
+        """Resolve recipients only from current local attachments.
+
+        The excluded argument remains only for older internal callers; local
+        delivery never carries peer-delivery exclusion metadata.
+        """
         recipients = await self._local_recipients()
         if wire["namespace"] is not None:
             claims = await self.mesh.task_store.active_claims(wire["namespace"], wire["task_id"])
@@ -252,17 +259,7 @@ class AccessMeshMessaging:
             recipients = [item for item in recipients if item["logical_agent_id"] in owners]
         if wire["target"] != "broadcast":
             recipients = [item for item in recipients if item["public_name"] == wire["target"]]
-        # A directed message must be available in the target agent's inbox
-        # on each node where that agent has an active local attachment.
-        # Excluded agents represent already-delivered *broadcast* recipients;
-        # applying that list to a directed message silently drops a legitimate
-        # receiver when the same LogicalAgent is attached on both nodes.
-        # A recipient is still deduplicated transactionally by message_hash
-        # within each node, and a sender never receives its own message.
-        excluded_ids = {wire["sender_id"]}
-        if wire["target"] == "broadcast":
-            excluded_ids.update(excluded)
-        return [item for item in recipients if item["logical_agent_id"] not in excluded_ids]
+        return [item for item in recipients if item["logical_agent_id"] != wire["sender_id"]]
 
     async def recipients(self, identity, *, scope, limit, cursor):
         query = {
@@ -274,29 +271,9 @@ class AccessMeshMessaging:
         # Validate before doing any peer work.
         decode_cursor(cursor, query)
         rows = {item["logical_agent_id"]: item for item in await self._local_recipients()}
+        # Each connector reports this node's locally attached recipients only.
+        # Globally replicated identities do not confer message delivery rights.
         unavailable = []
-        if scope == "fleet":
-            for peer in self.peers:
-                after = ""
-                try:
-                    for _ in range(1 + MAX_RECIPIENTS // 100):
-                        result = await self.replication.request(
-                            peer, "messages/recipients", {"after": after, "limit": 100}
-                        )
-                        if result.get("ok") is not True or not isinstance(
-                            result.get("recipients"), list
-                        ):
-                            raise MeshMessagingError("message_unavailable")
-                        for item in result["recipients"]:
-                            self._validate_recipient(item, peer.instance_id)
-                            rows.setdefault(item["logical_agent_id"], item)
-                        after = result.get("after")
-                        if not after:
-                            break
-                    if after:
-                        raise MeshMessagingError("output_item_too_large")
-                except Exception:
-                    unavailable.append(peer.instance_id)
         rows.pop(identity["logical_agent_id"], None)
         if len(rows) > MAX_RECIPIENTS:
             raise MeshMessagingError("output_item_too_large")
@@ -315,15 +292,20 @@ class AccessMeshMessaging:
         }
 
     async def active_agent_locations(self):
-        """Return one current location per LogicalAgent, using latest activity."""
+        """Return one current fleet observation per LogicalAgent.
+
+        Agent observation remains independent from message recipient discovery.
+        It uses a dedicated read-only presence endpoint so the retired message
+        recipient endpoint can stay terminally disabled.
+        """
         rows = {item["logical_agent_id"]: item for item in await self._local_recipients()}
         if self.replication is not None:
             for peer in self.peers:
-                cursor = ""
+                after = ""
                 try:
                     for _ in range(1 + MAX_RECIPIENTS // 100):
                         response = await self.replication.request(
-                            peer, "messages/recipients", {"after": cursor, "limit": 100}
+                            peer, "agents/locations", {"after": after, "limit": 100}
                         )
                         if response.get("ok") is not True or not isinstance(
                             response.get("recipients"), list
@@ -332,8 +314,6 @@ class AccessMeshMessaging:
                         for item in response["recipients"]:
                             self._validate_recipient(item, peer.instance_id)
                             known = rows.get(item["logical_agent_id"])
-                            # Lexicographic ISO timestamps are comparable after
-                            # normalization; ties break consistently by server.
                             if known is None or (
                                 str(item.get("last_active_at") or ""),
                                 item["server_id"],
@@ -342,9 +322,14 @@ class AccessMeshMessaging:
                                 known["server_id"],
                             ):
                                 rows[item["logical_agent_id"]] = item
-                        cursor = response.get("after") or ""
-                        if not cursor:
+                        following = response.get("after") or ""
+                        if not following:
                             break
+                        if following == after:
+                            raise MeshMessagingError("message_unavailable")
+                        after = following
+                    if after:
+                        raise MeshMessagingError("output_item_too_large")
                 except Exception:
                     logging.getLogger(__name__).debug(
                         "Agent observation peer temporarily unavailable: %s",
@@ -361,6 +346,29 @@ class AccessMeshMessaging:
         slot = self.mesh.store.slot_for_agent(agent_id)
         if slot is None or item.get("public_name") != _public_name(slot):
             raise MeshMessagingError("message_unavailable")
+
+    async def handle_locations_peer(self, peer_id, payload):
+        """Read-only fleet presence endpoint; it is not message recipient discovery."""
+        if peer_id not in {peer.instance_id for peer in self.peers}:
+            return _failure("access_denied")
+        try:
+            request = MeshRecipientsQuery.model_validate(payload)
+            rows = [
+                item
+                for item in await self._local_recipients()
+                if item["logical_agent_id"] > request.after
+            ]
+            rows.sort(key=lambda item: item["logical_agent_id"])
+            page = rows[: request.limit]
+            return {
+                "ok": True,
+                "recipients": page,
+                "after": page[-1]["logical_agent_id"] if len(rows) > len(page) else None,
+            }
+        except ValidationError:
+            return _failure("input_validation_failed")
+        except MeshMessagingError as exc:
+            return _failure(exc.code)
 
     async def _target_is_merged_self(self, target: str, logical_agent_id: str) -> bool:
         """Recognize old public_name aliases after LogicalAgent convergence."""
@@ -418,15 +426,10 @@ class AccessMeshMessaging:
             parent = await asyncio.to_thread(self.store.wire, reply_to)
             if parent is None:
                 raise MeshMessagingError("message_not_found")
-            row = await asyncio.to_thread(
-                self.store.recipient, reply_to, identity["logical_agent_id"]
-            )
-            if row["reply_message_hash"]:
-                previous = await asyncio.to_thread(self.store.wire, row["reply_message_hash"])
-                if previous is None or previous["text"] != text:
-                    raise MeshMessagingError("idempotency_conflict")
-                return await asyncio.to_thread(self.store.receipt, row["reply_message_hash"])
-            target, scope, namespace, task_id = parent["sender_name"], "fleet", None, None
+            await asyncio.to_thread(self.store.recipient, reply_to, identity["logical_agent_id"])
+            # An intentional second reply is another message. Each accepted
+            # reply has a unique hash; inbound retry dedup uses that hash.
+            target, scope, namespace, task_id = parent["sender_name"], "local", None, None
         if isinstance(target, str) and target.casefold() == "broadcast":
             target = "broadcast"
         if isinstance(target, str) and (
@@ -449,8 +452,8 @@ class AccessMeshMessaging:
         }
         # Explicit outbound sends are distinct regardless of JSON-RPC id
         # or identical text. Inbound retransmission dedup uses message_hash.
-        suffix = secrets.token_hex(20)
-        message_hash = f"{self.node_id}:meshmsg:{suffix}"
+        suffix = secrets.token_hex(16)
+        message_hash = f"{self.node_id}:localmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:
             await self.flush_for_call(message_hash=message_hash)
@@ -466,7 +469,7 @@ class AccessMeshMessaging:
         if len(canonical(wire).encode()) > MAX_WIRE_BYTES - 8192:
             raise MeshMessagingError("output_item_too_large")
         recipients = await self._targets(wire, ())
-        peers = [peer.instance_id for peer in self.peers] if scope == "fleet" else []
+        peers = []  # Node-local messages never schedule remote delivery.
         if not recipients and not peers:
             raise MeshMessagingError(
                 "no_active_recipients" if wire["target"] == "broadcast" else "recipient_not_found"
@@ -619,7 +622,7 @@ class AccessMeshMessaging:
         mode=None,
         require_reply=False,
         alert=False,
-        scope="fleet",
+        scope="local",
         history=False,
         recipients=False,
         limit=20,
@@ -632,6 +635,8 @@ class AccessMeshMessaging:
         try:
             if scope not in {"local", "fleet"} or detail not in {"summary", "full"}:
                 raise MeshMessagingError("input_validation_failed")
+            if scope == "fleet":
+                raise MeshMessagingError("feature_disabled")
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise MeshMessagingError("input_validation_failed")
             if type(require_reply) is not bool or type(alert) is not bool:
@@ -723,102 +728,33 @@ class AccessMeshMessaging:
             raise
 
     async def handle_peer(self, peer_id, kind, payload):
+        # Keep peer authentication and public size bounds, then terminally reject
+        # legacy message delivery/receipt/discovery without mutating message state.
         if peer_id not in {peer.instance_id for peer in self.peers}:
             return _failure("access_denied")
         if len(canonical(payload).encode()) > MAX_WIRE_BYTES:
             return _failure("output_item_too_large")
-        try:
-            if kind == "deliver":
-                request = MeshDelivery.model_validate(payload)
-                wire = request.message.model_dump()
-                if (
-                    wire["origin_node_id"] != peer_id
-                    or wire["scope"] != "fleet"
-                    or not wire["message_hash"].startswith(f"{peer_id}:meshmsg:")
-                ):
-                    raise MeshMessagingError("message_forbidden")
-                slot = await asyncio.to_thread(self.mesh.store.slot_for_agent, wire["sender_id"])
-                if slot is None or _public_name(slot) != wire["sender_name"]:
-                    raise MeshMessagingError("sender_not_authorized")
-                recipients = await self._targets(wire, request.excluded)
-                return await asyncio.to_thread(self.store.accept, wire, recipients)
-            if kind == "receipt":
-                receipt = MeshReceipt.model_validate(payload).model_dump()
-                return await asyncio.to_thread(self.store.apply_receipt, peer_id, receipt)
-            if kind == "recipients":
-                request = MeshRecipientsQuery.model_validate(payload)
-                rows = [
-                    item
-                    for item in await self._local_recipients()
-                    if item["logical_agent_id"] > request.after
-                ]
-                rows.sort(key=lambda item: item["logical_agent_id"])
-                page = rows[: request.limit]
-                return {
-                    "ok": True,
-                    "recipients": page,
-                    "after": page[-1]["logical_agent_id"] if len(rows) > len(page) else None,
-                }
-            return _failure("input_validation_failed")
-        except ValidationError:
-            return _failure("input_validation_failed")
-        except MeshMessagingError as exc:
-            return _failure(exc.code)
+        return _failure("feature_disabled", outcome="not_committed")
 
     async def flush_for_call(self, *, message_hash):
-        """The durable accept receipt does not wait for a busy or offline Fleet."""
-        try:
-            await asyncio.wait_for(
-                self.flush(message_hash=message_hash),
-                timeout=PUBLIC_DELIVERY_BUDGET_SECONDS,
-            )
-        except TimeoutError:
-            # The transaction has already queued every remaining delivery.
-            # Lifespan workers retry it without extending this caller's budget.
-            return
+        """Compatibility no-op after retirement of peer message transport."""
+        await self.flush(message_hash=message_hash)
 
     async def flush(self, *, message_hash=None):
-        if self.replication is None:
-            return
-        async with self._flush_lock:
-            peers = {peer.instance_id: peer for peer in self.peers}
-            jobs = await asyncio.to_thread(self.store.pending, limit=20, message_hash=message_hash)
-            for job in jobs:
-                try:
-                    peer = peers.get(job["peer_id"])
-                    if peer is None:
-                        raise MeshMessagingError("message_unavailable")
-                    result = await self.replication.request(
-                        peer, f"messages/{job['kind']}", json.loads(job["payload_json"])
-                    )
-                    if (
-                        result.get("ok") is not True
-                        or result.get("message_hash") != job["message_hash"]
-                    ):
-                        raise MeshMessagingError("message_unavailable")
-                    if job["kind"] == "deliver":
-                        deliveries = result.get("deliveries")
-                        if not isinstance(deliveries, list) or len(deliveries) > MAX_RECIPIENTS:
-                            raise MeshMessagingError("message_unavailable")
-                        for item in deliveries:
-                            self._validate_recipient(item, peer.instance_id)
-                    await asyncio.to_thread(
-                        self.store.finish_delivery, job, result, utc_text(self.mesh.clock())
-                    )
-                except Exception as exc:
-                    await asyncio.to_thread(
-                        self.store.failed_delivery,
-                        job["id"],
-                        str(getattr(exc, "code", "message_unavailable")),
-                    )
+        """Remote message/receipt transport is retired; no network retries."""
+        return
 
     async def tick(self):
-        await self.flush()
+        # Read-time expiry is authoritative; physical pruning runs even if
+        # the process was idle or restarted after a long outage.
+        await asyncio.to_thread(self.store.prune_expired)
 
     async def start(self):
+        # Idempotent transition, with its preflight inside one transaction.
+        await asyncio.to_thread(self.store.activate_local_cutover)
         if self._task is None:
             self._stop.clear()
-            self._task = asyncio.create_task(self._loop(), name="access-mesh-message-outbox")
+            self._task = asyncio.create_task(self._loop(), name="access-mesh-message-retention")
 
     async def stop(self):
         self._stop.set()
@@ -834,8 +770,8 @@ class AccessMeshMessaging:
                 self.last_error = None
             except Exception as exc:
                 self.last_error = type(exc).__name__
-                logging.getLogger(__name__).warning("Message outbox sweep failed", exc_info=True)
+                logging.getLogger(__name__).warning("Message retention sweep failed", exc_info=True)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=2)
+                await asyncio.wait_for(self._stop.wait(), timeout=60)
             except TimeoutError:
                 pass
