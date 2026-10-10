@@ -18,11 +18,19 @@ async def case(tmp_path):
     return store, TaskCoordinator(store)
 
 
-async def create(coordinator, request_id, *, title="Receipt", description="original"):
+async def create(
+    coordinator,
+    request_id,
+    *,
+    agent_id="writer",
+    namespace="receipts",
+    title="Receipt",
+    description="original",
+):
     return await coordinator.mutate(
-        "writer",
+        agent_id,
         action="create",
-        namespace="receipts",
+        namespace=namespace,
         isolation_hint="isolated-receipt",
         request_id=request_id,
         title=title,
@@ -60,6 +68,29 @@ async def test_request_id_replay_after_rename_and_payload_conflict(case):
     different = await create(coordinator, "create-789", title="Different")
     assert not different["ok"]
     assert different["code"] == "request_id_conflict"
+
+
+@pytest.mark.asyncio
+async def test_create_receipt_scope_is_agent_namespace_and_operation_id(case):
+    _, coordinator = case
+    original = await create(coordinator, "scoped-id")
+    replay = await create(coordinator, "scoped-id")
+    other_agent = await create(coordinator, "scoped-id", agent_id="other-writer")
+    other_namespace = await create(coordinator, "scoped-id", namespace="other-receipts")
+    distinct_operation = await create(
+        coordinator, "different-id", title="Separate operation", description="separate payload"
+    )
+
+    assert original["ok"] and replay["ok"]
+    assert replay["task"]["task_id"] == original["task"]["task_id"]
+    assert other_agent["ok"] and other_namespace["ok"] and distinct_operation["ok"]
+    task_ids = {
+        original["task"]["task_id"],
+        other_agent["task"]["task_id"],
+        other_namespace["task"]["task_id"],
+        distinct_operation["task"]["task_id"],
+    }
+    assert len(task_ids) == 4
 
 
 @pytest.mark.asyncio
@@ -117,13 +148,17 @@ def test_live_mcp_task_manage_receipt_is_stable_across_retries(tmp_path):
     import sqlite3
 
     from fastapi.testclient import TestClient
-    from test_access_mesh_mcp_runtime import call, settings
+    from test_access_mesh_mcp_runtime import call, rpc, settings
 
     from terminal_mcp.app import create_app
 
     config = settings(tmp_path)
     app = create_app(config)
     with TestClient(app, base_url="https://terminal.example") as client:
+        coordinator_tools = rpc(client, "coordinator", "tools/list").json()["result"]["tools"]
+        task_manage = next(tool for tool in coordinator_tools if tool["name"] == "task_manage")
+        request_id_schema = task_manage["inputSchema"]["properties"]["request_id"]
+        assert "create" in request_id_schema["description"].lower()
         issued = call(client, "access", "session", {"action": "start"}, request_id=30)
         assert issued["ok"]
         assert call(

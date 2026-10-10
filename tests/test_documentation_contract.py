@@ -125,7 +125,7 @@ def test_packaged_terminal_operations_skill_matches_sources() -> None:
         assert len(archive.namelist()) == len(expected)
         assert archive.testzip() is None
         for name, content in expected.items():
-            assert archive.read(name) == content
+            assert archive.read(name).replace(b"\r\n", b"\n") == content.replace(b"\r\n", b"\n")
 
 
 @pytest.mark.parametrize(

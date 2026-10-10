@@ -184,6 +184,10 @@ def test_schema_declares_action_specific_requirements_and_forbidden_fields():
         "task_id",
         "state",
     }
+    assert "request_id" in defs["TaskCreateRequest"]["properties"]
+    assert "request_id" not in defs["TaskCreateRequest"]["required"]
+    for action in ("TaskStateRequest", "TaskCheckpointRequest", "TaskCommentRequest"):
+        assert "request_id" not in defs[action]["properties"]
     assert "candidate_ref" not in defs["TaskReviewRequest"]["properties"]
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["maxItems"] == 3
     assert defs["TaskReviewRequest"]["properties"]["dimensions"]["uniqueItems"] is True

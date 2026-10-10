@@ -34,11 +34,13 @@ Local grant/policy replicas provide admission. Reads use a pure observation path
 
 ## Workflow-state and ownership contract
 
-Task state is one of `ready`, `in_progress`, `qa`, `blocked`, `deferred`, `done`. Create sets initial state; subsequent workflow transitions use `state` or `done`. `update` rejects a state field. Claim/release/expiry/end/suspend/delete preserve explicit task state, checkpoint and result.
+Task state is one of `ready`, `in_progress`, `qa`, `blocked`, `deferred`, `done`. Create sets initial state. `task_state` and `task_manage(action="state")` accept any listed state from any admitted agent at any time, independent of claim ownership, prior state, result and dependency status. The `task_state` input contains `namespace`, `task_id` and `state`; each state write preserves the content revision and repeated values preserve that revision. `update` rejects a state field. Claim/release/expiry/end/suspend/delete preserve explicit task state, checkpoint and result.
 
 Legacy claims release on end/expiry. Persistent claims release on end/expiry when their policy says `release_on_end=true`; otherwise ownership remains durable. Suspend/delete triggers cleanup. Local cleanup fences execution before releasing ownership and retains a pending fence on failure. Each release targets its exact old claim/session identity and is idempotent; a successor claim survives delayed cleanup.
 
-Owner-sensitive task writes validate ownership in their write transaction, independently of revision checking. Revision checks protect policy/dependency/output preconditions. Executor task_comment accepts comment (default) and checkpoint; checkpoint retains canonical owner/revision guards. Comments retain independent append semantics. Review and its audit commit together. All successful mutation receipts are derived from the transaction's committed snapshot, including state, revision and requested description/checkpoint/result; post-commit readback does not decide whether the mutation succeeded.
+Content edits preserve the task revision/CAS contract. Checkpoints append history and update the latest checkpoint while preserving content revision; repeated checkpoint values append separate events. Comments retain author attribution and history, with exact-text duplicate detection per author. Executor `task_comment` accepts `comment` (default) and `checkpoint`. Review and its audit commit together. Successful mutation receipts come from the transaction's committed snapshot, including state, revision and requested description/checkpoint/result; the committed outcome remains authoritative through post-commit readback failures.
+
+The action-specific runtime schema exposes `request_id` for `task.create`. Its receipt is scoped by LogicalAgent, namespace and operation ID, with a content fingerprint. Reuse with changed content returns `request_id_conflict`; a fresh ID represents a separate create operation. JSON-RPC/MCP request IDs identify transport calls. Repeated checkpoint calls append independent events and retain their authorship records.
 
 ## Planning and runtime validation
 
