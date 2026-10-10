@@ -140,7 +140,7 @@ class AccessMeshMessaging:
     def _session_alert_hash(node_id, slot, started_at):
         digest = hashlib.sha256(
             f"{slot.issuer_id}:{slot.slot_id}:{started_at}".encode()
-        ).hexdigest()[:40]
+        ).hexdigest()[:24]
         return f"{node_id}:localmsg:session_alert_{digest}"
 
     async def ensure_session_alert(self, slot, identity):
@@ -452,7 +452,7 @@ class AccessMeshMessaging:
         }
         # Explicit outbound sends are distinct regardless of JSON-RPC id
         # or identical text. Inbound retransmission dedup uses message_hash.
-        suffix = secrets.token_hex(20)
+        suffix = secrets.token_hex(16)
         message_hash = f"{self.node_id}:localmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:

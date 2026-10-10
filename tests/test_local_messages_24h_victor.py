@@ -1,11 +1,13 @@
 """Isolated local-message cutover regression; no live servers or databases."""
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from test_access_mesh_messages_v2 import _public_name, actor
 from test_access_mesh_messages_v2 import mesh_pair as mesh_pair_fixture
 
+from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
 from terminal_mcp.storage.access_mesh_messages import (
     CUTOVER_REASON,
     AccessMeshMessageStore,
@@ -445,3 +447,23 @@ async def test_local_health_probe_is_transactional_and_detects_missing_storage(m
 
     with pytest.raises(sqlite3.OperationalError):
         local.store.health_probe()
+
+
+@pytest.mark.asyncio
+async def test_maximum_supported_node_id_preserves_public_message_id_budget(mesh_pair):
+    """Origin node up to 80 chars must fit the public 128-char message limit."""
+    local = mesh_pair.nodes["firstbyte"]
+    long_node_id = "n" * 80
+    local.mesh.store.local_node_id = long_node_id
+    local.store.local_node_id = long_node_id
+    local.store.local_prefix = f"{long_node_id}:localmsg:"
+    recipient = _public_name(local.mesh.store.slots["carol"])
+    sent = await local.message(actor("alice"), text="node boundary", target=recipient)
+    assert sent["ok"], sent
+    assert sent["message_hash"].startswith(local.store.local_prefix)
+    assert len(sent["message_hash"]) <= 128
+    assert local.store.wire(sent["message_hash"])["text"] == "node boundary"
+    slot = SimpleNamespace(issuer_id="issuer", slot_id="slot")
+    alert_id = AccessMeshMessaging._session_alert_hash(long_node_id, slot, "2026-10-10T00:00:00Z")
+    assert len(alert_id) <= 128
+    assert alert_id.startswith(local.store.local_prefix)
