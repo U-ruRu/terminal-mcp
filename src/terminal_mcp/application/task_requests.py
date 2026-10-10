@@ -137,6 +137,9 @@ class TaskCreateRequest(StrictTaskModel):
     namespace: Namespace
     task_id: TaskId | None = None
     isolation_hint: Annotated[str, Field(min_length=1, max_length=160)]
+    request_id: (
+        Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")] | None
+    ) = None
     title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     lane: TaskLane = "general"
     priority: TaskPriority = "P2"

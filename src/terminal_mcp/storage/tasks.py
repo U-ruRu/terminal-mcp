@@ -326,6 +326,9 @@ class TaskStore:
         dependencies=None,
         event_agent_id: str | None = None,
         dedupe_creator: str | None = None,
+        receipt_creator: str | None = None,
+        request_id: str | None = None,
+        request_fingerprint: str | None = None,
         event_payload: Any = None,
         dependency_override: Any = None,
         now: str | None = None,
@@ -339,6 +342,34 @@ class TaskStore:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                # A receipt is committed atomically with the task and its created event.
+                # Replay resolves the original task ID before normal duplicate detection.
+                receipt_key = None
+                if request_id is not None:
+                    if receipt_creator is None or request_fingerprint is None:
+                        raise ValueError("request_id requires caller and fingerprint")
+                    receipt_key = hashlib.sha256(
+                        (namespace + "\0" + request_id).encode("utf-8")
+                    ).hexdigest()
+                    prior = await (
+                        await db.execute(
+                            "SELECT request_fingerprint,state,result_json "
+                            "FROM persistent_idempotency "
+                            "WHERE logical_agent_id=? AND operation='task.create' "
+                            "AND idempotency_key=?",
+                            (receipt_creator, receipt_key),
+                        )
+                    ).fetchone()
+                    if prior is not None:
+                        if prior[0] != request_fingerprint:
+                            raise ValueError("request_id_conflict")
+                        if prior[1] != "complete" or not prior[2]:
+                            raise RuntimeError("task receipt is pending or incomplete")
+                        original_id = json.loads(prior[2])["task_id"]
+                        confirmed = await self._committed_record_tx(db, namespace, original_id)
+                        confirmed.replayed = True
+                        await db.commit()
+                        return confirmed
                 if dedupe_creator is not None:
                     matching = await (
                         await db.execute(
@@ -446,6 +477,21 @@ class TaskStore:
                         ),
                     )
                 committed = await self._committed_record_tx(db, namespace, task_id)
+                if receipt_key is not None:
+                    await db.execute(
+                        "INSERT INTO persistent_idempotency("
+                        "logical_agent_id,operation,idempotency_key,request_fingerprint,"
+                        "state,result_json,created_at) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            receipt_creator,
+                            "task.create",
+                            receipt_key,
+                            request_fingerprint,
+                            "complete",
+                            self._json({"task_id": task_id, "created_at": now}),
+                            now,
+                        ),
+                    )
                 await db.commit()
             except Exception:
                 await db.rollback()
