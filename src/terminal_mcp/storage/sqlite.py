@@ -72,7 +72,9 @@ class SqliteRepository:
         # One bounded, read-only B-tree check per interval; concurrent health
         # polls share the result instead of repeatedly scanning the whole DB.
         self._health_probe_lock = asyncio.Lock()
-        self._health_integrity_uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+        # Preserve the symlink path: SQLite must open the currently selected target,
+        # while ping() tracks that target by inode for cache invalidation.
+        self._health_integrity_uri = Path(self.path).absolute().as_uri() + "?mode=ro"
         self._health_checked_at: float | None = None
         self._health_cached_ok = False
         self._health_file_id: tuple[int, int] | None = None
@@ -225,6 +227,10 @@ class SqliteRepository:
                     pass
             except (OSError, TimeoutError):
                 healthy = False
+            # A symlink may have been switched while the check was running.
+            # Never publish a result for a target that is no longer selected.
+            if file_id() != identity:
+                return False
             # Cache both outcomes for 30 seconds per repository instance and
             # main-file inode; a missing/replaced file bypasses the cache.
             self._health_cached_ok = healthy

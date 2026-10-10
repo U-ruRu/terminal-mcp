@@ -876,7 +876,7 @@ class TerminalService:
         except TimeoutError:
             terminal = await self.terminal.health()
             terminal["ok"] = False
-            return {
+            result = {
                 "ok": False,
                 "agent_name": public_agent_name(agent_id),
                 "application": "terminal-mcp",
@@ -884,8 +884,19 @@ class TerminalService:
                 "storage": "error",
                 "auth_mode": auth_mode,
                 "terminal": terminal,
+                "status": "failed",
+                "components": [
+                    {"id": "storage", "status": "failed", "reason": "storage_unavailable"},
+                    {"id": "terminal", "status": "failed", "reason": "terminal_unavailable"},
+                ],
                 **context,
             }
+            if self.task_coordinator:
+                result["workflow"] = {"ok": False}
+                result["components"].append(
+                    {"id": "workflow", "status": "degraded", "reason": "workflow_degraded"}
+                )
+            return result
 
     async def _persistent_console_snapshot(self, policy: dict | None):
         if policy is None:

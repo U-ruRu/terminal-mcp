@@ -377,3 +377,92 @@ async def test_public_health_failed_workflow_sql_marks_storage_failed(tmp_path, 
     assert result["status"] == "failed"
     assert result["workflow"]["ok"] is False
     assert next(c for c in result["components"] if c["id"] == "storage")["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_public_health_rechecks_database_after_symlink_target_switch(tmp_path):
+    from terminal_mcp.core.service import TerminalService
+
+    class HealthyTerminal:
+        async def health(self):
+            return {"ok": True, "degraded": False, "worker_health": {"1": True}}
+
+    good = tmp_path / "good.sqlite3"
+    broken = tmp_path / "broken.sqlite3"
+    for path in (good, broken):
+        await SqliteRepository(path, tmp_path / f"{path.stem}-out.sqlite3").initialize()
+    _corrupt_instance_events_index(broken)
+
+    link = tmp_path / "active.sqlite3"
+    link.symlink_to(good)
+    repo = SqliteRepository(link, tmp_path / "active-out.sqlite3")
+    service = TerminalService(repo, HealthyTerminal(), max_lines=100)
+    first = await service.health("none")
+    assert first["ok"] is True
+    assert first["status"] == "healthy"
+
+    replacement = tmp_path / "replacement-link"
+    replacement.symlink_to(broken)
+    os.replace(replacement, link)
+    after = await service.health("none")  # public path must recheck directly
+    assert after["ok"] is False
+    assert await repo.ping() is False  # target-aware integrity cache
+    assert after["storage"] == "error"
+    assert after["status"] == "failed"
+    assert next(c for c in after["components"] if c["id"] == "storage") == {
+        "id": "storage", "status": "failed", "reason": "storage_unavailable"
+    }
+
+
+@pytest.mark.asyncio
+async def test_public_health_budget_timeout_keeps_complete_failure_contract(tmp_path, monkeypatch):
+    import terminal_mcp.core.service as service_module
+    from terminal_mcp.core.service import TerminalService
+
+    class HealthyTerminal:
+        async def health(self):
+            return {"ok": True, "degraded": False, "worker_health": {"1": True}}
+
+    repo = SqliteRepository(tmp_path / "main.sqlite3", tmp_path / "out.sqlite3")
+    await repo.initialize()
+    service = TerminalService(repo, HealthyTerminal(), max_lines=100)
+
+    async def never_finishes_in_budget():
+        await asyncio.sleep(0.1)
+        return True
+
+    monkeypatch.setattr(repo, "ping", never_finishes_in_budget)
+    monkeypatch.setattr(service_module, "HEALTH_TIMEOUT_SECONDS", 0.01)
+    health = await service.health("none")
+    assert health["ok"] is False
+    assert health["storage"] == "error"
+    assert health["status"] == "failed"
+    assert health["components"]
+    assert next(c for c in health["components"] if c["id"] == "storage") == {
+        "id": "storage", "status": "failed", "reason": "storage_unavailable"
+    }
+
+
+@pytest.mark.asyncio
+async def test_main_db_health_symlink_switch_during_probe_fails_closed(tmp_path, monkeypatch):
+    good = tmp_path / "good.sqlite3"
+    broken = tmp_path / "broken.sqlite3"
+    for path in (good, broken):
+        await SqliteRepository(path, tmp_path / f"{path.stem}-out.sqlite3").initialize()
+    _corrupt_instance_events_index(broken)
+    link = tmp_path / "active.sqlite3"
+    link.symlink_to(good)
+    repo = SqliteRepository(link, tmp_path / "out.sqlite3")
+    probe = repo._health_integrity_probe
+
+    async def switch_during_probe(**kwargs):
+        result = await probe(**kwargs)
+        replacement = tmp_path / "replacement-link"
+        replacement.symlink_to(broken)
+        os.replace(replacement, link)
+        return result
+
+    monkeypatch.setattr(repo, "_health_integrity_probe", switch_during_probe)
+    assert await repo.ping() is False  # never publish old-target success after retarget
+    monkeypatch.setattr(repo, "_health_integrity_probe", probe)
+    assert await repo.ping() is False
