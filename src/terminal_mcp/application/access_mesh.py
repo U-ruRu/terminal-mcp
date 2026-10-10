@@ -85,6 +85,33 @@ class AccessMeshApplication:
         ]
         return hashlib.sha256(json.dumps(scope, separators=(",", ":")).encode()).hexdigest()
 
+    async def _notify_local_presence(self, identity: dict, *, activity=False) -> None:
+        # This is called strictly after a trusted local attach or admitted work.
+        # Remote issuance never calls it. Delivery/storage faults must not affect tools.
+        if not all(
+            identity.get(k) for k in ("logical_agent_id", "work_session_id", "session_epoch")
+        ):
+            return
+        callback = getattr(
+            self,
+            "activity_notifier" if activity else "attach_notifier",
+            None,
+        )
+        if callback is None:
+            return
+        try:
+            args = (
+                identity["logical_agent_id"],
+                identity["work_session_id"],
+                identity["session_epoch"],
+            )
+            if activity:
+                await callback(*args)
+            else:
+                await callback(*args, agent_name=identity.get("public_name"))
+        except Exception as exc:
+            _LOG.warning("local MCP event notification failed: %s", type(exc).__name__)
+
     async def attach(
         self,
         actor: ActorContext,
@@ -117,7 +144,8 @@ class AccessMeshApplication:
             # Attach creates the local WorkSession immediately, so another
             # agent can discover this recipient before its first command.
             await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
-            await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+            identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+            await self._notify_local_presence(identity)
             return {"ok": True}
         if isinstance(access_code, str) and ":" in access_code:
             prefix, access_code = access_code.split(":", 1)
@@ -134,6 +162,7 @@ class AccessMeshApplication:
         )
         await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
         identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+        await self._notify_local_presence(identity)
         return {
             **identity,
             "action": "attach",
@@ -242,6 +271,8 @@ class AccessMeshApplication:
             and operation not in FINALIZATION_OPERATIONS
         ):
             raise AccessMeshError("session_draining")
+        await self._notify_local_presence(identity)
+        await self._notify_local_presence(identity, activity=True)
         return identity
 
     async def cleanup(

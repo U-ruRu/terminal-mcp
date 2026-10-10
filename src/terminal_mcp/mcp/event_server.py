@@ -11,7 +11,13 @@ from starlette.responses import JSONResponse, Response
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import current_admission_context
-from terminal_mcp.mcp.event_store import EVENT_NAMES, MCPEventStore, event_catalog
+from terminal_mcp.mcp.event_diagnostics import correlation_id, emit
+from terminal_mcp.mcp.event_store import (
+    EVENT_NAMES,
+    MCPEventStore,
+    SubscriptionAuthorizationError,
+    event_catalog,
+)
 from terminal_mcp.mcp.event_webhooks import (
     CallbackEndpointError,
     post_signed,
@@ -19,6 +25,7 @@ from terminal_mcp.mcp.event_webhooks import (
     validate_callback_url,
     verify_callback,
 )
+from terminal_mcp.mcp.message_binding import provider_metadata_from_events
 
 
 class MCPEventsAdapter:
@@ -30,14 +37,21 @@ class MCPEventsAdapter:
         reconcile=None,
         sender=None,
         access_checker=None,
+        message_resolver=None,
+        endpoint_role="legacy",
+        events_enabled=True,
     ):
         self.wrapped = wrapped
         self.store = store
         self.reconcile = reconcile
         self.sender = sender
         self.access_checker = access_checker
+        self.message_resolver = message_resolver
+        self.endpoint_role = endpoint_role
+        self.events_enabled = events_enabled
         self._task = None
         self._stop = asyncio.Event()
+        self._last_worker_error = 0.0
 
     async def start(self):
         await self.store.initialize()
@@ -66,9 +80,11 @@ class MCPEventsAdapter:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # A failed poll does not lose the durable cursor or pending deliveries.
-                # Do not log callback URLs, secrets, or payloads.
-                pass
+                # Log only the failure class, never callback or private payload.
+                # Rate-limited to avoid flooding the service journal.
+                if time.monotonic() - self._last_worker_error >= 60:
+                    emit("events/worker", "poll", "internal_error", correlation_id())
+                    self._last_worker_error = time.monotonic()
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=5)
             except TimeoutError:
@@ -141,9 +157,14 @@ class MCPEventsAdapter:
         return admission.principal_id
 
     @staticmethod
-    def _id(principal, name, arguments, callback):
+    def _id(principal, name, arguments, callback, *, binding=None):
+        extra = (
+            [binding.recipient_agent_id, binding.connection_key, binding.slot_id]
+            if binding is not None
+            else []
+        )
         canonical = json.dumps(
-            [principal, callback, name, arguments],
+            [principal, callback, name, arguments, *extra],
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -157,8 +178,14 @@ class MCPEventsAdapter:
             result["error"]["data"] = data
         return result
 
-    async def handle(self, request):
+    async def handle(self, request, *, cid=None):
         method = request["method"]
+        cid = cid or correlation_id()
+
+        def reject(stage, reason, code, message, data=None):
+            emit(method, stage, reason, cid)
+            return self._error(request.get("id"), code, message, data)
+
         request_id = request.get("id")
         params = request.get("params", {})
         if method == "server/discover":
@@ -168,50 +195,112 @@ class MCPEventsAdapter:
                 "result": {
                     "resultType": "complete",
                     "supportedVersions": ["2026-07-28"],
-                    "capabilities": {"tools": {}, "events": {}},
+                    "capabilities": (
+                        {"tools": {}, "events": {}} if self.events_enabled else {"tools": {}}
+                    ),
                 },
             }
         if method == "events/list":
+            if not self.events_enabled:
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"events": []}}
             if params not in ({}, None) and (
                 not isinstance(params, dict) or params.get("cursor") not in (None, "")
             ):
-                return self._error(request_id, -32602, "Invalid parameters")
+                return reject("validation", "invalid_parameters", -32602, "Invalid parameters")
             return {"jsonrpc": "2.0", "id": request_id, "result": event_catalog()}
+        if not self.events_enabled:
+            return reject("authorization", "events_access_only", -32601, "Method not found")
         principal = self._identity()
         if principal is None:
-            return self._error(request_id, -32001, "Authenticated principal required")
+            return reject(
+                "authorization",
+                "principal_missing",
+                -32001,
+                "Authenticated principal required",
+            )
+        emit(method, "authorization", "accepted", cid)
         if not isinstance(params, dict):
-            return self._error(request_id, -32602, "Invalid parameters")
+            return reject("validation", "invalid_parameters", -32602, "Invalid parameters")
         name = params.get("name")
         arguments = params.get("arguments")
         delivery = params.get("delivery")
         if name not in EVENT_NAMES or arguments != {} or not isinstance(delivery, dict):
-            return self._error(request_id, -32602, "Invalid event subscription")
+            return reject(
+                "validation", "invalid_subscription", -32602, "Invalid event subscription"
+            )
         if delivery.get("mode") != "webhook":
-            return self._error(request_id, -32602, "Webhook delivery required")
+            return reject(
+                "validation", "delivery_mode_invalid", -32602, "Webhook delivery required"
+            )
         callback = delivery.get("url")
         try:
             validate_callback_url(callback)
         except CallbackEndpointError:
-            return self._error(request_id, -32602, "Invalid HTTPS callback URL")
-        sub_id = self._id(principal, name, arguments, callback)
+            return reject(
+                "validation", "callback_url_invalid", -32602, "Invalid HTTPS callback URL"
+            )
+        emit(method, "validation", "accepted", cid)
+        binding = None
+        if name == "message.received":
+            admission = current_admission_context()
+            provider_meta = provider_metadata_from_events(params)
+            if provider_meta is None:
+                return reject(
+                    "authorization",
+                    "identity_metadata_missing",
+                    -32001,
+                    "Bound recipient metadata required",
+                )
+            if self.message_resolver is None:
+                return reject(
+                    "authorization",
+                    "recipient_resolver_unavailable",
+                    -32001,
+                    "Recipient binding unavailable",
+                )
+            try:
+                binding = await self.message_resolver.resolve(
+                    admission,
+                    provider_meta,
+                    self.endpoint_role,
+                )
+            except Exception:
+                return reject(
+                    "authorization",
+                    "recipient_lookup_error",
+                    -32001,
+                    "Recipient binding unavailable",
+                )
+            if binding is None:
+                return reject(
+                    "authorization",
+                    "recipient_not_bound",
+                    -32001,
+                    "Recipient binding unavailable",
+                )
+            emit(method, "authorization", "recipient_bound", cid)
+        sub_id = self._id(principal, name, arguments, callback, binding=binding)
         if method == "events/unsubscribe":
             if set(delivery) - {"mode", "url"}:
-                return self._error(request_id, -32602, "Invalid unsubscribe delivery")
+                return reject(
+                    "validation", "unsubscribe_invalid", -32602, "Invalid unsubscribe delivery"
+                )
             await self.store.unsubscribe(sub_id, principal)
+            emit(method, "persistence", "unsubscribed", cid)
             return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         if method != "events/subscribe":
-            return self._error(request_id, -32601, "Method not found")
+            return reject("validation", "method_unknown", -32601, "Method not found")
         secret = delivery.get("secret")
         try:
             signing_key(secret)
         except (TypeError, ValueError, AttributeError):
-            return self._error(request_id, -32602, "Invalid signing secret")
+            return reject("validation", "signing_key_invalid", -32602, "Invalid signing secret")
         if params.get("cursor") is not None:
-            return self._error(request_id, -32602, "Replay cursor unsupported")
+            return reject("validation", "replay_unsupported", -32602, "Replay cursor unsupported")
         ttl_ms = params.get("ttlMs")
         if ttl_ms is not None and (type(ttl_ms) is not int or ttl_ms < 1000):
-            return self._error(request_id, -32602, "Invalid ttlMs")
+            return reject("validation", "ttl_invalid", -32602, "Invalid ttlMs")
+        emit(method, "callback", "challenge_started", cid)
         try:
             if not await self.store.verified_recently(principal, callback):
                 await verify_callback(
@@ -221,23 +310,47 @@ class MCPEventsAdapter:
                     sender=self.sender,
                 )
         except CallbackEndpointError as exc:
-            return self._error(
-                request_id,
+            return reject(
+                "callback",
+                exc.reason,
                 -32015,
                 "CallbackEndpointError",
                 {"reason": exc.reason},
             )
+        emit(method, "callback", "verified", cid)
         admission = current_admission_context()
-        expires_at = await self.store.save_subscription(
-            sub_id=sub_id,
-            principal=principal,
-            credential_id=admission.credential_id,
-            auth_mode=admission.auth_mode,
-            name=name,
-            callback=callback,
-            secret=secret,
-            ttl_ms=ttl_ms,
-        )
+        if (
+            admission is None
+            or admission.principal_id != principal
+            or (binding is not None and "terminal:read" not in admission.scopes)
+        ):
+            return reject(
+                "authorization",
+                "subscription_authorization_expired",
+                -32001,
+                "Subscription authorization expired",
+            )
+        try:
+            expires_at = await self.store.save_subscription(
+                sub_id=sub_id,
+                principal=principal,
+                credential_id=admission.credential_id,
+                auth_mode=admission.auth_mode,
+                name=name,
+                callback=callback,
+                secret=secret,
+                ttl_ms=ttl_ms,
+                message_binding=binding,
+                authorization_checker=self.access_checker,
+            )
+        except SubscriptionAuthorizationError:
+            return reject(
+                "authorization",
+                "subscription_authorization_expired",
+                -32001,
+                "Subscription authorization expired",
+            )
+        emit(method, "persistence", "stored", cid)
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -290,7 +403,9 @@ class MCPEventsAdapter:
                     "id": request.get("id"),
                     "result": {
                         "protocolVersion": "2026-07-28",
-                        "capabilities": {"tools": {}, "events": {}},
+                        "capabilities": (
+                            {"tools": {}, "events": {}} if self.events_enabled else {"tools": {}}
+                        ),
                         "serverInfo": {"name": "terminal-mcp", "version": "2.0"},
                     },
                 }
@@ -308,7 +423,19 @@ class MCPEventsAdapter:
                 "events/unsubscribe",
             )
         ):
-            result = await self.handle(request)
+            cid = scope.get("mcp_events_cid") or correlation_id()
+            emit(request["method"], "rpc", "received", cid)
+            try:
+                result = await self.handle(request, cid=cid)
+            except Exception:
+                emit(request["method"], "rpc", "internal_error", cid)
+                raise
+            emit(
+                request["method"],
+                "rpc",
+                "ok" if "result" in result else "rpc_error",
+                cid,
+            )
             await JSONResponse(result)(scope, receive, send)
             return
         has_replayed = False

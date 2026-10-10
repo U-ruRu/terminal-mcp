@@ -373,7 +373,21 @@ class ManagedSessionApplication:
             )
         if not decision.allowed:
             raise ManagedSessionError(decision.code, current=snapshot.window, return_to_chat=True)
-        return self._admitted(actor, grant, snapshot, decision)
+        admitted = self._admitted(actor, grant, snapshot, decision)
+        # Admission on this node, unlike remote Access issuance or passive
+        # replication, establishes actual local presence.
+        notifier = getattr(self, "attach_notifier", None)
+        if notifier is not None and actor.node_id == snapshot.session.authority_node_id:
+            try:
+                await notifier(
+                    grant.logical_agent_id,
+                    snapshot.session.work_session_id,
+                    snapshot.session.session_epoch,
+                    agent_name=grant.public_name,
+                )
+            except Exception as exc:
+                _LOG.warning("managed event attach note failed: %s", type(exc).__name__)
+        return admitted
 
     async def authorize_operation(
         self, actor: ActorContext, operation: ManagedOperation
@@ -410,7 +424,52 @@ class ManagedSessionApplication:
                 ManagedOperation.SESSION_STATUS,
             }:
                 raise ManagedSessionError("session_not_active", return_to_chat=True)
-            return self._admitted(actor, grant, snapshot, decision)
+            admitted = self._admitted(actor, grant, snapshot, decision)
+            # A successful authenticated operation by the target agent is
+            # real activity. Observation, lists, health and status are not.
+            # Recording a notification must never prevent normal tool use.
+            activity_operations = {
+                ManagedOperation.COMMAND_RUN,
+                ManagedOperation.COMMAND_READ,
+                ManagedOperation.COMMAND_CANCEL,
+                ManagedOperation.COMMAND_RECOVERY,
+                ManagedOperation.TASK_CREATE,
+                ManagedOperation.TASK_CLAIM,
+                ManagedOperation.TASK_UPDATE,
+                ManagedOperation.TASK_CHECKPOINT,
+                ManagedOperation.TASK_DONE,
+                ManagedOperation.TASK_RELEASE,
+                ManagedOperation.TASK_REVIEW,
+                ManagedOperation.TASK_COMMENT,
+                ManagedOperation.TASK_RELATE,
+                ManagedOperation.TASK_UNRELATE,
+                ManagedOperation.TASK_STATE,
+                ManagedOperation.TASK_ARCHIVE,
+                ManagedOperation.MESSAGE_SEND,
+                ManagedOperation.MESSAGE_ACK,
+                ManagedOperation.MESSAGE_REPLY,
+                ManagedOperation.CONTEXT_WRITE,
+            }
+            notifier = getattr(self, "activity_notifier", None)
+            if (
+                notifier is not None
+                and operation in activity_operations
+                and actor.node_id == snapshot.session.authority_node_id
+                and (
+                    actor.logical_agent_id is None
+                    or actor.logical_agent_id == grant.logical_agent_id
+                )
+            ):
+                try:
+                    await notifier(
+                        grant.logical_agent_id,
+                        snapshot.session.work_session_id,
+                        snapshot.session.session_epoch,
+                        now=now,
+                    )
+                except Exception as exc:
+                    _LOG.warning("managed event activity note failed: %s", type(exc).__name__)
+            return admitted
 
     async def _drain(self, session: WorkSessionRecord, reason: str) -> bool:
         try:

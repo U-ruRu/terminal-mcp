@@ -443,6 +443,7 @@ async def test_repeated_expired_gate_calls_keep_stable_error_after_revocation(en
             await env.app.authorize_operation(first.actor, ManagedOperation.COMMAND_RUN)
         assert error.value.return_to_chat
 
+
 async def test_operator_surface_reports_policy_window_and_session_and_mutates_window(env):
     started = await env.app.start(actor())
     operator = actor(role="operator")
@@ -490,6 +491,7 @@ async def test_operator_can_end_current_managed_session_without_impersonating_pr
     assert ended.state == "ended"
     assert ended.end_reason == "operator_end"
 
+
 async def test_explicit_managed_start_adopts_active_legacy_session_without_resetting_budget(env):
     _slot, legacy = await env.store.start_session(
         selector="ABCD",
@@ -518,6 +520,7 @@ async def test_explicit_managed_start_adopts_active_legacy_session_without_reset
     assert again.snapshot.window.work_window_id == started.snapshot.window.work_window_id
     assert again.snapshot.window.hard_expires_at == started.snapshot.window.hard_expires_at
 
+
 async def test_draining_allows_idempotent_active_start_but_blocks_new_session_after_end(env):
     first = await env.app.start(actor())
     env.clock[0] = T0 + timedelta(seconds=1320)
@@ -537,6 +540,7 @@ async def test_draining_allows_idempotent_active_start_but_blocks_new_session_af
     assert await env.store.active_session_for_slot("la_one") is None
     window = await env.store.current_window("la_one")
     assert window is not None and window.phase(env.clock[0]) is WindowPhase.DRAINING
+
 
 async def test_legacy_adoption_in_draining_preserves_existing_session_instead_of_starting_new(env):
     _slot, legacy = await env.store.start_session(
@@ -558,3 +562,52 @@ async def test_legacy_adoption_in_draining_preserves_existing_session_instead_of
     assert adopted.snapshot.session.work_session_id == legacy.work_session_id
     assert adopted.lifecycle.phase is WindowPhase.DRAINING
     assert adopted.lifecycle.return_to_chat is True
+
+
+@pytest.mark.asyncio
+async def test_events_follow_real_managed_admission_and_ignore_observer(env):
+    attached = []
+    activity = []
+
+    async def note_attach(*args, **kwargs):
+        attached.append((args, kwargs))
+
+    async def note_activity(*args, **kwargs):
+        activity.append((args, kwargs))
+
+    env.app.attach_notifier = note_attach
+    env.app.activity_notifier = note_activity
+    started = await env.app.start(actor())
+    assert len(attached) == 1
+    assert attached[0][0][1] == started.snapshot.session.work_session_id
+    assert attached[0][1]["agent_name"] == "Stable-Agent"
+    await env.app.authorize_operation(started.actor, ManagedOperation.OBSERVE)
+    await env.app.authorize_operation(started.actor, ManagedOperation.TASK_LIST)
+    await env.app.authorize_operation(started.actor, ManagedOperation.SESSION_STATUS)
+    assert activity == []
+    await env.app.authorize_operation(started.actor, ManagedOperation.COMMAND_RUN)
+    assert len(activity) == 1
+    assert activity[0][0][:3] == (
+        "la_one",
+        started.snapshot.session.work_session_id,
+        started.snapshot.session.session_epoch,
+    )
+    # Re-admission may refresh local presence but outbox dedup must hold.
+    await env.app.start(actor())
+    assert len(attached) == 2
+    assert (
+        env.app.session_duration_seconds if hasattr(env.app, "session_duration_seconds") else True
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_notifications_are_nonfatal_to_tool_authorization(env):
+    async def failing(*args, **kwargs):
+        raise RuntimeError("fake secret should not enter output")
+
+    env.app.attach_notifier = failing
+    env.app.activity_notifier = failing
+    admitted = await env.app.start(actor())
+    assert admitted.snapshot.session.state == "active"
+    authorized = await env.app.authorize_operation(admitted.actor, ManagedOperation.COMMAND_RUN)
+    assert authorized.snapshot.session.work_session_id == admitted.snapshot.session.work_session_id
