@@ -1,0 +1,401 @@
+{
+  "exact_SHA": "2649bc445252b8af9d34b6eee1dec2ce1ea6a601",
+  "roster_count": 19,
+  "tools": [
+    {
+      "tool": "access.session",
+      "input_fields": 1,
+      "strict_required": [
+        "action"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.session",
+      "input_fields": 2,
+      "strict_required": [
+        "session_number"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.task_list",
+      "input_fields": 6,
+      "strict_required": [],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.command_run",
+      "input_fields": 3,
+      "strict_required": [
+        "command"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.command_read",
+      "input_fields": 3,
+      "strict_required": [],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.command_cancel",
+      "input_fields": 1,
+      "strict_required": [
+        "cmd_hash"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.command_recovery",
+      "input_fields": 1,
+      "strict_required": [
+        "command"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.task_claim",
+      "input_fields": 6,
+      "strict_required": [
+        "action",
+        "namespace",
+        "task_id"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.task_state",
+      "input_fields": 3,
+      "strict_required": [
+        "namespace",
+        "state",
+        "task_id"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.task_comment",
+      "input_fields": 5,
+      "strict_required": [
+        "namespace",
+        "task_id"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "executor.message",
+      "input_fields": 13,
+      "strict_required": [
+        "action"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.session",
+      "input_fields": 2,
+      "strict_required": [
+        "session_number"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.task_get",
+      "input_fields": 6,
+      "strict_required": [
+        "namespace",
+        "task_id"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.task_list",
+      "input_fields": 6,
+      "strict_required": [],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.task_manage",
+      "input_fields": 33,
+      "strict_required": [
+        "action",
+        "namespace"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.task_graph",
+      "input_fields": 6,
+      "strict_required": [
+        "namespace",
+        "task_id"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.agent_observe",
+      "input_fields": 0,
+      "strict_required": [],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.message",
+      "input_fields": 13,
+      "strict_required": [
+        "action"
+      ],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    },
+    {
+      "tool": "coordinator.health",
+      "input_fields": 1,
+      "strict_required": [],
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "text_roster_required": "PASS",
+      "transport_nonblocking": "PASS",
+      "flat_output_unchanged": "PASS",
+      "manual_runtime": "REVIEWED"
+    }
+  ],
+  "canonical_checks": {
+    "B1_update_missing_rev": "PASS",
+    "B1_update_null_rev": "PASS",
+    "B1_update_valid": "PASS",
+    "B3_archive_note_only": "PASS",
+    "B6_claim_null_intent": "PASS",
+    "B6_claim_valid": "PASS",
+    "B6_claim_cross_extra": "PASS",
+    "B6_release_cross_extra": "PASS",
+    "B6_release_no_reason": "PASS",
+    "B9_checkpoint_null": "PASS",
+    "B9_review_null_dimensions": "PASS",
+    "B10_null_vs_empty": "PASS",
+    "B13_relate_open_string": "PASS",
+    "B7_message_null_values": "PASS",
+    "B8_comment_extra_and_null": "PASS"
+  },
+  "runtime_storage": {
+    "state_independent_claim": true,
+    "content_revision_before": 1,
+    "content_revision_after": 1,
+    "state_from": "ready",
+    "state_to": "blocked",
+    "archive_other_agent_code": "owner_required",
+    "review_with_output_state_ok": true,
+    "release_without_reason_ok": true
+  },
+  "independent_wire": [
+    {
+      "tool": "access.session",
+      "http_bytes": 1669,
+      "result_bytes": 1635,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.session",
+      "http_bytes": 1857,
+      "result_bytes": 1823,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.task_list",
+      "http_bytes": 2213,
+      "result_bytes": 2179,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.command_run",
+      "http_bytes": 1965,
+      "result_bytes": 1931,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.command_read",
+      "http_bytes": 1955,
+      "result_bytes": 1921,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.command_cancel",
+      "http_bytes": 1615,
+      "result_bytes": 1581,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.command_recovery",
+      "http_bytes": 1611,
+      "result_bytes": 1577,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.task_claim",
+      "http_bytes": 2201,
+      "result_bytes": 2167,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.task_state",
+      "http_bytes": 1015,
+      "result_bytes": 981,
+      "code": "invalid_state"
+    },
+    {
+      "tool": "executor.task_comment",
+      "http_bytes": 2194,
+      "result_bytes": 2159,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "executor.message",
+      "http_bytes": 2226,
+      "result_bytes": 2191,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.session",
+      "http_bytes": 1858,
+      "result_bytes": 1823,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.task_get",
+      "http_bytes": 2242,
+      "result_bytes": 2207,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.task_list",
+      "http_bytes": 2214,
+      "result_bytes": 2179,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.task_manage",
+      "http_bytes": 2206,
+      "result_bytes": 2171,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.task_graph",
+      "http_bytes": 2146,
+      "result_bytes": 2111,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.agent_observe",
+      "http_bytes": 1434,
+      "result_bytes": 1399,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.message",
+      "http_bytes": 2226,
+      "result_bytes": 2191,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "coordinator.health",
+      "http_bytes": 1434,
+      "result_bytes": 1399,
+      "code": "input_validation_failed"
+    },
+    {
+      "tool": "STRESS:coordinator.task_manage",
+      "http_bytes": 2220,
+      "result_bytes": 2183,
+      "code": "input_validation_failed"
+    }
+  ],
+  "wire_max_bytes": 2207
+}
