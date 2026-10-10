@@ -77,6 +77,10 @@ def event_catalog():
     }
 
 
+class SubscriptionAuthorizationError(PermissionError):
+    """Subscription rights changed before the durable write."""
+
+
 class MCPEventStore:
     def __init__(self, path, node_id: str):
         self.path = path
@@ -713,12 +717,43 @@ class MCPEventStore:
         secret,
         ttl_ms=None,
         message_binding=None,
+        authorization_checker=None,
     ):
         now = utc_now()
         created_at = utc_text(now)
         expires_at = utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
         async with aiosqlite.connect(self.path, timeout=5) as db:
+            # SQLite is shared with OAuth clients and Access Mesh bindings.
+            # Acquire the writer reservation *before* the final authorization
+            # reads: revocation either commits first and fails this request,
+            # or serializes after this subscription commit.
             await db.execute("BEGIN IMMEDIATE")
+            if message_binding is not None and authorization_checker is None:
+                raise SubscriptionAuthorizationError
+            if authorization_checker is not None:
+                candidate = {
+                    "name": name,
+                    "principal_id": principal,
+                    "credential_id": credential_id,
+                    "auth_mode": auth_mode,
+                }
+                if message_binding is not None:
+                    candidate.update(
+                        recipient_agent_id=message_binding.recipient_agent_id,
+                        recipient_session_id=message_binding.work_session_id,
+                        recipient_epoch=message_binding.session_epoch,
+                        recipient_connection_key=message_binding.connection_key,
+                        recipient_node_id=self.node_id,
+                        recipient_issuer_id=message_binding.issuer_id,
+                        recipient_slot_id=message_binding.slot_id,
+                        recipient_role=message_binding.role,
+                    )
+                try:
+                    authorized = await authorization_checker(candidate)
+                except Exception:
+                    raise SubscriptionAuthorizationError from None
+                if not authorized:
+                    raise SubscriptionAuthorizationError
             await db.execute(
                 "INSERT INTO mcp_event_subscriptions"
                 "(id,principal_id,credential_id,auth_mode,name,arguments_json,"

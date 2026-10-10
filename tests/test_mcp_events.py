@@ -654,9 +654,8 @@ async def test_revoked_subscription_denied_before_network_delivery(context):
     access = False
     await adapter.deliver_due()
     assert len(delivered.requests) == 1  # no event exfiltrated after revoke
-    assert len(checks) == 1
-    assert checks[0][0] == "test-user"
-    assert checks[0][1] == "bearer:test"
+    # Both durable subscription creation and delivery revalidate access.
+    assert checks == [("test-user", "bearer:test")] * 2
     assert await store.subscription(sub) is None
 
 

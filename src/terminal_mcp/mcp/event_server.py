@@ -12,7 +12,12 @@ from starlette.responses import JSONResponse, Response
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import current_admission_context
 from terminal_mcp.mcp.event_diagnostics import correlation_id, emit
-from terminal_mcp.mcp.event_store import EVENT_NAMES, MCPEventStore, event_catalog
+from terminal_mcp.mcp.event_store import (
+    EVENT_NAMES,
+    MCPEventStore,
+    SubscriptionAuthorizationError,
+    event_catalog,
+)
 from terminal_mcp.mcp.event_webhooks import (
     CallbackEndpointError,
     post_signed,
@@ -314,17 +319,37 @@ class MCPEventsAdapter:
             )
         emit(method, "callback", "verified", cid)
         admission = current_admission_context()
-        expires_at = await self.store.save_subscription(
-            sub_id=sub_id,
-            principal=principal,
-            credential_id=admission.credential_id,
-            auth_mode=admission.auth_mode,
-            name=name,
-            callback=callback,
-            secret=secret,
-            ttl_ms=ttl_ms,
-            message_binding=binding,
-        )
+        if (
+            admission is None
+            or admission.principal_id != principal
+            or (binding is not None and "terminal:read" not in admission.scopes)
+        ):
+            return reject(
+                "authorization",
+                "subscription_authorization_expired",
+                -32001,
+                "Subscription authorization expired",
+            )
+        try:
+            expires_at = await self.store.save_subscription(
+                sub_id=sub_id,
+                principal=principal,
+                credential_id=admission.credential_id,
+                auth_mode=admission.auth_mode,
+                name=name,
+                callback=callback,
+                secret=secret,
+                ttl_ms=ttl_ms,
+                message_binding=binding,
+                authorization_checker=self.access_checker,
+            )
+        except SubscriptionAuthorizationError:
+            return reject(
+                "authorization",
+                "subscription_authorization_expired",
+                -32001,
+                "Subscription authorization expired",
+            )
         emit(method, "persistence", "stored", cid)
         return {
             "jsonrpc": "2.0",
