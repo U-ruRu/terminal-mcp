@@ -189,6 +189,12 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         ("access", "stop", "cors_preflight_rejected origin_not_allowed"),
         ("internal", "reconcile", "access_issue_failed policy_persist_failed"),
+        # Managed Mesh WireGuard transport operator mutations.
+        ("validation", "repair", "vpn_invalid"),
+        ("policy", "repair", "mesh_unmanaged"),
+        ("conflict", "reconcile", "vpn_conflict"),
+        ("transient", "retry", "vpn_unavailable"),
+        ("internal", "reconcile", "vpn_reconcile_failed"),
     )
     groups += (
         (

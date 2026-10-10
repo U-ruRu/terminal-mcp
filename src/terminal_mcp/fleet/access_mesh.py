@@ -511,7 +511,13 @@ class AccessMeshReplication:
                 break
             # Paginated catch-up continues immediately; degraded peers are
             # retried independently of the slow healthy anti-entropy cadence.
-            if any(self._snapshot_after[peer.instance_id] for peer in self.peers):
+            # Continue healthy paginated catch-up immediately; failed pages
+            # must respect retry backoff even when a cursor remains pending.
+            if any(
+                self._snapshot_after[peer.instance_id]
+                and self.peer_health[peer.instance_id]["status"] != "degraded"
+                for peer in self.peers
+            ):
                 delay = 0.0
             elif any(self.peer_health[p.instance_id]["status"] == "degraded" for p in self.peers):
                 delay = PEER_RETRY_SECONDS

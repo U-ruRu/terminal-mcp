@@ -11,6 +11,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -153,7 +154,7 @@ def build_mesh_vpn_control_router(controller, application, settings) -> APIRoute
                 "code": "vpn_conflict" if conflict else "vpn_invalid",
                 "error": str(exc),
             }
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        except (OSError, ValueError, subprocess.SubprocessError, httpx.RequestError) as exc:
             return {"ok": False, "code": "vpn_unavailable", "error": type(exc).__name__}
 
     @router.get("/actions/fleet/control/transport", operation_id="getManagedFleetVpn")
