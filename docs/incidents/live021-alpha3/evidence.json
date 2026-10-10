@@ -1,0 +1,335 @@
+{
+  "incident": "LIVE-021-20261010-A",
+  "base_sha": "bde0dec8bd0679c3cbda768104672de57956b6cf",
+  "partner_evidence_sha": "e5f3ab951c9d26d5278a6095a1455ceac33dc985",
+  "collected_utc": "2026-10-10T21:36:50Z",
+  "http_completion_window_utc": [
+    "2026-10-10T20:54:00Z",
+    "2026-10-10T21:05:00Z"
+  ],
+  "http_records_count": 146,
+  "max_completed_post_duration_s": 5.610609498,
+  "http_selected": [
+    {
+      "conversation_group": null,
+      "duration_s": 1.26058996,
+      "log_ts": "2026-10-10T20:56:04.512+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/executor/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S5",
+      "size": 1474,
+      "start": "2026-10-10T20:56:03.252+00:00",
+      "status": 200,
+      "trace_group": "T38"
+    },
+    {
+      "conversation_group": null,
+      "duration_s": 1.14699855,
+      "log_ts": "2026-10-10T20:56:47.764+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/executor/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S5",
+      "size": 1477,
+      "start": "2026-10-10T20:56:46.617+00:00",
+      "status": 200,
+      "trace_group": "T43"
+    },
+    {
+      "conversation_group": null,
+      "duration_s": 0.489261663,
+      "log_ts": "2026-10-10T20:59:48.901+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/coordinator/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S1",
+      "size": 1324,
+      "start": "2026-10-10T20:59:48.411+00:00",
+      "status": 200,
+      "trace_group": "T93"
+    },
+    {
+      "conversation_group": null,
+      "duration_s": 0.398498898,
+      "log_ts": "2026-10-10T21:00:29.361+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/coordinator/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S1",
+      "size": 1646,
+      "start": "2026-10-10T21:00:28.962+00:00",
+      "status": 200,
+      "trace_group": "T96"
+    },
+    {
+      "conversation_group": null,
+      "duration_s": 0.443185593,
+      "log_ts": "2026-10-10T21:01:55.884+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/coordinator/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S4",
+      "size": 197,
+      "start": "2026-10-10T21:01:55.440+00:00",
+      "status": 200,
+      "trace_group": "T113"
+    },
+    {
+      "conversation_group": null,
+      "duration_s": 0.270164985,
+      "log_ts": "2026-10-10T21:02:01.332+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/coordinator/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S1",
+      "size": 169,
+      "start": "2026-10-10T21:02:01.062+00:00",
+      "status": 200,
+      "trace_group": "T114"
+    },
+    {
+      "conversation_group": null,
+      "duration_s": 0.78577602,
+      "log_ts": "2026-10-10T21:02:42.537+00:00",
+      "method": "POST",
+      "path": "/terminal-mcp/coordinator/v1/mcp/",
+      "read_bytes": null,
+      "rpc_headers_present": [
+        "traceparent",
+        "tracestate",
+        "x-datadog-trace-id",
+        "x-openai-session",
+        "x-openai-subject"
+      ],
+      "session_group": "S1",
+      "size": 491,
+      "start": "2026-10-10T21:02:41.752+00:00",
+      "status": 200,
+      "trace_group": "T116"
+    }
+  ],
+  "commands": [
+    {
+      "claimed_at": "2026-10-10T20:56:04.126Z",
+      "command_equality_group": "Q1",
+      "enqueued_at": "2026-10-10T20:56:04.087Z",
+      "error": null,
+      "exit_code": 7,
+      "finished_at": "2026-10-10T20:56:04.376Z",
+      "hash": "70d86f06",
+      "queue_id": 1,
+      "queue_sequence": 2,
+      "started_at": "2026-10-10T20:56:04.126Z",
+      "status": "failed"
+    },
+    {
+      "claimed_at": "2026-10-10T20:56:47.496Z",
+      "command_equality_group": "Q1",
+      "enqueued_at": "2026-10-10T20:56:47.474Z",
+      "error": null,
+      "exit_code": 7,
+      "finished_at": "2026-10-10T20:56:47.641Z",
+      "hash": "cac560e1",
+      "queue_id": 1,
+      "queue_sequence": 3,
+      "started_at": "2026-10-10T20:56:47.496Z",
+      "status": "failed"
+    }
+  ],
+  "task_snapshots": [
+    {
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-7D3B5EC33410DCE4ABED08E5",
+      "revision": 1,
+      "state": "ready",
+      "updated_at": "2026-10-10T20:50:59.716Z",
+      "content_a_marker_present": false
+    },
+    {
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-70ABD8FCEC34EAD1E17C2DEB",
+      "revision": 3,
+      "state": "ready",
+      "updated_at": "2026-10-10T21:06:47.061Z",
+      "content_a_marker_present": true
+    }
+  ],
+  "task_events": [
+    {
+      "id": 46,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-70ABD8FCEC34EAD1E17C2DEB",
+      "event_type": "updated",
+      "created_at": "2026-10-10T21:01:55.792Z",
+      "author_group": "A3",
+      "payload_summary": {
+        "fields": [
+          "description"
+        ],
+        "cas_expected_revision": 1
+      }
+    },
+    {
+      "id": 47,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-70ABD8FCEC34EAD1E17C2DEB",
+      "event_type": "persistent_mutation",
+      "created_at": "2026-10-10T21:01:55.812Z",
+      "author_group": "A3",
+      "payload_summary": {
+        "action": "update"
+      }
+    },
+    {
+      "id": 48,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-7D3B5EC33410DCE4ABED08E5",
+      "event_type": "comment",
+      "created_at": "2026-10-10T21:02:01.199Z",
+      "author_group": "A2",
+      "payload_summary": {
+        "text_sha256": "a838921123a7b646fa19946f0c677b86f9037157e86e24fc1325f828e7854a7a",
+        "text_chars": 1131,
+        "receipt_mentions": [
+          "21:01:11.223"
+        ]
+      }
+    },
+    {
+      "id": 49,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-7D3B5EC33410DCE4ABED08E5",
+      "event_type": "persistent_mutation",
+      "created_at": "2026-10-10T21:02:01.235Z",
+      "author_group": "A2",
+      "payload_summary": {
+        "action": "comment"
+      }
+    },
+    {
+      "id": 56,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-7D3B5EC33410DCE4ABED08E5",
+      "event_type": "comment",
+      "created_at": "2026-10-10T21:03:56.752Z",
+      "author_group": "A3",
+      "payload_summary": {
+        "text_sha256": "d7083f43111bd8fbe29b9643073106e2aa2babafab4e35071fdab2a65e4186e9",
+        "text_chars": 1673,
+        "receipt_mentions": [
+          "70d86f06",
+          "cac560e1",
+          "CONTENT-A",
+          "21:01:55.792"
+        ]
+      }
+    },
+    {
+      "id": 60,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-7D3B5EC33410DCE4ABED08E5",
+      "event_type": "comment",
+      "created_at": "2026-10-10T21:05:03.663Z",
+      "author_group": "A1",
+      "payload_summary": {
+        "text_sha256": "6e71a7d2c92420dec91b0dd565230989796f2dcea8c8af4ce83ca0e7ffdea9bc",
+        "text_chars": 1741,
+        "receipt_mentions": [
+          "CONTENT-A",
+          "21:01:55.792"
+        ]
+      }
+    },
+    {
+      "id": 65,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-70ABD8FCEC34EAD1E17C2DEB",
+      "event_type": "archived",
+      "created_at": "2026-10-10T21:06:47.061Z",
+      "author_group": "A1",
+      "payload_summary": {
+        "fields": [
+          "archive_note",
+          "archived_at"
+        ],
+        "state": "ready"
+      }
+    },
+    {
+      "id": 66,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-70ABD8FCEC34EAD1E17C2DEB",
+      "event_type": "persistent_mutation",
+      "created_at": "2026-10-10T21:06:47.087Z",
+      "author_group": "A1",
+      "payload_summary": {
+        "action": "archive"
+      }
+    },
+    {
+      "id": 71,
+      "namespace": "LIVE-021-20261010-A",
+      "task_id": "TASK-7D3B5EC33410DCE4ABED08E5",
+      "event_type": "comment",
+      "created_at": "2026-10-10T21:07:03.720Z",
+      "author_group": "A3",
+      "payload_summary": {
+        "text_sha256": "15e588c11a1092491fdd550e524644d8e0ad5d48ecd254c70f73dd78d110b2da",
+        "text_chars": 2147,
+        "receipt_mentions": []
+      }
+    }
+  ],
+  "event_log_window_records": 0,
+  "event_log_last_record_utc": "2026-10-10T20:15:30.971Z",
+  "limits": [
+    "HTTP tool/body identity not logged; route/time correlation only.",
+    "HTTP 200 and successful ASGI send do not prove caller received a successful JSON-RPC result.",
+    "Completion-window logs cannot exclude an unfinished request or waits before ingress.",
+    "Raw receipt text, identity headers and command text omitted.",
+    "Task current revision3 follows later archive; incident revision2 is independently witnessed by receipt and CAS event46."
+  ]
+}
