@@ -147,30 +147,41 @@ class SqliteRepository:
         # SQLite busy waits do not invoke the VM progress handler. Bound the
         # lock wait separately and never use CREATE mode for a health probe.
         connect_timeout = max(0.001, min(1.0, deadline - time.monotonic()))
-        async with cancellation_safe_connection(
-            aiosqlite.connect,
-            self._health_integrity_uri,
-            uri=True,
-            timeout=connect_timeout,
-        ) as db:
-            try:
-                await db.set_progress_handler(should_abort_sql, 1000)
-                remaining_ms = max(1, min(1000, int((deadline - time.monotonic()) * 1000)))
-                await db.execute(f"PRAGMA busy_timeout={remaining_ms}")
-                await db.execute("PRAGMA query_only=ON")
-                row = await (await db.execute(statement)).fetchone()
-            except asyncio.CancelledError:
-                # interrupt() is thread-safe and targets an in-flight SQLite call;
-                # the progress handler also observes stop_sql on the worker.
-                stop_sql.set()
+        worker = None
+        try:
+            async with cancellation_safe_connection(
+                aiosqlite.connect,
+                self._health_integrity_uri,
+                uri=True,
+                timeout=connect_timeout,
+            ) as db:
+                worker = getattr(db, "_thread", None)
                 try:
-                    await db.interrupt()
-                except aiosqlite.Error:
-                    pass
-                raise
-            finally:
-                # Set before context-manager cleanup, which awaits worker close.
-                stop_sql.set()
+                    await db.set_progress_handler(should_abort_sql, 1000)
+                    remaining_ms = max(1, min(1000, int((deadline - time.monotonic()) * 1000)))
+                    await db.execute(f"PRAGMA busy_timeout={remaining_ms}")
+                    await db.execute("PRAGMA query_only=ON")
+                    row = await (await db.execute(statement)).fetchone()
+                except asyncio.CancelledError:
+                    # interrupt() is thread-safe and targets an in-flight SQLite call;
+                    # the progress handler also observes stop_sql on the worker.
+                    stop_sql.set()
+                    try:
+                        await db.interrupt()
+                    except aiosqlite.Error:
+                        pass
+                    raise
+                finally:
+                    # Set before context-manager cleanup, which awaits worker close.
+                    stop_sql.set()
+        finally:
+            # aiosqlite.close() awaits its STOP future, which is completed by
+            # call_soon_threadsafe *before* the worker exits the thread loop.
+            # Under load an immediate health assertion can still see it alive.
+            # Join only this probe's already-closed worker, bounded by 75 ms;
+            # no other SQLite connections or session/command resources change.
+            if worker is not None and worker.is_alive():
+                await asyncio.to_thread(worker.join, timeout=0.075)
         return row is not None and row[0] == "ok"
 
     async def ping(self) -> bool:
