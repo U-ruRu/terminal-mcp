@@ -345,6 +345,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             access_mesh_replication = AccessMeshReplication(access_mesh, fleet_config)
             access_mesh.replication = access_mesh_replication
             service.access_mesh_replication = access_mesh_replication
+            if managed_fleet_control is not None:
+                managed_fleet_control.runtime_targets += (access_mesh_replication,)
         access_mesh_messages = AccessMeshMessaging(
             access_mesh,
             agent_store=service.agent_coordinator.store,

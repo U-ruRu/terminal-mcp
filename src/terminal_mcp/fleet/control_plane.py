@@ -364,7 +364,9 @@ class ManagedFleetControl:
         )
         self.config = config
         for target in self.runtime_targets:
-            if hasattr(target, "config"):
+            if hasattr(target, "apply_managed_fleet_config"):
+                target.apply_managed_fleet_config(config)
+            elif hasattr(target, "config"):
                 target.config = config
 
     def _sync_control_node(self, control_node_id: str) -> None:

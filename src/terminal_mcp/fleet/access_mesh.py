@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import secrets
+from dataclasses import replace
 from functools import partial
 
 import httpx
@@ -48,6 +49,7 @@ class AccessMeshReplication:
         self.mesh = mesh
         self.store = mesh.store
         self.config = config
+        self._bootstrap_config = config
         self.client = client
         self._owned_client = False
         self._stop = asyncio.Event()
@@ -60,6 +62,42 @@ class AccessMeshReplication:
             peer.instance_id: {"status": "degraded", "reason": "catchup_pending"}
             for peer in self.peers
         }
+
+    def apply_managed_fleet_config(self, managed_config) -> None:
+        """Change only transport and active membership, never pinned Access auth.
+
+        Managed Fleet can dynamically rewrite peers/tokens. Access Mesh peer
+        authentication remains pinned to the original bootstrap identities.
+        Transport changes from the operator still need to reach this worker.
+        """
+        enabled = {peer.instance_id: peer for peer in managed_config.peers}
+        selected = tuple(
+            replace(
+                pinned,
+                origin=enabled[pinned.instance_id].origin,
+                transport=enabled[pinned.instance_id].transport,
+                bootstrap_origin=pinned.bootstrap_origin or pinned.origin,
+            )
+            for pinned in self._bootstrap_config.peers
+            if pinned.instance_id in enabled
+        )
+        previous = {peer.instance_id: peer.origin for peer in self.config.peers}
+        self.config = replace(self._bootstrap_config, peers=selected)
+        for peer in selected:
+            self._snapshot_after.setdefault(peer.instance_id, "")
+            if previous.get(peer.instance_id) != peer.origin:
+                self._snapshot_after[peer.instance_id] = ""
+                self._last_snapshot_pass[peer.instance_id] = 0.0
+                self.peer_health[peer.instance_id] = {
+                    "status": "degraded",
+                    "reason": "transport_catchup_pending",
+                }
+            else:
+                self._last_snapshot_pass.setdefault(peer.instance_id, 0.0)
+                self.peer_health.setdefault(
+                    peer.instance_id, {"status": "degraded", "reason": "catchup_pending"}
+                )
+        self._wake.set()
 
     @property
     def peers(self):

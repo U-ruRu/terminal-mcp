@@ -525,3 +525,55 @@ def test_wireguard_cutover_requires_eight_consecutive_private_health_passes(tmp_
         switch(root, selected, peer_id="firstbyte", mode="wireguard", now=101)
     assert len(attempted) == 4
     assert not selected.exists()
+
+
+def test_managed_fleet_transport_refreshes_access_mesh_without_rotating_pinned_auth():
+    from terminal_mcp.fleet.access_mesh import AccessMeshReplication
+    from terminal_mcp.fleet.config import FleetConfig, FleetPeer
+    from terminal_mcp.fleet.control_plane import ManagedFleetControl
+
+    pinned = FleetPeer("bacloud", "https://public-bac.example", "pinned-signing", "pinned-token")
+    initial = FleetConfig("firstbyte", "signing-key", (pinned,), 5.0, 3.0)
+    store = SimpleNamespace(trusted_issuers=frozenset({"bacloud"}))
+    transport = AccessMeshReplication(SimpleNamespace(store=store), initial)
+    controller = ManagedFleetControl(
+        SimpleNamespace(),
+        initial,
+        None,
+        public_base_url="https://firstbyte.example",
+        runtime_targets=(transport,),
+    )
+    active = FleetConfig(
+        "firstbyte",
+        "new-managed-signing-key",
+        (
+            FleetPeer(
+                "bacloud",
+                "http://10.253.242.2:18084",
+                "untrusted-managed-key",
+                "untrusted-managed-token",
+                "wireguard",
+            ),
+            FleetPeer("newly-added", "http://10.253.242.3:18084", "k", "t", "wireguard"),
+        ),
+        5.0,
+        3.0,
+    )
+    controller._replace_runtime_config(active)
+    assert len(transport.peers) == 1
+    peer = transport.peers[0]
+    assert peer.instance_id == "bacloud"
+    assert peer.origin == "http://10.253.242.2:18084"
+    assert peer.auth_token == pinned.auth_token
+    assert peer.public_key == pinned.public_key
+    assert transport.config.signing_private_key == initial.signing_private_key
+    assert transport._last_snapshot_pass["bacloud"] == 0
+    assert transport._wake.is_set()
+    transport._wake.clear()
+    controller._replace_runtime_config(
+        FleetConfig("firstbyte", "new-managed-signing-key", (), 5.0, 3.0)
+    )
+    assert transport.peers == ()
+    assert transport._wake.is_set()
+    controller._replace_runtime_config(initial)
+    assert transport.peers[0].origin == pinned.origin

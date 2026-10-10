@@ -261,3 +261,81 @@ the local persisted WireGuard identity before touching routing.
 It does not poll or create Internet/default routes. Normal `mesh-vpn up`
 already recreates routes at startup. Always validate the route
 watcher with a separate staged link-flap before production activation.
+
+## 2026-10-10 final independent VPN QA session
+
+Source candidate ref: feature worktree on current canonical
+`integration/M3-functional-candidate` (base `ce8dbf8`). All observations below
+were performed on temporary **QA-only** interfaces, private keys and
+userspace packages; production Mesh peer origins and Terminal MCP
+services were not modified.
+
+### UDP underlay is flow/port-sensitive and can fail after idle
+
+On Firstbyte (kernel) and BacLOUD (wireguard-go), tested six actual
+underlay port combinations in addition to the previous 42063/53148
+pair, which had temporarily become fully unresponsive after previously
+passing 100/100 ICMP plus 50/50 HTTP.
+
+- FB/Bac UDP 51820/51820: 0/7 packet delivery both directions.
+- 45063/53150, 61063/53150, 42063/53150, 42063/42065,
+  61063/42065: 7/7 packets delivered *each direction* in the initial
+  short test for each pair.
+- 61063/42065: 100/100 ICMP in each direction, and 50/50 successful
+  HTTP `/health/live` in each direction. Mean HTTP response ~128 ms
+  Firstbyte to BacLOUD, ~124 ms BacLOUD to Firstbyte.
+- Later, without changing peer keys or production configuration,
+  61063/42065 lost connectivity across the private tunnel while
+  both Linux routes remained present, both wireguard processes stayed
+  alive, and the latest WG handshake became stale. Read-only Mesh
+  snapshot via the private route timed out; a comparable read-only
+  public HTTPS snapshot also showed an HTTPX ReadTimeout in that
+  observation window. Local `/health/live` on both production hosts
+  remained HTTP 200.
+
+These measurements confirm kernel/userspace wire-protocol compatibility,
+but **do not establish stable VPN service under production idle/rekey
+conditions**. Short-term 100% delivery must not be used as the sole
+criterion for deploying a primary Mesh transport. A middlebox or upstream
+network filter is a plausible source of port-specific failures, but the
+responsible network device/provider has not been conclusively identified.
+The separate public HTTPS timeout confirms that application/SQLite stalls
+must also be investigated independently.
+
+### Event-driven link route recovery — live PASS
+
+The new `mesh-vpn watch` process ran directly on both real hosts.
+After `ip link set <QA_IFACE> down`, the Linux peer /32 route
+disappeared and route lookup fell back to the physical interface.
+After the interface was set UP, the `ip monitor link` watcher
+automatically reinserted the /32 peer route with no manual route
+command. Both watchers remained alive. The route watcher uses
+link netlink events, not rapid periodic polling.
+
+### Dynamic Fleet Control integration
+
+Managed Fleet Control updates now reach Access Mesh Replication as well
+as the other runtime components. Only the transport origin and active
+membership are carried across to Access Mesh; its existing pinned
+bootstrap public-key/token trust is **not** replaced with unreviewed
+managed peer keys. New managed members do not acquire Access Mesh
+issuer trust merely by selecting a WireGuard route. The sync worker
+invalidates the anti-entropy pass on an origin change and wakes for
+prompt state reconciliation.
+
+### Release gate
+
+1. Diagnose WG underlay idle/rekey behavior with packet captures at
+   both external NICs, testing a full idle window exceeding five
+   minutes, rekey, and multi-minute authenticated Mesh API traffic.
+2. Accept both directions of authenticated snapshot, number
+   reservation/start/end/conflict, messaging, offline outbox and third
+   node catch-up with verified latency and zero errors.
+3. Finish separate Firstbyte SQLite incident QA; public HTTPS
+   ReadTimeout is not automatically fixed by VPN.
+4. Merge the opt-in feature linearly only after regression approval,
+   reconcile source-vs-live versions (canonical source's `version.py`
+   still reads 0.14.4 while both deployed connectors report 0.17.0),
+   bump version according to the release contract, and deploy
+   one server at a time with immediate HTTPS rollback.
+5. Do not remove public recovery access during the transport cutover.
