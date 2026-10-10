@@ -902,7 +902,10 @@ class ManagedFleetControl:
                     prune_detached_peers,
                     Path(self.bootstrap_config.mesh_vpn_state_dir),
                     Path(self.bootstrap_config.peer_transports_path),
-                    set(),
+                    # Standalone peers are explicitly pinned by the Fleet
+                    # bootstrap config. Never erase their signed WireGuard
+                    # enrollment just because managed topology is disabled.
+                    set(self.bootstrap_config.peers_by_id),
                 )
             await self._restore_local_policy()
             self._restore_bootstrap_runtime(use_peers=state.get("mesh") is None)

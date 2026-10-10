@@ -623,3 +623,51 @@ def test_enrollment_accepts_numeric_ipv4_and_global_ipv6_underlay(provided, cano
 def test_ipv6_endpoint_rejects_non_global_ambiguous_or_dns_address(value):
     with pytest.raises(VPNError):
         _endpoint(value)
+
+
+@pytest.mark.asyncio
+async def test_standalone_reconcile_preserves_signed_pinned_wireguard_enrollment(
+    tmp_path, monkeypatch
+):
+    from terminal_mcp.fleet.config import FleetConfig, FleetPeer
+    from terminal_mcp.fleet.control_plane import ManagedFleetControl
+
+    root = tmp_path / "mesh-vpn"
+    peers_dir = root / "peers"
+    peers_dir.mkdir(parents=True)
+    (root / "local.json").write_text(
+        json.dumps(local("firstbyte", "10.244.12.1", "[2a04:5200:fff5::344a]:61063"))
+    )
+    pinned = create_offer(
+        local("bacloud", "10.244.12.2", "[2a04:2181:c011:1::bafb:f78e]:42065"),
+        signer()[0],
+        now=1000,
+    )["payload"]
+    (peers_dir / "bacloud.json").write_text(json.dumps(pinned))
+    (peers_dir / "untrusted.json").write_text(json.dumps({**pinned, "instance_id": "untrusted"}))
+    routes = tmp_path / "transports.json"
+    config = FleetConfig(
+        "firstbyte",
+        signer()[0],
+        (FleetPeer("bacloud", "https://terminal-bac.example", signer()[1], "token"),),
+        5.0,
+        3.0,
+        peer_transports_path=str(routes),
+        mesh_vpn_state_dir=str(root),
+    )
+    monkeypatch.setattr(
+        "terminal_mcp.mesh_vpn.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    controller = ManagedFleetControl(
+        SimpleNamespace(),
+        config,
+        None,
+        public_base_url="https://terminal-fb.example",
+    )
+    for _ in range(2):
+        await controller._apply_local({"managed": False, "mesh": None})
+        assert (peers_dir / "bacloud.json").exists()
+        assert json.loads((peers_dir / "bacloud.json").read_text()) == pinned
+        assert not (peers_dir / "untrusted.json").exists()
+        assert controller.config.peers_by_id["bacloud"].origin == "https://terminal-bac.example"
