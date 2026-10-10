@@ -37,7 +37,10 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
         ),
-        description="Start an Access session and obtain its four-digit session_number, or end the current session.",
+        description=(
+            "Start an Access session and obtain its four-digit session_number, "
+            "or end the current session."
+        ),
     )
     async def session(*, boundary: RuntimeBoundary) -> dict:
         request, error = validate_boundary(boundary, IssuerSessionInput)
@@ -57,10 +60,13 @@ def build_access_mcp(application, *, public_base_url: str = "http://127.0.0.1:80
             return await application.service.access_mesh.issuer_session(
                 actor, action=request.action
             )
+
     install_role_input_contract(
         mcp, "access", overrides={("access", "session"): IssuerSessionInput}
     )
-    install_role_output_contract(mcp, "access", overrides={("access", "session"): IssuerOutput}, application=application)
+    install_role_output_contract(
+        mcp, "access", overrides={("access", "session"): IssuerOutput}, application=application
+    )
     from terminal_mcp.operation_metadata import install_action_metadata
 
     install_action_metadata(mcp, "access", mesh=True)

@@ -8,7 +8,6 @@ from terminal_mcp.core.read_contract import DEFAULT_CMD_READ_LINES, MAX_CMD_READ
 from terminal_mcp.mcp.output_contracts import AccessError, CmdReadResult
 from terminal_mcp.mcp.role_contracts import (
     Cursor,
-    ExpectedRevision,
     Hash,
     MessageInput,
     Namespace,
@@ -20,7 +19,13 @@ from terminal_mcp.mcp.role_contracts import (
 
 class AttachInput(StrictRoleInput):
     action: Literal["attach"] = "attach"
-    session_number: Annotated[str, Field(pattern=r"^[0-9]{4}$", description="Four-digit session number, including leading zeros.")]
+    session_number: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9]{4}$",
+            description="Four-digit session number, including leading zeros.",
+        ),
+    ]
 
 
 class IssuerSessionInput(StrictRoleInput):
@@ -46,6 +51,7 @@ class MeshTaskCommentInput(StrictRoleInput):
             description="Required for action=checkpoint; saves progress and preserves task state."
         ),
     ] = None
+
     def to_request(self):
         from terminal_mcp.application.task_requests import TaskCheckpointRequest, TaskCommentRequest
 
