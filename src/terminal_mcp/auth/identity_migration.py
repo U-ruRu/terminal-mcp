@@ -244,6 +244,12 @@ def migrate(
     if reverse and state["runtime_rows"]:
         raise IdentityMigrationError("runtime destination already contains identities; conflict")
 
+    # Protect the original WAL-mode databases BEFORE converting journal modes,
+    # creating the destination database or starting a cross-file transaction.
+    _make_backups(main, auth, Path(backup_dir))
+    if fault == "after_backup":
+        raise IdentityMigrationError("injected interruption after backup")
+
     with closing(sqlite3.connect(main, isolation_level=None, timeout=5.0)) as con:
         con.execute("PRAGMA busy_timeout=5000")
         if con.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() != "delete":
@@ -278,11 +284,6 @@ def migrate(
                 expected.execute(f'CREATE TABLE "{name}" {ddl}')
                 if _shape(con, source, name) != _shape(expected, "main", name):
                     raise IdentityMigrationError("unsupported legacy identity schema: " + name)
-        # Back up both databases BEFORE the first mutating transaction.
-        _make_backups(main, auth, Path(backup_dir))
-        if fault == "after_backup":
-            raise IdentityMigrationError("injected interruption after backup")
-
         con.execute("BEGIN EXCLUSIVE")
         try:
             for name, ddl in SCHEMAS.items():

@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import sqlite3
 import time
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,7 +51,7 @@ def seed(tmp_path):
     )
     assert failure == ""
     assert device is not None
-    with sqlite3.connect(runtime) as db:
+    with closing(sqlite3.connect(runtime)) as db, db:
         expiry = db.execute(
             "SELECT expires_at FROM oauth_refresh_tokens WHERE token_hash=?",
             (hashlib.sha256(token.encode()).hexdigest(),),
@@ -94,7 +95,7 @@ def test_existing_chatgpt_and_android_survive_migrate_clean_restart(tmp_path):
     assert result["tables"] == 6
     assert inspect(runtime, auth)["status"] == "isolated"
     assert migrate(runtime, auth, tmp_path / "unused-backup")["status"] == "already-isolated"
-    with sqlite3.connect(auth) as db:
+    with closing(sqlite3.connect(auth)) as db, db:
         assert (
             db.execute(
                 "SELECT expires_at FROM oauth_refresh_tokens WHERE token_hash=?",
@@ -108,7 +109,7 @@ def test_existing_chatgpt_and_android_survive_migrate_clean_restart(tmp_path):
     assert_identity_isolated(runtime, auth)
     # Official clean start quarantines all runtime/output data and snapshots auth.
     output = tmp_path / "output.sqlite3"
-    with sqlite3.connect(output) as cache:
+    with closing(sqlite3.connect(output)) as cache, cache:
         cache.execute("CREATE TABLE command_output(body TEXT)")
         cache.execute("INSERT INTO command_output VALUES('disposable')")
     result = clean_working_data(runtime, auth, output, tmp_path / "clean-quarantine")
@@ -160,10 +161,12 @@ def test_conflicting_destination_never_overwritten(tmp_path):
     secure = OAuthStore(auth)
     run(secure.initialize())
     run(secure.register_client(["https://other.example/cb"], "existing", "none"))
-    before = sqlite3.connect(auth).execute("SELECT count(*) FROM oauth_clients").fetchone()[0]
+    with closing(sqlite3.connect(auth)) as db, db:
+        before = db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0]
     with pytest.raises(IdentityMigrationError, match="destination|conflict"):
         migrate(runtime, auth, tmp_path / "backups")
-    after = sqlite3.connect(auth).execute("SELECT count(*) FROM oauth_clients").fetchone()[0]
+    with closing(sqlite3.connect(auth)) as db, db:
+        after = db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0]
     assert after == before
     assert inspect(runtime, auth)["status"] == "legacy-present"
 
@@ -174,9 +177,9 @@ def test_interrupted_migration_rolls_back_and_can_retry(tmp_path, phase):
     backup = tmp_path / "backup1"
     with pytest.raises(IdentityMigrationError, match="injected"):
         migrate(runtime, auth, backup, fault=phase)
-    with sqlite3.connect(runtime) as db:
+    with closing(sqlite3.connect(runtime)) as db, db:
         assert db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] >= 2
-    with sqlite3.connect(auth) as db:
+    with closing(sqlite3.connect(auth)) as db, db:
         assert (
             db.execute("SELECT name FROM sqlite_master WHERE name='oauth_clients'").fetchone()
             is None
@@ -197,7 +200,7 @@ def test_reverse_uses_current_credentials_not_pre_cutover_backup(tmp_path):
     assert migrate(runtime, auth, tmp_path / "reverse-backup", reverse=True)["status"] == "reversed"
     assert run(OAuthStore(runtime).rotate_refresh(new_token)) == (cid, "terminal:read")
     assert run(OAuthStore(runtime).rotate_refresh(token)) is None
-    with sqlite3.connect(auth) as db:
+    with closing(sqlite3.connect(auth)) as db, db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='auth_principals'").fetchone()
         assert (
             db.execute("SELECT name FROM sqlite_master WHERE name='oauth_clients'").fetchone()
@@ -212,7 +215,7 @@ def test_reverse_conflict_preserves_both_databases(tmp_path):
     runtime, auth, *_ = seed(tmp_path)
     migrate(runtime, auth, tmp_path / "backup")
     # An older binary could have recreated an empty legacy OAuth table.
-    with sqlite3.connect(runtime) as db:
+    with closing(sqlite3.connect(runtime)) as db, db:
         db.execute("CREATE TABLE oauth_clients(client_id TEXT PRIMARY KEY)")
     with pytest.raises(IdentityMigrationError, match="conflict"):
         migrate(runtime, auth, tmp_path / "reverse-backup", reverse=True)
@@ -223,7 +226,7 @@ def test_expiration_and_device_revocation_after_migration(tmp_path):
     runtime, auth, cid, token, device, *_ = seed(tmp_path)
     migrate(runtime, auth, tmp_path / "backup")
     now = int(time.time())
-    with sqlite3.connect(auth) as db:
+    with closing(sqlite3.connect(auth)) as db, db:
         db.execute(
             "UPDATE oauth_refresh_tokens SET expires_at=? WHERE token_hash=?",
             (now - 10, hashlib.sha256(token.encode()).hexdigest()),
@@ -231,7 +234,7 @@ def test_expiration_and_device_revocation_after_migration(tmp_path):
     assert run(OAuthStore(auth).rotate_refresh(token)) is None
     assert run(PairingStore(auth).revoke_device(device.device_id))
     assert run(OAuthStore(auth).rotate_refresh(device.refresh_token)) is None
-    with sqlite3.connect(auth) as db:
+    with closing(sqlite3.connect(auth)) as db, db:
         assert (
             db.execute(
                 "SELECT revoked_at FROM console_devices WHERE device_id=?",
@@ -270,10 +273,10 @@ def test_sqlite_backup_restore_old_working_schema_and_current_auth_reverse(tmp_p
     runtime, auth, cid, old_token, device, *_ = seed(tmp_path)
     backup = tmp_path / "forward-backup"
     assert migrate(runtime, auth, backup)["status"] == "migrated"
-    with sqlite3.connect(backup / "runtime.before.sqlite3") as original:
+    with closing(sqlite3.connect(backup / "runtime.before.sqlite3")) as original, original:
         assert original.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert original.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] >= 2
-    with sqlite3.connect(backup / "auth.before.sqlite3") as original_auth:
+    with closing(sqlite3.connect(backup / "auth.before.sqlite3")) as original_auth, original_auth:
         assert original_auth.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert (
             original_auth.execute(
@@ -285,12 +288,12 @@ def test_sqlite_backup_restore_old_working_schema_and_current_auth_reverse(tmp_p
     # Emulate old schema restore, stripped ONLY of stale identity tables in
     # the isolated COPY. Newest auth data must win during reverse.
     old_working = tmp_path / "rollback-working.sqlite3"
-    with sqlite3.connect(backup / "runtime.before.sqlite3") as original:
-        with sqlite3.connect(old_working) as restored:
+    with closing(sqlite3.connect(backup / "runtime.before.sqlite3")) as original, original:
+        with closing(sqlite3.connect(old_working)) as restored, restored:
             original.backup(restored)
     from terminal_mcp.auth.identity_migration import SCHEMAS
 
-    with sqlite3.connect(old_working) as restored:
+    with closing(sqlite3.connect(old_working)) as restored, restored:
         for table in reversed(tuple(SCHEMAS)):
             restored.execute(f'DROP TABLE "{table}"')
         assert restored.execute("PRAGMA quick_check").fetchone()[0] == "ok"
