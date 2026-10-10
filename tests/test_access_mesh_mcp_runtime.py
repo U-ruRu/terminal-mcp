@@ -372,6 +372,9 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
         slot = call(client, "access", "session", {"action": "start"})
+        logical_agent_id = app.state.access_mesh.store.numbers.winner(slot["session_number"])[
+            "logical_agent_id"
+        ]
         binding = {"session_number": slot["session_number"]}
         for role in ["executor", "coordinator"]:
             assert call(client, role, "session", binding)["ok"]
@@ -419,6 +422,14 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             request_id=13,
         )
         assert commented["ok"], commented
+        second_comment = call(
+            client,
+            "executor",
+            "task_comment",
+            {**key, "comment_text": "second comment with the same transport ID"},
+            request_id=13,
+        )
+        assert second_comment == {"ok": True}
         read = call(client, "coordinator", "task_get", key)
         assert read["ok"], read
         stored = client.portal.call(
@@ -512,8 +523,8 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             request_id=18,
         )
         assert archive["ok"], archive
-        # Checkpoints append independently, even after content updates.
-        replay = call(
+        # The same transport ID carries a second checkpoint operation.
+        repeated_id = call(
             client,
             "executor",
             "task_comment",
@@ -524,5 +535,17 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             },
             request_id=12,
         )
-        assert replay == {"ok": True}
+        assert repeated_id == {"ok": True}
+        events = client.portal.call(
+            app.state.service.task_store.list_events, key["namespace"], key["task_id"]
+        )
+        checkpoints = [event for event in events if event["event_type"] == "checkpoint"]
+        comments = [
+            event
+            for event in events
+            if event["event_type"] == "comment" and event["payload"].get("kind") == "comment"
+        ]
+        assert len(checkpoints) == 2, events
+        assert len(comments) == 2, events
+        assert all(event["agent_id"] == logical_agent_id for event in checkpoints + comments)
         assert len(rpc(client, "executor", "tools/list").json()["result"]["tools"]) == 10

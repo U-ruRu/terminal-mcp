@@ -105,10 +105,32 @@ def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
         assert set(state_schema["properties"]) == {"namespace", "task_id", "state"}
         assert set(state_schema["required"]) == {"namespace", "task_id", "state"}
         assert "qa" in state_schema["properties"]["state"].get("enum", [])
-        started = call(client, "access", "session", {"action": "start"})
+        started = call(
+            client, "access", "session", {"action": "start"}, conversation="state-creator"
+        )
         number = started["session_number"]
-        assert call(client, "executor", "session", {"session_number": number}) == {"ok": True}
-        assert call(client, "coordinator", "session", {"session_number": number}) == {"ok": True}
+        creator_id = app.state.access_mesh.store.numbers.winner(number)["logical_agent_id"]
+        binding = {"session_number": number}
+        assert call(
+            client, "executor", "session", binding, conversation="state-creator"
+        ) == {"ok": True}
+        assert call(
+            client, "coordinator", "session", binding, conversation="state-creator"
+        ) == {"ok": True}
+        dependency = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {
+                "action": "create",
+                "namespace": "qa-mcp",
+                "task_id": "open-dependency",
+                "title": "Open dependency",
+                "isolation_hint": "none",
+            },
+            conversation="state-creator",
+        )
+        assert dependency["ok"], dependency
         created = call(
             client,
             "coordinator",
@@ -119,20 +141,45 @@ def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
                 "task_id": "one",
                 "title": "Public QA state",
                 "isolation_hint": "none",
+                "dependencies": [{"task_id": "open-dependency"}],
             },
+            conversation="state-creator",
         )
         assert created["ok"], created
-        changed = call(
+        dependency_row = client.portal.call(
+            app.state.service.task_store.get_task, "qa-mcp", "open-dependency"
+        )
+        assert dependency_row["state"] == "ready"
+        other = call(
+            client, "access", "session", {"action": "start"}, conversation="state-other"
+        )
+        other_id = app.state.access_mesh.store.numbers.winner(other["session_number"])[
+            "logical_agent_id"
+        ]
+        assert other_id != creator_id
+        assert call(
             client,
             "executor",
-            "task_state",
-            {
-                "namespace": "qa-mcp",
-                "task_id": "one",
-                "state": "qa",
-            },
-        )
-        assert changed == {"ok": True}
+            "session",
+            {"session_number": other["session_number"]},
+            conversation="state-other",
+        ) == {"ok": True}
+        # One transport ID carries distinct status operations on a task with an
+        # open dependency and no result; each value applies to the same record.
+        for state in ("qa", "done", "blocked", "in_progress", "ready", "deferred"):
+            changed = call(
+                client,
+                "executor",
+                "task_state",
+                {"namespace": "qa-mcp", "task_id": "one", "state": state},
+                request_id=90,
+                conversation="state-other",
+            )
+            assert changed == {"ok": True}, changed
+        stored = client.portal.call(app.state.service.task_store.get_task, "qa-mcp", "one")
+        assert stored["state"] == "deferred"
+        assert stored["revision"] == 1
+        assert stored["result"] is None
         missing = call(
             client,
             "executor",
@@ -142,6 +189,7 @@ def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
                 "task_id": "missing",
                 "state": "qa",
             },
+            conversation="state-other",
         )
         assert missing["ok"] is False
         assert missing["error"]["code"] == "task_not_found"
@@ -184,8 +232,25 @@ async def test_append_checkpoint_and_exact_comment_dedup_without_revision(tmp_pa
     assert saved["checkpoint"] == {"step": 2}
     assert saved["revision"] == rev
     events = await store.list_events(**key)
-    assert len([x for x in events if x["event_type"] == "comment"]) == 3
-    assert len([x for x in events if x["event_type"] == "checkpoint"]) == 3
+    comments = sorted(
+        (event for event in events if event["event_type"] == "comment"),
+        key=lambda event: event["id"],
+    )
+    checkpoints = sorted(
+        (event for event in events if event["event_type"] == "checkpoint"),
+        key=lambda event: event["id"],
+    )
+    assert [(event["agent_id"], event["payload"]["text"]) for event in comments] == [
+        ("author", "same text  "),
+        ("other", "same text  "),
+        ("author", "same text"),
+    ]
+    assert [event["agent_id"] for event in checkpoints] == ["other"] * 3
+    assert [event["payload"]["checkpoint"] for event in checkpoints] == [
+        {"step": 1},
+        {"step": 1},
+        {"step": 2},
+    ]
     latest = await store.latest_checkpoint_event(**key)
     assert latest["payload"]["checkpoint"] == {"step": 2}
 

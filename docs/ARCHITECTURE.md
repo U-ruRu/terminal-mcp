@@ -82,13 +82,11 @@ Durable stores keep audit and mutation effects in the appropriate SQLite transac
 
 ## Tasks: state, ownership and committed receipts
 
-Task states are `ready`, `in_progress`, `blocked`, `deferred`, `done`. Initial state is assigned by create. Subsequent state changes require `state` or `done`; property `update` rejects a state argument. Claim and release preserve the explicit state. Session expiry, end, suspension and deletion preserve state, checkpoint and result while changing ownership according to slot policy.
+Public Task API state, ownership, content revisions, checkpoint/comment history and `task.create` receipts follow the [connector runtime contract](connector-runtime-contract.md#workflow-state-and-ownership-contract). Claim and release preserve explicit task state. Session expiry, end, suspension and deletion preserve state, checkpoint and result while changing ownership according to slot policy.
 
-Owner-sensitive writes validate the exact claim-id snapshot in their write transaction. Revision checks also guard policy/output changes between preflight and commit. Executor task_comment supports comment (default) and checkpoint without expanding the ten-tool catalog. Safe participant property changes retain their established permissions; comments remain independent append operations. `review` and its audit event commit together. Relations, checkpoint, archive, state and dependency changes follow their ownership and dependency guards.
+Owner-sensitive writes validate the exact claim-id snapshot in their write transaction. Revision checks also guard policy/output changes between preflight and commit. Executor `task_comment` supports comment (default) and checkpoint without expanding the ten-tool catalog. Safe participant property changes retain their established permissions; comments remain independent append operations. `review` and its audit event commit together. Relations, archive and dependency changes follow their ownership and dependency guards.
 
 Every successful mutation family captures the resulting task, ownership, dependency and relevant legacy-session liveness snapshot inside the transaction. The returned `TaskReceipt`/`TaskWorkingSet` reflects that commit, even if another writer later advances the task or a post-commit read fails. Revisions identify the captured record, not an arbitrary newer readback. Canonical projections remain `TaskListItem`, `TaskSnapshot`, `TaskDetail`, `TaskWorkingSet`, `TaskReceipt`, `TaskHistory`.
-
-Automatic task replay keys hash normalized domain fields with trusted caller, role, LogicalAgent, WorkSession, epoch and observed MCP request ID. Reused zero or nonzero IDs with different domain requests produce different mutations. Exact retries return the durable original receipt after the current session gate is checked.
 
 ## Commands and ExecutionPort
 
