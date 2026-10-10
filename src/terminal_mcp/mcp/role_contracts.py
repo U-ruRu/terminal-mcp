@@ -402,7 +402,9 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     (
         "executor",
         "task_list",
-    ): "Read bounded TaskListItem records for work orientation; the agent selects work.",
+    ): "Read bounded TaskListItem records for work orientation. By default excludes "
+    "done and archived; state='done' includes only non-archived done tasks. "
+    "namespace=None spans namespaces; state/lane/tags filter the results.",
     (
         "executor",
         "command_run",
@@ -430,8 +432,12 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "coordinator",
         "session",
     ): "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent.",
-    ("coordinator", "task_get"): "Read one canonical task as snapshot, detail, or history.",
-    ("coordinator", "task_list"): "Read a bounded page of canonical TaskListItem records.",
+    ("coordinator", "task_get"): "Read one canonical task as snapshot, detail, or history. "
+    "History cursors bind to the selected stream snapshot; after history changes "
+    "an old cursor returns invalid_cursor and reading must restart.",
+    ("coordinator", "task_list"): "Read a bounded page of canonical TaskListItem records. "
+    "Default excludes done and archived. state='done' includes only non-archived "
+    "done tasks. namespace=None spans namespaces; state/lane/tags are filters.",
     (
         "coordinator",
         "task_manage",

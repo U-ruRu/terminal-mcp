@@ -42,6 +42,7 @@ from terminal_mcp.core.read_contract import (
     InvalidCursor,
     OutputItemTooLarge,
     bounded_page,
+    cursor_scope_fingerprint,
 )
 from terminal_mcp.core.task_projections import (
     TaskHistory,
@@ -381,6 +382,8 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
         show_archived=True,
         limit=1,
         _defer_full_task_budget=True,
+        _all_task_events=request.detail == "history"
+        and request.history_kind in {"events", "comments"},
     )
     record, failure = _task_record_from_observe(raw)
     if failure is not None:
@@ -419,6 +422,11 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
     items = [
         item.model_dump(mode="json", exclude_none=True) for item in streams[request.history_kind]
     ]
+    # Offsets are valid only for an unchanged selected history stream.
+    # A new event appears at the head (id DESC), shifting all old offsets.
+    # Bind the cursor to the stream snapshot rather than the task's content
+    # revision: state transitions append events without a content-revision bump.
+    scope["snapshot"] = cursor_scope_fingerprint({"items": items})
     try:
         page, next_cursor = bounded_page(
             items, limit=request.limit, cursor=request.cursor, scope=scope
