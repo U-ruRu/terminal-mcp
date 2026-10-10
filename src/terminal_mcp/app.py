@@ -440,7 +440,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return True
 
-    mcp_event_store = MCPEventStore(settings.database_path, managed_authority_node_id)
+    mcp_event_store = MCPEventStore(
+        settings.database_path,
+        managed_authority_node_id,
+        auth_database_path=settings.auth_database_path,
+    )
     # Connect the real managed-session operation path to the one-shot idle clock.
     managed_sessions.activity_notifier = mcp_event_store.note_managed_activity
     managed_sessions.attach_notifier = mcp_event_store.note_local_attach

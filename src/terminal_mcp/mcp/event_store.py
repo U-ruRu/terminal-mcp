@@ -82,9 +82,10 @@ class SubscriptionAuthorizationError(PermissionError):
 
 
 class MCPEventStore:
-    def __init__(self, path, node_id: str):
+    def __init__(self, path, node_id: str, auth_database_path=None):
         self.path = path
         self.node_id = node_id
+        self.auth_database_path = auth_database_path
 
     async def initialize(self):
         secure_database_path(self.path)
@@ -723,10 +724,16 @@ class MCPEventStore:
         created_at = utc_text(now)
         expires_at = utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
         async with aiosqlite.connect(self.path, timeout=5) as db:
-            # SQLite is shared with OAuth clients and Access Mesh bindings.
-            # Acquire the writer reservation *before* the final authorization
-            # reads: revocation either commits first and fails this request,
-            # or serializes after this subscription commit.
+            # OAuth continuity stores credentials in protected auth SQLite,
+            # while Access Mesh bindings and subscriptions live in main SQLite.
+            # Reserve writers in BOTH databases before the final checker; an
+            # OAuth revoke or Access unbind must serialize before the checker
+            # or after the committed subscription. No identity rows are changed.
+            if auth_mode == "oauth" and self.auth_database_path is not None:
+                await db.execute(
+                    "ATTACH DATABASE ? AS protected_identity",
+                    (str(self.auth_database_path),),
+                )
             await db.execute("BEGIN IMMEDIATE")
             if message_binding is not None and authorization_checker is None:
                 raise SubscriptionAuthorizationError

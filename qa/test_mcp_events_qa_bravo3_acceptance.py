@@ -187,7 +187,7 @@ def test_oauth_revocation_writer_cannot_interleave_and_later_delivery_denied(tmp
                 # A competing OAuth credential writer must not commit while
                 # the store is between its final checker and the INSERT.
                 try:
-                    with sqlite3.connect(app.state.settings.database_path, timeout=0) as rival:
+                    with sqlite3.connect(app.state.settings.auth_database_path, timeout=0) as rival:
                         rival.execute("DELETE FROM oauth_clients WHERE client_id=?", (client_id,))
                 except sqlite3.OperationalError as exc:
                     assert "locked" in str(exc).lower()
@@ -202,9 +202,10 @@ def test_oauth_revocation_writer_cannot_interleave_and_later_delivery_denied(tmp
         assert probes == ["checked"]
         assert rows(app) == (1, 1, 1)
 
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            removed = db.execute("DELETE FROM oauth_clients WHERE client_id=?", (client_id,))
+        with sqlite3.connect(app.state.settings.auth_database_path) as auth_db:
+            removed = auth_db.execute("DELETE FROM oauth_clients WHERE client_id=?", (client_id,))
             assert removed.rowcount == 1
+        with sqlite3.connect(app.state.settings.database_path) as db:
             stamp = utc_text()
             db.execute(
                 "INSERT INTO mcp_event_records("
