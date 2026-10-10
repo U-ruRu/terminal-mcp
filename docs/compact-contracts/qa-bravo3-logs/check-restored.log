@@ -1,0 +1,5 @@
+PASS 10 deterministic compact contract artifacts
+access: bytes 1120 -> 1819 (+699); tokens 269 -> 429
+executor: bytes 16009 -> 26500 (+10491); tokens 3675 -> 6258
+coordinator: bytes 40092 -> 25790 (-14302); tokens 9819 -> 6102
+TOTAL: 57221 -> 54109 bytes (-3112, -5.439%)
