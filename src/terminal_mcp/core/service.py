@@ -1308,6 +1308,7 @@ class TerminalService:
         limit=50,
         cursor=None,
         reveal_agent_ids=False,
+        include_all_events=False,
     ):
         if not self.task_coordinator:
             return {"ok": False, "error": "task coordination unavailable"}
@@ -1325,6 +1326,7 @@ class TerminalService:
             limit=limit,
             cursor=cursor,
             reveal_agent_ids=reveal_agent_ids,
+            **({"include_all_events": True} if include_all_events and task_id else {}),
         )
 
     async def task(self, agent_id, **kwargs):
