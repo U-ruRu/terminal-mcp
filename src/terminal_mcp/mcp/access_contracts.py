@@ -65,7 +65,7 @@ class MeshTaskCommentInput(StrictRoleInput):
 
 
 class MeshMessageInput(MessageInput):
-    scope: Literal["local", "fleet"] = "fleet"
+    scope: Literal["local", "fleet"] = "local"
 
 
 class _Strict(BaseModel):

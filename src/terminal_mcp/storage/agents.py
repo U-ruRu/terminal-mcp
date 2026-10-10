@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -764,21 +765,23 @@ class AgentStore:
     async def message_obligations(self, agent_id, *, limit=None, offset=0):
         async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             query = (
-                    "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
-                    "m.require_reply,m.alert,m.delivery_mode,m.task_namespace,m.task_id,"
-                    "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
-                    "r.read_at,r.replied_at,r.reply_message_hash "
-                    "FROM coordination_message_recipients r "
-                    "JOIN coordination_messages m ON m.message_hash=r.message_hash "
-                    "WHERE r.recipient_agent_id=? AND ("
-                    "(m.delivery_mode='notify' AND r.seen_count<3) OR "
-                    "(m.delivery_mode='ack' AND r.read_at IS NULL) OR "
-                    "(m.delivery_mode='alert' AND r.replied_at IS NULL) OR "
-                    "(m.delivery_mode='legacy' AND (r.read_at IS NULL OR "
-                    "((m.require_reply=1 OR m.alert=1) AND r.replied_at IS NULL)))) "
-                    "ORDER BY m.alert DESC,m.created_at,m.rowid"
+                "SELECT m.message_hash,m.sender_agent_id,m.target_name,m.text,m.created_at,"
+                "m.require_reply,m.alert,m.delivery_mode,m.task_namespace,m.task_id,"
+                "r.delivered_at,r.first_seen_at,r.last_seen_at,r.seen_count,"
+                "r.read_at,r.replied_at,r.reply_message_hash "
+                "FROM coordination_message_recipients r "
+                "JOIN coordination_messages m ON m.message_hash=r.message_hash "
+                "WHERE r.recipient_agent_id=? AND julianday(m.created_at)>julianday(?) AND ("
+                "(m.delivery_mode='notify' AND r.seen_count<3) OR "
+                "(m.delivery_mode='ack' AND r.read_at IS NULL) OR "
+                "(m.delivery_mode='alert' AND r.replied_at IS NULL) OR "
+                "(m.delivery_mode='legacy' AND (r.read_at IS NULL OR "
+                "((m.require_reply=1 OR m.alert=1) AND r.replied_at IS NULL)))) "
+                "ORDER BY m.alert DESC,m.created_at,m.rowid"
             )
-            params = [agent_id]
+            clock = getattr(self, "message_clock", None)
+            now = clock() if callable(clock) else datetime.now(UTC)
+            params = [agent_id, (now - timedelta(hours=24)).isoformat()]
             if limit is not None:
                 query += " LIMIT ? OFFSET ?"
                 params.extend((max(1, int(limit)), max(0, int(offset))))

@@ -993,10 +993,11 @@ def build_role_mcp(
                 tool.description = text + " Available without an active work cycle or Access Code."
             elif tool.name == "message":
                 tool.description = (
-                    "Read inbox, history, and recipients; send, acknowledge, or reply. "
-                    "scope='fleet' targets local active participants first and configured "
-                    "Mesh peers; scope='local' stays on this node. Writes use an attached "
-                    "local work cycle. Alerts remain durable until reply."
+                    "Read inbox, history, and recipients; send, acknowledge, or reply on "
+                    "this server only. Message recipients require a current local attachment; "
+                    "message transport never uses Mesh peers. Legacy scope='fleet' requests return "
+                    "feature_disabled. Messages expire 24 hours after created_at. Writes use an "
+                    "attached local work cycle."
                 )
             else:
                 tool.description = (
