@@ -83,10 +83,14 @@ class MCPEventStore:
                 CREATE TABLE IF NOT EXISTS mcp_event_subscriptions(
                     id TEXT PRIMARY KEY,
                     principal_id TEXT NOT NULL,
+                    credential_id TEXT,
+                    auth_mode TEXT,
                     name TEXT NOT NULL,
                     arguments_json TEXT NOT NULL,
                     callback_url TEXT NOT NULL,
                     signing_secret TEXT NOT NULL,
+                    previous_signing_secret TEXT,
+                    rotation_until TEXT,
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
                 );
@@ -145,6 +149,18 @@ class MCPEventStore:
                     );
                 END;
             """)
+            columns = {
+                row[1]
+                for row in await (
+                    await db.execute("PRAGMA table_info(mcp_event_subscriptions)")
+                ).fetchall()
+            }
+            if "credential_id" not in columns:
+                await db.execute(
+                    "ALTER TABLE mcp_event_subscriptions ADD COLUMN credential_id TEXT"
+                )
+            if "auth_mode" not in columns:
+                await db.execute("ALTER TABLE mcp_event_subscriptions ADD COLUMN auth_mode TEXT")
             await db.execute(
                 "INSERT OR IGNORE INTO mcp_event_cursor(singleton,last_seq) "
                 "SELECT 1,COALESCE(MAX(seq),0) FROM instance_events"
@@ -185,7 +201,7 @@ class MCPEventStore:
                     )
                 ).fetchall()
                 for item in rows:
-                    source_key = f"journal:{item['seq']}"
+                    source_key = f"{self.node_id}:journal:{item['seq']}"
                     event_type = item["event_type"]
                     if event_type == "mcp.agent.attached":
                         row = await (
@@ -251,7 +267,11 @@ class MCPEventStore:
                                     continue
                                 await self._insert_event(
                                     db,
-                                    source_key=source_key + ":" + self.node_id,
+                                    source_key=(
+                                        f"{self.node_id}:work_session_ended:"
+                                        f"{item['entity_id']}:"
+                                        f"{source.get('session_epoch')}"
+                                    ),
                                     name="session.ended",
                                     occurred_at=item["created_at"],
                                     data={
@@ -315,7 +335,7 @@ class MCPEventStore:
                         continue
                     await self._insert_event(
                         db,
-                        source_key="inactive:" + subject_key + ":" + activity,
+                        source_key="inactive:" + self.node_id + ":" + subject_key + ":" + activity,
                         name="agent.inactive",
                         occurred_at=stamp,
                         data={"agent_name": name, "server": self.node_id},
@@ -358,7 +378,18 @@ class MCPEventStore:
             ).fetchone()
             return bool(row)
 
-    async def save_subscription(self, *, sub_id, principal, name, callback, secret, ttl_ms=None):
+    async def save_subscription(
+        self,
+        *,
+        sub_id,
+        principal,
+        credential_id,
+        auth_mode,
+        name,
+        callback,
+        secret,
+        ttl_ms=None,
+    ):
         now = utc_now()
         created_at = utc_text(now)
         expires_at = utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
@@ -366,11 +397,32 @@ class MCPEventStore:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
                 "INSERT INTO mcp_event_subscriptions"
-                "(id,principal_id,name,arguments_json,callback_url,"
-                "signing_secret,created_at,expires_at) "
-                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-                "signing_secret=excluded.signing_secret,expires_at=excluded.expires_at",
-                (sub_id, principal, name, "{}", callback, secret, created_at, expires_at),
+                "(id,principal_id,credential_id,auth_mode,name,arguments_json,"
+                "callback_url,signing_secret,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "previous_signing_secret=CASE WHEN "
+                "mcp_event_subscriptions.signing_secret!=excluded.signing_secret "
+                "THEN mcp_event_subscriptions.signing_secret "
+                "ELSE mcp_event_subscriptions.previous_signing_secret END,"
+                "rotation_until=CASE WHEN "
+                "mcp_event_subscriptions.signing_secret!=excluded.signing_secret "
+                "THEN ? ELSE mcp_event_subscriptions.rotation_until END,"
+                "signing_secret=excluded.signing_secret,"
+                "credential_id=excluded.credential_id,auth_mode=excluded.auth_mode,"
+                "expires_at=excluded.expires_at",
+                (
+                    sub_id,
+                    principal,
+                    credential_id,
+                    auth_mode,
+                    name,
+                    "{}",
+                    callback,
+                    secret,
+                    created_at,
+                    expires_at,
+                    utc_text(now + timedelta(minutes=5)),
+                ),
             )
             await db.execute(
                 "INSERT INTO mcp_event_verified_callbacks"
@@ -406,7 +458,9 @@ class MCPEventStore:
                 rows = await (
                     await db.execute(
                         "SELECT d.event_id,d.subscription_id,d.attempts,"
-                        "e.name,e.occurred_at,e.data_json,s.callback_url,s.signing_secret "
+                        "e.name,e.occurred_at,e.data_json,s.callback_url,s.signing_secret,"
+                        "s.principal_id,s.credential_id,s.auth_mode,"
+                        "s.previous_signing_secret,s.rotation_until "
                         "FROM mcp_event_deliveries d "
                         "JOIN mcp_event_records e ON e.event_id=d.event_id "
                         "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "

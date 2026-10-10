@@ -1,4 +1,6 @@
 import contextlib
+import hashlib
+import hmac
 import json
 import socket
 
@@ -392,16 +394,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
 
+    async def mcp_events_access_checker(item):
+        """Recheck the same authorization source on every callback delivery."""
+        credential = item.get("credential_id") or ""
+        if item.get("auth_mode") == "oauth" and credential.startswith("oauth:"):
+            return bool(await oauth_store.get_client(credential.removeprefix("oauth:")))
+        if item.get("auth_mode") == "bearer" and credential.startswith("bearer:"):
+            # No raw bearer token is persisted with a subscription.
+            for bearer in credentials.bearer_items():
+                token = str(bearer.get("token") or "")
+                if not token or not credentials._active(bearer):
+                    continue
+                identifier = str(
+                    bearer.get("id") or hashlib.sha256(token.encode()).hexdigest()[:20]
+                )
+                if hmac.compare_digest(credential, "bearer:" + identifier):
+                    return True
+        return False
+
     mcp_event_store = MCPEventStore(settings.database_path, managed_authority_node_id)
     mcp_events = MCPEventsAdapter(
         mcp.streamable_http_app(),
         mcp_event_store,
         reconcile=service.reconcile_agent_sessions,
+        access_checker=mcp_events_access_checker,
     )
-    executor_events = MCPEventsAdapter(executor_mcp.streamable_http_app(), mcp_event_store)
-    coordinator_events = MCPEventsAdapter(coordinator_mcp.streamable_http_app(), mcp_event_store)
+    executor_events = MCPEventsAdapter(
+        executor_mcp.streamable_http_app(),
+        mcp_event_store,
+        access_checker=mcp_events_access_checker,
+    )
+    coordinator_events = MCPEventsAdapter(
+        coordinator_mcp.streamable_http_app(),
+        mcp_event_store,
+        access_checker=mcp_events_access_checker,
+    )
     access_events = (
-        MCPEventsAdapter(access_mcp.streamable_http_app(), mcp_event_store) if access_mcp else None
+        MCPEventsAdapter(
+            access_mcp.streamable_http_app(),
+            mcp_event_store,
+            access_checker=mcp_events_access_checker,
+        )
+        if access_mcp
+        else None
     )
 
     @contextlib.asynccontextmanager

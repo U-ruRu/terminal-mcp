@@ -9,6 +9,7 @@ import time
 
 from starlette.responses import JSONResponse, Response
 
+from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import current_admission_context
 from terminal_mcp.mcp.event_store import EVENT_NAMES, MCPEventStore, event_catalog
 from terminal_mcp.mcp.event_webhooks import (
@@ -21,11 +22,20 @@ from terminal_mcp.mcp.event_webhooks import (
 
 
 class MCPEventsAdapter:
-    def __init__(self, wrapped, store: MCPEventStore, *, reconcile=None, sender=None):
+    def __init__(
+        self,
+        wrapped,
+        store: MCPEventStore,
+        *,
+        reconcile=None,
+        sender=None,
+        access_checker=None,
+    ):
         self.wrapped = wrapped
         self.store = store
         self.reconcile = reconcile
         self.sender = sender
+        self.access_checker = access_checker
         self._task = None
         self._stop = asyncio.Event()
 
@@ -66,6 +76,24 @@ class MCPEventsAdapter:
 
     async def deliver_due(self):
         for item in await self.store.due_deliveries():
+            try:
+                # Fail closed when access can no longer be verified.
+                valid = self.access_checker is not None and await self.access_checker(item)
+            except Exception:
+                # Temporary checker failure is retryable; it must never send.
+                await self.store.finish_attempt(
+                    item["event_id"],
+                    item["subscription_id"],
+                    status=None,
+                )
+                continue
+            if not valid:
+                # Revoked credentials invalidate the durable subscription as well.
+                await self.store.unsubscribe(
+                    item["subscription_id"],
+                    item["principal_id"],
+                )
+                continue
             payload = {
                 "eventId": item["event_id"],
                 "name": item["name"],
@@ -82,6 +110,11 @@ class MCPEventsAdapter:
                     item["event_id"],
                     payload,
                     sender=self.sender,
+                    previous_secret=(
+                        item["previous_signing_secret"]
+                        if item["rotation_until"] and item["rotation_until"] > utc_text()
+                        else None
+                    ),
                 )
             except CallbackEndpointError as exc:
                 if exc.reason == "payload_too_large":
@@ -194,9 +227,12 @@ class MCPEventsAdapter:
                 "CallbackEndpointError",
                 {"reason": exc.reason},
             )
+        admission = current_admission_context()
         expires_at = await self.store.save_subscription(
             sub_id=sub_id,
             principal=principal,
+            credential_id=admission.credential_id,
+            auth_mode=admission.auth_mode,
             name=name,
             callback=callback,
             secret=secret,
@@ -238,6 +274,29 @@ class MCPEventsAdapter:
             request = json.loads(body)
         except (ValueError, UnicodeDecodeError):
             request = None
+        # MCP 2.0 Events is a protocol facade over the existing FastMCP 1.x
+        # tool stack. Negotiate the new wire version only for clients that
+        # explicitly request it; legacy clients retain the unchanged handshake.
+        if (
+            isinstance(request, dict)
+            and request.get("jsonrpc") == "2.0"
+            and request.get("method") == "initialize"
+            and isinstance(request.get("params"), dict)
+            and request["params"].get("protocolVersion") == "2026-07-28"
+        ):
+            await JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "protocolVersion": "2026-07-28",
+                        "capabilities": {"tools": {}, "events": {}},
+                        "serverInfo": {"name": "terminal-mcp", "version": "2.0"},
+                    },
+                }
+            )(scope, receive, send)
+            return
+
         if (
             isinstance(request, dict)
             and request.get("jsonrpc") == "2.0"
@@ -261,4 +320,18 @@ class MCPEventsAdapter:
                 return {"type": "http.request", "body": body, "more_body": False}
             return await receive()
 
+        # Installed FastMCP SDK predates 2026-07-28. Its handler for the
+        # unmodified tool methods still understands 2025-11-25. Translate
+        # only this transport header before delegation, never auth headers.
+        if any(
+            key.lower() == b"mcp-protocol-version" and val == b"2026-07-28"
+            for key, val in scope.get("headers", [])
+        ):
+            scope = dict(scope)
+            scope["headers"] = [
+                (key, b"2025-11-25")
+                if key.lower() == b"mcp-protocol-version" and val == b"2026-07-28"
+                else (key, val)
+                for key, val in scope.get("headers", [])
+            ]
         await self.wrapped(scope, replay_receive, send)

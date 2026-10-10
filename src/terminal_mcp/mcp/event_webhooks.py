@@ -34,15 +34,28 @@ def signing_key(secret: str) -> bytes:
     return key
 
 
-def signed_headers(secret, webhook_id, body, subscription_id):
+def signed_headers(
+    secret,
+    webhook_id,
+    body,
+    subscription_id,
+    *,
+    previous_secret=None,
+):
     timestamp = str(int(time.time()))
     signed = webhook_id.encode() + b"." + timestamp.encode() + b"." + body
-    signature = base64.b64encode(hmac.new(signing_key(secret), signed, hashlib.sha256).digest())
+    signatures = []
+    for key in (secret, previous_secret):
+        if key:
+            value = base64.b64encode(
+                hmac.new(signing_key(key), signed, hashlib.sha256).digest()
+            ).decode("ascii")
+            signatures.append("v1," + value)
     return {
         "Content-Type": "application/json",
         "webhook-id": webhook_id,
         "webhook-timestamp": timestamp,
-        "webhook-signature": "v1," + signature.decode("ascii"),
+        "webhook-signature": " ".join(signatures),
         "X-MCP-Subscription-Id": subscription_id,
     }
 
@@ -106,11 +119,26 @@ def _pinned_https_post(url, body, headers):
         connection.close()
 
 
-async def post_signed(url, secret, subscription_id, webhook_id, payload, *, sender=None):
+async def post_signed(
+    url,
+    secret,
+    subscription_id,
+    webhook_id,
+    payload,
+    *,
+    sender=None,
+    previous_secret=None,
+):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(body) > 262144:
         raise CallbackEndpointError("payload_too_large")
-    headers = signed_headers(secret, webhook_id, body, subscription_id)
+    headers = signed_headers(
+        secret,
+        webhook_id,
+        body,
+        subscription_id,
+        previous_secret=previous_secret,
+    )
     if sender is not None:
         return await sender(url, body, headers)
     return await asyncio.to_thread(_pinned_https_post, url, body, headers)

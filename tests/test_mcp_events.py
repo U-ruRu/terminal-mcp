@@ -186,6 +186,10 @@ async def test_persistent_presence_for_other_node_not_misattributed(context):
     assert not _records(path, "agent.attached")
 
 
+async def access_allowed(_item):
+    return True
+
+
 class FakeReceiver:
     def __init__(self, statuses=None):
         self.statuses = list(statuses or [])
@@ -214,7 +218,12 @@ def _admission():
 async def test_subscription_challenge_refresh_unsubscribe_and_persistence(context):
     path, agents, events = context
     receiver = FakeReceiver()
-    adapter = MCPEventsAdapter(None, events, sender=receiver)
+    adapter = MCPEventsAdapter(
+        None,
+        events,
+        sender=receiver,
+        access_checker=access_allowed,
+    )
     token = bind_admission_context(_admission())
     try:
         request = {
@@ -254,7 +263,12 @@ async def test_subscription_challenge_refresh_unsubscribe_and_persistence(contex
 async def test_webhook_signature_and_stable_event_id(context):
     path, agents, events = context
     receiver = FakeReceiver()
-    adapter = MCPEventsAdapter(None, events, sender=receiver)
+    adapter = MCPEventsAdapter(
+        None,
+        events,
+        sender=receiver,
+        access_checker=access_allowed,
+    )
     token = bind_admission_context(_admission())
     try:
         request = {
@@ -296,7 +310,12 @@ async def test_delivery_backoff_and_no_retry_410_413(context):
     await events.pump()
     for status in (410, 413, 500):
         receiver = FakeReceiver([status])
-        adapter = MCPEventsAdapter(None, events, sender=receiver)
+        adapter = MCPEventsAdapter(
+            None,
+            events,
+            sender=receiver,
+            access_checker=access_allowed,
+        )
         token = bind_admission_context(_admission())
         try:
             sub = await adapter.handle(
@@ -459,6 +478,15 @@ async def test_real_limited_work_session_explicit_end_delivers_once(context):
     ]
     await events.pump()
     assert len(_records(path, "session.ended")) == 1
+    # A post-finalization metadata update is a new journal row,
+    # but not a second WorkSession lifecycle transition.
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "UPDATE logical_agent_work_sessions SET end_reason='cleanup' "
+            "WHERE work_session_id='ws1'"
+        )
+    await events.pump()
+    assert len(_records(path, "session.ended")) == 1
 
 
 @pytest.mark.asyncio
@@ -534,7 +562,12 @@ async def test_challenge_failure_rejects_subscription_and_does_not_store(context
 async def test_missing_callback_credentials_rejected_without_network(context):
     _, _, events = context
     receiver = FakeReceiver()
-    adapter = MCPEventsAdapter(None, events, sender=receiver)
+    adapter = MCPEventsAdapter(
+        None,
+        events,
+        sender=receiver,
+        access_checker=access_allowed,
+    )
     token = bind_admission_context(_admission())
     try:
         response = await adapter.handle(
@@ -577,3 +610,133 @@ async def test_private_dns_answer_blocks_outbound_connect(monkeypatch):
                 "cursor": None,
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_revoked_subscription_denied_before_network_delivery(context):
+    path, agents, store = context
+    delivered = FakeReceiver()
+    access = True
+    checks = []
+
+    async def guard(item):
+        checks.append((item["principal_id"], item["credential_id"]))
+        return access
+
+    adapter = MCPEventsAdapter(None, store, sender=delivered, access_checker=guard)
+    token = bind_admission_context(_admission())
+    try:
+        res = await adapter.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "events/subscribe",
+                "params": {
+                    "name": "agent.attached",
+                    "arguments": {},
+                    "delivery": {"mode": "webhook", "url": CALLBACK, "secret": SECRET},
+                },
+            }
+        )
+        sub = res["result"]["id"]
+    finally:
+        reset_admission_context(token)
+    assert len(delivered.requests) == 1  # verification request only
+    await _agent(agents)
+    await store.pump()
+    access = False
+    await adapter.deliver_due()
+    assert len(delivered.requests) == 1  # no event exfiltrated after revoke
+    assert len(checks) == 1
+    assert checks[0][0] == "test-user"
+    assert checks[0][1] == "bearer:test"
+    assert await store.subscription(sub) is None
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_when_delivery_auth_check_unavailable(context):
+    path, agents, store = context
+    receiver = FakeReceiver()
+    adapter = MCPEventsAdapter(None, store, sender=receiver)
+    token = bind_admission_context(_admission())
+    try:
+        sub = await adapter.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "events/subscribe",
+                "params": {
+                    "name": "agent.attached",
+                    "arguments": {},
+                    "delivery": {"mode": "webhook", "url": CALLBACK, "secret": SECRET},
+                },
+            }
+        )
+        assert "result" in sub
+    finally:
+        reset_admission_context(token)
+    await _agent(agents)
+    await store.pump()
+    await adapter.deliver_due()
+    assert len(receiver.requests) == 1
+    assert await store.subscription(sub["result"]["id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_callback_secret_rotation_dual_signatures(context):
+    path, agents, store = context
+    receiver = FakeReceiver()
+    adapter = MCPEventsAdapter(None, store, sender=receiver, access_checker=access_allowed)
+    new_key = "whsec_" + base64.b64encode(b"y" * 32).decode()
+    token = bind_admission_context(_admission())
+    try:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "events/subscribe",
+            "params": {
+                "name": "agent.attached",
+                "arguments": {},
+                "delivery": {"mode": "webhook", "url": CALLBACK, "secret": SECRET},
+            },
+        }
+        first = await adapter.handle(payload)
+        assert "result" in first
+        payload["params"]["delivery"]["secret"] = new_key
+        second = await adapter.handle(payload)
+        assert second["result"]["id"] == first["result"]["id"]
+    finally:
+        reset_admission_context(token)
+    await _agent(agents)
+    await store.pump()
+    await adapter.deliver_due()
+    _, data, headers = receiver.requests[-1]
+    parts = headers["webhook-signature"].split(" ")
+    assert len(parts) == 2
+    assert parts[0].startswith("v1,") and parts[1].startswith("v1,")
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+    for i, secret in enumerate((b"y" * 32, b"x" * 32)):
+        actual = hmac.new(
+            secret,
+            (headers["webhook-id"] + "." + headers["webhook-timestamp"] + ".").encode() + body,
+            hashlib.sha256,
+        ).digest()
+        assert parts[i] == "v1," + base64.b64encode(actual).decode()
+
+
+@pytest.mark.asyncio
+async def test_subscription_auth_schema_upgrade_fails_closed(context):
+    path, _, store = context
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO mcp_event_subscriptions "
+            "(id,principal_id,name,arguments_json,callback_url,"
+            "signing_secret,created_at,expires_at) "
+            "VALUES('old','legacy','agent.attached','{}',?,?,?,?)",
+            (CALLBACK, SECRET, utc_text(), utc_text(utc_now() + timedelta(hours=1))),
+        )
+    await store.initialize()
+    migrated = await store.subscription("old")
+    assert migrated["credential_id"] is None
+    assert migrated["auth_mode"] is None
+    assert migrated["previous_signing_secret"] is None
