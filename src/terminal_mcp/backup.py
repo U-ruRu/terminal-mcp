@@ -52,6 +52,33 @@ def access_verifier_key_path(auth_database_path: Path) -> Path:
     return path.with_name(path.name + ".access-key")
 
 
+def oauth_installation_anchor_path(auth_database_path: Path) -> Path:
+    path = Path(auth_database_path)
+    return path.with_name(path.name + ".identity-anchor")
+
+
+def _oauth_anchor_required(auth_path: Path) -> bool:
+    """New protected marker requires independent installation witness in backup."""
+    anchor = oauth_installation_anchor_path(auth_path)
+    if anchor.exists():
+        return True
+    if not auth_path.is_file():
+        return False
+    from urllib.parse import quote
+
+    try:
+        with sqlite3.connect(f"file:{quote(str(auth_path.resolve()))}?mode=ro", uri=True) as con:
+            row = con.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' "
+                "AND name='oauth_identity_migration'"
+            ).fetchone()
+            return bool(row and "lineage_nonce" in str(row[0]))
+    except sqlite3.Error:
+        # Corrupt/protected data must not let validation silently omit its
+        # independent recovery witness.
+        return True
+
+
 def _fleet_state_required(settings: Settings) -> bool:
     return any(
         (
@@ -70,6 +97,8 @@ def authoritative_backup_members(settings: Settings) -> tuple[BackupMember, ...]
 
     fleet_required = _fleet_state_required(settings)
     auth_key = access_verifier_key_path(settings.auth_database_path)
+    oauth_anchor = oauth_installation_anchor_path(settings.auth_database_path)
+    anchor_required = _oauth_anchor_required(settings.auth_database_path)
     return (
         BackupMember(
             "node_environment",
@@ -109,6 +138,15 @@ def authoritative_backup_members(settings: Settings) -> tuple[BackupMember, ...]
             True,
             True,
             40,
+        ),
+        BackupMember(
+            "oauth_installation_anchor",
+            oauth_anchor,
+            "Independent immutable lineage of this protected OAuth/AuthFoundation installation.",
+            "secret",
+            anchor_required,
+            True,
+            45,
         ),
         BackupMember(
             "fleet_node_meta",

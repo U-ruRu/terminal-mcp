@@ -76,6 +76,7 @@ def test_manifest_names_authoritative_state_and_excludes_derived_cache(tmp_path)
         "runtime_database",
         "auth_database",
         "access_verifier_key",
+        "oauth_installation_anchor",
         "fleet_node_meta",
         "fleet_control",
         "runtime_config",
@@ -333,3 +334,47 @@ def test_snapshot_restores_complete_authoritative_state_in_isolated_target(tmp_p
 
     assert access_verifier_key_path(target.auth_database_path).read_bytes() == source_key
     assert target.env_file_path.read_text() == source.env_file_path.read_text()
+
+
+def test_auth_identity_anchor_is_required_in_snapshot_after_migration(tmp_path):
+    import asyncio
+
+    from terminal_mcp.auth.foundation import AuthFoundationStore
+    from terminal_mcp.auth.identity_migration import migrate
+    from terminal_mcp.auth.pairing import PairingStore
+    from terminal_mcp.auth.storage import OAuthStore
+    from terminal_mcp.backup import (
+        create_authoritative_snapshot,
+        validate_authoritative_snapshot,
+    )
+
+    settings = _settings(tmp_path)
+    asyncio.run(AuthFoundationStore(settings.auth_database_path).initialize())
+    asyncio.run(OAuthStore(settings.database_path).initialize())
+    asyncio.run(PairingStore(settings.database_path).initialize())
+    assert (
+        migrate(settings.database_path, settings.auth_database_path, tmp_path / "migration-backup")[
+            "status"
+        ]
+        == "migrated"
+    )
+
+    items = {item["member_id"]: item for item in authoritative_backup_manifest(settings)["members"]}
+    anchor = items["oauth_installation_anchor"]
+    assert anchor["required"] is True
+    assert anchor["secret"] is True
+    anchor_path = Path(anchor["path"])
+    assert anchor_path.stat().st_mode & 0o777 == 0o600
+    checkpoint = tmp_path / "snapshot"
+    result = create_authoritative_snapshot(settings, checkpoint, quiesced=True)
+    assert {x["member_id"] for x in result["validated"]} >= {"oauth_installation_anchor"}
+    assert validate_authoritative_snapshot(checkpoint)["quiesced"] is True
+
+    # A lost anchor is not optional merely because the file is now missing:
+    # the protected migration marker still requires its recovery witness.
+    anchor_path.unlink()
+    assert {item["member_id"]: item for item in authoritative_backup_manifest(settings)["members"]}[
+        "oauth_installation_anchor"
+    ]["required"] is True
+    with pytest.raises(BackupValidationError, match="oauth_installation_anchor"):
+        validate_authoritative_backup_source(settings)

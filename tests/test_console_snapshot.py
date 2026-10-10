@@ -7,6 +7,7 @@ from terminal_mcp.config import Settings
 def settings(tmp_path):
     return Settings(
         database_path=tmp_path / "db.sqlite3",
+        auth_database_path=tmp_path / "auth.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
         log_path=tmp_path / "terminal-mcp.log",
@@ -143,7 +144,8 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
         )
         assert body["tasks"]["summary"]["by_state"]["done"] >= 1
         active_projection = next(
-            item for item in body["tasks"]["tasks"]
+            item
+            for item in body["tasks"]["tasks"]
             if item["namespace"] == "snapshot" and item["task_id"] == "ACTIVE"
         )
         assert active_projection["owner"]["agent_id"] == agent_id
@@ -155,9 +157,7 @@ def test_console_snapshot_is_authenticated_and_returns_complete_read_model(tmp_p
                 "content": "Visible authenticated context.",
             }
         ]
-        communication = next(
-            item for item in body["communications"] if item["name"] == agent_name
-        )
+        communication = next(item for item in body["communications"] if item["name"] == agent_name)
         assert communication["agent_id"] == agent_id
         assert "intent_journal" in communication
         assert "message_journal" in communication

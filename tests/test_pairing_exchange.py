@@ -12,6 +12,7 @@ from terminal_mcp.config import Settings
 def settings(tmp_path, **updates):
     base = Settings(
         database_path=tmp_path / "db.sqlite3",
+        auth_database_path=tmp_path / "auth.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
         env_file_path=tmp_path / "terminal-mcp.env",
@@ -61,7 +62,7 @@ def test_pairing_exchange_registers_device_and_returns_usable_credentials(tmp_pa
         )
         assert health.status_code == 200
 
-        with sqlite3.connect(app.state.settings.database_path) as db:
+        with sqlite3.connect(app.state.settings.auth_database_path) as db:
             device = db.execute(
                 "SELECT client_id,public_key,label,created_at,last_used_at,revoked_at "
                 "FROM console_devices WHERE device_id=?",
@@ -76,8 +77,7 @@ def test_pairing_exchange_registers_device_and_returns_usable_credentials(tmp_pa
                 (body["client_id"],),
             ).fetchone()
             audit = db.execute(
-                "SELECT event_type,outcome,reason,device_id "
-                "FROM console_pairing_audit ORDER BY id"
+                "SELECT event_type,outcome,reason,device_id FROM console_pairing_audit ORDER BY id"
             ).fetchall()
 
         assert device[0] == body["client_id"]
@@ -111,7 +111,6 @@ def test_pairing_exchange_registers_device_and_returns_usable_credentials(tmp_pa
         assert "/pairing/exchange" not in schema["paths"]
         assert "/pairing/create" not in schema["paths"]
         assert "/connect" not in schema["paths"]
-
 
 
 def test_bearer_actions_scope_paired_oauth_to_active_console_device(tmp_path):
@@ -341,7 +340,7 @@ def test_pairing_exchange_rejects_replay_expiry_and_malformed_without_secret_lea
         assert malformed.status_code == 400
         assert malformed.json() == {"error": "invalid_request"}
 
-        with sqlite3.connect(app.state.settings.database_path) as db:
+        with sqlite3.connect(app.state.settings.auth_database_path) as db:
             rejected = db.execute(
                 "SELECT reason FROM console_pairing_audit "
                 "WHERE event_type='pairing_exchange' AND outcome='rejected' ORDER BY id"
@@ -374,11 +373,14 @@ def test_pairing_exchange_is_atomic_under_concurrency(tmp_path):
         assert len(successes) == 1
         assert failures == ["replayed"]
 
-        with sqlite3.connect(app.state.settings.database_path) as db:
+        with sqlite3.connect(app.state.settings.auth_database_path) as db:
             assert db.execute("SELECT count(*) FROM console_devices").fetchone()[0] == 1
-            assert db.execute(
-                "SELECT count(*) FROM oauth_clients WHERE client_id LIKE 'device_%'"
-            ).fetchone()[0] == 1
+            assert (
+                db.execute(
+                    "SELECT count(*) FROM oauth_clients WHERE client_id LIKE 'device_%'"
+                ).fetchone()[0]
+                == 1
+            )
 
 
 def test_device_revocation_invalidates_existing_access_and_refresh(tmp_path):
@@ -404,7 +406,7 @@ def test_device_revocation_invalidates_existing_access_and_refresh(tmp_path):
         assert refresh.status_code == 401
         assert refresh.json() == {"error": "invalid_client"}
 
-        with sqlite3.connect(app.state.settings.database_path) as db:
+        with sqlite3.connect(app.state.settings.auth_database_path) as db:
             device = db.execute(
                 "SELECT revoked_at FROM console_devices WHERE device_id=?",
                 (body["device_id"],),
@@ -428,7 +430,6 @@ def test_connect_bootstrap_does_not_receive_or_render_fragment(tmp_path):
 
     assert response.status_code == 200
     assert "pairing secret stays in the URL fragment" in response.text
-
 
 
 def test_pairing_exchange_is_rate_limited(tmp_path):

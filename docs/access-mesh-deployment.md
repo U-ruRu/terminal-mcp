@@ -82,3 +82,6 @@ Legacy `/mcp` compatibility is an additional check, not a substitute for these s
 Record candidate SHA/version, source full-suite evidence, installed SHA on both nodes, role/schema digests, local and bidirectional acceptance results, health, catchup/outbox/cleanup state, and the handling of disposable resources. Preserve result/checkpoint data. Close dependent tasks only when their own acceptance criteria and this release gate are satisfied.
 
 If activation fails, use the installer decision and captured deployment journal to choose a compatible recovery. Split topology rollback restores the captured units/configuration, not an earlier database/security history. Restore application data only through an explicit consistency/security recovery plan, preserving newer revocations and issuer provenance. Re-run health and native acceptance after recovery; a successful process start alone is not recovery acceptance.
+
+
+OAuth and console identity preservation on clean start: [OAuth identity isolation runbook](oauth-identity-isolation-runbook.md). Do not clean the working DB until its six legacy OAuth/console relations have been transferred to protected auth.sqlite3.

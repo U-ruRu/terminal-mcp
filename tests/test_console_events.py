@@ -15,6 +15,7 @@ ORIGIN = "https://terminal.example"
 def settings(tmp_path, **updates):
     base = Settings(
         database_path=tmp_path / "db.sqlite3",
+        auth_database_path=tmp_path / "auth.sqlite3",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
         log_path=tmp_path / "terminal-mcp.log",
@@ -184,7 +185,6 @@ def test_task_detail_requires_active_paired_device_and_preserves_bearer_actions(
         assert health.status_code == 200
 
 
-
 def test_activity_feed_exposes_stable_agent_id_to_paired_console(tmp_path):
     app = create_app(
         settings(
@@ -232,6 +232,7 @@ def test_activity_feed_exposes_stable_agent_id_to_paired_console(tmp_path):
         assert event["payload"]["session_ref"] == event["entity_id"]
         assert event["actor_id"] == agent_id
         assert agent_id not in str(event["payload"])
+
 
 def test_activity_feed_projects_authorized_messages_and_requires_paired_device(tmp_path):
     app = create_app(
@@ -479,8 +480,6 @@ def test_websocket_rejects_wrong_origin_and_revoked_device(tmp_path):
         assert revoked.value.code == 4401
 
 
-
-
 def test_open_websocket_closes_after_device_revocation(tmp_path):
     app = create_app(settings(tmp_path))
     with TestClient(app) as client:
@@ -504,15 +503,12 @@ def test_websocket_reports_resync_required_on_journal_gap(tmp_path):
     with TestClient(app) as client:
         paired = pair(client, app)
         for index in range(3):
-            asyncio.run(
-                app.state.event_store.append("test.changed", "test", str(index))
-            )
+            asyncio.run(app.state.event_store.append("test.changed", "test", str(index)))
         import sqlite3
 
         with sqlite3.connect(app.state.settings.database_path) as db:
             db.execute(
-                "DELETE FROM instance_events "
-                "WHERE seq=(SELECT MIN(seq) FROM instance_events)"
+                "DELETE FROM instance_events WHERE seq=(SELECT MIN(seq) FROM instance_events)"
             )
             db.commit()
 
