@@ -79,8 +79,19 @@ class AccessMeshReplication:
                 bootstrap_origin=pinned.bootstrap_origin or pinned.origin,
             )
             for pinned in self._bootstrap_config.peers
+            # General Fleet membership never implicitly grants Access Mesh trust.
+            # Only explicitly trusted Access issuers serve the signed Mesh router.
             if pinned.instance_id in enabled
+            and pinned.instance_id in self.store.trusted_issuers
         )
+        selected_ids = {peer.instance_id for peer in selected}
+        # Drop health entries for peers no longer active or trusted, otherwise
+        # perpetual catchup_pending phantom peers degrade global health.
+        for peer_id in tuple(self.peer_health):
+            if peer_id not in selected_ids:
+                del self.peer_health[peer_id]
+                self._snapshot_after.pop(peer_id, None)
+                self._last_snapshot_pass.pop(peer_id, None)
         previous = {peer.instance_id: peer.origin for peer in self.config.peers}
         old_transport_state = tuple(
             (peer.instance_id, peer.origin, peer.transport) for peer in self.config.peers
