@@ -39,7 +39,7 @@ Choose unique private overlay addresses and public UDP endpoints:
 ```bash
 # Firstbyte (example underlay address, no private keys transferred)
 sudo terminal-mcp mesh-vpn init --backend auto --interface tmcpwg \
-  --overlay-ip 10.244.12.1 --endpoint 185.244.172.75:53148
+  --overlay-ip 10.244.12.1 --endpoint 185.244.172.75:42063 --listen-port 42063
 sudo terminal-mcp mesh-vpn offer > /tmp/firstbyte-offer.json
 
 # BacLOUD
@@ -201,3 +201,63 @@ The private WireGuard tunnel is not a mobile device VPN. The mobile
 application acts as the trusted **control plane**, while WireGuard remains
 server-to-server data transport. Failed tunnel activation never silently
 promotes an unverified route; HTTPS remains usable for recovery.
+
+## 2026-10-10 follow-up: UDP port-pair root cause and resolution
+
+Network-layer forensics on the real Firstbyte/BacLOUD hosts isolated the
+reverse-path failure to specific **underlay UDP port pairs**, rather than
+a WireGuard cryptographic incompatibility. Ordinary host-to-host ICMP
+had 10/10 success both directions at ~48 ms. The original symmetric
+port 53148 and test port 53151->53148 lost many packets, even when a
+raw Python UDP sender bypassed WireGuard entirely: 4/4 ordinary UDP
+datagrams with source port 53151 and destination 53148 were lost before
+BacLOUD's eth0 capture. In the same port matrix, 4/4 datagrams for each
+other tested combination (sources 42063, 45063, 61063 and ephemeral)
+and destinations 42065/53148/53150 reached BacLOUD, except the blocked
+53151->53148 pair. Thus the fault belongs to the path-specific UDP
+filtering/middlebox behavior and is independent of kernel/userspace driver
+choice; the responsible upstream provider/filter has not been proven.
+
+**Verified working pair on these hosts:**
+- Firstbyte: kernel WireGuard, UDP listener 42063, private overlay /32.
+- BacLOUD: userspace wireguard-go, UDP listener 53148, private overlay /32.
+- Reestablished WireGuard handshake; ICMP BacLOUD->Firstbyte 20/20,
+  Firstbyte->BacLOUD 20/20, RTT about 50 ms in both directions.
+- Temporary HTTPS app proxy inside WireGuard: 50/50 HTTP 200
+  Firstbyte->BacLOUD, 50/50 HTTP 200 BacLOUD->Firstbyte, avg around
+  121/132 ms (successful samples). Traffic uses encrypted private
+  overlay and original service upstream 127.0.0.1:8080.
+
+Port selection is a real deployment dimension; mobile prepare supports
+individual UDP listen ports and external endpoint ports. As a cutover
+gate, the `switch` operation requires a fresh handshake **and eight
+consecutive health HTTP 200 checks** across the private tunnel, rejecting
+intermittently broken routes. Complete extended Mesh acceptance
+(partition/reconnect, durable events, enrollment from the shipped mobile
+app) remains a separate release check. Preserve HTTPS rollback.
+
+## 2026-10-10 link-flap recovery confirmation
+
+Under the proven asymmetric UDP ports 42063/53148, a sustained ICMP
+test achieved **100/100** in each direction (RTT ~49–50 ms), plus
+50/50 HTTP 200 responses in each direction through an isolated
+private tunnel-to-localhost TCP proxy.
+
+A simulated userspace interface DOWN/UP caused a *different* one-way
+failure. Captures on BacLOUD showed Firstbyte's encrypted UDP packets
+arriving and decrypting into ICMP echo requests, but BacLOUD did not
+produce replies. The kernel route lookup revealed that Linux had
+**removed the manually installed peer /32 route** on interface DOWN,
+falling back to eth0 as the reverse path. Replacing the route with
+`ip route replace 10.253.241.1/32 dev tmcpwgdiag` restored 20/20
+ping replies in both directions, without changing crypto keys.
+
+This is an interface lifecycle routing problem, independent from the
+initial path-selective UDP blackhole. The installer now includes a
+`terminal-mcp-mesh-vpn-routes.service` netlink event watcher. It
+reinstalls peer /32 routes when the managed WireGuard interface is
+brought UP, and verifies that the interface's public key matches
+the local persisted WireGuard identity before touching routing.
+It does not poll or create Internet/default routes. Normal `mesh-vpn up`
+already recreates routes at startup. Always validate the route
+watcher with a separate staged link-flap before production activation.

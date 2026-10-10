@@ -440,11 +440,18 @@ def switch(
                 handshake and 0 <= int(time.time() if now is None else now) - handshake <= 180
             ):
                 raise VPNError("WireGuard handshake not fresh; refusing transport switch")
-            response = httpx.get(
-                f"http://{peer['overlay_ip']}:{peer['proxy_port']}/health/live", timeout=3
-            )
-            if response.status_code != 200:
-                raise VPNError("WireGuard application health probe failed")
+            # One successful request is not sufficient: an unreliable UDP
+            # path can pass a single probe and still drop most Mesh events.
+            # Require eight independent, consecutive HTTP connections before
+            # ever switching the configured peer origin.
+            health_url = f"http://{peer['overlay_ip']}:{peer['proxy_port']}/health/live"
+            for _ in range(8):
+                try:
+                    response = httpx.get(health_url, timeout=2.0, trust_env=False)
+                except httpx.HTTPError as exc:
+                    raise VPNError("WireGuard application health probe failed") from exc
+                if response.status_code != 200:
+                    raise VPNError("WireGuard application health probe failed")
         override = {
             "mode": "wireguard",
             "origin": f"http://{peer['overlay_ip']}:{peer['proxy_port']}",
@@ -518,7 +525,9 @@ def revoke_peer(state_dir: Path, peer_id: str, transports_path: Path) -> dict:
 
 
 def prune_detached_peers(
-    state_dir: Path, transports_path: Path, allowed_node_ids: set[str],
+    state_dir: Path,
+    transports_path: Path,
+    allowed_node_ids: set[str],
 ) -> list[str]:
     """Drop WireGuard trust after authoritative Mesh membership removal."""
     if not (state_dir / "local.json").exists():
@@ -544,6 +553,54 @@ def set_backend(state_dir: Path, preference: str) -> dict:
     data["backend"] = preference
     _atomic_json(state_dir / "local.json", data)
     return {"backend": preference, "restart_required": True}
+
+
+def restore_peer_routes(state_dir: Path) -> bool:
+    """Recreate peer /32 routes after a transient Linux interface flap."""
+    local = _load(state_dir / "local.json")
+    interface = local["interface"]
+    observed = subprocess.run(
+        ["wg", "show", interface, "public-key"],
+        capture_output=True,
+        text=True,
+    )
+    if observed.returncode or observed.stdout.strip() != local["wireguard_public_key"]:
+        return False
+    link = subprocess.run(
+        ["ip", "link", "show", "dev", interface],
+        capture_output=True,
+        text=True,
+    )
+    if link.returncode or "UP" not in link.stdout.split("\n", 1)[0]:
+        return False
+    for peer in _peers(state_dir):
+        _run("ip", "route", "replace", f"{_address(peer['overlay_ip'])}/32", "dev", interface)
+    return True
+
+
+async def watch_peer_routes(state_dir: Path) -> None:
+    """Consume netlink link notifications; no periodic polling or busy loop."""
+    local = _load(state_dir / "local.json")
+    await asyncio.to_thread(restore_peer_routes, state_dir)
+    process = await asyncio.create_subprocess_exec(
+        "ip",
+        "monitor",
+        "link",
+        "dev",
+        local["interface"],
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        while line := await process.stdout.readline():
+            text = line.decode("utf-8", "replace")
+            if "UP" in text and local["interface"] in text:
+                await asyncio.to_thread(restore_peer_routes, state_dir)
+        raise VPNError("WireGuard link event watcher stopped unexpectedly")
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            await process.wait()
 
 
 def install_units(
@@ -594,9 +651,32 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 [Install]
 WantedBy=multi-user.target
 """
+    routes_unit = f"""[Unit]
+Description=Terminal MCP WireGuard route recovery
+Requires=terminal-mcp-mesh-vpn.service
+PartOf=terminal-mcp-mesh-vpn.service
+After=terminal-mcp-mesh-vpn.service
+
+[Service]
+Type=simple
+ExecStart={executable} mesh-vpn watch --state-dir {state_dir}
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_NETLINK AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+"""
     files = {
         "terminal-mcp-mesh-vpn.service": interface_unit,
         "terminal-mcp-mesh-vpn-proxy.service": proxy_unit,
+        "terminal-mcp-mesh-vpn-routes.service": routes_unit,
     }
     for name, content in files.items():
         path = unit_dir / name
@@ -660,6 +740,9 @@ def cli(args: argparse.Namespace) -> dict | None:
         if not config or args.peer not in config.peers_by_id:
             raise VPNError("switch requires an already trusted Fleet peer")
         return switch(directory, Path(args.transports_path), peer_id=args.peer, mode=args.mode)
+    if args.action == "watch":
+        asyncio.run(watch_peer_routes(directory))
+        return None
     if args.action == "serve":
         local = _load(directory / "local.json")
         asyncio.run(
@@ -684,6 +767,7 @@ def add_cli(parser: argparse.ArgumentParser) -> None:
         "status",
         "switch",
         "serve",
+        "watch",
         "backend",
         "install-service",
     ):

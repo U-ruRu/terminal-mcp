@@ -294,10 +294,13 @@ def test_service_install_generates_opt_in_units_without_activation(tmp_path):
     )
     units = tmp_path / "systemd"
     names = install_units(root, units, "/usr/local/bin/terminal-mcp")
-    assert len(names) == 2
+    assert len(names) == 3
     proxy = (units / "terminal-mcp-mesh-vpn-proxy.service").read_text()
     assert "NoNewPrivileges=yes" in proxy
     assert "terminal-mcp-mesh-vpn.service" in proxy
+    route_recovery = (units / "terminal-mcp-mesh-vpn-routes.service").read_text()
+    assert "mesh-vpn watch" in route_recovery
+    assert "CAP_NET_ADMIN" in route_recovery
     assert install_units(root, units, "/usr/local/bin/terminal-mcp") == names
     with pytest.raises(VPNError, match="different content"):
         install_units(root, units, "/another/path")
@@ -473,3 +476,52 @@ def test_mobile_operator_api_enforces_managed_peer_and_pinned_key(tmp_path, monk
         assert controller.reconciles == 1
         assert browser.post(base + "/revoke", json={"peer_id": "firstbyte"}).json()["ok"]
         assert controller.reconciles == 2
+
+
+def test_wireguard_cutover_requires_eight_consecutive_private_health_passes(tmp_path, monkeypatch):
+    """A sporadically passing tunnel cannot be promoted into the live Mesh route."""
+    root = tmp_path / "mesh"
+    (root / "peers").mkdir(parents=True)
+    (root / "local.json").write_text(
+        json.dumps(local("bacloud", "10.244.12.2", "88.119.171.230:53148"))
+    )
+    (root / "peers" / "firstbyte.json").write_text(
+        json.dumps(
+            create_offer(
+                local("firstbyte", "10.244.12.1", "185.244.172.75:42063"),
+                signer()[0],
+                now=1000,
+            )["payload"]
+        )
+    )
+    marker = fingerprint(PUBLIC)[:12]
+    monkeypatch.setattr(
+        "terminal_mcp.mesh_vpn.status", lambda _: {"running": True, "handshakes": {marker: 100}}
+    )
+    attempted = []
+
+    def success(*args, **kwargs):
+        attempted.append((args, kwargs))
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr("terminal_mcp.mesh_vpn.httpx.get", success)
+    selected = tmp_path / "routes.json"
+    assert (
+        switch(root, selected, peer_id="firstbyte", mode="wireguard", now=101)["transport"]
+        == "wireguard"
+    )
+    assert len(attempted) == 8
+    assert all(item[1]["trust_env"] is False for item in attempted)
+
+    selected.unlink()
+    attempted.clear()
+
+    def sporadic(*args, **kwargs):
+        attempted.append((args, kwargs))
+        return SimpleNamespace(status_code=503 if len(attempted) == 4 else 200)
+
+    monkeypatch.setattr("terminal_mcp.mesh_vpn.httpx.get", sporadic)
+    with pytest.raises(VPNError, match="health probe failed"):
+        switch(root, selected, peer_id="firstbyte", mode="wireguard", now=101)
+    assert len(attempted) == 4
+    assert not selected.exists()

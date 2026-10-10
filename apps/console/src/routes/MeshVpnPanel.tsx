@@ -26,6 +26,7 @@ export function MeshVpnPanel({ instanceId, nodeId, peers, client, expectedTopolo
   const [backend, setBackend] = useState<'auto' | 'kernel' | 'userspace'>('auto')
   const [overlayIp, setOverlayIp] = useState('')
   const [endpoint, setEndpoint] = useState('')
+  const [listenPort, setListenPort] = useState(53148)
   const [peerId, setPeerId] = useState('')
 
   const refresh = useCallback(async () => {
@@ -114,8 +115,17 @@ export function MeshVpnPanel({ instanceId, nodeId, peers, client, expectedTopolo
                   placeholder="10.244.12.1" autoComplete="off" />
               </label>
               <label className="ui-field">{t('vpn.endpoint')}
-                <input type="text" value={endpoint} onChange={(e) => setEndpoint(e.target.value)}
+                <input type="text" value={endpoint} onChange={(e) => {
+                  const value = e.target.value
+                  setEndpoint(value)
+                  const port = Number(value.split(':').at(-1))
+                  if (Number.isInteger(port) && port > 0 && port <= 65535) setListenPort(port)
+                }}
                   placeholder="203.0.113.10:53148" autoComplete="off" />
+              </label>
+              <label className="ui-field">{t('vpn.listenPort')}
+                <input type="number" min={1} max={65535} value={listenPort}
+                  onChange={(e) => setListenPort(Number(e.target.value))} />
               </label>
               <label className="ui-field">{t('vpn.backend')}
                 <select value={backend} onChange={(e) => setBackend(e.target.value as typeof backend)}>
@@ -124,8 +134,10 @@ export function MeshVpnPanel({ instanceId, nodeId, peers, client, expectedTopolo
                   <option value="userspace">userspace</option>
                 </select>
               </label>
-              <button type="button" className="chip" disabled={busy || !overlayIp || !endpoint}
-                onClick={() => void perform('prepare', { backend, overlay_ip: overlayIp, endpoint })}>
+              <button type="button" className="chip" disabled={busy || !overlayIp || !endpoint || listenPort < 1 || listenPort > 65535}
+                onClick={() => void perform('prepare', {
+                  backend, overlay_ip: overlayIp, endpoint, listen_port: listenPort,
+                })}>
                 {t('vpn.prepare')}
               </button>
             </div>
