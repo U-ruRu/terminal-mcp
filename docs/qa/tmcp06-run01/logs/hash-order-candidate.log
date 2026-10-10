@@ -1,0 +1,40 @@
+........................................................................ [ 26%]
+.............................................................F.......... [ 53%]
+........................................................................ [ 80%]
+...................................................                      [100%]
+=================================== FAILURES ===================================
+_________ test_all_seven_legacy_discovery_contracts_preserve_baseline __________
+
+    @pytest.mark.asyncio
+    async def test_all_seven_legacy_discovery_contracts_preserve_baseline():
+        """Intentional future public contract changes must update this reviewed baseline."""
+        import hashlib
+        import json
+
+        from terminal_mcp.mcp.server import build_mcp
+
+        class Service:
+            persistent = None
+
+        expected = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "legacy_mcp_projection_contract_hashes.json"
+            ).read_text()
+        )
+        actual = {}
+        for tool in await build_mcp(Service()).list_tools():
+            data = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+            serialized = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            actual[tool.name] = hashlib.sha256(serialized.encode()).hexdigest()
+>       assert actual == expected
+E       AssertionError: assert {'cmd': 'd34b...7cfc9e5', ...} == {'cmd': 'd34b...7cfc9e5', ...}
+E
+E         Omitting 6 identical items, use -vv to show
+E         Differing items:
+E         {'session': '022f41fa92151f1d0a717515e0418a709592789c15b66834218deaad9ee4a15b'} != {'session': 'a976ffe5a7f5b2ef9868c2bf146b0cccb8dd5cf7f11e3cc13d8d194b8d3d4801'}
+E         Use -v to get more diff
+
+tests/test_task_projection_core.py:296: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_task_projection_core.py::test_all_seven_legacy_discovery_contracts_preserve_baseline
+1 failed, 266 passed in 24.69s
