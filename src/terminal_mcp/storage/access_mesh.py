@@ -306,9 +306,10 @@ class AccessMeshStore(LocalAccessMesh):
             # A local native start without the extra metadata still records its
             # immutable event timestamp to preserve its existing contract.
             if previous and (start_data is not None or event.issuer_id == self.local_node_id):
-                active_from = (
-                    (start_data or {}).get("active_from") or event.effective_at or self.clock()
-                )
+                # For the local native lifecycle retain the original behavior:
+                # a new activation uses the actual write clock, even when the
+                # SessionStarted event resumes an older window anchor.
+                active_from = (start_data or {}).get("active_from") or self.clock()
                 started_at = event.effective_at or active_from
                 expires = event.deadline_at or (
                     started_at + timedelta(seconds=slot.policy.duration_seconds)

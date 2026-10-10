@@ -95,3 +95,23 @@ async def test_replica_sessionstarted_event_does_not_invent_manual_activation(tm
         await second_rep.tick()
         assert first_rep.peer_health["bacloud"]["status"] == "healthy"
         assert second_rep.peer_health["firstbyte"]["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_local_start_without_explicit_number_metadata_keeps_live_activation(tmp_path):
+    """Legacy-compatible local starts still use the current clock, not old anchor."""
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        first, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
+        live_activation = T0 + timedelta(minutes=10, seconds=1)
+        first.clock = lambda: live_activation
+        first.store.clock = first.clock
+        issued = await first.issue(actor(), code="0494", policy=SlotPolicy(1200))
+        await first.change(
+            actor(), slot_id=issued["slot_id"], kind="SessionStarted",
+            expected_revision=1, effective_at=T0,
+            deadline_at=T0 + timedelta(minutes=20),
+        )
+        row = first.store.numbers.start_snapshot()[0]
+        assert row["active_from"] == first.store.numbers.stamp(live_activation)
+        assert row["started_at"] == first.store.numbers.stamp(T0)
