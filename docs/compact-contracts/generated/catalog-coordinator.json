@@ -1,0 +1,1855 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Attach this connector once using session_number. Session number is mandatory; action is attach-only. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.\nArguments: action?:string (default=\"attach\"; SCHEMA_FALLBACK {\"const\":\"attach\",\"title\":\"Action\"}); session_number:string (pattern=\"^[0-9]{4}$\"; SCHEMA_FALLBACK {\"description\":\"Four-digit session number, including leading zeros.\",\"title\":\"Session Number\"}). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle.\nReturns: MeshAttachReceipt{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "attach",
+            "default": "attach",
+            "type": "string"
+          },
+          "session_number": {
+            "pattern": "^[0-9]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_number"
+        ],
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "attach": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "session",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one canonical task as snapshot, detail, or history. Available without an active work cycle or Access Code.\nArguments: required [namespace, task_id]; optional [detail, history_kind, limit, cursor]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: detail chooses snapshot, detail or history; history_kind and cursor apply to history.\nReturns: inline:ONE_OF(TaskGetSnapshotSuccess,TaskGetDetailSuccess,TaskGetHistorySuccess) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "detail": {
+            "default": "snapshot",
+            "enum": [
+              "snapshot",
+              "detail",
+              "history"
+            ],
+            "type": "string"
+          },
+          "history_kind": {
+            "default": "events",
+            "enum": [
+              "comments",
+              "events",
+              "reviews",
+              "output_states"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "namespace": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "task_id"
+        ],
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_get",
+      "outputSchema": {
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "task": {
+            "type": "object"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a bounded page of canonical TaskListItem records. Available without an active work cycle or Access Code.\nArguments: required [(none)]; optional [namespace, lane, state, tags, limit, cursor]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nRuntime rules: read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination.\nReturns: TaskListSuccess{ok:true,tasks:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "enum": [
+                  "implementation",
+                  "review",
+                  "release",
+                  "integration",
+                  "general"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ready",
+                  "in_progress",
+                  "qa",
+                  "blocked",
+                  "deferred",
+                  "done"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_list",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tasks": {
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. checkpoint needs checkpoint; state needs state; comment needs comment_text; review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; archive needs archive_note. Attach this connector once; writes use its local work cycle.\nArguments: required [action, namespace]; optional [task_id, expected_revision, isolation_hint, request_id, title, lane, priority, state, description, next_action, resource_context, cooperative, checkpoint, candidate_ref, input_refs, output_refs, result, tags, dependencies, blocker_reason, relation_kind, related_namespace, related_task_id, archive_note, note, dimensions, verdict, evidence, comment_text, force, force_reason]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nConditions: ALL_OF(IF action==\"create\" => requires(isolation_hint) | IF action in [\"update\",\"checkpoint\",\"archive\",\"review\",\"relate\",\"unrelate\",\"state\",\"comment\"] => requires(task_id) | IF action==\"checkpoint\" => requires(checkpoint) | IF action in [\"relate\",\"unrelate\"] => requires(relation_kind,related_task_id) | IF action==\"state\" => requires(state) | IF action==\"review\" => requires(dimensions,verdict) | IF action==\"comment\" => requires(comment_text) | IF action==\"archive\" => require_at_least_one(archive_note,note)).\nRuntime rules: create requires isolation_hint; non-create mutation actions require task_id; archive needs archive_note or note; action-dependent requirements come from TaskManageInput; canonical TaskRequest action variants enforce operation-specific fields and runtime transitions after boundary validation; their exact variants are the source for offline cross-check; request_id is a create operation identity: only reuse on transport retry of the same create; creating state=done requires a non-null result; when archiving, archive_note or note must be non-null; canonical mutation state checks remain authoritative.\nReturns: inline:ONE_OF(TaskMutationResult,TaskClaimMutationResult) | TaskCreateCompact{ok:true,task_id:string} | TaskUpdateCompact{ok:true,revision:integer} | TaskAppendCompact{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "$defs": {
+          "TaskDependency": {
+            "additionalProperties": false,
+            "properties": {
+              "namespace": {
+                "anyOf": [
+                  {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "task_id": {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "task_id"
+            ],
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "isolation_hint"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "update",
+                    "checkpoint",
+                    "archive",
+                    "review",
+                    "relate",
+                    "unrelate",
+                    "state",
+                    "comment"
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "task_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "checkpoint"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "checkpoint"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "relate",
+                    "unrelate"
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "relation_kind",
+                "related_task_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "state"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "state"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "review"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "dimensions",
+                "verdict"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "comment"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "comment_text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "archive"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "archive_note"
+                  ]
+                },
+                {
+                  "required": [
+                    "note"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "checkpoint",
+              "archive",
+              "review",
+              "relate",
+              "unrelate",
+              "state",
+              "comment"
+            ],
+            "type": "string"
+          },
+          "archive_note": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "blocker_reason": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "candidate_ref": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "checkpoint": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array"
+                  }
+                ],
+                "x-maxSerializedBytes": 16384
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "comment_text": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cooperative": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "dependencies": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/TaskDependency"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "A",
+                    "C",
+                    "R"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "uniqueItems": true
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "object",
+                "x-maxSerializedBytes": 16384
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "maximum": 9223372036854775807,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "force": {
+            "default": false,
+            "type": "boolean"
+          },
+          "force_reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "input_refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "isolation_hint": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "enum": [
+                  "implementation",
+                  "review",
+                  "release",
+                  "integration",
+                  "general"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "namespace": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "output_refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "enum": [
+                  "P0",
+                  "P1",
+                  "P2",
+                  "P3"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "related_namespace": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "related_task_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "relation_kind": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "resource_context": {
+            "anyOf": [
+              {
+                "type": "object",
+                "x-maxSerializedBytes": 8192
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "result": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array"
+                  }
+                ],
+                "x-maxSerializedBytes": 32768
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ready",
+                  "in_progress",
+                  "qa",
+                  "blocked",
+                  "deferred",
+                  "done"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "NON_BLOCKING",
+                  "BLOCKING"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "action",
+          "namespace"
+        ],
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "archive": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "checkpoint": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "comment": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "create": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "done": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "relate": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "review": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "state": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "unrelate": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "update": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "task_manage",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "task": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a bounded dependency/relation graph rooted at one task. Available without an active work cycle or Access Code.\nArguments: required [namespace, task_id]; optional [direction, kinds, limit, cursor]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nReturns: TaskGraphSuccess{ok:true,nodes:array,edges:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "direction": {
+            "default": "both",
+            "enum": [
+              "both",
+              "incoming",
+              "outgoing"
+            ],
+            "type": "string"
+          },
+          "kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "namespace": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "task_id"
+        ],
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_graph",
+      "outputSchema": {
+        "properties": {
+          "edges": {
+            "type": "array"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "nodes": {
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read compact current LogicalAgent, WorkWindow, and WorkSession state. Available without an active work cycle or Access Code.\nArguments: (none). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nReturns: MeshAgentObserve{ok:true,agents:array} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "agent_observe",
+      "outputSchema": {
+        "properties": {
+          "agents": {
+            "type": "array"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.\nArguments: required [action]; optional [text, target, message_hash, mode, require_reply, alert, limit, cursor, detail, namespace, task_id, scope]. InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nConditions: ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text)).\nRuntime rules: send requires text and forbids message_hash; ack requires message_hash and forbids text; reply requires both; read/history/recipients forbid text and message_hash; recipient resolution and current session are runtime checks; message scope is local or fleet; local is default for mesh roles.\nReturns: inline:ONE_OF(MessageListResult,MessageSendResult,MessageAcknowledgeResult,MessageReplyResult,MessageRecipientsResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "send"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "ack"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "message_hash"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reply"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "message_hash",
+                "text"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "send",
+              "read",
+              "ack",
+              "reply",
+              "history",
+              "recipients"
+            ],
+            "type": "string"
+          },
+          "alert": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "detail": {
+            "default": "summary",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "message_hash": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "notify",
+                  "ack",
+                  "alert"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "require_reply": {
+            "default": false,
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "local",
+            "enum": [
+              "local",
+              "fleet"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "ack": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "history": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "recipients": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "reply": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "send": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "message",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "recipients": {
+            "type": "array"
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "sender": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "unavailable_peers": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.\nArguments: extended?:boolean (default=false; SCHEMA_FALLBACK {\"title\":\"Extended\"}). InputSchema carries exact types, bounds, defaults, alternatives and tool-local $defs.\nReturns: ExtendedHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow,auth_mode?:union,identity:HealthIdentityDiagnostic} | CompactHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "extended": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "health",
+      "outputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "application": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "auth_mode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "components": {
+            "type": "array"
+          },
+          "error": {
+            "type": "object"
+          },
+          "healthy": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "storage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "terminal": {
+            "type": "object"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "version": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workflow": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

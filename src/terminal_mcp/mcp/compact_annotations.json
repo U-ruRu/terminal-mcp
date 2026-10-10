@@ -1,0 +1,104 @@
+{
+  "access.session": [
+    {
+      "text": "start issues a four-digit session_number; end ends the shared access cycle",
+      "source": "src/terminal_mcp/mcp/access.py",
+      "anchor": "issuer_session("
+    }
+  ],
+  "executor.session": [
+    {
+      "text": "attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle",
+      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "anchor": "class AttachInput"
+    }
+  ],
+  "coordinator.session": [
+    {
+      "text": "attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle",
+      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "anchor": "class AttachInput"
+    }
+  ],
+  "executor.task_list": [
+    {
+      "text": "read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination",
+      "source": "src/terminal_mcp/mcp/roles.py",
+      "anchor": "async def _task_list("
+    }
+  ],
+  "coordinator.task_list": [
+    {
+      "text": "read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination",
+      "source": "src/terminal_mcp/mcp/roles.py",
+      "anchor": "async def _task_list("
+    }
+  ],
+  "*.message": [
+    {
+      "text": "send requires text and forbids message_hash; ack requires message_hash and forbids text; reply requires both",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
+      "anchor": "def validate_mode(self):"
+    },
+    {
+      "text": "read/history/recipients forbid text and message_hash; recipient resolution and current session are runtime checks",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
+      "anchor": "elif self.action in {\"read\", \"history\", \"recipients\"}:"
+    },
+    {
+      "text": "message scope is local or fleet; local is default for mesh roles",
+      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "anchor": "scope: Literal[\"local\", \"fleet\"] = \"local\""
+    }
+  ],
+  "executor.task_comment": [
+    {
+      "text": "comment requires comment_text; checkpoint requires checkpoint payload; action selects the canonical request model",
+      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "anchor": "def to_request(self):"
+    }
+  ],
+  "executor.task_claim": [
+    {
+      "text": "claim requires claim_intent; release_reason may be required when an existing live claim is released, determined from current state",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
+      "anchor": "class TaskClaimInput"
+    }
+  ],
+  "coordinator.task_manage": [
+    {
+      "text": "create requires isolation_hint; non-create mutation actions require task_id; archive needs archive_note or note; action-dependent requirements come from TaskManageInput",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
+      "anchor": "class TaskManageInput"
+    },
+    {
+      "text": "canonical TaskRequest action variants enforce operation-specific fields and runtime transitions after boundary validation; their exact variants are the source for offline cross-check",
+      "source": "src/terminal_mcp/application/task_requests.py",
+      "anchor": "TaskRequest ="
+    },
+    {
+      "text": "request_id is a create operation identity: only reuse on transport retry of the same create",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
+      "anchor": "Create operation identity. Reuse only on transport retries"
+    },
+    {
+      "text": "creating state=done requires a non-null result; when archiving, archive_note or note must be non-null; canonical mutation state checks remain authoritative",
+      "source": "src/terminal_mcp/application/task_requests.py",
+      "anchor": "class TaskCreateRequest"
+    }
+  ],
+  "executor.command_run": [
+    {
+      "text": "a command run executes a shell command in the current managed work session; no implicit idempotency guarantee",
+      "source": "src/terminal_mcp/mcp/roles.py",
+      "anchor": "name=\"command_run\""
+    }
+  ],
+  "coordinator.task_get": [
+    {
+      "text": "detail chooses snapshot, detail or history; history_kind and cursor apply to history",
+      "source": "src/terminal_mcp/mcp/role_contracts.py",
+      "anchor": "class TaskGetInput"
+    }
+  ]
+}
