@@ -45,6 +45,7 @@ class ObservationApplication(ApplicationCapability):
         limit: Annotated[int, Field(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
         cursor: str | None = None,
         _defer_full_task_budget: bool = False,
+        _all_task_events: bool = False,
     ) -> dict:
         if actor.endpoint_role == "executor":
             if subject != "tasks" or task_id is not None or detail != "summary":
@@ -148,6 +149,14 @@ class ObservationApplication(ApplicationCapability):
             show_archived=show_archived,
             limit=limit,
             cursor=str(offset),
+            **(
+                {"include_all_events": True}
+                if _all_task_events
+                and actor.endpoint_role == "coordinator"
+                and detail == "full"
+                and task_id is not None
+                else {}
+            ),
         )
         if not result.get("ok"):
             if result.get("error") == "task not found":

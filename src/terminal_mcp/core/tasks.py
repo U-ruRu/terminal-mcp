@@ -462,7 +462,9 @@ class TaskCoordinator:
         result.pop("resource_context", None)
         return result
 
-    async def _decorate(self, task, *, details=False, reveal_agent_ids=False):
+    async def _decorate(
+        self, task, *, details=False, reveal_agent_ids=False, include_all_events=False
+    ):
         result = self._external_task(task)
         namespace, task_id = result["namespace"], result["task_id"]
         claims = await self._live_claims(namespace, task_id)
@@ -495,7 +497,21 @@ class TaskCoordinator:
                 review.pop("candidate_ref", None)
             result["reviews"] = reviews
             result["output_states"] = await self.store.output_states(namespace, task_id)
-            events = await self.store.list_events(namespace, task_id, limit=100)
+            if include_all_events:
+                # Task history's public paging layer needs the complete selected
+                # stream: a fixed 100-event preview silently loses older pages.
+                events = []
+                before_id = None
+                while True:
+                    batch = await self.store.list_events(
+                        namespace, task_id, limit=1000, before_id=before_id
+                    )
+                    events.extend(batch)
+                    if len(batch) < 1000:
+                        break
+                    before_id = batch[-1]["id"]
+            else:
+                events = await self.store.list_events(namespace, task_id, limit=100)
             comments = []
             for event in events:
                 if event.get("agent_id"):
@@ -678,6 +694,7 @@ class TaskCoordinator:
         limit=50,
         cursor=None,
         reveal_agent_ids=False,
+        include_all_events=False,
     ):
         if lane is not None and lane not in LANES:
             return {"ok": False, "error": f"tasks.lane: expected one of {', '.join(LANES)}"}
@@ -704,7 +721,10 @@ class TaskCoordinator:
                     await self._snapshot(task, reveal_agent_ids=reveal_agent_ids)
                     if task and snapshot
                     else await self._decorate(
-                        task, details=show_details, reveal_agent_ids=reveal_agent_ids
+                        task,
+                        details=show_details,
+                        reveal_agent_ids=reveal_agent_ids,
+                        include_all_events=include_all_events,
                     )
                     if task
                     else None
