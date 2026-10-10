@@ -198,7 +198,7 @@ async def test_cancellation_safe_connection_rejects_http_overwrite_before_open(t
 
     with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
         async with cancellation_safe_connection(aiosqlite.connect, path):
-            pytest.fail("malformed main file must be rejected before SQLite opens it")
+            pytest.fail("malformed main file must be rejected through SQLite")
 
 
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_cancellation_safe_connection_rejects_wal_at_main_path(tmp_path):
     path = tmp_path / "runtime.sqlite3"
     path.write_bytes(bytes.fromhex("377f0682") + b"\x00" * 64)
 
-    with pytest.raises(SqliteMainFileError, match="sqlite_main_is_wal"):
+    with pytest.raises(SqliteMainFileError, match="sqlite_main_invalid_header"):
         async with cancellation_safe_connection(aiosqlite.connect, path):
             pytest.fail("WAL data must not be accepted as a SQLite main database")
 

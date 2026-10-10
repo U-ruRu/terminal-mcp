@@ -52,7 +52,7 @@ async def test_fleet_control_incident_shape_is_a_32_byte_main_header_overwrite(t
     original_header = overwrite_main_header_with_wal_prefix(path)
 
     corrupted = path.read_bytes()
-    with pytest.raises(FleetControlError, match="fleet_control_main_is_wal"):
+    with pytest.raises(FleetControlError, match="fleet_control_invalid_header"):
         await store.schema_version()
     assert await store.healthy() is False
     assert path.read_bytes() == corrupted
@@ -89,7 +89,7 @@ async def test_runtime_health_detects_corrupted_fleet_control_main_file(tmp_path
         health = await service.health("none")
         assert health["storage"] == "error"
         assert health["ok"] is False
-        with pytest.raises(FleetControlError, match="fleet_control_main_is_wal"):
+        with pytest.raises(FleetControlError, match="fleet_control_invalid_header"):
             await control.schema_version()
     finally:
         await terminal.stop()

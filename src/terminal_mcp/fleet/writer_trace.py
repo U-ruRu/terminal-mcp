@@ -17,7 +17,9 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from terminal_mcp.fleet.control_storage import SQLITE_MAIN_HEADER, SQLITE_WAL_MAGICS
+# Header inspection is only permitted on sandbox copies, never live databases.
+SQLITE_MAIN_HEADER = b"SQLite format 3\x00"
+SQLITE_WAL_MAGICS = {bytes.fromhex("377f0682"), bytes.fromhex("377f0683")}
 
 FAN_CLOEXEC = 0x00000001
 FAN_NONBLOCK = 0x00000002

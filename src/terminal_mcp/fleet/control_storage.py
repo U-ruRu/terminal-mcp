@@ -15,6 +15,7 @@ from terminal_mcp.fleet.protocol import validate_capabilities, validate_protocol
 from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import (
     SqliteDiagnostics,
+    SqliteMainFileError,
     cancellation_safe_connection,
     observed_connection,
 )
@@ -22,10 +23,6 @@ from terminal_mcp.storage.sqlite_observability import (
 
 class FleetControlError(RuntimeError):
     pass
-
-
-SQLITE_MAIN_HEADER = b"SQLite format 3\x00"
-SQLITE_WAL_MAGICS = {bytes.fromhex("377f0682"), bytes.fromhex("377f0683")}
 
 
 class FleetControlStore:
@@ -54,21 +51,8 @@ class FleetControlStore:
         path = Path(self.path)
         return path.exists() and path.stat().st_size > 0
 
-    def _validate_main_file_header(self) -> None:
-        path = Path(self.path)
-        if not self._main_file_ready():
-            return
-        with path.open("rb") as handle:
-            header = handle.read(len(SQLITE_MAIN_HEADER))
-        if header == SQLITE_MAIN_HEADER:
-            return
-        if header[:4] in SQLITE_WAL_MAGICS:
-            raise FleetControlError("fleet_control_main_is_wal")
-        raise FleetControlError("fleet_control_invalid_header")
-
     async def healthy(self) -> bool:
         try:
-            self._validate_main_file_header()
             if not self._main_file_ready():
                 return False
             uri = f"file:{Path(self.path)}?mode=ro"
@@ -80,22 +64,24 @@ class FleetControlStore:
 
     @asynccontextmanager
     async def _connect(self, operation: str):
-        self._validate_main_file_header()
         secure_database_path(self.path)
-        async with observed_connection(
-            aiosqlite.connect,
-            self.path,
-            busy_timeout=1.0,
-            diagnostics=self.sqlite_diagnostics,
-            operation=operation,
-            pragmas=(
-                "PRAGMA journal_mode=WAL",
-                "PRAGMA synchronous=FULL",
-                "PRAGMA busy_timeout=1000",
-                "PRAGMA foreign_keys=ON",
-            ),
-        ) as db:
-            yield db
+        try:
+            async with observed_connection(
+                aiosqlite.connect,
+                self.path,
+                busy_timeout=1.0,
+                diagnostics=self.sqlite_diagnostics,
+                operation=operation,
+                pragmas=(
+                    "PRAGMA journal_mode=WAL",
+                    "PRAGMA synchronous=FULL",
+                    "PRAGMA busy_timeout=1000",
+                    "PRAGMA foreign_keys=ON",
+                ),
+            ) as db:
+                yield db
+        except SqliteMainFileError as exc:
+            raise FleetControlError("fleet_control_invalid_header") from exc
 
     async def initialize(self) -> None:
         stamp = utc_text()
@@ -306,9 +292,7 @@ class FleetControlStore:
                             "WHERE state!='detached' AND mesh_id IS NULL",
                             (legacy_mesh[0],),
                         )
-                    await db.execute(
-                        "UPDATE managed_nodes SET mesh_id=NULL WHERE state='detached'"
-                    )
+                    await db.execute("UPDATE managed_nodes SET mesh_id=NULL WHERE state='detached'")
 
                 if existing_version is None:
                     await db.execute(
@@ -352,9 +336,7 @@ class FleetControlStore:
                 else:
                     # The persisted control authority is runtime state. The env value is
                     # only a bootstrap default and must not overwrite an explicit rehome.
-                    self.control_node_id = validate_protocol_id(
-                        str(meta[2]), "control_node_id"
-                    )
+                    self.control_node_id = validate_protocol_id(str(meta[2]), "control_node_id")
                 await db.execute(
                     "INSERT INTO fleet_members(node_id,capabilities_json,state,updated_at) "
                     "VALUES(?, '[]','active',?) "
@@ -756,8 +738,7 @@ class FleetControlStore:
                         (public_key, trust, stamp, node_id),
                     )
                     await db.execute(
-                        "UPDATE managed_nodes SET desired_trust_revision=? "
-                        "WHERE state!='detached'",
+                        "UPDATE managed_nodes SET desired_trust_revision=? WHERE state!='detached'",
                         (trust,),
                     )
                 await db.commit()
@@ -864,9 +845,12 @@ class FleetControlStore:
                         (display_name, stamp, mesh_id),
                     )
 
-                first_adoption = await (
-                    await db.execute("SELECT 1 FROM access_policy WHERE singleton=1")
-                ).fetchone() is None
+                first_adoption = (
+                    await (
+                        await db.execute("SELECT 1 FROM access_policy WHERE singleton=1")
+                    ).fetchone()
+                    is None
+                )
                 if first_adoption:
                     trust = await self._bump_revision(db, "trust", stamp)
                     policy_revision = await self._bump_revision(db, "policy", stamp)
@@ -933,8 +917,7 @@ class FleetControlStore:
                         (mesh_id, topology, stamp, self.node_id),
                     )
                 await db.execute(
-                    "UPDATE managed_nodes SET desired_topology_revision=? "
-                    "WHERE state!='detached'",
+                    "UPDATE managed_nodes SET desired_topology_revision=? WHERE state!='detached'",
                     (topology,),
                 )
                 await db.commit()
@@ -1081,8 +1064,10 @@ class FleetControlStore:
                 ).fetchone()
                 if existing is not None and existing[3] and existing[3] != mesh_id:
                     raise FleetControlError("node_already_in_other_mesh")
-                if existing is None and node_id != self.node_id and not all(
-                    (origin, public_key, auth_token)
+                if (
+                    existing is None
+                    and node_id != self.node_id
+                    and not all((origin, public_key, auth_token))
                 ):
                     raise ValueError("managed peer requires origin, public_key and auth_token")
                 topology_changed = (
@@ -1138,8 +1123,7 @@ class FleetControlStore:
                     if topology_changed and not trust_changed:
                         trust = await self._bump_revision(db, "trust", stamp)
                     await db.execute(
-                        "UPDATE managed_nodes SET desired_trust_revision=? "
-                        "WHERE state!='detached'",
+                        "UPDATE managed_nodes SET desired_trust_revision=? WHERE state!='detached'",
                         (trust,),
                     )
                 await db.commit()
@@ -1469,9 +1453,7 @@ class FleetControlStore:
         incoming_meshes = snapshot.get("meshes")
         if incoming_meshes is None:
             incoming_meshes = (
-                [legacy_mesh]
-                if legacy_mesh and bool(legacy_mesh.get("adopted"))
-                else []
+                [legacy_mesh] if legacy_mesh and bool(legacy_mesh.get("adopted")) else []
             )
         normalized_meshes: list[dict] = []
         for item in incoming_meshes:

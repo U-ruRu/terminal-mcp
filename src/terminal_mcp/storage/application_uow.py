@@ -30,7 +30,7 @@ from terminal_mcp.application.ports import (
 )
 from terminal_mcp.core.persistent_agents import WorkSessionRecord
 from terminal_mcp.storage.context import ContextStore
-from terminal_mcp.storage.sqlite_observability import validate_sqlite_main_file
+from terminal_mcp.storage.sqlite_observability import validate_sqlite_main_connection
 
 _active_transaction: ContextVar[bool] = ContextVar("application_transaction_active", default=False)
 
@@ -55,10 +55,11 @@ async def _finish_cleanup(operation: Awaitable[None]) -> None:
 
 async def _open_connection(path: Path, busy_timeout: float) -> aiosqlite.Connection:
     """Keep ownership of an in-flight open until it can be closed on cancellation."""
-    validate_sqlite_main_file(path)
     opening = asyncio.ensure_future(aiosqlite.connect(path, timeout=busy_timeout))
     try:
-        return await asyncio.shield(opening)
+        db = await asyncio.shield(opening)
+        await validate_sqlite_main_connection(db)
+        return db
     except BaseException:
 
         async def discard_opened_connection() -> None:

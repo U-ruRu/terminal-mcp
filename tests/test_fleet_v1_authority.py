@@ -1686,7 +1686,7 @@ async def test_fleet_control_rejects_wal_sidecar_bytes_at_main_path(tmp_path):
     )
 
     assert await store.healthy() is False
-    with pytest.raises(FleetControlError, match="fleet_control_main_is_wal"):
+    with pytest.raises(FleetControlError, match="fleet_control_invalid_header"):
         await store.initialize()
     assert path.read_bytes() == original
 
@@ -1702,7 +1702,6 @@ async def test_fleet_control_health_uses_read_only_quick_check(tmp_path):
     )
     await store.initialize()
     assert await store.healthy() is True
-
 
 
 @pytest.mark.asyncio
@@ -1823,26 +1822,19 @@ async def test_forwarded_detach_returns_committed_before_slow_replication(tmp_pa
     assert remote_node["state"] == "draining"
     assert remote_node["mesh_id"] is None
     authoritative = await home.snapshot()
-    authority_remote = next(
-        node for node in authoritative["nodes"] if node["node_id"] == "remote"
-    )
+    authority_remote = next(node for node in authoritative["nodes"] if node["node_id"] == "remote")
     assert authority_remote["state"] == "detached"
     assert (
         authority_remote["desired_topology_revision"]
         == authority_remote["applied_topology_revision"]
     )
-    assert (
-        authority_remote["desired_trust_revision"]
-        == authority_remote["applied_trust_revision"]
-    )
+    assert authority_remote["desired_trust_revision"] == authority_remote["applied_trust_revision"]
     assert authority_remote["last_error"] is None
     authority_token = (await home.enrollment_descriptor())["auth_token"]
     authorization = f"Bearer {authority_token}"
     assert await home.authenticate_management_peer("remote", authorization) is None
     assert (
-        await home.authenticate_management_peer(
-            "remote", authorization, allow_detached_peer=True
-        )
+        await home.authenticate_management_peer("remote", authorization, allow_detached_peer=True)
         == "remote"
     )
     await asyncio.wait_for(slow_apply_started.wait(), timeout=0.3)
