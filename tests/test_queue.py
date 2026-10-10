@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shlex
 import signal
 import time
 
@@ -146,21 +147,25 @@ async def test_recovery_nonzero_exit_is_command_failure_not_plugin_error(tmp_pat
 @pytest.mark.asyncio
 async def test_recovery_timeout_stops_process_and_does_not_block_fifo(tmp_path, monkeypatch):
     _, terminal, service = await create_runtime(tmp_path)
-    monkeypatch.setattr(service_module, "OPERATION_TIMEOUT_SECONDS", 0.05)
-    result = await service.recovery("sleep 1")
-    assert result["ok"] is False
-    assert result["error"].startswith("recovery.timeout:")
-    assert result["cmd_hash"] not in terminal.processes
+    # Exercise recovery's deadline without shortening unrelated read/run budgets.
+    monkeypatch.setattr(service_module, "RECOVERY_TIMEOUT_SECONDS", 0.05)
+    try:
+        result = await service.recovery("sleep 1")
+        assert result["ok"] is False
+        assert result["error"].startswith("recovery.timeout:")
+        assert result["cmd_hash"] not in terminal.processes
 
-    stored = await service.read(result["cmd_hash"])
-    assert stored["status"] == "cancelled"
-    assert stored["ok"] is True
-    assert stored["error"] == result["error"]
+        stored = await service.read(result["cmd_hash"])
+        assert stored["ok"] is True
+        assert stored["status"] == "cancelled"
+        assert stored["error"] == result["error"]
 
-    queued = await service.run("printf 'fifo-still-works\\n'", task_scope="none")
-    read = await wait_status(service, queued["cmd_hash"], "completed")
-    assert read["lines"][0].endswith("fifo-still-works")
-    await terminal.stop()
+        queued = await service.run("printf 'fifo-still-works\\n'", task_scope="none")
+        read = await wait_status(service, queued["cmd_hash"], "completed")
+        assert read["ok"] is True
+        assert read["lines"][0].endswith("fifo-still-works")
+    finally:
+        await terminal.stop()
 
 
 @pytest.mark.asyncio
@@ -362,26 +367,40 @@ async def test_worker_does_not_wedge_when_output_pipe_never_reaches_eof(tmp_path
 @pytest.mark.asyncio
 async def test_inherited_output_fd_after_root_exit_does_not_hold_fifo(tmp_path):
     _, terminal, service = await create_runtime(tmp_path)
-    first = await service.run(
-        (
-            'python3 -c "import os,time; p=os.fork(); '
-            'time.sleep(1) if p == 0 else None; os._exit(0)"'
-        ),
-        queue_id=1,
-        task_scope="none",
+    release = tmp_path / "release-inherited-fd"
+    child_ended = tmp_path / "inherited-fd-child-ended"
+    script = (
+        "import os,time\n"
+        "from pathlib import Path\n"
+        "if os.fork() == 0:\n"
+        f"    release = Path({str(release)!r})\n"
+        "    deadline = time.monotonic() + 10\n"
+        "    while not release.exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.02)\n"
+        f"    Path({str(child_ended)!r}).touch()\n"
+        "os._exit(0)\n"
     )
-    second = await service.run(
-        "printf 'after-inherited-fd\\n' > after-inherited-fd.txt",
-        queue_id=1,
-        task_scope="none",
-    )
-    completed = await asyncio.wait_for(
-        wait_status(service, second["cmd_hash"], "completed"), timeout=0.8
-    )
-    assert completed["status"] == "completed"
-    assert (await service.read(first["cmd_hash"]))["output_truncated"] is True
-    assert (tmp_path / "after-inherited-fd.txt").read_text() == "after-inherited-fd\n"
-    await terminal.stop()
+    try:
+        first = await service.run(
+            f"python3 -c {shlex.quote(script)}", queue_id=1, task_scope="none"
+        )
+        second = await service.run(
+            "printf 'after-inherited-fd\\n' > after-inherited-fd.txt",
+            queue_id=1,
+            task_scope="none",
+        )
+        completed = await asyncio.wait_for(
+            wait_status(service, second["cmd_hash"], "completed"), timeout=3
+        )
+        assert completed["ok"] is True
+        assert completed["status"] == "completed"
+        # The holder has not exited naturally: completion cannot be explained by its EOF.
+        assert not child_ended.exists()
+        assert (await service.read(first["cmd_hash"]))["output_truncated"] is True
+        assert (tmp_path / "after-inherited-fd.txt").read_text() == "after-inherited-fd\n"
+    finally:
+        release.touch()
+        await terminal.stop()
 
 
 @pytest.mark.asyncio
