@@ -2004,8 +2004,6 @@ class PersistentBackend:
                 "node_attachment_id": permit.node_attachment_id if permit is not None else None,
                 "error": None,
             }
-        except PersistentLifecycleError as exc:
-            return self._error(exc)
         except Exception as exc:
             if command is not None:
                 # The command was committed. Its hash is the recovery receipt;
@@ -2017,6 +2015,8 @@ class PersistentBackend:
                     "execution_started": bool(command.claimed_at or command.started_at),
                     "postcommit_warning": type(exc).__name__,
                 }
+            if isinstance(exc, PersistentLifecycleError):
+                return self._error(exc)
             return {"ok": False, "code": "run_failed", "error": str(exc)}
 
     async def recovery(
@@ -2105,6 +2105,7 @@ class PersistentBackend:
         session_epoch: int,
         access_code: str | None = None,
     ):
+        accepted_receipt = None
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
                 await self._execution_authority(
@@ -2139,11 +2140,7 @@ class PersistentBackend:
                         "ok": False, "code": "command_already_finished",
                         "error": f"command is already {command.status}",
                     }
-                if outcome == "running" or (
-                    outcome == "previously_accepted" and command.status == "running"
-                ):
-                    self.terminal.enqueue_cancel(command)
-                return {
+                accepted_receipt = {
                     "ok": True, "cmd_hash": cmd_hash,
                     "cancel_requested": True,
                     "cancelled_from": (
@@ -2152,8 +2149,19 @@ class PersistentBackend:
                     "execution_started": bool(command.claimed_at or command.started_at),
                     "error": None,
                 }
-        except PersistentLifecycleError as exc:
-            return self._error(exc)
+                if outcome == "running" or (
+                    outcome == "previously_accepted" and command.status == "running"
+                ):
+                    self.terminal.enqueue_cancel(command)
+                return accepted_receipt
+        except Exception as exc:
+            if accepted_receipt is not None:
+                # The durable intent is authoritative. The scheduler reconciler
+                # retries process cancellation even if this immediate wake-up fails.
+                return {**accepted_receipt, "postcommit_warning": type(exc).__name__}
+            if isinstance(exc, PersistentLifecycleError):
+                return self._error(exc)
+            raise
 
     async def task(
         self,

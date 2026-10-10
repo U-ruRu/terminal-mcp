@@ -175,13 +175,19 @@ class CommandApplication(ApplicationCapability):
                 }
                 if getattr(self.gate, "access_mesh", None) is not None:
                     scope["node_id"] = getattr(self.gate, "access_mesh", None).store.local_node_id
-                output = await self.service.read(
-                    cmd_hash=result["cmd_hash"],
-                    lines_count=DEFAULT_CMD_READ_LINES,
-                    offset=0,
-                    agent_id=None,
-                )
-                output = _finish_cmd_read_page(output, start=0, scope=scope)
+                try:
+                    output = await self.service.read(
+                        cmd_hash=result["cmd_hash"],
+                        lines_count=DEFAULT_CMD_READ_LINES,
+                        offset=0,
+                        agent_id=None,
+                    )
+                    output = _finish_cmd_read_page(output, start=0, scope=scope)
+                except Exception as exc:
+                    # Inline stdout is optional enrichment of a committed run.
+                    # Keep its receipt so command_read can recover the output later.
+                    output = {}
+                    result["postcommit_warning"] = type(exc).__name__
                 for key in (
                     "lines",
                     "overall_lines_count",
