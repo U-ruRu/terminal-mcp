@@ -35,9 +35,13 @@ def _pairing_url(
     preferred_name = display_name.strip() if display_name is not None else ""
     name = (preferred_name or target.hostname or target.netloc).strip()[:120]
     payload = {"v": 1, "server": target_origin, "name": name, "secret": secret}
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).decode("ascii").rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
     return f"{console_public_base_url.rstrip('/')}/connect#{encoded}"
 
 
@@ -82,6 +86,10 @@ def _parser() -> argparse.ArgumentParser:
         metavar="DISPLAY_NAME",
         help="suggested server display name embedded in the pairing link",
     )
+    vpn = subcommands.add_parser("mesh-vpn", help="register and manage WireGuard Mesh transport")
+    from terminal_mcp.mesh_vpn import add_cli
+
+    add_cli(vpn)
     devices = subcommands.add_parser("devices", help="manage paired Console devices")
     device_commands = devices.add_subparsers(dest="device_command", required=True)
     device_commands.add_parser("list", help="list paired devices")
@@ -102,6 +110,17 @@ def main(argv: list[str] | None = None):
         return None
 
     parsed = _parser().parse_args(args)
+    if parsed.command == "mesh-vpn":
+        from terminal_mcp.mesh_vpn import VPNError, cli
+
+        try:
+            result = cli(parsed)
+            if result is not None:
+                print(json.dumps(result, sort_keys=True))
+            return 0
+        except VPNError as exc:
+            print(f"mesh-vpn: {exc}", file=sys.stderr)
+            return 2
     if parsed.command == "pair":
         if parsed.ttl <= 0:
             _parser().error("--ttl must be a positive number of seconds")

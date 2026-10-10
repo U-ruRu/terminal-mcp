@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     fleet_instance_id: str = ""
     fleet_signing_private_key: str = ""
     fleet_peers_json: str = "[]"
+    fleet_peer_transports_path: str = "/etc/terminal-mcp/fleet-peer-transports.json"
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
     fleet_legacy_replication_enabled: bool = True

@@ -465,6 +465,9 @@ class AccessMeshReplication:
             if checked or delivered:
                 self.peer_health[peer.instance_id] = {"status": "healthy"}
         except Exception as exc:
+            # Force immediate catch-up of numbers, starts and ends after reconnect.
+            self._last_snapshot_pass[peer.instance_id] = -ANTI_ENTROPY_SECONDS
+            self._snapshot_after[peer.instance_id] = ""
             self.peer_health[peer.instance_id] = {
                 "status": "degraded",
                 "reason": getattr(exc, "code", type(exc).__name__),

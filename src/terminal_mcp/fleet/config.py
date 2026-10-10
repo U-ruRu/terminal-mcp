@@ -5,6 +5,7 @@ import ipaddress
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -16,6 +17,8 @@ class FleetPeer:
     origin: str
     public_key: str
     auth_token: str
+    transport: str = "https"
+    bootstrap_origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,60 @@ def _origin(value: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
 
+def load_peer_transports(path: str) -> dict[str, dict[str, str]]:
+    """Fail closed on malformed per-node transport overrides.
+
+    A WireGuard HTTP origin is valid only for a private tunnel address.
+    The caller is responsible for bringing up the tunnel before switching.
+    """
+    if not path:
+        return {}
+    file = Path(path)
+    if not file.exists():
+        return {}
+    raw = json.loads(file.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("fleet peer transport overrides must be a JSON object")
+    overrides = {}
+    for peer_id, record in raw.items():
+        _instance_id(peer_id, "transport peer id")
+        if not isinstance(record, dict) or set(record) != {"mode", "origin", "interface"}:
+            raise ValueError("peer transport requires mode, origin and interface")
+        mode = record["mode"]
+        origin = record["origin"]
+        interface = record["interface"]
+        if mode != "wireguard" or not isinstance(origin, str):
+            raise ValueError("only explicit wireguard transport overrides are supported")
+        if not isinstance(interface, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,15}", interface):
+            raise ValueError("invalid wireguard interface name")
+        parts = urlsplit(origin)
+        if (
+            parts.scheme != "http"
+            or parts.username is not None
+            or parts.password is not None
+            or parts.path not in {"", "/"}
+            or parts.query
+            or parts.fragment
+            or not parts.hostname
+            or parts.port is None
+        ):
+            raise ValueError("wireguard transport requires an explicit private HTTP host:port")
+        try:
+            address = ipaddress.ip_address(parts.hostname)
+        except ValueError as exc:
+            raise ValueError("wireguard transport requires a literal private IP") from exc
+        if not (
+            isinstance(address, ipaddress.IPv4Address)
+            and address.is_private
+            and not address.is_loopback
+            and not address.is_link_local
+            and not address.is_multicast
+        ):
+            raise ValueError("wireguard transport must use a private IPv4 tunnel address")
+        overrides[peer_id] = {"mode": mode, "origin": origin.rstrip("/"), "interface": interface}
+    return overrides
+
+
 def build_fleet_config(settings) -> FleetConfig | None:
     raw_instance_id = settings.fleet_instance_id.strip()
     raw_private_key = settings.fleet_signing_private_key.strip()
@@ -120,6 +177,7 @@ def build_fleet_config(settings) -> FleetConfig | None:
     instance_id = _instance_id(raw_instance_id, "fleet_instance_id")
     private_key = _validate_private_key(raw_private_key)
 
+    transport_overrides = load_peer_transports(getattr(settings, "fleet_peer_transports_path", ""))
     peers: list[FleetPeer] = []
     seen = {instance_id}
     for index, item in enumerate(payload):
@@ -140,7 +198,20 @@ def build_fleet_config(settings) -> FleetConfig | None:
         if peer_id in seen:
             raise ValueError(f"duplicate fleet instance_id: {peer_id}")
         seen.add(peer_id)
-        peers.append(FleetPeer(peer_id, _origin(origin), public_key, auth_token))
+        public_origin = _origin(origin)
+        override = transport_overrides.get(peer_id)
+        peers.append(
+            FleetPeer(
+                peer_id,
+                override["origin"] if override else public_origin,
+                public_key,
+                auth_token,
+                "wireguard" if override else "https",
+                public_origin if override else None,
+            )
+        )
+    if unexpected := set(transport_overrides) - (seen - {instance_id}):
+        raise ValueError(f"wireguard transport has unknown peers: {sorted(unexpected)}")
 
     interval = float(settings.fleet_replication_interval_sec)
     timeout = float(settings.fleet_request_timeout_sec)
