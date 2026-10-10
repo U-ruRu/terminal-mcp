@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+from sqlite3 import Error as SqliteError
 from sqlite3 import IntegrityError
 
 from terminal_mcp.core.agent_policy import AgentPolicy
@@ -734,7 +735,15 @@ class TerminalService:
                     **context,
                 }
                 if self.task_coordinator:
-                    result["workflow"] = await self.task_coordinator.health()
+                    # Do not query another table in an already-corrupt main DB.
+                    # A stale successful cache can also race with later damage.
+                    result["workflow"] = {"ok": False}
+                    if storage_ok:
+                        try:
+                            result["workflow"] = await self.task_coordinator.health()
+                        except SqliteError:
+                            storage_ok = False
+                            result["storage"] = "error"
                     result["ok"] = bool(result["ok"] and result["workflow"].get("ok", False))
                 components = [
                     {
@@ -825,7 +834,9 @@ class TerminalService:
                         key=severity.__getitem__,
                     )
                     result["ok"] = result["status"] == "healthy"
-                if self.event_store:
+                # On failed durable storage, even recording health.changed
+                # may fail on the same corrupted B-tree. Keep health observable.
+                if self.event_store and storage_ok:
                     signature = {
                         "ok": bool(result["ok"]),
                         "status": result["status"],
@@ -835,13 +846,23 @@ class TerminalService:
                         "worker_health": terminal.get("worker_health") or {},
                     }
                     if signature != self._last_health_signature:
-                        await self.event_store.append(
-                            "health.changed",
-                            "health",
-                            "terminal-mcp",
-                            payload=signature,
-                        )
-                        self._last_health_signature = signature
+                        try:
+                            await self.event_store.append(
+                                "health.changed",
+                                "health",
+                                "terminal-mcp",
+                                payload=signature,
+                            )
+                        except SqliteError:
+                            # The DB can become unreadable after a cached healthy
+                            # probe; a failed diagnostic write must fail closed.
+                            result["ok"] = False
+                            result["storage"] = "error"
+                            result["status"] = "failed"
+                            components[0]["status"] = "failed"
+                            components[0]["reason"] = "storage_unavailable"
+                        else:
+                            self._last_health_signature = signature
                 return result
         except asyncio.CancelledError:
             if self.events:

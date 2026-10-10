@@ -1,6 +1,8 @@
 # ruff: noqa: E501
+import asyncio
 import json
 import secrets
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,10 +23,16 @@ from terminal_mcp.storage.output import (
     OutputStore,
 )
 from terminal_mcp.storage.permissions import secure_database_path
-from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
+from terminal_mcp.storage.sqlite_observability import (
+    SqliteDiagnostics,
+    cancellation_safe_connection,
+    observed_connection,
+)
 from terminal_mcp.storage.work_windows import install_work_window_schema
 
 SCHEMA_VERSION = 23
+HEALTH_INTEGRITY_CACHE_SECONDS = 30.0
+HEALTH_INTEGRITY_TIMEOUT_SECONDS = 3.0
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"
@@ -61,6 +69,13 @@ class SqliteRepository:
         self.events = None
         self.metrics = None
         self.sqlite_diagnostics = SqliteDiagnostics("durable")
+        # One bounded, read-only B-tree check per interval; concurrent health
+        # polls share the result instead of repeatedly scanning the whole DB.
+        self._health_probe_lock = asyncio.Lock()
+        self._health_integrity_uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+        self._health_checked_at: float | None = None
+        self._health_cached_ok = False
+        self._health_file_id: tuple[int, int] | None = None
 
     def configure_observability(self, events, metrics):
         self.events = events
@@ -111,10 +126,113 @@ class SqliteRepository:
                         (("operation", operation),),
                     )
 
-    async def ping(self):
-        async with self._connect("health") as db:
-            await (await db.execute("SELECT 1")).fetchone()
-        return True
+    async def _health_integrity_probe(
+        self, *, deadline: float, statement: str = "PRAGMA quick_check(1)"
+    ) -> bool:
+        """Check B-trees on a read-only SQLite handle, stopping native VM work at deadline.
+
+        Cancellation alone cannot stop an aiosqlite worker: close() queues behind
+        the running SQL. The VM progress handler and cross-thread interrupt make
+        its shutdown bounded even when quick_check is still executing.
+        """
+        stop_sql = threading.Event()
+
+        def should_abort_sql() -> int:
+            return int(stop_sql.is_set() or time.monotonic() >= deadline)
+
+        # SQLite busy waits do not invoke the VM progress handler. Bound the
+        # lock wait separately and never use CREATE mode for a health probe.
+        connect_timeout = max(0.001, min(1.0, deadline - time.monotonic()))
+        async with cancellation_safe_connection(
+            aiosqlite.connect,
+            self._health_integrity_uri,
+            uri=True,
+            timeout=connect_timeout,
+        ) as db:
+            try:
+                await db.set_progress_handler(should_abort_sql, 1000)
+                remaining_ms = max(1, min(1000, int((deadline - time.monotonic()) * 1000)))
+                await db.execute(f"PRAGMA busy_timeout={remaining_ms}")
+                await db.execute("PRAGMA query_only=ON")
+                row = await (await db.execute(statement)).fetchone()
+            except asyncio.CancelledError:
+                # interrupt() is thread-safe and targets an in-flight SQLite call;
+                # the progress handler also observes stop_sql on the worker.
+                stop_sql.set()
+                try:
+                    await db.interrupt()
+                except aiosqlite.Error:
+                    pass
+                raise
+            finally:
+                # Set before context-manager cleanup, which awaits worker close.
+                stop_sql.set()
+        return row is not None and row[0] == "ok"
+
+    async def ping(self) -> bool:
+        def file_id() -> tuple[int, int] | None:
+            try:
+                info = Path(self.path).stat()
+            except OSError:
+                return None
+            if info.st_size <= 0:
+                return None
+            return (info.st_dev, info.st_ino)
+
+        identity = file_id()
+        if identity is None:
+            return False
+        checked_at = self._health_checked_at
+        if (
+            self._health_file_id == identity
+            and checked_at is not None
+            and time.monotonic() - checked_at < HEALTH_INTEGRITY_CACHE_SECONDS
+        ):
+            return self._health_cached_ok
+
+        # The same wall-clock deadline covers lock acquisition, SQL execution
+        # and the connection close performed during cancellation.
+        deadline = time.monotonic() + HEALTH_INTEGRITY_TIMEOUT_SECONDS
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self._health_probe_lock.acquire()
+        except TimeoutError:
+            # A concurrent owner will publish its result; do not cache a
+            # timeout caused solely by waiting for the lock.
+            return False
+        try:
+            identity = file_id()
+            if identity is None:
+                return False
+            checked_at = self._health_checked_at
+            if (
+                self._health_file_id == identity
+                and checked_at is not None
+                and time.monotonic() - checked_at < HEALTH_INTEGRITY_CACHE_SECONDS
+            ):
+                return self._health_cached_ok
+            try:
+                async with asyncio.timeout_at(deadline):
+                    healthy = await self._health_integrity_probe(deadline=deadline)
+            except aiosqlite.Error as exc:
+                healthy = False
+                try:
+                    self.sqlite_diagnostics.record(
+                        exc, operation="health_integrity", stage="quick_check"
+                    )
+                except Exception:
+                    # Telemetry must never mask a failed integrity probe.
+                    pass
+            except (OSError, TimeoutError):
+                healthy = False
+            # Cache both outcomes for 30 seconds per repository instance and
+            # main-file inode; a missing/replaced file bypasses the cache.
+            self._health_cached_ok = healthy
+            self._health_file_id = identity
+            self._health_checked_at = time.monotonic()
+            return healthy
+        finally:
+            self._health_probe_lock.release()
 
     async def initialize(self, *, preserve_active_commands: bool = False):
         secure_database_path(self.path)
