@@ -82,6 +82,12 @@ class AccessMeshReplication:
             if pinned.instance_id in enabled
         )
         previous = {peer.instance_id: peer.origin for peer in self.config.peers}
+        old_transport_state = tuple(
+            (peer.instance_id, peer.origin, peer.transport) for peer in self.config.peers
+        )
+        new_transport_state = tuple(
+            (peer.instance_id, peer.origin, peer.transport) for peer in selected
+        )
         self.config = replace(self._bootstrap_config, peers=selected)
         for peer in selected:
             self._snapshot_after.setdefault(peer.instance_id, "")
@@ -97,7 +103,8 @@ class AccessMeshReplication:
                 self.peer_health.setdefault(
                     peer.instance_id, {"status": "degraded", "reason": "catchup_pending"}
                 )
-        self._wake.set()
+        if old_transport_state != new_transport_state:
+            self._wake.set()
 
     @property
     def peers(self):

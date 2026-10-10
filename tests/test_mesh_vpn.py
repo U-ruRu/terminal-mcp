@@ -570,6 +570,10 @@ def test_managed_fleet_transport_refreshes_access_mesh_without_rotating_pinned_a
     assert transport._last_snapshot_pass["bacloud"] == 0
     assert transport._wake.is_set()
     transport._wake.clear()
+    # Managed Fleet periodically reconciles unchanged topology. That must not
+    # awaken Access Mesh and reintroduce frequent idle HTTP polling.
+    controller._replace_runtime_config(active)
+    assert not transport._wake.is_set()
     controller._replace_runtime_config(
         FleetConfig("firstbyte", "new-managed-signing-key", (), 5.0, 3.0)
     )
