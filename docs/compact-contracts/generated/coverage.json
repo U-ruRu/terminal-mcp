@@ -741,12 +741,12 @@
       {
         "anchor": "class TaskCheckpointRequest",
         "source": "src/terminal_mcp/application/task_requests.py",
-        "text": "checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text; relate/unrelate require non-null relation_kind and related_task_id."
+        "text": "checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text with at least one non-whitespace character; relate/unrelate require non-null relation_kind and related_task_id."
       },
       {
         "anchor": "class TaskArchiveRequest",
         "source": "src/terminal_mcp/application/task_requests.py",
-        "text": "archive requires at least one non-null archive_note or note; either is sufficient. create with state=done requires non-null result."
+        "text": "archive requires either non-null archive_note or non-null note at canonical model level. Runtime selects raw archive_note if truthy, else note; it then strips and requires non-whitespace text. archive_note=\"   \" masks valid note fallback and fails; supply one meaningful field. create with state=done requires non-null result."
       },
       {
         "anchor": "model_dump(exclude_none=True, exclude_unset=True)",
@@ -767,6 +767,35 @@
         "anchor": "Create operation identity. Reuse only on transport retries",
         "source": "src/terminal_mcp/mcp/role_contracts.py",
         "text": "request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id."
+      },
+      {
+        "action": "update",
+        "anchor": "SAFE_PARTICIPANT_FIELDS = frozenset({\"title\", \"description\", \"next_action\", \"tags\"})",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "With a live claim, nonowner update permits only safe participant fields title, description, next_action, tags; workflow fields or non-null dependencies require live owner (owner_required). expected_revision is required."
+      },
+      {
+        "action": "update",
+        "anchor": "async def _action_update(",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "update rejects non-null state and checkpoint; use dedicated state/checkpoint actions."
+      },
+      {
+        "action": "update",
+        "anchor": "\"code\": \"candidate_ref_frozen\"",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "Non-null update candidate_ref returns candidate_ref_frozen when task is done or has incoming review_of, even for unchanged value; null is omitted."
+      },
+      {
+        "action": "state",
+        "anchor": "async def _action_state(",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "Admitted nonowners may set workflow state despite a live claim; no content revision CAS check/increment, existing claim unaffected."
+      },
+      {
+        "anchor": "async def _owner_error(",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "When any claim is live, archive, relate and unrelate require the live owner; nonowners get owner_required. Without a live claim this owner gate does not apply."
       }
     ],
     "strict_input_sha256": "dac0417375adab7c6951517317975ac95efb2bbad9f309957b9cad399408ff8d",
@@ -1020,14 +1049,16 @@
     ],
     "runtime_annotations": [
       {
-        "anchor": "class TaskClaimRequest",
-        "source": "src/terminal_mcp/application/task_requests.py",
-        "text": "claim requires claim_intent as a non-null string(1..160); release forbids claim_intent. claim forbids release_reason. Action-specific allowed fields and extra_forbidden rules derive from TaskClaimRequest and TaskReleaseRequest."
+        "action": "claim",
+        "anchor": "kwargs.get(\"claim_intent\"), \"claim_intent\", max_length=160",
+        "source": "src/terminal_mcp/core/tasks.py",
+        "text": "claim requires non-null claim_intent string(1..160) containing non-whitespace characters; runtime trims and rejects whitespace-only intent. claim forbids release_reason; release forbids claim_intent; canonical action-specific field lists apply."
       },
       {
+        "action": "release",
         "anchor": "kwargs.get(\"release_reason\") or \"released_by_owner\"",
         "source": "src/terminal_mcp/core/tasks.py",
-        "text": "release_reason is optional even when an existing live claim is released; when omitted, runtime uses released_by_owner; idempotent not-claimed release also needs no reason."
+        "text": "release_reason is optional even when an existing live claim is released: omitted/null uses released_by_owner. A supplied release_reason must be non-whitespace after trimming when a live claim is released; idempotent unclaimed release bypasses reason validation."
       }
     ],
     "strict_input_sha256": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
@@ -1101,7 +1132,7 @@
       {
         "anchor": "def to_request(self):",
         "source": "src/terminal_mcp/mcp/access_contracts.py",
-        "text": "comment (default action) requires non-null comment_text and rejects checkpoint. checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields including expected_revision are forbidden; checkpoint does not accept expected_revision."
+        "text": "comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision."
       }
     ],
     "strict_input_sha256": "947fa128f5f553c22321bd7d86845b374dac515d1dcd97a0146c4652493e9039",
@@ -1162,7 +1193,7 @@
       {
         "anchor": "async def _action_state(",
         "source": "src/terminal_mcp/core/tasks.py",
-        "text": "Any admitted agent may set a valid task state irrespective of another agent's live claim/ownership; task existence and admission remain required; do not imply own claim is needed."
+        "text": "any admitted agent may set valid workflow state, including on a task claimed by someone else. expected_revision does not guard state writes via content CAS; content revision is unchanged, live claims persist, and repeated state assignment emits no event."
       }
     ],
     "strict_input_sha256": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",

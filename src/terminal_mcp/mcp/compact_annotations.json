@@ -58,21 +58,23 @@
   ],
   "executor.task_comment": [
     {
-      "text": "comment (default action) requires non-null comment_text and rejects checkpoint. checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields including expected_revision are forbidden; checkpoint does not accept expected_revision.",
+      "text": "comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision.",
       "source": "src/terminal_mcp/mcp/access_contracts.py",
       "anchor": "def to_request(self):"
     }
   ],
   "executor.task_claim": [
     {
-      "text": "claim requires claim_intent as a non-null string(1..160); release forbids claim_intent. claim forbids release_reason. Action-specific allowed fields and extra_forbidden rules derive from TaskClaimRequest and TaskReleaseRequest.",
-      "source": "src/terminal_mcp/application/task_requests.py",
-      "anchor": "class TaskClaimRequest"
+      "text": "claim requires non-null claim_intent string(1..160) containing non-whitespace characters; runtime trims and rejects whitespace-only intent. claim forbids release_reason; release forbids claim_intent; canonical action-specific field lists apply.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "kwargs.get(\"claim_intent\"), \"claim_intent\", max_length=160",
+      "action": "claim"
     },
     {
-      "text": "release_reason is optional even when an existing live claim is released; when omitted, runtime uses released_by_owner; idempotent not-claimed release also needs no reason.",
+      "text": "release_reason is optional even when an existing live claim is released: omitted/null uses released_by_owner. A supplied release_reason must be non-whitespace after trimming when a live claim is released; idempotent unclaimed release bypasses reason validation.",
       "source": "src/terminal_mcp/core/tasks.py",
-      "anchor": "kwargs.get(\"release_reason\") or \"released_by_owner\""
+      "anchor": "kwargs.get(\"release_reason\") or \"released_by_owner\"",
+      "action": "release"
     }
   ],
   "coordinator.task_manage": [
@@ -82,12 +84,12 @@
       "anchor": "_TASK_MANAGE_MODELS ="
     },
     {
-      "text": "checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text; relate/unrelate require non-null relation_kind and related_task_id.",
+      "text": "checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text with at least one non-whitespace character; relate/unrelate require non-null relation_kind and related_task_id.",
       "source": "src/terminal_mcp/application/task_requests.py",
       "anchor": "class TaskCheckpointRequest"
     },
     {
-      "text": "archive requires at least one non-null archive_note or note; either is sufficient. create with state=done requires non-null result.",
+      "text": "archive requires either non-null archive_note or non-null note at canonical model level. Runtime selects raw archive_note if truthy, else note; it then strips and requires non-whitespace text. archive_note=\"   \" masks valid note fallback and fails; supply one meaningful field. create with state=done requires non-null result.",
       "source": "src/terminal_mcp/application/task_requests.py",
       "anchor": "class TaskArchiveRequest"
     },
@@ -110,6 +112,35 @@
       "text": "request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id.",
       "source": "src/terminal_mcp/mcp/role_contracts.py",
       "anchor": "Create operation identity. Reuse only on transport retries"
+    },
+    {
+      "action": "update",
+      "text": "With a live claim, nonowner update permits only safe participant fields title, description, next_action, tags; workflow fields or non-null dependencies require live owner (owner_required). expected_revision is required.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "SAFE_PARTICIPANT_FIELDS = frozenset({\"title\", \"description\", \"next_action\", \"tags\"})"
+    },
+    {
+      "action": "update",
+      "text": "update rejects non-null state and checkpoint; use dedicated state/checkpoint actions.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "async def _action_update("
+    },
+    {
+      "action": "update",
+      "text": "Non-null update candidate_ref returns candidate_ref_frozen when task is done or has incoming review_of, even for unchanged value; null is omitted.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "\"code\": \"candidate_ref_frozen\""
+    },
+    {
+      "action": "state",
+      "text": "Admitted nonowners may set workflow state despite a live claim; no content revision CAS check/increment, existing claim unaffected.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "async def _action_state("
+    },
+    {
+      "text": "When any claim is live, archive, relate and unrelate require the live owner; nonowners get owner_required. Without a live claim this owner gate does not apply.",
+      "source": "src/terminal_mcp/core/tasks.py",
+      "anchor": "async def _owner_error("
     }
   ],
   "executor.command_run": [
@@ -128,7 +159,7 @@
   ],
   "executor.task_state": [
     {
-      "text": "Any admitted agent may set a valid task state irrespective of another agent's live claim/ownership; task existence and admission remain required; do not imply own claim is needed.",
+      "text": "any admitted agent may set valid workflow state, including on a task claimed by someone else. expected_revision does not guard state writes via content CAS; content revision is unchanged, live claims persist, and repeated state assignment emits no event.",
       "source": "src/terminal_mcp/core/tasks.py",
       "anchor": "async def _action_state("
     }

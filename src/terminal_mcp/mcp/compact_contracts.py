@@ -571,6 +571,13 @@ def _annotations() -> dict:
                 raise ValueError(f"Annotation source stale: {roletool}: {entry}")
             if not entry.get("text"):
                 raise ValueError(f"Empty semantic annotation: {roletool}")
+            # Runtime rules may be action-scoped. Validate the scope against
+            # the real canonical action registry so documentation cannot
+            # silently drift to a nonexistent or renamed action.
+            if "action" in entry:
+                role, tool_name = roletool.split(".", 1)
+                if role == "*" or entry["action"] not in action_models(role, tool_name):
+                    raise ValueError(f"Invalid action-scoped annotation: {roletool}: {entry}")
     return parsed
 
 
@@ -721,7 +728,13 @@ def compile_tool(
     if conds:
         lines.append("Conditions: " + "; ".join(conds) + ".")
     if notes:
-        lines.append("Runtime rules: " + "; ".join(note["text"] for note in notes) + ".")
+        # Distinguish per-action post-schema runtime gates from general rules;
+        # keep each source anchor in the generated coverage provenance.
+        rendered_rules = [
+            (f"action={note['action']}: " if note.get("action") else "") + note["text"]
+            for note in notes
+        ]
+        lines.append("Runtime rules: " + "; ".join(rendered_rules) + ".")
     lines.append("Returns: " + output_summary(strict_output) + ".")
     lines.append(
         "Errors: input_validation_failed is a structured public error; "
@@ -742,7 +755,12 @@ def compile_tool(
         "exact_input_fallbacks": sorted(set(renderer.fallbacks)),
         "output_fallback": "strict-contracts.json:" + role + "." + item["name"] + ".outputSchema",
         "runtime_annotations": [
-            {"source": note["source"], "anchor": note["anchor"], "text": note["text"]}
+            {
+                "source": note["source"],
+                "anchor": note["anchor"],
+                "text": note["text"],
+                **({"action": note["action"]} if note.get("action") else {}),
+            }
             for note in notes
         ],
         "baseline_description_preserved": True,
