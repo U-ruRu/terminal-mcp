@@ -92,3 +92,9 @@ Release order *after a fresh explicit authorization*: (1) same-SHA isolated pair
 - One frozen full-suite belongs to Oscar-2 and independent QA; Uniform-2 runs only this critical targeted runner. No live deploy, network, backup restore, production DB or credential changes in preparation.
 
 **Decision rule:** `source_gate=PASS` + independently approved exact full suite + zero open critical P0 + STAB-06–10 isolated/live evidence + signed real OAuth/Events-to-dot acceptance + per-host manifest/backup/rollback checks + explicit release authorization → canary eligible. Missing any required source or live proof → **BLOCKED / INCOMPLETE** with owner and exact next action, not a stable verdict.
+
+### Deferred risk: STAB-02/03 — duplicate command execution (2026-10-10)
+
+The observed triple execution corresponded to three separate HTTP requests. The caller-side retry trigger and the point where response/acknowledgement was lost remain unproven. A repeated request may execute a side-effecting command more than once. This candidate preserves the existing independent-command contract; it deliberately adds neither an invocation token nor request-level deduplication.
+
+Per the 2026-10-10 operator decision, STAB-02/03 are deferred and do not block this release. Keep their diagnostic evidence; publish this risk to rollout operators and require separate stabilization before claiming exactly-once behavior.
