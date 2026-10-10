@@ -80,6 +80,19 @@ class MCPEventStore:
                     subject_key TEXT PRIMARY KEY,
                     last_notified_activity TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS mcp_event_local_attached(
+                    work_session_id TEXT PRIMARY KEY,
+                    logical_agent_id TEXT NOT NULL,
+                    session_epoch INTEGER NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    attached_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mcp_event_managed_activity(
+                    work_session_id TEXT PRIMARY KEY,
+                    session_epoch INTEGER NOT NULL,
+                    node_instance_id TEXT NOT NULL,
+                    last_activity_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS mcp_event_subscriptions(
                     id TEXT PRIMARY KEY,
                     principal_id TEXT NOT NULL,
@@ -226,7 +239,8 @@ class MCPEventStore:
                         if source.get("node") == self.node_id:
                             row = await (
                                 await db.execute(
-                                    "SELECT a.display_name FROM persistent_attachment_presence p "
+                                    "SELECT a.display_name,p.work_session_id,p.session_epoch "
+                                    "FROM persistent_attachment_presence p "
                                     "JOIN logical_agents a ON "
                                     "a.logical_agent_id=p.logical_agent_id "
                                     "WHERE p.node_attachment_id=? AND p.node_instance_id=?",
@@ -234,9 +248,27 @@ class MCPEventStore:
                                 )
                             ).fetchone()
                             if row:
+                                await db.execute(
+                                    "INSERT OR IGNORE INTO mcp_event_local_attached("
+                                    "work_session_id,logical_agent_id,session_epoch,"
+                                    "agent_name,attached_at) "
+                                    "SELECT p.work_session_id,p.logical_agent_id,"
+                                    "p.session_epoch,?,? "
+                                    "FROM persistent_attachment_presence p "
+                                    "WHERE p.node_attachment_id=? AND p.node_instance_id=?",
+                                    (
+                                        row["display_name"],
+                                        item["created_at"],
+                                        item["entity_id"],
+                                        self.node_id,
+                                    ),
+                                )
                                 await self._insert_event(
                                     db,
-                                    source_key=source_key,
+                                    source_key=(
+                                        f"{self.node_id}:work_session_attached:"
+                                        f"{row['work_session_id']}:{row['session_epoch']}"
+                                    ),
                                     name="agent.attached",
                                     occurred_at=item["created_at"],
                                     data={
@@ -247,35 +279,50 @@ class MCPEventStore:
                     elif event_type == "work_session.changed":
                         source = json.loads(item["payload_json"])
                         if source.get("state") in ("ended", "expired"):
+                            # Include actual locally started managed sessions
+                            # even when no legacy persistent presence rows exist.
+                            local = await (
+                                await db.execute(
+                                    "SELECT agent_name AS display_name "
+                                    "FROM mcp_event_local_attached "
+                                    "WHERE work_session_id=? AND logical_agent_id=? "
+                                    "AND session_epoch=?",
+                                    (
+                                        item["entity_id"],
+                                        source.get("logical_agent_id"),
+                                        source.get("session_epoch"),
+                                    ),
+                                )
+                            ).fetchone()
                             presences = await (
                                 await db.execute(
-                                    "SELECT DISTINCT p.node_instance_id,a.display_name "
+                                    "SELECT DISTINCT a.display_name "
                                     "FROM persistent_attachment_presence p "
                                     "JOIN logical_agents a ON "
                                     "a.logical_agent_id=p.logical_agent_id "
                                     "WHERE p.work_session_id=? AND p.session_epoch=? "
-                                    "AND p.logical_agent_id=?",
+                                    "AND p.logical_agent_id=? AND p.node_instance_id=?",
                                     (
                                         item["entity_id"],
                                         source.get("session_epoch"),
                                         source.get("logical_agent_id"),
+                                        self.node_id,
                                     ),
                                 )
                             ).fetchall()
-                            for presence in presences:
-                                if presence["node_instance_id"] != self.node_id:
-                                    continue
+                            if local or presences:
+                                # Stable identity across terminal-state metadata
+                                # updates, retries and multiple representations.
                                 await self._insert_event(
                                     db,
                                     source_key=(
                                         f"{self.node_id}:work_session_ended:"
-                                        f"{item['entity_id']}:"
-                                        f"{source.get('session_epoch')}"
+                                        f"{item['entity_id']}:{source.get('session_epoch')}"
                                     ),
                                     name="session.ended",
                                     occurred_at=item["created_at"],
                                     data={
-                                        "agent_name": presence["display_name"],
+                                        "agent_name": (local or presences[0])["display_name"],
                                         "server": self.node_id,
                                     },
                                 )
@@ -330,6 +377,33 @@ class MCPEventStore:
                                 row["display_name"],
                             )
                         )
+                managed = await (
+                    await db.execute(
+                        "SELECT s.work_session_id,a.agent_name,"
+                        "COALESCE(m.last_activity_at,a.attached_at) AS last_activity_at "
+                        "FROM mcp_event_local_attached a "
+                        "JOIN logical_agent_work_sessions s "
+                        "ON s.work_session_id=a.work_session_id "
+                        "AND s.session_epoch=a.session_epoch "
+                        "LEFT JOIN mcp_event_managed_activity m ON "
+                        "m.work_session_id=s.work_session_id "
+                        "AND m.session_epoch=s.session_epoch "
+                        "WHERE s.state='active' AND s.authority_node_id=? "
+                        "AND s.hard_expires_at>? "
+                        "AND NOT EXISTS (SELECT 1 FROM persistent_attachment_presence p "
+                        "WHERE p.work_session_id=s.work_session_id "
+                        "AND p.session_epoch=s.session_epoch AND p.node_instance_id=?)",
+                        (self.node_id, stamp, self.node_id),
+                    )
+                ).fetchall()
+                subjects.extend(
+                    (
+                        "managed:" + row["work_session_id"],
+                        row["last_activity_at"],
+                        row["agent_name"],
+                    )
+                    for row in managed
+                )
                 for subject_key, activity, name in subjects:
                     if (current - parse_utc(activity)).total_seconds() <= INACTIVE_AFTER_SECONDS:
                         continue
@@ -355,6 +429,99 @@ class MCPEventStore:
             except BaseException:
                 await db.rollback()
                 raise
+
+    async def note_local_attach(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        agent_name: str | None = None,
+        now=None,
+    ) -> bool:
+        """Only invoke after a successful authenticated local attach/start.
+
+        A remote grant or a replicated WorkSession row cannot invoke this on
+        its own. One event per locally-attached WorkSession epoch.
+        """
+        stamp = utc_text(now or utc_now())
+        async with aiosqlite.connect(self.path, timeout=5) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                current = await (
+                    await db.execute(
+                        "SELECT s.work_session_id,s.session_epoch,a.display_name "
+                        "FROM logical_agent_work_sessions s "
+                        "JOIN logical_agents a ON a.logical_agent_id=s.logical_agent_id "
+                        "WHERE s.logical_agent_id=? AND s.work_session_id=? "
+                        "AND s.session_epoch=? AND s.state='active' "
+                        "AND s.authority_node_id=? AND s.hard_expires_at>?",
+                        (logical_agent_id, work_session_id, session_epoch, self.node_id, stamp),
+                    )
+                ).fetchone()
+                if current is None:
+                    await db.rollback()
+                    return False
+                display = agent_name or current["display_name"]
+                cur = await db.execute(
+                    "INSERT OR IGNORE INTO mcp_event_local_attached("
+                    "work_session_id,logical_agent_id,session_epoch,agent_name,attached_at)"
+                    "VALUES(?,?,?,?,?)",
+                    (work_session_id, logical_agent_id, session_epoch, display, stamp),
+                )
+                if cur.rowcount == 1:
+                    await self._insert_event(
+                        db,
+                        source_key=(
+                            f"{self.node_id}:work_session_attached:"
+                            f"{work_session_id}:{session_epoch}"
+                        ),
+                        name="agent.attached",
+                        occurred_at=stamp,
+                        data={"agent_name": display, "server": self.node_id},
+                    )
+                await db.commit()
+                return cur.rowcount == 1
+            except BaseException:
+                await db.rollback()
+                raise
+
+    async def note_managed_activity(
+        self,
+        logical_agent_id: str,
+        work_session_id: str,
+        session_epoch: int,
+        *,
+        now=None,
+    ) -> bool:
+        """Write only an authenticated agent's real operation to its own session."""
+        stamp = utc_text(now or utc_now())
+        async with aiosqlite.connect(self.path, timeout=5) as db:
+            cur = await db.execute(
+                "INSERT INTO mcp_event_managed_activity("
+                "work_session_id,session_epoch,node_instance_id,last_activity_at) "
+                "SELECT s.work_session_id,s.session_epoch,s.authority_node_id,? "
+                "FROM logical_agent_work_sessions s "
+                "JOIN mcp_event_local_attached a ON a.work_session_id=s.work_session_id "
+                "AND a.session_epoch=s.session_epoch "
+                "WHERE s.logical_agent_id=? AND s.work_session_id=? "
+                "AND s.session_epoch=? AND s.state='active' "
+                "AND s.authority_node_id=? AND s.hard_expires_at>? "
+                "ON CONFLICT(work_session_id) DO UPDATE SET "
+                "last_activity_at=CASE WHEN excluded.last_activity_at>last_activity_at "
+                "THEN excluded.last_activity_at ELSE last_activity_at END",
+                (
+                    stamp,
+                    logical_agent_id,
+                    work_session_id,
+                    session_epoch,
+                    self.node_id,
+                    stamp,
+                ),
+            )
+            await db.commit()
+            return bool(cur.rowcount)
 
     async def subscription(self, subscription_id):
         async with aiosqlite.connect(self.path, timeout=5) as db:

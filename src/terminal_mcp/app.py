@@ -76,6 +76,7 @@ from terminal_mcp.http.provider_identity_fleet import build_provider_identity_fl
 from terminal_mcp.http.public import build_public_router
 from terminal_mcp.http.rate_limit import RateLimitMiddleware
 from terminal_mcp.mcp.access import build_access_mcp
+from terminal_mcp.mcp.event_diagnostics import MCPEventIngressProbe
 from terminal_mcp.mcp.event_server import MCPEventsAdapter
 from terminal_mcp.mcp.event_store import MCPEventStore
 from terminal_mcp.mcp.roles import build_role_mcp
@@ -421,6 +422,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return False
 
     mcp_event_store = MCPEventStore(settings.database_path, managed_authority_node_id)
+    # Connect the real managed-session operation path to the one-shot idle clock.
+    managed_sessions.activity_notifier = mcp_event_store.note_managed_activity
+    managed_sessions.attach_notifier = mcp_event_store.note_local_attach
+    if access_mesh is not None:
+        access_mesh.attach_notifier = mcp_event_store.note_local_attach
+        access_mesh.activity_notifier = mcp_event_store.note_managed_activity
+
     mcp_events = MCPEventsAdapter(
         mcp.streamable_http_app(),
         mcp_event_store,
@@ -712,6 +720,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TraceMiddleware)
     app.add_middleware(BrowserSecurityMiddleware, settings=settings)
+    # Outermost probe records Events ingress even if authentication rejects it.
+    app.add_middleware(MCPEventIngressProbe)
     return app
 
 

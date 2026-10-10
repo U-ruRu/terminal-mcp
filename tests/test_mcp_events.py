@@ -522,6 +522,13 @@ async def test_persistent_attachment_stays_untouched_by_read_and_idles(context):
 async def test_persistent_remote_presence_grant_not_attached_to_local(context):
     path, _, events = context
     _seed_persistent(path, nodes=("elsewhere",))
+    with sqlite3.connect(path) as db:
+        # A foreign-authority WorkSession and remote-only presence are not a
+        # locally materialized attachment even if their grants are visible.
+        db.execute(
+            "UPDATE logical_agent_work_sessions SET authority_node_id='elsewhere',"
+            "origin_instance_id='elsewhere' WHERE work_session_id='ws1'"
+        )
     await events.pump()
     assert _records(path, "agent.attached") == []
 

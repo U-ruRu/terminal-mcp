@@ -295,6 +295,7 @@ async def test_snapshot_rotation_preserves_session_but_missed_stop_fences(fixtur
         "session_epoch"
     ] == initial["session_epoch"] + 1
 
+
 @pytest.mark.asyncio
 async def test_repeated_mesh_resolve_does_not_flood_entity_journal(fixture):
     """Rechecking a stable Access cycle must not emit duplicate change events."""
@@ -351,7 +352,8 @@ async def test_existing_unconditional_event_triggers_upgrade_without_event_loss(
         )
         db.execute(
             "UPDATE logical_agent_work_sessions SET hard_expires_at=hard_expires_at "
-            "WHERE work_session_id=?", (session_id,),
+            "WHERE work_session_id=?",
+            (session_id,),
         )
         assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline + 2
 
@@ -371,7 +373,8 @@ async def test_existing_unconditional_event_triggers_upgrade_without_event_loss(
         )
         db.execute(
             "UPDATE logical_agent_work_sessions SET hard_expires_at=hard_expires_at "
-            "WHERE work_session_id=?", (session_id,),
+            "WHERE work_session_id=?",
+            (session_id,),
         )
         assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline
         db.execute(
@@ -380,3 +383,67 @@ async def test_existing_unconditional_event_triggers_upgrade_without_event_loss(
         )
         assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline + 1
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_events_mesh_attach_is_local_and_observation_never_activity(fixture):
+    f = fixture
+    attached, activity = [], []
+
+    async def on_attach(*args, **kwargs):
+        attached.append((args, kwargs))
+
+    async def on_activity(*args, **kwargs):
+        activity.append((args, kwargs))
+
+    f.app.attach_notifier = on_attach
+    f.app.activity_notifier = on_activity
+    await issued(f)
+    assert attached == []  # Issuing Access is not local attach
+    first = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    assert len(attached) == 1
+    assert attached[0][0][1] == first["work_session_id"]
+    assert attached[0][1]["agent_name"] == first["public_name"]
+    await f.app.resolve(actor(), ManagedOperation.OBSERVE)
+    assert activity == []
+    await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+    assert len(activity) == 1
+    assert activity[0][0][1] == first["work_session_id"]
+    await f.app.resolve(actor(), ManagedOperation.TASK_LIST)
+    assert len(activity) == 1
+
+
+@pytest.mark.asyncio
+async def test_events_grant_on_firstbyte_not_local_attach_on_bacloud(fixture, tmp_path):
+    f = fixture
+    await issued(f)
+    path = tmp_path / "remote.db"
+    await SqliteRepository(path, tmp_path / "remote_output.db").initialize()
+    store = AccessMeshStore(
+        path,
+        local_node_id="bacloud",
+        trusted_issuers=frozenset({"firstbyte", "bacloud"}),
+        proof_key=KEY,
+    )
+    app = AccessMeshApplication(
+        store,
+        task_store=TaskStore(path),
+        execution_fence=Fence(),
+        clock=lambda: T0,
+    )
+    attached = []
+
+    async def on_attach(*args, **kwargs):
+        attached.append((args, kwargs))
+
+    app.attach_notifier = on_attach
+    store.apply_snapshot(
+        f.store.snapshot_page(issuer_id="firstbyte")[0],
+        authenticated_peer_id="firstbyte",
+    )
+    assert attached == []  # Remote grant replication did not attach
+    attached_session = await app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    assert attached_session["authority_node_id"] == "bacloud"
+    assert attached_session["issuer_node_id"] == "firstbyte"
+    assert len(attached) == 1
+    assert attached[0][0][1] == attached_session["work_session_id"]
