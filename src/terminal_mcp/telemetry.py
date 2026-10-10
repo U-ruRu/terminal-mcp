@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import logging
 import time
+from contextlib import suppress
 
 from terminal_mcp.core.public_errors import error_from_exception
 
@@ -26,7 +27,8 @@ async def observed(service, transport: str, tool: str, operation):
     events = getattr(service, "events", None)
     labels = (("transport", transport), ("tool", tool))
     if metrics:
-        metrics.inc("terminal_mcp_inflight_requests", labels)
+        with suppress(Exception):
+            metrics.inc("terminal_mcp_inflight_requests", labels)
     try:
         result = await operation
         outcome = "success" if result.get("ok", False) else "error"
@@ -34,31 +36,39 @@ async def observed(service, transport: str, tool: str, operation):
     except asyncio.CancelledError:
         outcome = "cancelled"
         if metrics:
-            metrics.inc("terminal_mcp_upstream_cancellations_total", labels)
-            metrics.inc("terminal_mcp_client_disconnects_total", labels)
+            with suppress(Exception):
+                metrics.inc("terminal_mcp_upstream_cancellations_total", labels)
+                metrics.inc("terminal_mcp_client_disconnects_total", labels)
         raise
     except Exception as exc:
         outcome = "error"
-        logger.exception("public transport operation failed: %s.%s", transport, tool)
+        with suppress(Exception):
+            logger.exception("public transport operation failed: %s.%s", transport, tool)
         return error_from_exception(exc).as_dict()
     finally:
         duration = time.monotonic() - started
         outcome = locals().get("outcome", "error")
-        if metrics:
-            metrics.inc(
-                "terminal_mcp_requests_total",
-                labels + (("outcome", outcome),),
-            )
-            metrics.observe("terminal_mcp_request_duration_seconds", duration, labels)
-            metrics.inc("terminal_mcp_response_completed_total", labels)
-            metrics.inc("terminal_mcp_inflight_requests", labels, -1)
-        if events:
-            events.emit(
-                "tool_completed",
-                transport=transport,
-                tool=tool,
-                outcome=outcome,
-                duration_ms=round(duration * 1000),
-            )
-        current_tool.reset(tool_token)
-        current_transport.reset(transport_token)
+        # Observability is optional after the operation has decided its result.
+        # Sink failures must not replace a committed receipt or cancellation.
+        try:
+            if metrics:
+                with suppress(Exception):
+                    metrics.inc(
+                        "terminal_mcp_requests_total",
+                        labels + (("outcome", outcome),),
+                    )
+                    metrics.observe("terminal_mcp_request_duration_seconds", duration, labels)
+                    metrics.inc("terminal_mcp_response_completed_total", labels)
+                    metrics.inc("terminal_mcp_inflight_requests", labels, -1)
+            if events:
+                with suppress(Exception):
+                    events.emit(
+                        "tool_completed",
+                        transport=transport,
+                        tool=tool,
+                        outcome=outcome,
+                        duration_ms=round(duration * 1000),
+                    )
+        finally:
+            current_tool.reset(tool_token)
+            current_transport.reset(transport_token)

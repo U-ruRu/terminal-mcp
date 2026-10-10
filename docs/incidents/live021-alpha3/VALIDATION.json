@@ -1,0 +1,57 @@
+{
+  "base_sha": "bde0dec8bd0679c3cbda768104672de57956b6cf",
+  "validation_utc": "2026-10-10T21:47:44.754Z",
+  "artifact_directory": "/workspace/terminal-mcp-artifacts/live021-alpha3-20261010",
+  "baseline_regression": {
+    "tests": 3,
+    "failed": 3,
+    "pytest_exit": 1,
+    "command_receipt": "17f0b45d",
+    "log": "telemetry-red.log"
+  },
+  "fixed_telemetry_and_boundaries": {
+    "passed": 6,
+    "pytest_exit": 0,
+    "command_receipt": "fef17385",
+    "log": "telemetry-green.log"
+  },
+  "final_diagnostics": {
+    "passed": 16,
+    "pytest_exit": 0,
+    "command_receipt": "0550c63f",
+    "log": "diagnostics-tests.log"
+  },
+  "final_focused": {
+    "passed": 116,
+    "warnings": 1,
+    "warning": "Existing Starlette testclient dependency deprecation",
+    "duration_seconds": 35.79,
+    "pytest_exit": 0,
+    "command_receipt": "ab8b605d",
+    "log": "final-focused.log",
+    "junit": "final-focused.xml",
+    "reproduce": "docs/incidents/live021-alpha3/run-focused.sh"
+  },
+  "ruff_exit": 0,
+  "git_diff_check_exit": 0,
+  "full_repository_suite": "not_run",
+  "production_deployment": "not_performed",
+  "source_sha256": {
+    "src/terminal_mcp/app.py": "e431e5afa73434d3756ba3b6d3313ea8083b5261b9d8c87cc125f7b5c97dc095",
+    "src/terminal_mcp/mcp/roles.py": "6074d6c26db4cf38f573306e578e48f050a5b0af6431f36d41ba00fb30a0e836",
+    "src/terminal_mcp/observability.py": "88703d4d31f88dfe61f1b3488ef4aa8ca0f2b7cc11a9b8066af9fc4db27a486e",
+    "src/terminal_mcp/telemetry.py": "f8225e3a09a10982396f241f814e0e404d9b41708970048fb3b6832c9f137d0e",
+    "src/terminal_mcp/trace.py": "179579d2718d17b2ce2147c2754aa7db320792f265bcf1c609fc9aa823bb2a55",
+    "src/terminal_mcp/attempt_diagnostics.py": "62a8f725599f21201479dfdb28a4b9de90523ada218c0d4ac3820343914ed9b7",
+    "tests/test_live021_telemetry.py": "450aa31f4ba69530f2091a0d793ea3f8d15634e28938c6209ad3040b49f8884c",
+    "tests/test_live021_attempt_diagnostics.py": "7d9498e720e4e78e349ea826d09e5044f2ca10ac3e1c3f8fade38347560a9868"
+  },
+  "log_sha256": {
+    "telemetry-red.log": "46cef3582145a66cb1823c076ded994b8ede445e4e92649d011cf3c6a61b6fed",
+    "telemetry-green.log": "672c6a51378caa4857c15d98df2f4100d9d98bc5d70dc0c3d80604db54aaf296",
+    "diagnostics-tests.log": "aebb9f56d64f19a588066028c92c6c3cacecac4e17ce492afceacfb0518e9fd1",
+    "final-focused.log": "4cf29537dfd2b3cf7ccb52c6dcd4bc78a1ce18805e046894e8552cace2cbe1db",
+    "final-focused.xml": "9cb3f38d7fa9ad317555fe96d5a16c237a3eb9e59938eefe9de60511fd3317ec",
+    "lint.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+  }
+}

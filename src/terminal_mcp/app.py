@@ -710,7 +710,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         AuthMiddleware, settings=settings, auth_service=auth, pairing_store=pairing_store
     )
     app.add_middleware(RateLimitMiddleware)
-    app.add_middleware(TraceMiddleware)
+    app.add_middleware(TraceMiddleware, events=events)
     app.add_middleware(BrowserSecurityMiddleware, settings=settings)
     return app
 
