@@ -1,0 +1,109 @@
+{
+  "candidate": "d1caea24e2d8c2dff650568fac616bcee0efb99b",
+  "method": "Independent canonical Python JSON dumps UTF-8; tiktoken cl100k_base",
+  "roles": {
+    "access": {
+      "count": 1,
+      "before": {
+        "bytes": 1120,
+        "tokens": 269
+      },
+      "after": {
+        "bytes": 1819,
+        "tokens": 429
+      },
+      "diff_bytes": 699,
+      "diff_tokens": 160,
+      "parts": {
+        "description": 732,
+        "inputSchema": 558,
+        "outputSchema": 348,
+        "annotations": 90
+      },
+      "client_constraints": {
+        "required": 1,
+        "extra_forbid": 1,
+        "conditional": 0,
+        "enums": 1,
+        "lengths": 0,
+        "arrays": 0,
+        "numeric_bounds": 0,
+        "types": 2,
+        "patterns": 0,
+        "unions": 0
+      }
+    },
+    "executor": {
+      "count": 10,
+      "before": {
+        "bytes": 16009,
+        "tokens": 3675
+      },
+      "after": {
+        "bytes": 26500,
+        "tokens": 6258
+      },
+      "diff_bytes": 10491,
+      "diff_tokens": 2583,
+      "parts": {
+        "description": 10294,
+        "inputSchema": 7669,
+        "outputSchema": 6794,
+        "annotations": 894
+      },
+      "client_constraints": {
+        "required": 22,
+        "extra_forbid": 10,
+        "conditional": 4,
+        "enums": 14,
+        "lengths": 25,
+        "arrays": 1,
+        "numeric_bounds": 5,
+        "types": 76,
+        "patterns": 1,
+        "unions": 21
+      }
+    },
+    "coordinator": {
+      "count": 8,
+      "before": {
+        "bytes": 40092,
+        "tokens": 9819
+      },
+      "after": {
+        "bytes": 25790,
+        "tokens": 6102
+      },
+      "diff_bytes": -14302,
+      "diff_tokens": -3717,
+      "parts": {
+        "description": 8756,
+        "inputSchema": 12044,
+        "outputSchema": 3609,
+        "annotations": 715
+      },
+      "client_constraints": {
+        "required": 35,
+        "extra_forbid": 9,
+        "conditional": 11,
+        "enums": 27,
+        "lengths": 39,
+        "arrays": 8,
+        "numeric_bounds": 5,
+        "types": 134,
+        "patterns": 2,
+        "unions": 49
+      }
+    }
+  },
+  "sum": {
+    "before_bytes": 57221,
+    "after_bytes": 54109,
+    "before_tokens": 13763,
+    "after_tokens": 12789
+  },
+  "delta": {
+    "bytes": -3112,
+    "tokens": -974
+  }
+}

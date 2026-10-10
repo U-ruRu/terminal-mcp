@@ -1,0 +1,568 @@
+{
+  "candidate": "d1caea24e2d8c2dff650568fac616bcee0efb99b",
+  "rows": [
+    {
+      "action": "create",
+      "model": "TaskCreateRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:118-178",
+      "required": [
+        "action",
+        "namespace",
+        "isolation_hint"
+      ],
+      "canonical_allowed": [
+        "action",
+        "candidate_ref",
+        "checkpoint",
+        "cooperative",
+        "dependencies",
+        "description",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "namespace",
+        "next_action",
+        "output_refs",
+        "priority",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "task_id",
+        "title"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "comment_text",
+        "dimensions",
+        "evidence",
+        "expected_revision",
+        "note",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "create",
+        "namespace": "qa",
+        "isolation_hint": "isolated",
+        "archive_note": "other"
+      },
+      "canonical_error": {
+        "path": "('archive_note',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "update",
+      "model": "TaskUpdateRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:198-218",
+      "required": [
+        "namespace",
+        "task_id",
+        "expected_revision",
+        "action"
+      ],
+      "canonical_allowed": [
+        "action",
+        "blocker_reason",
+        "candidate_ref",
+        "cooperative",
+        "dependencies",
+        "description",
+        "expected_revision",
+        "force",
+        "force_reason",
+        "input_refs",
+        "lane",
+        "namespace",
+        "next_action",
+        "output_refs",
+        "priority",
+        "resource_context",
+        "result",
+        "tags",
+        "task_id",
+        "title"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "checkpoint",
+        "comment_text",
+        "dimensions",
+        "evidence",
+        "isolation_hint",
+        "note",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "request_id",
+        "state",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "update",
+        "namespace": "qa",
+        "task_id": "t",
+        "expected_revision": 1,
+        "checkpoint": "out of place"
+      },
+      "canonical_error": {
+        "path": "('checkpoint',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "checkpoint",
+      "model": "TaskCheckpointRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:220-223",
+      "required": [
+        "namespace",
+        "task_id",
+        "action",
+        "checkpoint"
+      ],
+      "canonical_allowed": [
+        "action",
+        "checkpoint",
+        "namespace",
+        "task_id"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "candidate_ref",
+        "comment_text",
+        "cooperative",
+        "dependencies",
+        "description",
+        "dimensions",
+        "evidence",
+        "expected_revision",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "note",
+        "output_refs",
+        "priority",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "title",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "checkpoint",
+        "namespace": "qa",
+        "task_id": "t",
+        "checkpoint": "progress",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "archive",
+      "model": "TaskArchiveRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:265-291",
+      "required": [
+        "namespace",
+        "task_id",
+        "action"
+      ],
+      "canonical_allowed": [
+        "action",
+        "archive_note",
+        "expected_revision",
+        "namespace",
+        "note",
+        "task_id"
+      ],
+      "canonical_forbidden_public_fields": [
+        "blocker_reason",
+        "candidate_ref",
+        "checkpoint",
+        "comment_text",
+        "cooperative",
+        "dependencies",
+        "description",
+        "dimensions",
+        "evidence",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "output_refs",
+        "priority",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "title",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "archive",
+        "namespace": "qa",
+        "task_id": "t",
+        "note": "reason",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "review",
+      "model": "TaskReviewRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:294-309",
+      "required": [
+        "namespace",
+        "task_id",
+        "action",
+        "dimensions",
+        "verdict"
+      ],
+      "canonical_allowed": [
+        "action",
+        "dimensions",
+        "evidence",
+        "expected_revision",
+        "namespace",
+        "task_id",
+        "verdict"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "candidate_ref",
+        "checkpoint",
+        "comment_text",
+        "cooperative",
+        "dependencies",
+        "description",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "note",
+        "output_refs",
+        "priority",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "title"
+      ],
+      "forbidden_example": {
+        "action": "review",
+        "namespace": "qa",
+        "task_id": "t",
+        "dimensions": [
+          "A"
+        ],
+        "verdict": "NON_BLOCKING",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "relate",
+      "model": "TaskRelateRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:230-238",
+      "required": [
+        "namespace",
+        "task_id",
+        "relation_kind",
+        "related_task_id",
+        "action"
+      ],
+      "canonical_allowed": [
+        "action",
+        "expected_revision",
+        "namespace",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "task_id"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "candidate_ref",
+        "checkpoint",
+        "comment_text",
+        "cooperative",
+        "dependencies",
+        "description",
+        "dimensions",
+        "evidence",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "note",
+        "output_refs",
+        "priority",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "title",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "relate",
+        "namespace": "qa",
+        "task_id": "t",
+        "relation_kind": "blocks",
+        "related_task_id": "u",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "unrelate",
+      "model": "TaskUnrelateRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:230-241",
+      "required": [
+        "namespace",
+        "task_id",
+        "relation_kind",
+        "related_task_id",
+        "action"
+      ],
+      "canonical_allowed": [
+        "action",
+        "expected_revision",
+        "namespace",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "task_id"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "candidate_ref",
+        "checkpoint",
+        "comment_text",
+        "cooperative",
+        "dependencies",
+        "description",
+        "dimensions",
+        "evidence",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "note",
+        "output_refs",
+        "priority",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "title",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "unrelate",
+        "namespace": "qa",
+        "task_id": "t",
+        "relation_kind": "blocks",
+        "related_task_id": "u",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "state",
+      "model": "TaskStateRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:244-246",
+      "required": [
+        "namespace",
+        "task_id",
+        "action",
+        "state"
+      ],
+      "canonical_allowed": [
+        "action",
+        "namespace",
+        "state",
+        "task_id"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "candidate_ref",
+        "checkpoint",
+        "comment_text",
+        "cooperative",
+        "dependencies",
+        "description",
+        "dimensions",
+        "evidence",
+        "expected_revision",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "note",
+        "output_refs",
+        "priority",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "request_id",
+        "resource_context",
+        "result",
+        "tags",
+        "title",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "state",
+        "namespace": "qa",
+        "task_id": "t",
+        "state": "qa",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    },
+    {
+      "action": "comment",
+      "model": "TaskCommentRequest",
+      "source": "src/terminal_mcp/application/task_requests.py:225-228",
+      "required": [
+        "namespace",
+        "task_id",
+        "action",
+        "comment_text"
+      ],
+      "canonical_allowed": [
+        "action",
+        "comment_text",
+        "namespace",
+        "task_id"
+      ],
+      "canonical_forbidden_public_fields": [
+        "archive_note",
+        "blocker_reason",
+        "candidate_ref",
+        "checkpoint",
+        "cooperative",
+        "dependencies",
+        "description",
+        "dimensions",
+        "evidence",
+        "expected_revision",
+        "force",
+        "force_reason",
+        "input_refs",
+        "isolation_hint",
+        "lane",
+        "next_action",
+        "note",
+        "output_refs",
+        "priority",
+        "related_namespace",
+        "related_task_id",
+        "relation_kind",
+        "request_id",
+        "resource_context",
+        "result",
+        "state",
+        "tags",
+        "title",
+        "verdict"
+      ],
+      "forbidden_example": {
+        "action": "comment",
+        "namespace": "qa",
+        "task_id": "t",
+        "comment_text": "note",
+        "title": "other"
+      },
+      "canonical_error": {
+        "path": "('title',)",
+        "type": "extra_forbidden"
+      },
+      "public_schema_accepts": true,
+      "strict_top_level_accepts": true,
+      "canonical_accepts": false
+    }
+  ]
+}

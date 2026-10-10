@@ -1,0 +1,34 @@
+{
+  "archive_note_whitespace": {
+    "canonical_accepts": true,
+    "runtime_ok": false,
+    "runtime_code": null,
+    "runtime_error": "task.archive_note: non-empty value required"
+  },
+  "comment_text_whitespace": {
+    "canonical_accepts": true,
+    "runtime_ok": false,
+    "runtime_code": "input_validation_failed",
+    "runtime_error": "Correct the indicated request field."
+  },
+  "release_reason_whitespace": {
+    "canonical_accepts": true,
+    "runtime_ok": false,
+    "runtime_code": "input_validation_failed",
+    "runtime_error": "Correct the indicated request field."
+  },
+  "archive_note_whitespace_masks_valid_note": {
+    "canonical_accepts": true,
+    "runtime_ok": false,
+    "runtime_error": "task.archive_note: non-empty value required"
+  },
+  "claim_intent_whitespace": {
+    "canonical_accepts": true,
+    "runtime_ok": false,
+    "runtime_code": "input_validation_failed",
+    "runtime_error": "Correct the indicated request field."
+  },
+  "release_reason_omitted": {
+    "runtime_ok": true
+  }
+}

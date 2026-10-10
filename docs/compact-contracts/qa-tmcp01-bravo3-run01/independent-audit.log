@@ -1,0 +1,74 @@
+/workspace/terminal-mcp/.venv-test/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+StreamableHTTP session manager started
+StreamableHTTP session manager started
+StreamableHTTP session manager started
+StreamableHTTP session manager started
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/access/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/executor/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+Processing request of type CallToolRequest
+Terminating session: None
+HTTP Request: POST https://tmcp01-qa.invalid/terminal-mcp/coordinator/v1/mcp/ "HTTP/1.1 200 OK"
+StreamableHTTP session manager shutting down
+StreamableHTTP session manager shutting down
+StreamableHTTP session manager shutting down
+StreamableHTTP session manager shutting down
+PASS 19/19 exact source-input/output, textual field and required markers, permissive transport, effective catalogue output
+PASS additional canonical cases: 15 runtime {'state_independent_claim': True, 'content_revision_before': 1, 'content_revision_after': 1, 'state_from': 'ready', 'state_to': 'blocked', 'archive_other_agent_code': 'owner_required', 'review_with_output_state_ok': True, 'release_without_reason_ok': True}
+PASS 19 malformed + 1 stress isolated HTTP wire; largest complete result bytes= 2207
+Saved /workspace/terminal-mcp-artifacts/bravo3-tmcp01-20261010/independent-evidence.json /workspace/terminal-mcp-artifacts/bravo3-tmcp01-20261010/19-tool-matrix.md

@@ -1,0 +1,3257 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Attach this connector once using session_number. Session number is mandatory; action is attach-only. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "attach",
+            "default": "attach",
+            "type": "string"
+          },
+          "session_number": {
+            "description": "Four-digit session number.",
+            "maxLength": 4,
+            "minLength": 4,
+            "pattern": "^[0-9]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_number"
+        ],
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "attach": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "session",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one canonical task as snapshot, detail, or history. Available without an active work cycle or Access Code.",
+      "inputSchema": {
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "string"
+          },
+          "detail": {
+            "default": "snapshot",
+            "description": "snapshot | detail | history"
+          },
+          "history_kind": {
+            "default": "events",
+            "description": "comments | events | reviews | output_states"
+          },
+          "limit": {
+            "default": 20,
+            "description": "integer"
+          },
+          "namespace": {
+            "description": "string"
+          },
+          "task_id": {
+            "description": "string"
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_get",
+      "outputSchema": {
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "task": {
+            "type": "object"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a bounded page of canonical TaskListItem records. Available without an active work cycle or Access Code.",
+      "inputSchema": {
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "string"
+          },
+          "lane": {
+            "default": null,
+            "description": "implementation | review | release | integration | general"
+          },
+          "limit": {
+            "default": 20,
+            "description": "integer"
+          },
+          "namespace": {
+            "default": null,
+            "description": "string"
+          },
+          "state": {
+            "default": null,
+            "description": "ready | in_progress | qa | blocked | deferred | done"
+          },
+          "tags": {
+            "default": null,
+            "description": "array"
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_list",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tasks": {
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. checkpoint needs checkpoint; state needs state; comment needs comment_text; review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; archive needs either non-null archive_note or non-null note. Attach this connector once; writes use its local work cycle.",
+      "inputSchema": {
+        "description": "Choose action and its domain fields. Create requires namespace and isolation_hint; create with state=done requires result. Archive requires namespace, task_id and archive_note or note. Update preserves state; use state or done to change it. All constraints are checked at runtime and reported as structured tool results.",
+        "properties": {
+          "action": {
+            "description": "\"archive\" | \"checkpoint\" | \"comment\" | \"create\" | \"relate\" | \"review\" | \"state\" | \"unrelate\" | \"update\". Actions: archive, checkpoint, comment, create, relate, review, state, unrelate, update. Required for: archive, checkpoint, comment, create, relate, review, state, unrelate, update.",
+            "x-runtime-schemas": {
+              "archive": {
+                "const": "archive",
+                "title": "Action",
+                "type": "string"
+              },
+              "checkpoint": {
+                "const": "checkpoint",
+                "title": "Action",
+                "type": "string"
+              },
+              "comment": {
+                "const": "comment",
+                "title": "Action",
+                "type": "string"
+              },
+              "create": {
+                "const": "create",
+                "title": "Action",
+                "type": "string"
+              },
+              "relate": {
+                "const": "relate",
+                "title": "Action",
+                "type": "string"
+              },
+              "review": {
+                "const": "review",
+                "title": "Action",
+                "type": "string"
+              },
+              "state": {
+                "const": "state",
+                "title": "Action",
+                "type": "string"
+              },
+              "unrelate": {
+                "const": "unrelate",
+                "title": "Action",
+                "type": "string"
+              },
+              "update": {
+                "const": "update",
+                "title": "Action",
+                "type": "string"
+              }
+            }
+          },
+          "archive_note": {
+            "description": "string; minLength=1; maxLength=4000 | null. Actions: archive. For archive, provide archive_note or note.",
+            "x-runtime-schemas": {
+              "archive": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Archive Note"
+              }
+            }
+          },
+          "blocker_reason": {
+            "description": "string; minLength=1; maxLength=4000 | null. Actions: update.",
+            "x-runtime-schemas": {
+              "update": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Blocker Reason"
+              }
+            }
+          },
+          "candidate_ref": {
+            "description": "string; maxLength=200 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Candidate Ref"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Candidate Ref"
+              }
+            }
+          },
+          "checkpoint": {
+            "description": "string; maxLength=4000 | object | array of (JSON value) | string; maxLength=4000 | object | array of (JSON value) | null. Actions: checkpoint, create. Required for: checkpoint.",
+            "x-runtime-schemas": {
+              "checkpoint": {
+                "oneOf": [
+                  {
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array"
+                  }
+                ],
+                "title": "Checkpoint",
+                "x-maxSerializedBytes": 16384
+              },
+              "create": {
+                "anyOf": [
+                  {
+                    "oneOf": [
+                      {
+                        "maxLength": 4000,
+                        "type": "string"
+                      },
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "array"
+                      }
+                    ],
+                    "x-maxSerializedBytes": 16384
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Checkpoint"
+              }
+            }
+          },
+          "comment_text": {
+            "description": "string; minLength=1; maxLength=4000. Actions: comment. Required for: comment.",
+            "x-runtime-schemas": {
+              "comment": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "title": "Comment Text",
+                "type": "string"
+              }
+            }
+          },
+          "cooperative": {
+            "description": "boolean | boolean | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "default": false,
+                "title": "Cooperative",
+                "type": "boolean"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Cooperative"
+              }
+            }
+          },
+          "dependencies": {
+            "description": "array of (object); maxItems=100 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/TaskDependency"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Dependencies"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/TaskDependency"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Dependencies"
+              }
+            }
+          },
+          "description": {
+            "description": "string; maxLength=8000 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "maxLength": 8000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "maxLength": 8000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              }
+            }
+          },
+          "dimensions": {
+            "description": "array of (\"A\" | \"C\" | \"R\"); minItems=1; maxItems=3; uniqueItems=true. Actions: review. Required for: review.",
+            "x-runtime-schemas": {
+              "review": {
+                "items": {
+                  "enum": [
+                    "A",
+                    "C",
+                    "R"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 1,
+                "title": "Dimensions",
+                "type": "array",
+                "uniqueItems": true
+              }
+            }
+          },
+          "evidence": {
+            "description": "object | null. Actions: review.",
+            "x-runtime-schemas": {
+              "review": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "x-maxSerializedBytes": 16384
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Evidence"
+              }
+            }
+          },
+          "expected_revision": {
+            "description": "integer; minimum=1; maximum=9223372036854775807 | null | integer; minimum=1; maximum=9223372036854775807. Actions: archive, relate, review, unrelate, update. Required for: update.",
+            "x-runtime-schemas": {
+              "archive": {
+                "anyOf": [
+                  {
+                    "maximum": 9223372036854775807,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Expected Revision"
+              },
+              "relate": {
+                "anyOf": [
+                  {
+                    "maximum": 9223372036854775807,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Expected Revision"
+              },
+              "review": {
+                "anyOf": [
+                  {
+                    "maximum": 9223372036854775807,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Expected Revision"
+              },
+              "unrelate": {
+                "anyOf": [
+                  {
+                    "maximum": 9223372036854775807,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Expected Revision"
+              },
+              "update": {
+                "maximum": 9223372036854775807,
+                "minimum": 1,
+                "title": "Expected Revision",
+                "type": "integer"
+              }
+            }
+          },
+          "force": {
+            "description": "boolean. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "default": false,
+                "title": "Force",
+                "type": "boolean"
+              },
+              "update": {
+                "default": false,
+                "title": "Force",
+                "type": "boolean"
+              }
+            }
+          },
+          "force_reason": {
+            "description": "string; minLength=1; maxLength=2000 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Force Reason"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Force Reason"
+              }
+            }
+          },
+          "input_refs": {
+            "description": "array of (string; minLength=1; maxLength=512); maxItems=64 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Input Refs"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Input Refs"
+              }
+            }
+          },
+          "isolation_hint": {
+            "description": "string; minLength=1; maxLength=160. Actions: create. Required for: create.",
+            "x-runtime-schemas": {
+              "create": {
+                "maxLength": 160,
+                "minLength": 1,
+                "title": "Isolation Hint",
+                "type": "string"
+              }
+            }
+          },
+          "lane": {
+            "description": "\"implementation\" | \"review\" | \"release\" | \"integration\" | \"general\" | \"implementation\" | \"review\" | \"release\" | \"integration\" | \"general\" | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "default": "general",
+                "enum": [
+                  "implementation",
+                  "review",
+                  "release",
+                  "integration",
+                  "general"
+                ],
+                "title": "Lane",
+                "type": "string"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "implementation",
+                      "review",
+                      "release",
+                      "integration",
+                      "general"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Lane"
+              }
+            }
+          },
+          "namespace": {
+            "description": "string; minLength=1; maxLength=120. Actions: archive, checkpoint, comment, create, relate, review, state, unrelate, update. Required for: archive, checkpoint, comment, create, relate, review, state, unrelate, update.",
+            "x-runtime-schemas": {
+              "archive": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "checkpoint": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "comment": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "create": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "relate": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "review": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "state": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "unrelate": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              },
+              "update": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Namespace",
+                "type": "string"
+              }
+            }
+          },
+          "next_action": {
+            "description": "string; maxLength=2000 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Next Action"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Next Action"
+              }
+            }
+          },
+          "note": {
+            "description": "string; minLength=1; maxLength=2000 | null. Actions: archive. For archive, provide archive_note or note.",
+            "x-runtime-schemas": {
+              "archive": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              }
+            }
+          },
+          "output_refs": {
+            "description": "array of (string; minLength=1; maxLength=512); maxItems=64 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Output Refs"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Output Refs"
+              }
+            }
+          },
+          "priority": {
+            "description": "\"P0\" | \"P1\" | \"P2\" | \"P3\" | \"P0\" | \"P1\" | \"P2\" | \"P3\" | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "default": "P2",
+                "enum": [
+                  "P0",
+                  "P1",
+                  "P2",
+                  "P3"
+                ],
+                "title": "Priority",
+                "type": "string"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "P0",
+                      "P1",
+                      "P2",
+                      "P3"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Priority"
+              }
+            }
+          },
+          "related_namespace": {
+            "description": "string; minLength=1; maxLength=120 | null. Actions: relate, unrelate.",
+            "x-runtime-schemas": {
+              "relate": {
+                "anyOf": [
+                  {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Related Namespace"
+              },
+              "unrelate": {
+                "anyOf": [
+                  {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Related Namespace"
+              }
+            }
+          },
+          "related_task_id": {
+            "description": "string; minLength=1; maxLength=120. Actions: relate, unrelate. Required for: relate, unrelate.",
+            "x-runtime-schemas": {
+              "relate": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Related Task Id",
+                "type": "string"
+              },
+              "unrelate": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Related Task Id",
+                "type": "string"
+              }
+            }
+          },
+          "relation_kind": {
+            "description": "string; minLength=1; maxLength=64. Actions: relate, unrelate. Required for: relate, unrelate.",
+            "x-runtime-schemas": {
+              "relate": {
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Relation Kind",
+                "type": "string"
+              },
+              "unrelate": {
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Relation Kind",
+                "type": "string"
+              }
+            }
+          },
+          "request_id": {
+            "description": "string; minLength=1; maxLength=128; pattern=\"^[A-Za-z0-9._:-]+$\" | null. Actions: create.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "description": "Stable operation ID for task creation. Use the same ID only to replay the exact original request; a new create needs a new ID.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._:-]+$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Request Id"
+              }
+            }
+          },
+          "resource_context": {
+            "description": "object | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "x-maxSerializedBytes": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Resource Context"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "x-maxSerializedBytes": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Resource Context"
+              }
+            }
+          },
+          "result": {
+            "description": "string; maxLength=16384 | object | array of (JSON value) | null. Actions: create, update. For create, a non-null result is required when state=done.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "oneOf": [
+                      {
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "array"
+                      }
+                    ],
+                    "x-maxSerializedBytes": 32768
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Result"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "oneOf": [
+                      {
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "array"
+                      }
+                    ],
+                    "x-maxSerializedBytes": 32768
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Result"
+              }
+            }
+          },
+          "state": {
+            "description": "\"ready\" | \"in_progress\" | \"qa\" | \"blocked\" | \"deferred\" | \"done\". Actions: create, state. Required for: state.",
+            "x-runtime-schemas": {
+              "create": {
+                "default": "ready",
+                "enum": [
+                  "ready",
+                  "in_progress",
+                  "qa",
+                  "blocked",
+                  "deferred",
+                  "done"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "ready",
+                  "in_progress",
+                  "qa",
+                  "blocked",
+                  "deferred",
+                  "done"
+                ],
+                "title": "State",
+                "type": "string"
+              }
+            }
+          },
+          "tags": {
+            "description": "array of (string; minLength=1; maxLength=64); maxItems=50 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 50,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tags"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 50,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tags"
+              }
+            }
+          },
+          "task_id": {
+            "description": "string; minLength=1; maxLength=120 | string; minLength=1; maxLength=120 | null. Actions: archive, checkpoint, comment, create, relate, review, state, unrelate, update. Required for: archive, checkpoint, comment, relate, review, state, unrelate, update.",
+            "x-runtime-schemas": {
+              "archive": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "checkpoint": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "comment": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "create": {
+                "anyOf": [
+                  {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Task Id"
+              },
+              "relate": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "review": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "state": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "unrelate": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              },
+              "update": {
+                "maxLength": 120,
+                "minLength": 1,
+                "title": "Task Id",
+                "type": "string"
+              }
+            }
+          },
+          "title": {
+            "description": "string; minLength=1; maxLength=200 | null. Actions: create, update.",
+            "x-runtime-schemas": {
+              "create": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              },
+              "update": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              }
+            }
+          },
+          "verdict": {
+            "description": "\"NON_BLOCKING\" | \"BLOCKING\". Actions: review. Required for: review.",
+            "x-runtime-schemas": {
+              "review": {
+                "enum": [
+                  "NON_BLOCKING",
+                  "BLOCKING"
+                ],
+                "title": "Verdict",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "type": "object",
+        "x-runtime-schema": {
+          "$defs": {
+            "TaskArchiveRequest": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "archive_note": {
+                      "not": {
+                        "type": "null"
+                      }
+                    }
+                  },
+                  "required": [
+                    "archive_note"
+                  ]
+                },
+                {
+                  "properties": {
+                    "note": {
+                      "not": {
+                        "type": "null"
+                      }
+                    }
+                  },
+                  "required": [
+                    "note"
+                  ]
+                }
+              ],
+              "properties": {
+                "action": {
+                  "const": "archive",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "archive_note": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Archive Note"
+                },
+                "expected_revision": {
+                  "anyOf": [
+                    {
+                      "maximum": 9223372036854775807,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Expected Revision"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "note": {
+                  "anyOf": [
+                    {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Note"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action"
+              ],
+              "title": "TaskArchiveRequest",
+              "type": "object"
+            },
+            "TaskCheckpointRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "checkpoint",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "checkpoint": {
+                  "oneOf": [
+                    {
+                      "maxLength": 4000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "object"
+                    },
+                    {
+                      "type": "array"
+                    }
+                  ],
+                  "title": "Checkpoint",
+                  "x-maxSerializedBytes": 16384
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action",
+                "checkpoint"
+              ],
+              "title": "TaskCheckpointRequest",
+              "type": "object"
+            },
+            "TaskClaimRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "claim",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "claim_intent": {
+                  "maxLength": 160,
+                  "minLength": 1,
+                  "title": "Claim Intent",
+                  "type": "string"
+                },
+                "code": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4,
+                      "minLength": 4,
+                      "pattern": "^[0-9]{4}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Code"
+                },
+                "expected_revision": {
+                  "anyOf": [
+                    {
+                      "maximum": 9223372036854775807,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Expected Revision"
+                },
+                "force": {
+                  "default": false,
+                  "title": "Force",
+                  "type": "boolean"
+                },
+                "force_reason": {
+                  "anyOf": [
+                    {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Force Reason"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action",
+                "claim_intent"
+              ],
+              "title": "TaskClaimRequest",
+              "type": "object"
+            },
+            "TaskCommentRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "comment",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "comment_text": {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "title": "Comment Text",
+                  "type": "string"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action",
+                "comment_text"
+              ],
+              "title": "TaskCommentRequest",
+              "type": "object"
+            },
+            "TaskCreateRequest": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "state": {
+                        "const": "done"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "result": {
+                        "not": {
+                          "type": "null"
+                        }
+                      }
+                    },
+                    "required": [
+                      "result"
+                    ]
+                  }
+                }
+              ],
+              "properties": {
+                "action": {
+                  "const": "create",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "candidate_ref": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Candidate Ref"
+                },
+                "checkpoint": {
+                  "anyOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "maxLength": 4000,
+                          "type": "string"
+                        },
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "array"
+                        }
+                      ],
+                      "x-maxSerializedBytes": 16384
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Checkpoint"
+                },
+                "cooperative": {
+                  "default": false,
+                  "title": "Cooperative",
+                  "type": "boolean"
+                },
+                "dependencies": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/TaskDependency"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Dependencies"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "maxLength": 8000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Description"
+                },
+                "force": {
+                  "default": false,
+                  "title": "Force",
+                  "type": "boolean"
+                },
+                "force_reason": {
+                  "anyOf": [
+                    {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Force Reason"
+                },
+                "input_refs": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Input Refs"
+                },
+                "isolation_hint": {
+                  "maxLength": 160,
+                  "minLength": 1,
+                  "title": "Isolation Hint",
+                  "type": "string"
+                },
+                "lane": {
+                  "default": "general",
+                  "enum": [
+                    "implementation",
+                    "review",
+                    "release",
+                    "integration",
+                    "general"
+                  ],
+                  "title": "Lane",
+                  "type": "string"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "next_action": {
+                  "anyOf": [
+                    {
+                      "maxLength": 2000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Next Action"
+                },
+                "output_refs": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Output Refs"
+                },
+                "priority": {
+                  "default": "P2",
+                  "enum": [
+                    "P0",
+                    "P1",
+                    "P2",
+                    "P3"
+                  ],
+                  "title": "Priority",
+                  "type": "string"
+                },
+                "request_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable operation ID for task creation. Use the same ID only to replay the exact original request; a new create needs a new ID.",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._:-]+$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Request Id"
+                },
+                "resource_context": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "x-maxSerializedBytes": 8192
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Resource Context"
+                },
+                "result": {
+                  "anyOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "maxLength": 16384,
+                          "type": "string"
+                        },
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "array"
+                        }
+                      ],
+                      "x-maxSerializedBytes": 32768
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Result"
+                },
+                "state": {
+                  "default": "ready",
+                  "enum": [
+                    "ready",
+                    "in_progress",
+                    "qa",
+                    "blocked",
+                    "deferred",
+                    "done"
+                  ],
+                  "title": "State",
+                  "type": "string"
+                },
+                "tags": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Tags"
+                },
+                "task_id": {
+                  "anyOf": [
+                    {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Task Id"
+                },
+                "title": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Title"
+                }
+              },
+              "required": [
+                "action",
+                "namespace",
+                "isolation_hint"
+              ],
+              "title": "TaskCreateRequest",
+              "type": "object"
+            },
+            "TaskDependency": {
+              "additionalProperties": false,
+              "properties": {
+                "namespace": {
+                  "anyOf": [
+                    {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Namespace"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "task_id"
+              ],
+              "title": "TaskDependency",
+              "type": "object"
+            },
+            "TaskRelateRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "relate",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "anyOf": [
+                    {
+                      "maximum": 9223372036854775807,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Expected Revision"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "related_namespace": {
+                  "anyOf": [
+                    {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Related Namespace"
+                },
+                "related_task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Related Task Id",
+                  "type": "string"
+                },
+                "relation_kind": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "title": "Relation Kind",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "relation_kind",
+                "related_task_id",
+                "action"
+              ],
+              "title": "TaskRelateRequest",
+              "type": "object"
+            },
+            "TaskReleaseRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "release",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "code": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4,
+                      "minLength": 4,
+                      "pattern": "^[0-9]{4}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Code"
+                },
+                "expected_revision": {
+                  "anyOf": [
+                    {
+                      "maximum": 9223372036854775807,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Expected Revision"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "release_reason": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Optional owner release reason; omission uses a default audit reason. Releasing an already-released own claim is an idempotent success.",
+                  "title": "Release Reason"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action"
+              ],
+              "title": "TaskReleaseRequest",
+              "type": "object"
+            },
+            "TaskReviewRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "review",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "dimensions": {
+                  "items": {
+                    "enum": [
+                      "A",
+                      "C",
+                      "R"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "minItems": 1,
+                  "title": "Dimensions",
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "x-maxSerializedBytes": 16384
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Evidence"
+                },
+                "expected_revision": {
+                  "anyOf": [
+                    {
+                      "maximum": 9223372036854775807,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Expected Revision"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                },
+                "verdict": {
+                  "enum": [
+                    "NON_BLOCKING",
+                    "BLOCKING"
+                  ],
+                  "title": "Verdict",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action",
+                "dimensions",
+                "verdict"
+              ],
+              "title": "TaskReviewRequest",
+              "type": "object"
+            },
+            "TaskStateRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "state",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "ready",
+                    "in_progress",
+                    "qa",
+                    "blocked",
+                    "deferred",
+                    "done"
+                  ],
+                  "title": "State",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "action",
+                "state"
+              ],
+              "title": "TaskStateRequest",
+              "type": "object"
+            },
+            "TaskUnrelateRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "unrelate",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "anyOf": [
+                    {
+                      "maximum": 9223372036854775807,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Expected Revision"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "related_namespace": {
+                  "anyOf": [
+                    {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Related Namespace"
+                },
+                "related_task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Related Task Id",
+                  "type": "string"
+                },
+                "relation_kind": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "title": "Relation Kind",
+                  "type": "string"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "relation_kind",
+                "related_task_id",
+                "action"
+              ],
+              "title": "TaskUnrelateRequest",
+              "type": "object"
+            },
+            "TaskUpdateRequest": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "update",
+                  "title": "Action",
+                  "type": "string"
+                },
+                "blocker_reason": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Blocker Reason"
+                },
+                "candidate_ref": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Candidate Ref"
+                },
+                "cooperative": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Cooperative"
+                },
+                "dependencies": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/TaskDependency"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Dependencies"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "maxLength": 8000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Description"
+                },
+                "expected_revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 1,
+                  "title": "Expected Revision",
+                  "type": "integer"
+                },
+                "force": {
+                  "default": false,
+                  "title": "Force",
+                  "type": "boolean"
+                },
+                "force_reason": {
+                  "anyOf": [
+                    {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Force Reason"
+                },
+                "input_refs": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Input Refs"
+                },
+                "lane": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "implementation",
+                        "review",
+                        "release",
+                        "integration",
+                        "general"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Lane"
+                },
+                "namespace": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Namespace",
+                  "type": "string"
+                },
+                "next_action": {
+                  "anyOf": [
+                    {
+                      "maxLength": 2000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Next Action"
+                },
+                "output_refs": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 64,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Output Refs"
+                },
+                "priority": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "P0",
+                        "P1",
+                        "P2",
+                        "P3"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Priority"
+                },
+                "resource_context": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "x-maxSerializedBytes": 8192
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Resource Context"
+                },
+                "result": {
+                  "anyOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "maxLength": 16384,
+                          "type": "string"
+                        },
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "array"
+                        }
+                      ],
+                      "x-maxSerializedBytes": 32768
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Result"
+                },
+                "tags": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Tags"
+                },
+                "task_id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "title": "Task Id",
+                  "type": "string"
+                },
+                "title": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Title"
+                }
+              },
+              "required": [
+                "namespace",
+                "task_id",
+                "expected_revision",
+                "action"
+              ],
+              "title": "TaskUpdateRequest",
+              "type": "object"
+            }
+          },
+          "discriminator": {
+            "mapping": {
+              "archive": "#/$defs/TaskArchiveRequest",
+              "checkpoint": "#/$defs/TaskCheckpointRequest",
+              "comment": "#/$defs/TaskCommentRequest",
+              "create": "#/$defs/TaskCreateRequest",
+              "relate": "#/$defs/TaskRelateRequest",
+              "review": "#/$defs/TaskReviewRequest",
+              "state": "#/$defs/TaskStateRequest",
+              "unrelate": "#/$defs/TaskUnrelateRequest",
+              "update": "#/$defs/TaskUpdateRequest"
+            },
+            "propertyName": "action"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TaskCreateRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskUpdateRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskCheckpointRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskCommentRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskRelateRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskUnrelateRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskStateRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskArchiveRequest"
+            },
+            {
+              "$ref": "#/$defs/TaskReviewRequest"
+            }
+          ]
+        },
+        "x-terminal-mcp-action-matrix": {
+          "archive": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "checkpoint": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "comment": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "create": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "done": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "relate": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "review": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "state": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "unrelate": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "update": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "task_manage",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "task": {
+            "type": "object"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a bounded dependency/relation graph rooted at one task. Available without an active work cycle or Access Code.",
+      "inputSchema": {
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "string"
+          },
+          "direction": {
+            "default": "both",
+            "description": "both | incoming | outgoing"
+          },
+          "kinds": {
+            "default": null,
+            "description": "array"
+          },
+          "limit": {
+            "default": 20,
+            "description": "integer"
+          },
+          "namespace": {
+            "description": "string"
+          },
+          "task_id": {
+            "description": "string"
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_graph",
+      "outputSchema": {
+        "properties": {
+          "edges": {
+            "type": "array"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "nodes": {
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read compact current LogicalAgent, WorkWindow, and WorkSession state. Available without an active work cycle or Access Code.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "agent_observe",
+      "outputSchema": {
+        "properties": {
+          "agents": {
+            "type": "array"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "send | read | ack | reply | history | recipients"
+          },
+          "alert": {
+            "default": false,
+            "description": "boolean"
+          },
+          "cursor": {
+            "default": null,
+            "description": "string"
+          },
+          "detail": {
+            "default": "summary",
+            "description": "summary | full"
+          },
+          "limit": {
+            "default": 20,
+            "description": "integer"
+          },
+          "message_hash": {
+            "default": null,
+            "description": "string"
+          },
+          "mode": {
+            "default": null,
+            "description": "notify | ack | alert"
+          },
+          "namespace": {
+            "default": null,
+            "description": "string"
+          },
+          "require_reply": {
+            "default": false,
+            "description": "boolean"
+          },
+          "scope": {
+            "default": "local",
+            "description": "local | fleet"
+          },
+          "target": {
+            "default": null,
+            "description": "string"
+          },
+          "task_id": {
+            "default": null,
+            "description": "string"
+          },
+          "text": {
+            "default": null,
+            "description": "string"
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "ack": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "history": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "recipients": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "reply": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "send": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "message",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "recipients": {
+            "type": "array"
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "sender": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "unavailable_peers": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.",
+      "inputSchema": {
+        "properties": {
+          "extended": {
+            "default": false,
+            "description": "boolean"
+          }
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "health",
+      "outputSchema": {
+        "properties": {
+          "agent_name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "application": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "auth_mode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "components": {
+            "type": "array"
+          },
+          "error": {
+            "type": "object"
+          },
+          "healthy": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "storage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "terminal": {
+            "type": "object"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "version": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "workflow": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

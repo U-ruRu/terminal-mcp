@@ -1,0 +1,1280 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Attach this connector once using session_number. Session number is mandatory; action is attach-only. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:string (default=\"attach\"; SCHEMA_FALLBACK {\"const\":\"attach\"}); session_number:string (pattern=\"^[0-9]{4}$\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle.\nReturns: MeshAttachReceipt{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "action": {},
+          "session_number": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "attach": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "session",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read bounded TaskListItem records for work orientation; the agent selects work. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace?:string(1..120)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination.\nReturns: TaskListSuccess{ok:true,tasks:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "cursor": {},
+          "lane": {},
+          "limit": {},
+          "namespace": {},
+          "state": {},
+          "tags": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "task_list",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tasks": {
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Run a command; fast completion may include the first bounded output page. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): command:string(1..32768); queue_id?:int (>=1; <=65535)? (default=null); task_scope?:string(1..256) (default=\"none\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: a command run executes a shell command in the current managed work session; no implicit idempotency guarantee.\nReturns: inline:ONE_OF(CmdRunResult,CmdReadResult,CmdCancelResult,CmdRecoveryResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "command": {},
+          "queue_id": {},
+          "task_scope": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "run": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "command_run",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "command": {
+            "type": "object"
+          },
+          "coordination": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "displayed_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "has_more": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "line_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "lines": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_pruned_at": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "output_retained": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "output_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "overall_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "task_scope": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "task_scope_options": {
+            "type": "array"
+          },
+          "task_targets": {
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal. Access Code and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): cmd_hash?:string(1..128)? (default=null); limit?:int (>=1; <=100; default=100); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdReadResult{session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CommandJournal{ok:true,action:\"journal\",node_id:string,commands:array,next_cursor:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "cmd_hash": {},
+          "cursor": {},
+          "limit": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "journal": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "output": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          }
+        }
+      },
+      "name": "command_read",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "command": {
+            "type": "object"
+          },
+          "commands": {
+            "type": "array"
+          },
+          "coordination": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "displayed_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "has_more": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "line_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "lines": {
+            "type": "array"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_pruned_at": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "output_retained": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "output_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "overall_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Cancel a command owned by the current LogicalAgent. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): cmd_hash:string(1..128).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: inline:ONE_OF(CmdRunResult,CmdReadResult,CmdCancelResult,CmdRecoveryResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "cmd_hash": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "cancel": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "command_cancel",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "command": {
+            "type": "object"
+          },
+          "coordination": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "displayed_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "has_more": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "line_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "lines": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_pruned_at": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "output_retained": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "output_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "overall_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "task_scope": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "task_scope_options": {
+            "type": "array"
+          },
+          "task_targets": {
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Run a recovery command under the current managed session. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): command:string(1..32768).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: inline:ONE_OF(CmdRunResult,CmdReadResult,CmdCancelResult,CmdRecoveryResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "command": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "recovery": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "command_recovery",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "command": {
+            "type": "object"
+          },
+          "coordination": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "displayed_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "has_more": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "line_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "lines": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "output_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_pruned_at": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "output_retained": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "output_truncated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "overall_lines_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "task_scope": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "task_scope_options": {
+            "type": "array"
+          },
+          "task_targets": {
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"claim\"|\"release\"; namespace:string(1..120); task_id:string(1..120); expected_revision?:int (>=1; <=9223372036854775807)? (default=null); claim_intent?:string(1..160)? (default=null); release_reason?:string(1..4000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nServer action field policy: claim: allowed fields [action, claim_intent, expected_revision, namespace, task_id]; required non-null [action, claim_intent, namespace, task_id]; all other named inputs rejected as extra_forbidden; release: allowed fields [action, expected_revision, namespace, release_reason, task_id]; required non-null [action, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nConditions: ALL_OF(IF action==\"claim\" => requires(claim_intent)).\nRuntime rules: action=claim: claim requires non-null claim_intent string(1..160) containing non-whitespace characters; runtime trims and rejects whitespace-only intent. claim forbids release_reason; release forbids claim_intent; canonical action-specific field lists apply.; action=release: release_reason is optional even when an existing live claim is released: omitted/null uses released_by_owner. A supplied release_reason must be non-whitespace after trimming when a live claim is released; idempotent unclaimed release bypasses reason validation..\nReturns: inline:ONE_OF(TaskClaimSuccess,TaskReleaseSuccess) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "action": {},
+          "claim_intent": {},
+          "expected_revision": {},
+          "namespace": {},
+          "release_reason": {},
+          "task_id": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "claim": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "release": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "task_claim",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "task": {
+            "type": "object"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "warnings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Set a valid task state as any admitted agent, including on a task claimed by someone else. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); state:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\".\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: any admitted agent may set valid workflow state, including on a task claimed by someone else. expected_revision does not guard state writes via content CAS; content revision is unchanged, live claims persist, and repeated state assignment emits no event..\nReturns: TaskStateSuccess{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "namespace": {},
+          "state": {},
+          "task_id": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "state": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "task_state",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Append comment_text with action='comment' (the default), or save checkpoint with action='checkpoint' and a checkpoint payload. Checkpoint updates preserve task state and history. Writes require this connector's attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:\"comment\"|\"checkpoint\" (default=\"comment\"); namespace:string(1..120); task_id:string(1..120); comment_text?:string(1..4000)? (default=null); checkpoint?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":16384,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":32768}? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nServer action field policy: comment: allowed fields [action, comment_text, namespace, task_id]; required non-null [comment_text, namespace, task_id]; all other named inputs rejected as extra_forbidden; checkpoint: allowed fields [action, checkpoint, namespace, task_id]; required non-null [action, checkpoint, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nRuntime rules: comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision..\nReturns: TaskCommentSuccess{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "action": {},
+          "checkpoint": {},
+          "comment_text": {},
+          "namespace": {},
+          "task_id": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "checkpoint": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "comment": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "task_comment",
+      "outputSchema": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"send\"|\"read\"|\"ack\"|\"reply\"|\"history\"|\"recipients\"; text?:string(0..16384)? (default=null); target?:string(1..120)? (default=null); message_hash?:string(1..128)? (default=null); mode?:\"notify\"|\"ack\"|\"alert\"? (default=null); require_reply?:boolean (default=false); alert?:boolean (default=false); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null); detail?:\"summary\"|\"full\" (default=\"summary\"); namespace?:string(1..120)? (default=null); task_id?:string(1..120)? (default=null); scope?:\"local\"|\"fleet\" (default=\"local\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nConditions: ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text)).\nRuntime rules: send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden).; Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours.; For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack.; namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target..\nReturns: inline:ONE_OF(MessageListResult,MessageSendResult,MessageAcknowledgeResult,MessageReplyResult,MessageRecipientsResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
+        "properties": {
+          "action": {},
+          "alert": {},
+          "cursor": {},
+          "detail": {},
+          "limit": {},
+          "message_hash": {},
+          "mode": {},
+          "namespace": {},
+          "require_reply": {},
+          "scope": {},
+          "target": {},
+          "task_id": {},
+          "text": {}
+        },
+        "type": "object",
+        "x-terminal-mcp-action-matrix": {
+          "ack": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "history": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "read": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "recipients": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "x-openai-isConsequential": false
+          },
+          "reply": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          },
+          "send": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "x-openai-isConsequential": true
+          }
+        }
+      },
+      "name": "message",
+      "outputSchema": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object"
+          },
+          "message": {
+            "type": "object"
+          },
+          "message_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "provider_identity": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "recipients": {
+            "type": "array"
+          },
+          "required_action": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "return_to_chat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "sender": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "session_lifecycle": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "unavailable_peers": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

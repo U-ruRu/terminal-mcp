@@ -987,7 +987,7 @@ def build_role_mcp(
             elif tool.name == "task_comment":
                 tool.description = (
                     "Append comment_text with action='comment' (the default), or save "
-                    "checkpoint with action='checkpoint' and optional expected_revision. "
+                    "checkpoint with action='checkpoint' and a checkpoint payload. "
                     "Checkpoint updates preserve task state and history. "
                     "Writes require this connector's attached local work cycle."
                 )

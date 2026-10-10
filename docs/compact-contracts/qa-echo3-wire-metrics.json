@@ -1,0 +1,189 @@
+{
+  "qa_parent": "d1caea24e2d8c2dff650568fac616bcee0efb99b",
+  "errors": [
+    {
+      "tool": "access.session",
+      "wire_bytes": 1473,
+      "result_bytes": 1439,
+      "structured_bytes": 633,
+      "error_bytes": 311,
+      "path": "action"
+    },
+    {
+      "tool": "executor.session",
+      "wire_bytes": 1537,
+      "result_bytes": 1503,
+      "structured_bytes": 665,
+      "error_bytes": 343,
+      "path": "session_number"
+    },
+    {
+      "tool": "executor.task_list",
+      "wire_bytes": 1527,
+      "result_bytes": 1493,
+      "structured_bytes": 658,
+      "error_bytes": 336,
+      "path": "limit"
+    },
+    {
+      "tool": "executor.command_run",
+      "wire_bytes": 1415,
+      "result_bytes": 1381,
+      "structured_bytes": 604,
+      "error_bytes": 282,
+      "path": "command"
+    },
+    {
+      "tool": "executor.command_read",
+      "wire_bytes": 1522,
+      "result_bytes": 1487,
+      "structured_bytes": 655,
+      "error_bytes": 333,
+      "path": "limit"
+    },
+    {
+      "tool": "executor.command_cancel",
+      "wire_bytes": 1516,
+      "result_bytes": 1481,
+      "structured_bytes": 652,
+      "error_bytes": 330,
+      "path": "cmd_hash"
+    },
+    {
+      "tool": "executor.command_recovery",
+      "wire_bytes": 1512,
+      "result_bytes": 1477,
+      "structured_bytes": 650,
+      "error_bytes": 328,
+      "path": "command"
+    },
+    {
+      "tool": "executor.task_claim",
+      "wire_bytes": 1436,
+      "result_bytes": 1401,
+      "structured_bytes": 614,
+      "error_bytes": 292,
+      "path": "claim_intent"
+    },
+    {
+      "tool": "executor.task_state",
+      "wire_bytes": 1016,
+      "result_bytes": 981,
+      "structured_bytes": 416,
+      "error_bytes": 94,
+      "path": null
+    },
+    {
+      "tool": "executor.task_comment",
+      "wire_bytes": 1798,
+      "result_bytes": 1763,
+      "structured_bytes": 783,
+      "error_bytes": 461,
+      "path": "checkpoint.*"
+    },
+    {
+      "tool": "executor.message",
+      "wire_bytes": 1492,
+      "result_bytes": 1457,
+      "structured_bytes": 642,
+      "error_bytes": 320,
+      "path": "message_hash"
+    },
+    {
+      "tool": "coordinator.session",
+      "wire_bytes": 1538,
+      "result_bytes": 1503,
+      "structured_bytes": 665,
+      "error_bytes": 343,
+      "path": "session_number"
+    },
+    {
+      "tool": "coordinator.task_get",
+      "wire_bytes": 1474,
+      "result_bytes": 1439,
+      "structured_bytes": 633,
+      "error_bytes": 311,
+      "path": "detail"
+    },
+    {
+      "tool": "coordinator.task_list",
+      "wire_bytes": 1510,
+      "result_bytes": 1475,
+      "structured_bytes": 649,
+      "error_bytes": 327,
+      "path": "tags.0"
+    },
+    {
+      "tool": "coordinator.task_manage",
+      "wire_bytes": 1478,
+      "result_bytes": 1443,
+      "structured_bytes": 635,
+      "error_bytes": 313,
+      "path": "expected_revision"
+    },
+    {
+      "tool": "coordinator.task_graph",
+      "wire_bytes": 1454,
+      "result_bytes": 1419,
+      "structured_bytes": 623,
+      "error_bytes": 301,
+      "path": "*"
+    },
+    {
+      "tool": "coordinator.agent_observe",
+      "wire_bytes": 1434,
+      "result_bytes": 1399,
+      "structured_bytes": 613,
+      "error_bytes": 291,
+      "path": "*"
+    },
+    {
+      "tool": "coordinator.message",
+      "wire_bytes": 1492,
+      "result_bytes": 1457,
+      "structured_bytes": 642,
+      "error_bytes": 320,
+      "path": "message_hash"
+    },
+    {
+      "tool": "coordinator.health",
+      "wire_bytes": 1418,
+      "result_bytes": 1383,
+      "structured_bytes": 605,
+      "error_bytes": 283,
+      "path": "extended"
+    },
+    {
+      "tool": "STRESS:coordinator.task_manage",
+      "wire_bytes": 2219,
+      "result_bytes": 2183,
+      "structured_bytes": 981,
+      "error_bytes": 659,
+      "path": "*"
+    },
+    {
+      "tool": "STRESS:executor.command_run",
+      "wire_bytes": 1521,
+      "result_bytes": 1485,
+      "structured_bytes": 654,
+      "error_bytes": 332,
+      "path": "command"
+    },
+    {
+      "tool": "STRESS:executor.message",
+      "wire_bytes": 1537,
+      "result_bytes": 1501,
+      "structured_bytes": 662,
+      "error_bytes": 340,
+      "path": "message_hash"
+    },
+    {
+      "tool": "STRESS:coordinator.task_list",
+      "wire_bytes": 1479,
+      "result_bytes": 1443,
+      "structured_bytes": 633,
+      "error_bytes": 311,
+      "path": "tags"
+    }
+  ]
+}

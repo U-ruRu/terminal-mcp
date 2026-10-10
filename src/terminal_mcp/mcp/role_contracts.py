@@ -422,7 +422,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     (
         "executor",
         "task_state",
-    ): "Apply the canonical task state machine for a task owned by the current LogicalAgent.",
+    ): "Set a valid task state as any admitted agent, including on a task claimed by someone else.",
     ("executor", "task_comment"): "Append a comment/checkpoint note to canonical task history.",
     (
         "executor",
@@ -444,7 +444,7 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ): "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. "
     "checkpoint needs checkpoint; state needs state; comment needs comment_text; "
     "review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; "
-    "archive needs archive_note.",
+    "archive needs either non-null archive_note or non-null note.",
     ("coordinator", "task_graph"): "Read a bounded dependency/relation graph rooted at one task.",
     (
         "coordinator",
