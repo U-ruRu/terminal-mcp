@@ -295,6 +295,19 @@ class MessageDeliveryError(_Strict):
     retry: Literal["retry"]
 
 
+class MessageRecipientReceipt(_Strict):
+    """Recipient facts: first_seen is surface/read, read_at is the legacy ACK clock."""
+
+    public_name: str | None = None
+    state: MessageState | None = None
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+    seen_count: int | None = None
+    read_at: str | None = None
+    replied_at: str | None = None
+    reply_message_hash: MessageId | None = None
+
+
 class MessageRecord(_Strict):
     message_hash: MessageId | None = None
     message_id: MessageId | None = None
@@ -319,6 +332,7 @@ class MessageRecord(_Strict):
     task_id: TaskId | None = None
     scope: str | None = None
     delivered_to: list[str] | None = None
+    deliveries: list[MessageRecipientReceipt] | None = None
     message_hashes: dict[str, str] | None = None
     pending_peers: list[str] | None = None
     delivery_errors: list[MessageDeliveryError] | None = None
@@ -906,6 +920,12 @@ def _message_record(raw: dict[str, Any], **overrides: Any) -> dict[str, Any]:
             else "delivered"
         )
     item.update(overrides)
+    if item.get("deliveries") is not None:
+        # Do not expose internal logical IDs from acceptance receipts.
+        item["deliveries"] = [
+            _known(MessageRecipientReceipt, receipt).model_dump(mode="json", exclude_unset=True)
+            for receipt in item["deliveries"]
+        ]
     return _known(MessageRecord, item).model_dump(mode="json", exclude_unset=True)
 
 
