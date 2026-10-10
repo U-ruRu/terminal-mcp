@@ -36,4 +36,3 @@ The prior independent Bravo-3 source checks and MCP-wire replay are preserved; t
 Current published/live servers are unchanged. The remaining live gate is a fresh ChatGPT connector A/B test: malformed-but-object arguments must reach the server, responses must stay compact **including pre-tool failure presentation**, tool selection must remain correct, and all authorized successful operations still need verification. The MCP object transport format cannot prevent a client from enforcing additional private rules, nor can offline tests measure live ChatGPT token billing. Future accepted changes in unrelated output schemas require regenerating the catalogue on that later integrated SHA.
 
 OAuth, Events, active release branches and deployments are outside this task.
-

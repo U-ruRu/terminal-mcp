@@ -39,4 +39,3 @@ Generator refuses stale artifacts/annotations, unknown refs or canonical action-
 2. Fresh ChatGPT test connector A/B: malformed object inputs reach server, no huge pre-tool schema echo, authorized actions and message workflows succeed, output/errors remain compact, token billing and latency understood. Local JSON Schema and HTTP cannot prove ChatGPT pre-tool behavior.
 3. Independent Bravo-3 message-receipt branch task/TMCP-MESSAGE-STATUS-bravo3-20261010, SHA 409040524bc444894a4f092035cd5e2bc906b5c2, introduces optional MessageRecord.deliveries. AFTER INTEGRATION on a new exact common SHA, rerun generator/tests and re-review output schemas. This worktree deliberately leaves that branch untouched.
 4. Deploy only after separate approval, not part of this task.
-

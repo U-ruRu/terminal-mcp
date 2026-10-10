@@ -15,4 +15,3 @@ Original strict input/output sidecar SHA-256 (unchanged): 5bafb845096b00b43e2171
 Existing independent Bravo-3 43 regression checks retained, B1–B13 dedicated checks added and additional role/schema tests rerun. Final exact counts and SHA are recorded in HANDOFF.md once all validations pass.
 
 **Status: ready for independent OFFLINE re-review after final publish, NOT a live PASS.** Actual ChatGPT pre-tool rejection UI/schema dumps and real token accounting remain a separate A/B gate. The candidate was not deployed and canonical, OAuth, Events and other live tasks are unchanged. After later accepted message-receipt output changes, regeneration on that new integrated SHA is required.
-

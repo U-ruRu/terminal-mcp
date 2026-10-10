@@ -26,10 +26,23 @@ Coordinator: dot Zulu-2; common integration exclusivity confirmed 2026-10-10 23:
   409040524bc444894a4f092035cd5e2bc906b5c2.
 - TASKLIST history cursor snapshot:
   8df8ef8623a00e4050258b78863142b206ead1d9.
-- Generator candidate baaf7744a94ca126ba0b913b6829f98e2a33b693:
-  HOLD unless independent TMCP-01/RUN-02 QA passes and dot explicitly authorizes inclusion.
-  Its ancestor 2649bc445252b8af9d34b6eee1dec2ce1ea6a601 alone is not acceptance.
-  Do not silently import generated JSON as a substitute for generator source.
+- Compact generator accepted for OFFLINE integration:
+  baaf7744a94ca126ba0b913b6829f98e2a33b693. Independent QA
+  TMCP-01/RUN-02 Charlie-3 94 targeted PASS, 19-tool audit PASS,
+  10 deterministic checks PASS, final QA-only SHA
+  a391875fd765149b04e09d19b299fa2376b2d249.
+  dot authorized inclusion 2026-10-10 23:14 UTC; live ChatGPT A/B remains HOLD.
+  Generator source and 10 output JSON artifacts were merged and rebuilt from
+  integrated role/output contracts; MessageRecord.deliveries is represented.
+  Two repeated writes yielded byte-identical SHA-256, --check PASS.
+- Integration-only OAuth+Access Events cross-DB correction:
+  0a2b30a4c07dea4a4fdba9f86647957b802341ae. Protected OAuth identity
+  moved out of main DB, so subscription's final writer reservation now
+  ATTACHes protected auth DB and reserves both auth/main under BEGIN IMMEDIATE.
+  RED receipt: 135 PASS / 1 FAIL on previous integrated code (exit 1);
+  GREEN synthetic 14 PASS / 0 FAIL (exit 0), JUnit and SHA receipts.
+  Independent review of this NEW diff and SQLite lock order is a separate
+  release HOLD until dot clears it.
 
 The published final SHA, exact parent list, run logs, JUnit, exit receipts,
 deterministic schema checks and remote equality are recorded separately in
@@ -57,6 +70,8 @@ for the precise commit.
   Treat repeat failures as explicit baseline comparison, not automatic PASS.
 - Every integrated Python edit requires current merged-SHA verification.
   Earlier source-specific PASS does not prove the final integrated SHA.
+  Full common suite must remain HOLD until independent cross-DB QA and dot
+  clearance; no suite run or canary success is asserted in this document.
 - No real OAuth DB, verifier key, anchor, permissions, FirstByte/BacLOUD
   runtime, or Canonical pointer was modified by this integration.
 
