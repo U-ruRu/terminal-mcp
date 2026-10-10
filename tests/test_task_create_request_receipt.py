@@ -55,6 +55,8 @@ async def test_request_id_replay_after_rename_and_payload_conflict(case):
     replay = await create(coordinator, "create-789")
     assert replay["ok"]
     assert replay["task"]["task_id"] == task_id
+    assert replay["task"]["revision"] == first["task"]["revision"] == 1
+    assert replay["task"]["title"] == first["task"]["title"] == "Receipt"
     different = await create(coordinator, "create-789", title="Different")
     assert not different["ok"]
     assert different["code"] == "request_id_conflict"
@@ -109,3 +111,99 @@ def test_request_id_public_input_schema():
         request_id="client-generated-uuid-1",
     )
     assert request.request_id == "client-generated-uuid-1"
+
+
+def test_live_mcp_task_manage_receipt_is_stable_across_retries(tmp_path):
+    import sqlite3
+
+    from fastapi.testclient import TestClient
+    from test_access_mesh_mcp_runtime import call, settings
+
+    from terminal_mcp.app import create_app
+
+    config = settings(tmp_path)
+    app = create_app(config)
+    with TestClient(app, base_url="https://terminal.example") as client:
+        issued = call(client, "access", "session", {"action": "start"}, request_id=30)
+        assert issued["ok"]
+        assert call(
+            client,
+            "coordinator",
+            "session",
+            {"session_number": issued["session_number"]},
+            request_id=31,
+        )["ok"]
+        payload = {
+            "action": "create",
+            "namespace": "http-receipts",
+            "isolation_hint": "test isolated",
+            "title": "HTTP create receipt",
+            "description": "fixed contents",
+            "request_id": "http-original-req-42",
+        }
+        original = call(client, "coordinator", "task_manage", payload, request_id=0)
+        assert original["ok"], original
+        # The original response is deliberately discarded: the same operation
+        # comes back through MCP, with no new task or event.
+        replay = call(client, "coordinator", "task_manage", payload, request_id=0)
+        assert replay["ok"], replay
+        assert replay["task_id"] == original["task_id"]
+        with sqlite3.connect(config.database_path) as db:
+            key = ("http-receipts", original["task_id"])
+            assert (
+                db.execute(
+                    "SELECT count(*) FROM work_events "
+                    "WHERE namespace=? AND task_id=? AND event_type='created'",
+                    key,
+                ).fetchone()[0]
+                == 1
+            )
+            assert (
+                db.execute(
+                    "SELECT count(*) FROM work_items WHERE namespace=? AND task_id=?", key
+                ).fetchone()[0]
+                == 1
+            )
+        independent = call(
+            client,
+            "coordinator",
+            "task_manage",
+            {**payload, "request_id": "http-independent-req-43"},
+            request_id=0,
+        )
+        assert not independent["ok"], independent
+        assert independent["error"]["code"] == "duplicate_task"
+
+
+@pytest.mark.asyncio
+async def test_lost_response_after_commit_is_reconciled_from_receipt(case, monkeypatch):
+    store, coordinator = case
+    original = store.create_task_mutation
+
+    async def simulate_lost_reply(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise OSError("response lost after durable commit")
+
+    monkeypatch.setattr(store, "create_task_mutation", simulate_lost_reply)
+    first = await create(coordinator, "postcommit-lost-response")
+    assert first["ok"], first
+    event_rows = await store.list_events("receipts", first["task"]["task_id"])
+    assert sum(row["event_type"] == "created" for row in event_rows) == 1
+    monkeypatch.setattr(store, "create_task_mutation", original)
+    retry = await create(coordinator, "postcommit-lost-response")
+    assert retry["ok"], retry
+    assert retry["task"]["task_id"] == first["task"]["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_unreconciled_commit_error_reports_unknown_outcome(case, monkeypatch):
+    store, coordinator = case
+
+    async def fail_indeterminately(*args, **kwargs):
+        raise OSError("SQLite commit acknowledgement uncertain")
+
+    monkeypatch.setattr(store, "create_task_mutation", fail_indeterminately)
+    result = await create(coordinator, "may-or-may-not-commit")
+    assert not result["ok"], result
+    assert result["code"] == "storage_unavailable"
+    assert result["outcome"] == "unknown"

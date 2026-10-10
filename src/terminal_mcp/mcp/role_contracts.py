@@ -287,6 +287,18 @@ class TaskManageInput(StrictRoleInput):
     task_id: TaskId | None = None
     expected_revision: ExpectedRevision | None = None
     isolation_hint: Annotated[str | None, Field(min_length=1, max_length=160)] = None
+    request_id: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9._:-]+$",
+            description=(
+                "Create operation identity. Reuse only on transport retries of that create; "
+                "independent operations need a fresh request_id."
+            ),
+        ),
+    ] = None
     title: Annotated[str | None, Field(min_length=1, max_length=200)] = None
     lane: TaskLane | None = None
     priority: TaskPriority | None = None
@@ -491,8 +503,13 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
             "type": "object",
             "properties": {
                 "action": {"type": "string", "const": "attach", "default": "attach"},
-                "session_number": {"type": "string", "minLength": 4, "maxLength": 4,
-                                   "pattern": r"^[0-9]{4}$", "description": "Four-digit session number."},
+                "session_number": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 4,
+                    "pattern": r"^[0-9]{4}$",
+                    "description": "Four-digit session number.",
+                },
             },
             "required": ["session_number"],
             "additionalProperties": False,
@@ -503,9 +520,10 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
             "properties": {
                 "namespace": {"type": "string", "minLength": 1, "maxLength": 120},
                 "task_id": {"type": "string", "minLength": 1, "maxLength": 120},
-                "state": {"type": "string", "enum": [
-                    "ready", "in_progress", "qa", "blocked", "deferred", "done"
-                ]},
+                "state": {
+                    "type": "string",
+                    "enum": ["ready", "in_progress", "qa", "blocked", "deferred", "done"],
+                },
             },
             "required": ["namespace", "task_id", "state"],
             "additionalProperties": False,

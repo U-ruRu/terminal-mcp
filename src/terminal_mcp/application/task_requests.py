@@ -138,7 +138,19 @@ class TaskCreateRequest(StrictTaskModel):
     task_id: TaskId | None = None
     isolation_hint: Annotated[str, Field(min_length=1, max_length=160)]
     request_id: (
-        Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")] | None
+        Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9._:-]+$",
+                description=(
+                    "Stable operation ID for task creation. Use the same ID only to replay "
+                    "the exact original request; a new create needs a new ID."
+                ),
+            ),
+        ]
+        | None
     ) = None
     title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     lane: TaskLane = "general"

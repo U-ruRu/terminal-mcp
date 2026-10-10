@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import secrets
+import sqlite3
 from collections import Counter
 
 from terminal_mcp.core.orchestration import (
@@ -1048,14 +1049,49 @@ class TaskCoordinator:
                     "error": "duplicate_task",
                     "warnings": [],
                 }
-            if await self.store.get_task(namespace, task_id) is not None:
+            # A commit may succeed while the connection or response fails.
+            # Reconcile the durable operation receipt before reporting a failure.
+            if request_id is not None:
+                try:
+                    saved = await self.store.get_create_receipt(
+                        agent_id, namespace, request_id, fingerprint
+                    )
+                    if saved is not None:
+                        return await self._result(
+                            namespace,
+                            saved["task_id"],
+                            warnings,
+                            committed_task=saved,
+                            include_description=kwargs.get("description") is not None,
+                        )
+                except Exception:
+                    # A read failure also leaves the commit status unknown.
+                    pass
+            if isinstance(exc, ValueError):
+                return {
+                    "ok": False,
+                    "code": "input_validation_failed",
+                    "error": f"task.create: {exc}",
+                    "outcome": "not_committed",
+                    "warnings": [],
+                }
+            # A primary-key conflict is a known rejected insert, while an
+            # arbitrary write/commit exception has an unknown outcome.
+            if isinstance(exc, sqlite3.IntegrityError):
                 return {
                     "ok": False,
                     "code": "task_already_exists",
                     "error": "task.create: task_already_exists",
+                    "outcome": "not_committed",
                     "warnings": [],
                 }
-            return {"ok": False, "error": f"task.create: {exc}", "warnings": []}
+            return {
+                "ok": False,
+                "code": "storage_unavailable",
+                "error": f"task.create: {exc}",
+                "outcome": "unknown",
+                "warnings": [],
+            }
         if not getattr(committed, "replayed", False):
             self._inc("terminal_mcp_tasks_created_total")
         return await self._result(

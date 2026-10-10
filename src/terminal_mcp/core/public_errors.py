@@ -49,7 +49,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             validation_error input_validation_failed invalid_request invalid_command invalid_queue
-            invalid_mode invalid_state invalid_session_number invalid_session_attempt invalid_session_timestamp
+            invalid_mode invalid_state invalid_session_number invalid_session_attempt
+            invalid_session_timestamp
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
             mode_required access_code_required legacy_code_not_allowed invalid_connect_url
             output_item_too_large execution_argument_invalid
@@ -79,12 +80,13 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             """
             conflict revision_conflict task_revision_conflict stale_revision
             not_owner task_already_exists number_conflict command_already_finished
-            duplicate_comment duplicate_task already_changed
+            duplicate_comment duplicate_task request_id_conflict already_changed
             candidate_mismatch candidate_ref_frozen output_state_changed output_state_missing
             owner_required claim_conflict task_claim_conflict wip_limit_exceeded
             archived_task command_not_owned command_not_persistent command_not_running
             review_requirements_unsatisfied coordination_alert coordination_ack_required
-            session_already_active session_already_started cannot_message_self policy_in_use dependency_open
+            session_already_active session_already_started cannot_message_self
+            policy_in_use dependency_open
         """,
         ),
         (

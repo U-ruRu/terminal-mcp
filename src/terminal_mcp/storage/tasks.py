@@ -365,8 +365,21 @@ class TaskStore:
                             raise ValueError("request_id_conflict")
                         if prior[1] != "complete" or not prior[2]:
                             raise RuntimeError("task receipt is pending or incomplete")
-                        original_id = json.loads(prior[2])["task_id"]
-                        confirmed = await self._committed_record_tx(db, namespace, original_id)
+                        receipt = json.loads(prior[2])
+                        # Return the original commit snapshot, not a later renamed/
+                        # modified version of the task. The receipt is immutable.
+                        if "task" in receipt:
+                            confirmed = TaskCommittedRecord(
+                                receipt["task"],
+                                receipt.get("claims", []),
+                                receipt.get("dependencies", []),
+                                receipt.get("sessions_by_agent", {}),
+                            )
+                        else:
+                            # Compatibility with early receipt prototypes.
+                            confirmed = await self._committed_record_tx(
+                                db, namespace, receipt["task_id"]
+                            )
                         confirmed.replayed = True
                         await db.commit()
                         return confirmed
@@ -488,7 +501,16 @@ class TaskStore:
                             receipt_key,
                             request_fingerprint,
                             "complete",
-                            self._json({"task_id": task_id, "created_at": now}),
+                            self._json(
+                                {
+                                    "task_id": task_id,
+                                    "created_at": now,
+                                    "task": dict(committed),
+                                    "claims": committed.claims,
+                                    "dependencies": committed.dependencies,
+                                    "sessions_by_agent": committed.sessions_by_agent,
+                                }
+                            ),
                             now,
                         ),
                     )
@@ -562,6 +584,35 @@ class TaskStore:
             ],
             {row[0]: dict(zip(session_fields, row, strict=True)) for row in sessions},
         )
+
+    async def get_create_receipt(
+        self, creator: str, namespace: str, request_id: str, fingerprint: str
+    ) -> TaskCommittedRecord | None:
+        """Read the atomic create receipt after an ambiguous commit exception."""
+        receipt_key = hashlib.sha256((namespace + "\0" + request_id).encode("utf-8")).hexdigest()
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    "SELECT request_fingerprint,state,result_json FROM persistent_idempotency "
+                    "WHERE logical_agent_id=? AND operation='task.create' AND idempotency_key=?",
+                    (creator, receipt_key),
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            if row[0] != fingerprint:
+                raise ValueError("request_id_conflict")
+            if row[1] != "complete" or not row[2]:
+                return None
+            receipt = json.loads(row[2])
+            if "task" in receipt:
+                return TaskCommittedRecord(
+                    receipt["task"],
+                    receipt.get("claims", []),
+                    receipt.get("dependencies", []),
+                    receipt.get("sessions_by_agent", {}),
+                )
+            return await self._committed_record_tx(db, namespace, receipt["task_id"])
 
     async def get_task(self, namespace: str, task_id: str):
         async with self._connect() as db:
