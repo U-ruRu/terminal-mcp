@@ -1,8 +1,10 @@
 """Regression tests for the minimal public Access/attach protocol."""
 import re
+
 from fastapi.testclient import TestClient
+from test_access_mesh_mcp_runtime import call, rpc, settings
+
 from terminal_mcp.app import create_app
-from test_access_mesh_mcp_runtime import settings, call, rpc
 
 
 def test_start_and_attach_share_minimal_number_only(tmp_path):
@@ -14,9 +16,15 @@ def test_start_and_attach_share_minimal_number_only(tmp_path):
         repeated = call(client, 'access', 'session', {'action':'start'}, request_id=70)
         assert repeated["ok"] is False
         assert repeated["error"]["code"] == "session_already_started"
-        attached = call(client, 'executor', 'session', {'session_number': started['session_number']}, request_id=71)
+        attached = call(
+            client, 'executor', 'session',
+            {'session_number': started['session_number']}, request_id=71,
+        )
         assert attached == {'ok':True}
-        again = call(client, 'executor', 'session', {'session_number': started['session_number']}, request_id=72)
+        again = call(
+            client, 'executor', 'session',
+            {'session_number': started['session_number']}, request_id=72,
+        )
         assert again == {'ok':True}
         tools = rpc(client, 'executor', 'tools/list').json()['result']['tools']
         session = next(tool for tool in tools if tool['name'] == 'session')

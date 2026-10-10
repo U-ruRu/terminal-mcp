@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+
 from terminal_mcp.mcp.access_contracts import AttachInput, IssuerOutput, IssuerSessionInput
 
 

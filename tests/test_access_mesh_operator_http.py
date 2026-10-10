@@ -217,7 +217,9 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
         resumed = client.get(
             f"/actions/access/slots/{slot['slot_id']}", headers=HEADERS
         ).json()["slot"]
-        assert resumed["session_lifecycle"]["hard_expires_at"] == view["session_lifecycle"]["hard_expires_at"]
+        assert resumed["session_lifecycle"]["hard_expires_at"] == (
+            view["session_lifecycle"]["hard_expires_at"]
+        )
         clock[0] += timedelta(seconds=5)
         restarted = internal_persistent_start(client, app, slot["access_code"])
         assert restarted["ok"] is False and (

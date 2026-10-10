@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
-
-from terminal_mcp.app import create_app
 from test_access_mesh_mcp_runtime import call, settings
 from test_access_mesh_native_lifecycle import actor
+
+from terminal_mcp.app import create_app
 
 
 def test_agent_observe_uses_latest_remote_activity_and_four_fields(tmp_path):

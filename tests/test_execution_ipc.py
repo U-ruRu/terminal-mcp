@@ -336,7 +336,9 @@ async def test_executor_restart_converges_without_api_restart(tmp_path):
         result = await service.run(f"echo once >> '{marker}'; sleep 20", task_scope="none")
 
         async def running():
-            return marker.exists()
+            # The shell opens the redirection before echo writes the side effect.
+            # Restart only after that side effect, not after an empty-file race.
+            return marker.exists() and marker.read_text() == "once\n"
 
         await eventually(running)
         await server.close()

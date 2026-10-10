@@ -2,10 +2,10 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from test_access_mesh_mcp_runtime import call, settings
 
 from terminal_mcp.app import create_app
 from terminal_mcp.core.access_mesh_grants import SlotPolicy
-from test_access_mesh_mcp_runtime import settings, call
 
 
 def test_expired_session_emits_single_message_alert_and_ack_removes_block(tmp_path):

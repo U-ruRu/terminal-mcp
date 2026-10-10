@@ -2140,13 +2140,20 @@ class PersistentBackend:
                         "ok": False, "code": "command_already_finished",
                         "error": f"command is already {command.status}",
                     }
+                execution_started = bool(command.claimed_at or command.started_at)
+                # A retry reads the already-cancelled row, not the original queued row.
+                # Its execution timestamps preserve cancellation-before-start provenance.
+                cancelled_before_start = outcome == "queued" or (
+                    outcome == "previously_accepted"
+                    and command.status == "cancelled"
+                    and not execution_started
+                )
                 accepted_receipt = {
                     "ok": True, "cmd_hash": cmd_hash,
+                    "status": "cancelled" if outcome == "queued" else command.status,
                     "cancel_requested": True,
-                    "cancelled_from": (
-                        "queued" if outcome == "queued" else "running"
-                    ),
-                    "execution_started": bool(command.claimed_at or command.started_at),
+                    "cancelled_from": "queued" if cancelled_before_start else "running",
+                    "execution_started": execution_started,
                     "error": None,
                 }
                 if outcome == "running" or (
