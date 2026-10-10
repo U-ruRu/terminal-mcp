@@ -18,6 +18,8 @@ from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEven
 
 _LOG = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 64 * 1024
+ANTI_ENTROPY_SECONDS = 300.0
+PEER_RETRY_SECONDS = 10.0
 
 
 class PinnedAccessMeshPeerAuth:
@@ -49,6 +51,8 @@ class AccessMeshReplication:
         self.client = client
         self._owned_client = False
         self._stop = asyncio.Event()
+        self._wake = asyncio.Event()
+        self._notify_loop = None
         self._task = None
         self._snapshot_after = {peer.instance_id: "" for peer in config.peers}
         self._last_snapshot_pass = {peer.instance_id: 0.0 for peer in config.peers}
@@ -406,6 +410,10 @@ class AccessMeshReplication:
                 event_id=event_id,
                 authenticated_peer_id=peer.instance_id,
             )
+        # Continue draining a full acknowledged page without awaiting
+        # the next anti-entropy pass. Retries remain bounded on failure.
+        if len(pending) == 20 and acked:
+            self._wake.set()
         # A lagging consumer asks for one issuer-authoritative snapshot. The next
         # event pass then receives stale/duplicate acknowledgements normally.
         gap = result.get("snapshot_slot_id")
@@ -441,7 +449,7 @@ class AccessMeshReplication:
             checked = False
             if (
                 self._snapshot_after[peer.instance_id]
-                or now - self._last_snapshot_pass[peer.instance_id] >= 30
+                or now - self._last_snapshot_pass[peer.instance_id] >= ANTI_ENTROPY_SECONDS
             ):
                 await self._snapshot(peer)
                 await self.sync_numbers(peer)
@@ -465,17 +473,28 @@ class AccessMeshReplication:
     async def tick(self) -> None:
         await asyncio.gather(*(self.sync_peer(peer) for peer in self.peers))
 
+    def _on_committed_event(self) -> None:
+        loop = self._notify_loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._wake.set)
+
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
         self._stop.clear()
+        self._wake.clear()
+        self._notify_loop = asyncio.get_running_loop()
+        self.store.set_delivery_notifier(self._on_committed_event)
         self._task = asyncio.create_task(self._loop(), name="access-mesh-event-delivery")
 
     async def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
+        self.store.set_delivery_notifier(None)
         if self._task:
             await self._task
             self._task = None
+        self._notify_loop = None
         if self._owned_client:
             await self.client.aclose()
             self.client = None
@@ -483,9 +502,30 @@ class AccessMeshReplication:
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
+            self._wake.clear()
             await self.tick()
+            if self._stop.is_set():
+                break
+            # Paginated catch-up continues immediately; degraded peers are
+            # retried independently of the slow healthy anti-entropy cadence.
+            if any(self._snapshot_after[peer.instance_id] for peer in self.peers):
+                delay = 0.0
+            elif any(self.peer_health[p.instance_id]["status"] == "degraded" for p in self.peers):
+                delay = PEER_RETRY_SECONDS
+            elif self.peers:
+                now = asyncio.get_running_loop().time()
+                delay = max(
+                    0.0,
+                    min(
+                        self._last_snapshot_pass[peer.instance_id] + ANTI_ENTROPY_SECONDS
+                        for peer in self.peers
+                    )
+                    - now,
+                )
+            else:
+                delay = ANTI_ENTROPY_SECONDS
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=1.0)
+                await asyncio.wait_for(self._wake.wait(), timeout=delay)
             except TimeoutError:
                 pass
 

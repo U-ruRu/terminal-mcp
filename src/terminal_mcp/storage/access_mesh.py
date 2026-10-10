@@ -103,10 +103,15 @@ class AccessMeshStore(LocalAccessMesh):
 
     def __init__(self, *args, clock=None, **kwargs):
         self.clock = clock or (lambda: datetime.now(UTC))
+        self._delivery_notifier = None
         super().__init__(*args, **kwargs)
         from terminal_mcp.storage.access_mesh_numbers import MeshSessionNumbers
 
         self.numbers = MeshSessionNumbers(self)
+
+    def set_delivery_notifier(self, callback) -> None:
+        """Register an in-process wakeup, never a network call or durability gate."""
+        self._delivery_notifier = callback
 
     def _initialize(self) -> None:
         super()._initialize()
@@ -434,7 +439,13 @@ class AccessMeshStore(LocalAccessMesh):
         start_token = _mutation_start.set(mutation_start)
         try:
             try:
-                return super().apply_event(event, **kwargs)
+                result = super().apply_event(event, **kwargs)
+                # The parent transaction has committed before this hook runs.
+                # It is safe to wake the transport; failure to notify never
+                # invalidates the durable outbox committed with the event.
+                if result.outcome == "applied" and self._delivery_notifier is not None:
+                    self._delivery_notifier()
+                return result
             except sqlite3.IntegrityError as exc:
                 if event.code_tag is not None:
                     with self._connect() as db:
