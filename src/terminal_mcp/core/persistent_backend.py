@@ -2150,6 +2150,7 @@ class PersistentBackend:
                 )
                 accepted_receipt = {
                     "ok": True, "cmd_hash": cmd_hash,
+                    "status": "cancelled" if outcome == "queued" else command.status,
                     "cancel_requested": True,
                     "cancelled_from": "queued" if cancelled_before_start else "running",
                     "execution_started": execution_started,
