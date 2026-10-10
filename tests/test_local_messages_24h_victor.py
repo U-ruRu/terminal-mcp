@@ -32,6 +32,9 @@ async def test_local_cycle_ack_replies_and_remote_recipient_exclusion(mesh_pair)
     )
     assert sent["ok"] and sent["scope"] == "local" and sent["delivered_to"] == [recipient]
     message_hash = sent["message_hash"]
+    # Existing messages addressed to a different recipient remain forbidden.
+    with pytest.raises(MeshMessagingError, match="message_forbidden"):
+        local.store.acknowledge(message_hash, "bob", local.mesh.now.isoformat())
     inbox = await local.message(actor("carol"), detail="full")
     assert any(m["message_hash"] == message_hash for m in inbox["messages"])
     first = await local.message(actor("carol"), message_hash=message_hash)
@@ -84,6 +87,10 @@ async def test_cutover_pending_jobs_expiry_and_restart(mesh_pair):
     with pytest.raises(MeshMessagingError, match="message_not_found"):
         local.store.acknowledge(message_hash, "carol", old_time.isoformat())
     assert local.store.prune_expired() == 1
+    # After the physical sweep, the deleted message must remain not_found,
+    # not message_forbidden just because its recipient row is also gone.
+    with pytest.raises(MeshMessagingError, match="message_not_found"):
+        local.store.acknowledge(message_hash, "carol", old_time.isoformat())
     with local.store.connect() as db:
         assert db.execute("SELECT COUNT(*) FROM access_mesh_messages").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM access_mesh_message_outbox").fetchone()[0] == 0

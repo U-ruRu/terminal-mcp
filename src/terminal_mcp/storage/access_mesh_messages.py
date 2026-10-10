@@ -316,13 +316,13 @@ class AccessMeshMessageStore:
             "WHERE message_hash=? AND recipient_agent_id=?",
             (message_hash, agent_id),
         ).fetchone()
-        if row is None:
-            raise MeshMessagingError("message_forbidden")
         wire_row = db.execute(
             "SELECT wire_json FROM access_mesh_messages WHERE message_hash=?", (message_hash,)
         ).fetchone()
         if wire_row is None or not unexpired(json.loads(wire_row[0]), self.clock()):
             raise MeshMessagingError("message_not_found")
+        if row is None:
+            raise MeshMessagingError("message_forbidden")
         return row
 
     def recipient(self, message_hash, agent_id):
