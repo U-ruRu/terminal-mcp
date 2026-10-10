@@ -16,7 +16,7 @@ from terminal_mcp.core.orchestration import (
 )
 from terminal_mcp.storage.permissions import secure_database_path
 
-EVENT_NAMES = ("agent.attached", "agent.inactive", "session.ended")
+EVENT_NAMES = ("agent.attached", "agent.inactive", "session.ended", "message.received")
 INACTIVE_AFTER_SECONDS = 180
 MAX_DELIVERY_ATTEMPTS = 5
 
@@ -32,6 +32,26 @@ def event_catalog():
         "required": ["agent_name", "server"],
         "additionalProperties": False,
     }
+    private_message = {
+        "type": "object",
+        "properties": {
+            "server": {"type": "string"},
+            "sender": {"type": "string"},
+            "recipient": {"type": "string"},
+            "message_id": {"type": "string"},
+            "text": {"type": "string"},
+            "timestamp": {"type": "string"},
+        },
+        "required": [
+            "server",
+            "sender",
+            "recipient",
+            "message_id",
+            "text",
+            "timestamp",
+        ],
+        "additionalProperties": False,
+    }
     return {
         "events": [
             {
@@ -42,6 +62,7 @@ def event_catalog():
                         "Agent has been inactive on this server for over 180 seconds."
                     ),
                     "session.ended": "A limited agent work session has ended on this server.",
+                    "message.received": "A new local message for this bound agent.",
                 }[name],
                 "delivery": ["webhook"],
                 "inputSchema": {
@@ -49,7 +70,7 @@ def event_catalog():
                     "properties": {},
                     "additionalProperties": False,
                 },
-                "payloadSchema": data,
+                "payloadSchema": private_message if name == "message.received" else data,
             }
             for name in EVENT_NAMES
         ]
@@ -74,7 +95,9 @@ class MCPEventStore:
                     source_key TEXT UNIQUE NOT NULL,
                     name TEXT NOT NULL,
                     occurred_at TEXT NOT NULL,
-                    data_json TEXT NOT NULL
+                    data_json TEXT NOT NULL,
+                    recipient_agent_id TEXT,
+                    namespace TEXT
                 );
                 CREATE TABLE IF NOT EXISTS mcp_event_inactivity(
                     subject_key TEXT PRIMARY KEY,
@@ -106,6 +129,17 @@ class MCPEventStore:
                     rotation_until TEXT,
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mcp_event_message_bindings(
+                    subscription_id TEXT PRIMARY KEY,
+                    recipient_agent_id TEXT NOT NULL,
+                    recipient_session_id TEXT NOT NULL,
+                    recipient_epoch INTEGER NOT NULL,
+                    recipient_connection_key TEXT NOT NULL,
+                    recipient_node_id TEXT NOT NULL,
+                    recipient_issuer_id TEXT NOT NULL,
+                    recipient_slot_id TEXT NOT NULL,
+                    recipient_role TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS mcp_event_verified_callbacks(
                     principal_id TEXT NOT NULL,
@@ -162,6 +196,16 @@ class MCPEventStore:
                     );
                 END;
             """)
+            record_columns = {
+                row[1]
+                for row in await (
+                    await db.execute("PRAGMA table_info(mcp_event_records)")
+                ).fetchall()
+            }
+            if "recipient_agent_id" not in record_columns:
+                await db.execute("ALTER TABLE mcp_event_records ADD COLUMN recipient_agent_id TEXT")
+            if "namespace" not in record_columns:
+                await db.execute("ALTER TABLE mcp_event_records ADD COLUMN namespace TEXT")
             columns = {
                 row[1]
                 for row in await (
@@ -185,13 +229,31 @@ class MCPEventStore:
             await db.commit()
 
     @staticmethod
-    async def _insert_event(db, *, source_key, name, occurred_at, data):
+    async def _insert_event(
+        db,
+        *,
+        source_key,
+        name,
+        occurred_at,
+        data,
+        recipient_agent_id=None,
+        namespace=None,
+    ):
         payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         digest = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:32]
         await db.execute(
             "INSERT OR IGNORE INTO mcp_event_records"
-            "(event_id,source_key,name,occurred_at,data_json) VALUES(?,?,?,?,?)",
-            ("evt_" + digest, source_key, name, occurred_at, payload),
+            "(event_id,source_key,name,occurred_at,data_json,recipient_agent_id,namespace) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (
+                "evt_" + digest,
+                source_key,
+                name,
+                occurred_at,
+                payload,
+                recipient_agent_id,
+                namespace,
+            ),
         )
 
     async def pump(self, *, now=None):
@@ -208,7 +270,7 @@ class MCPEventStore:
                 last_seq = int(state[0])
                 rows = await (
                     await db.execute(
-                        "SELECT seq,event_type,entity_id,payload_json,created_at "
+                        "SELECT seq,event_type,entity_id,actor_id,payload_json,created_at "
                         "FROM instance_events WHERE seq>? ORDER BY seq LIMIT 500",
                         (last_seq,),
                     )
@@ -276,6 +338,84 @@ class MCPEventStore:
                                         "server": self.node_id,
                                     },
                                 )
+                    elif event_type == "message.receipt":
+                        # The Access Mesh messages table may not exist on a
+                        # legacy-only installation; its unrelated journal rows
+                        # must never prevent other Events from being delivered.
+                        mesh_table = await (
+                            await db.execute(
+                                "SELECT 1 FROM sqlite_master "
+                                "WHERE type='table' AND name='access_mesh_messages'"
+                            )
+                        ).fetchone()
+                        if not mesh_table:
+                            continue
+                        # The recipient INSERT has delivered=1; receipt UPDATE
+                        # events for seen, read, ACK or reply must be ignored.
+                        receipt = json.loads(item["payload_json"])
+                        recipient = item["actor_id"]
+                        if receipt.get("delivered") != 1 or not recipient:
+                            continue
+                        message = await (
+                            await db.execute(
+                                "SELECT m.message_hash,m.text,m.created_at,"
+                                "m.task_namespace,a.display_name AS recipient_name,"
+                                "w.wire_json "
+                                "FROM coordination_messages m "
+                                "JOIN coordination_message_recipients r "
+                                "ON r.message_hash=m.message_hash "
+                                "JOIN logical_agents a ON a.logical_agent_id=r.recipient_agent_id "
+                                "JOIN access_mesh_messages w ON w.message_hash=m.message_hash "
+                                "WHERE m.message_hash=? AND r.recipient_agent_id=? "
+                                "AND substr(m.message_hash,1,?)=?",
+                                (
+                                    item["entity_id"],
+                                    recipient,
+                                    len(self.node_id + ":localmsg:"),
+                                    self.node_id + ":localmsg:",
+                                ),
+                            )
+                        ).fetchone()
+                        if message is not None:
+                            # Do not persist private message content when there
+                            # is no explicit active subscription for its recipient.
+                            allowed = await (
+                                await db.execute(
+                                    "SELECT 1 FROM mcp_event_subscriptions s "
+                                    "JOIN mcp_event_message_bindings b "
+                                    "ON b.subscription_id=s.id "
+                                    "WHERE s.name='message.received' "
+                                    "AND b.recipient_agent_id=? AND b.recipient_node_id=? "
+                                    "AND s.created_at<=? AND s.expires_at>? LIMIT 1",
+                                    (
+                                        recipient,
+                                        self.node_id,
+                                        message["created_at"],
+                                        stamp,
+                                    ),
+                                )
+                            ).fetchone()
+                            if allowed:
+                                wire = json.loads(message["wire_json"])
+                                await self._insert_event(
+                                    db,
+                                    source_key=(
+                                        f"{self.node_id}:message.received:"
+                                        f"{item['entity_id']}:{recipient}"
+                                    ),
+                                    name="message.received",
+                                    occurred_at=message["created_at"],
+                                    data={
+                                        "server": self.node_id,
+                                        "sender": str(wire.get("sender_name") or "")[:120],
+                                        "recipient": message["recipient_name"],
+                                        "message_id": message["message_hash"],
+                                        "text": message["text"],
+                                        "timestamp": message["created_at"],
+                                    },
+                                    recipient_agent_id=recipient,
+                                    namespace=message["task_namespace"],
+                                )
                     elif event_type == "work_session.changed":
                         source = json.loads(item["payload_json"])
                         if source.get("state") in ("ended", "expired"):
@@ -326,6 +466,17 @@ class MCPEventStore:
                                         "server": self.node_id,
                                     },
                                 )
+                expired = utc_text(current - timedelta(hours=24))
+                await db.execute(
+                    "DELETE FROM mcp_event_deliveries WHERE event_id IN ("
+                    "SELECT event_id FROM mcp_event_records "
+                    "WHERE name='message.received' AND occurred_at<?)",
+                    (expired,),
+                )
+                await db.execute(
+                    "DELETE FROM mcp_event_records WHERE name='message.received' AND occurred_at<?",
+                    (expired,),
+                )
                 if rows:
                     await db.execute(
                         "UPDATE mcp_event_cursor SET last_seq=? WHERE singleton=1",
@@ -421,9 +572,14 @@ class MCPEventStore:
                     "(event_id,subscription_id,next_attempt_at) "
                     "SELECT e.event_id,s.id,? FROM mcp_event_records e "
                     "JOIN mcp_event_subscriptions s ON s.name=e.name "
-                    "WHERE e.occurred_at >= s.created_at AND e.occurred_at < s.expires_at "
+                    "WHERE (e.name!='message.received' OR EXISTS("
+                    "SELECT 1 FROM mcp_event_message_bindings b "
+                    "WHERE b.subscription_id=s.id AND "
+                    "b.recipient_agent_id=e.recipient_agent_id "
+                    "AND b.recipient_node_id=?)) "
+                    "AND e.occurred_at >= s.created_at AND e.occurred_at < s.expires_at "
                     "AND s.expires_at>?",
-                    (stamp, stamp),
+                    (stamp, self.node_id, stamp),
                 )
                 await db.commit()
             except BaseException:
@@ -556,6 +712,7 @@ class MCPEventStore:
         callback,
         secret,
         ttl_ms=None,
+        message_binding=None,
     ):
         now = utc_now()
         created_at = utc_text(now)
@@ -591,6 +748,33 @@ class MCPEventStore:
                     utc_text(now + timedelta(minutes=5)),
                 ),
             )
+            if message_binding is not None:
+                await db.execute(
+                    "INSERT INTO mcp_event_message_bindings("
+                    "subscription_id,recipient_agent_id,recipient_session_id,"
+                    "recipient_epoch,recipient_connection_key,recipient_node_id,"
+                    "recipient_issuer_id,recipient_slot_id,recipient_role)"
+                    "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(subscription_id) DO UPDATE SET "
+                    "recipient_agent_id=excluded.recipient_agent_id,"
+                    "recipient_session_id=excluded.recipient_session_id,"
+                    "recipient_epoch=excluded.recipient_epoch,"
+                    "recipient_connection_key=excluded.recipient_connection_key,"
+                    "recipient_node_id=excluded.recipient_node_id,"
+                    "recipient_issuer_id=excluded.recipient_issuer_id,"
+                    "recipient_slot_id=excluded.recipient_slot_id,"
+                    "recipient_role=excluded.recipient_role",
+                    (
+                        sub_id,
+                        message_binding.recipient_agent_id,
+                        message_binding.work_session_id,
+                        message_binding.session_epoch,
+                        message_binding.connection_key,
+                        self.node_id,
+                        message_binding.issuer_id,
+                        message_binding.slot_id,
+                        message_binding.role,
+                    ),
+                )
             await db.execute(
                 "INSERT INTO mcp_event_verified_callbacks"
                 "(principal_id,callback_url,verified_until) VALUES(?,?,?) "
@@ -607,6 +791,12 @@ class MCPEventStore:
             await db.execute(
                 "DELETE FROM mcp_event_deliveries WHERE subscription_id=? AND EXISTS"
                 "(SELECT 1 FROM mcp_event_subscriptions WHERE id=? AND principal_id=?)",
+                (sub_id, sub_id, principal),
+            )
+            await db.execute(
+                "DELETE FROM mcp_event_message_bindings WHERE subscription_id=? "
+                "AND EXISTS(SELECT 1 FROM mcp_event_subscriptions "
+                "WHERE id=? AND principal_id=?)",
                 (sub_id, sub_id, principal),
             )
             await db.execute(
@@ -627,10 +817,14 @@ class MCPEventStore:
                         "SELECT d.event_id,d.subscription_id,d.attempts,"
                         "e.name,e.occurred_at,e.data_json,s.callback_url,s.signing_secret,"
                         "s.principal_id,s.credential_id,s.auth_mode,"
-                        "s.previous_signing_secret,s.rotation_until "
+                        "s.previous_signing_secret,s.rotation_until,"
+                        "b.recipient_agent_id,b.recipient_session_id,b.recipient_epoch,"
+                        "b.recipient_connection_key,b.recipient_node_id,"
+                        "b.recipient_issuer_id,b.recipient_slot_id,b.recipient_role "
                         "FROM mcp_event_deliveries d "
                         "JOIN mcp_event_records e ON e.event_id=d.event_id "
                         "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "
+                        "LEFT JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
                         "WHERE d.state='pending' AND d.next_attempt_at<=? "
                         "AND s.expires_at>? ORDER BY d.next_attempt_at LIMIT ?",
                         (stamp, stamp, limit),

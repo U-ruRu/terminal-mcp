@@ -79,6 +79,7 @@ from terminal_mcp.mcp.access import build_access_mcp
 from terminal_mcp.mcp.event_diagnostics import MCPEventIngressProbe
 from terminal_mcp.mcp.event_server import MCPEventsAdapter
 from terminal_mcp.mcp.event_store import MCPEventStore
+from terminal_mcp.mcp.message_binding import MeshMessageSubscriberResolver
 from terminal_mcp.mcp.roles import build_role_mcp
 from terminal_mcp.mcp.server import build_mcp
 from terminal_mcp.metrics import Metrics
@@ -421,6 +422,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         return True
         return False
 
+    message_subscriber_resolver = (
+        MeshMessageSubscriberResolver(access_mesh) if access_mesh is not None else None
+    )
+
+    async def checked_subscription_access(item):
+        if not await mcp_events_access_checker(item):
+            return False
+        if item.get("name") == "message.received":
+            return bool(
+                message_subscriber_resolver is not None
+                and await message_subscriber_resolver.still_bound(item)
+            )
+        return True
+
     mcp_event_store = MCPEventStore(settings.database_path, managed_authority_node_id)
     # Connect the real managed-session operation path to the one-shot idle clock.
     managed_sessions.activity_notifier = mcp_event_store.note_managed_activity
@@ -429,27 +444,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         access_mesh.attach_notifier = mcp_event_store.note_local_attach
         access_mesh.activity_notifier = mcp_event_store.note_managed_activity
 
+    # Access is the sole Events subscription surface. Other role tools and
+    # protocol versions continue functioning without advertising Events.
     mcp_events = MCPEventsAdapter(
         mcp.streamable_http_app(),
         mcp_event_store,
         reconcile=service.reconcile_agent_sessions,
-        access_checker=mcp_events_access_checker,
+        access_checker=checked_subscription_access,
+        events_enabled=False,
     )
     executor_events = MCPEventsAdapter(
         executor_mcp.streamable_http_app(),
         mcp_event_store,
-        access_checker=mcp_events_access_checker,
+        access_checker=checked_subscription_access,
+        endpoint_role="executor",
+        events_enabled=False,
     )
     coordinator_events = MCPEventsAdapter(
         coordinator_mcp.streamable_http_app(),
         mcp_event_store,
-        access_checker=mcp_events_access_checker,
+        access_checker=checked_subscription_access,
+        endpoint_role="coordinator",
+        events_enabled=False,
     )
     access_events = (
         MCPEventsAdapter(
             access_mcp.streamable_http_app(),
             mcp_event_store,
-            access_checker=mcp_events_access_checker,
+            access_checker=checked_subscription_access,
+            message_resolver=message_subscriber_resolver,
+            endpoint_role="access",
+            events_enabled=True,
         )
         if access_mcp
         else None
@@ -550,6 +575,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.access_mesh_messages = access_mesh_messages
     app.state.access_mesh_replication = access_mesh_replication
     app.state.access_mcp = access_mcp
+    app.state.access_events = access_events
+    app.state.message_subscriber_resolver = message_subscriber_resolver
     app.state.mcp_events = mcp_events
     app.state.executor_mcp = executor_mcp
     app.state.coordinator_mcp = coordinator_mcp

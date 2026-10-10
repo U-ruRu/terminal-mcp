@@ -20,6 +20,7 @@ from terminal_mcp.mcp.event_webhooks import (
     validate_callback_url,
     verify_callback,
 )
+from terminal_mcp.mcp.message_binding import provider_metadata_from_events
 
 
 class MCPEventsAdapter:
@@ -31,12 +32,18 @@ class MCPEventsAdapter:
         reconcile=None,
         sender=None,
         access_checker=None,
+        message_resolver=None,
+        endpoint_role="legacy",
+        events_enabled=True,
     ):
         self.wrapped = wrapped
         self.store = store
         self.reconcile = reconcile
         self.sender = sender
         self.access_checker = access_checker
+        self.message_resolver = message_resolver
+        self.endpoint_role = endpoint_role
+        self.events_enabled = events_enabled
         self._task = None
         self._stop = asyncio.Event()
         self._last_worker_error = 0.0
@@ -145,9 +152,14 @@ class MCPEventsAdapter:
         return admission.principal_id
 
     @staticmethod
-    def _id(principal, name, arguments, callback):
+    def _id(principal, name, arguments, callback, *, binding=None):
+        extra = (
+            [binding.recipient_agent_id, binding.connection_key, binding.slot_id]
+            if binding is not None
+            else []
+        )
         canonical = json.dumps(
-            [principal, callback, name, arguments],
+            [principal, callback, name, arguments, *extra],
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -178,15 +190,21 @@ class MCPEventsAdapter:
                 "result": {
                     "resultType": "complete",
                     "supportedVersions": ["2026-07-28"],
-                    "capabilities": {"tools": {}, "events": {}},
+                    "capabilities": (
+                        {"tools": {}, "events": {}} if self.events_enabled else {"tools": {}}
+                    ),
                 },
             }
         if method == "events/list":
+            if not self.events_enabled:
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"events": []}}
             if params not in ({}, None) and (
                 not isinstance(params, dict) or params.get("cursor") not in (None, "")
             ):
                 return reject("validation", "invalid_parameters", -32602, "Invalid parameters")
             return {"jsonrpc": "2.0", "id": request_id, "result": event_catalog()}
+        if not self.events_enabled:
+            return reject("authorization", "events_access_only", -32601, "Method not found")
         principal = self._identity()
         if principal is None:
             return reject(
@@ -217,7 +235,46 @@ class MCPEventsAdapter:
                 "validation", "callback_url_invalid", -32602, "Invalid HTTPS callback URL"
             )
         emit(method, "validation", "accepted", cid)
-        sub_id = self._id(principal, name, arguments, callback)
+        binding = None
+        if name == "message.received":
+            admission = current_admission_context()
+            provider_meta = provider_metadata_from_events(params)
+            if provider_meta is None:
+                return reject(
+                    "authorization",
+                    "identity_metadata_missing",
+                    -32001,
+                    "Bound recipient metadata required",
+                )
+            if self.message_resolver is None:
+                return reject(
+                    "authorization",
+                    "recipient_resolver_unavailable",
+                    -32001,
+                    "Recipient binding unavailable",
+                )
+            try:
+                binding = await self.message_resolver.resolve(
+                    admission,
+                    provider_meta,
+                    self.endpoint_role,
+                )
+            except Exception:
+                return reject(
+                    "authorization",
+                    "recipient_lookup_error",
+                    -32001,
+                    "Recipient binding unavailable",
+                )
+            if binding is None:
+                return reject(
+                    "authorization",
+                    "recipient_not_bound",
+                    -32001,
+                    "Recipient binding unavailable",
+                )
+            emit(method, "authorization", "recipient_bound", cid)
+        sub_id = self._id(principal, name, arguments, callback, binding=binding)
         if method == "events/unsubscribe":
             if set(delivery) - {"mode", "url"}:
                 return reject(
@@ -266,6 +323,7 @@ class MCPEventsAdapter:
             callback=callback,
             secret=secret,
             ttl_ms=ttl_ms,
+            message_binding=binding,
         )
         emit(method, "persistence", "stored", cid)
         return {
@@ -320,7 +378,9 @@ class MCPEventsAdapter:
                     "id": request.get("id"),
                     "result": {
                         "protocolVersion": "2026-07-28",
-                        "capabilities": {"tools": {}, "events": {}},
+                        "capabilities": (
+                            {"tools": {}, "events": {}} if self.events_enabled else {"tools": {}}
+                        ),
                         "serverInfo": {"name": "terminal-mcp", "version": "2.0"},
                     },
                 }
