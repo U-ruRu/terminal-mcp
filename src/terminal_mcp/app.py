@@ -21,6 +21,7 @@ from terminal_mcp.application.managed_sessions import ManagedSessionApplication
 from terminal_mcp.application.window_recovery import ManagedWindowRecovery
 from terminal_mcp.auth.credentials import CredentialManager
 from terminal_mcp.auth.foundation import AuthFoundationStore
+from terminal_mcp.auth.identity_migration import assert_identity_isolated
 from terminal_mcp.auth.middleware import AuthMiddleware
 from terminal_mcp.auth.pairing import PairingStore
 from terminal_mcp.auth.routes import build_oauth_router
@@ -107,9 +108,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         output_max_rows=settings.output_retention_max_rows,
         output_prune_rows=settings.output_retention_prune_rows,
     )
-    oauth_store = OAuthStore(settings.database_path)
+    oauth_store = OAuthStore(settings.auth_database_path)
     auth_foundation = AuthFoundationStore(settings.auth_database_path)
-    pairing_store = PairingStore(settings.database_path)
+    pairing_store = PairingStore(settings.auth_database_path)
     ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     fleet_ws_ticket_store = WebSocketTicketStore(settings.console_ws_ticket_ttl_sec)
     credentials = CredentialManager(settings)
@@ -449,6 +450,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Fail closed before initialising runtime services if legacy credentials
+        # still live in the resettable database. Migration requires an offline backup.
+        assert_identity_isolated(settings.database_path, settings.auth_database_path)
         events.start()
         await runtime.start()
         await metrics.start()

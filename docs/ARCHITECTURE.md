@@ -74,7 +74,7 @@ SQLite durable state · bounded output cache · shell executor
 | Store | Responsibility |
 | --- | --- |
 | `terminal-mcp.sqlite3` | native tasks, claims, messages, command metadata, sessions and context; mesh grant replicas, attachment/activity, cleanup, event/message outbox and replay receipts |
-| `auth.sqlite3` | principals, clients and credential/security state |
+| `auth.sqlite3` | principals, OAuth clients and tokens, console device pairings, grants and protected security state |
 | `fleet-control.sqlite3` | configured Fleet topology and control |
 | `output.sqlite3` | bounded command output with independent retention |
 
