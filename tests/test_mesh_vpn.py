@@ -12,6 +12,7 @@ from terminal_mcp.fleet.config import build_fleet_config, load_peer_transports
 from terminal_mcp.mesh_vpn import (
     VPNError,
     _backend,
+    _endpoint,
     _load,
     create_offer,
     fingerprint,
@@ -581,3 +582,44 @@ def test_managed_fleet_transport_refreshes_access_mesh_without_rotating_pinned_a
     assert transport._wake.is_set()
     controller._replace_runtime_config(initial)
     assert transport.peers[0].origin == pinned.origin
+
+
+@pytest.mark.parametrize(
+    ("provided", "canonical"),
+    [
+        ("185.244.172.75:61063", "185.244.172.75:61063"),
+        ("[2a04:5200:fff5::344a]:61063", "[2a04:5200:fff5::344a]:61063"),
+        ("[2A04:2181:C011:1::BAFB:F78E]:42065", "[2a04:2181:c011:1::bafb:f78e]:42065"),
+    ],
+)
+def test_enrollment_accepts_numeric_ipv4_and_global_ipv6_underlay(provided, canonical):
+    assert _endpoint(provided) == canonical
+    private, public = signer()
+    offer = create_offer(local("firstbyte", "10.244.12.1", provided), private, now=1000)
+    assert (
+        verify_offer(offer, expected_instance_id="firstbyte", pinned_key=public, now=1020)[
+            "endpoint"
+        ]
+        == provided
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2a04:5200:fff5::344a:61063",
+        "[fe80::1]:61063",
+        "[ff02::1]:61063",
+        "[::1]:61063",
+        "[fc00::1]:61063",
+        "[::ffff:185.244.172.75]:61063",
+        "[2a04:5200:fff5::344a%eth0]:61063",
+        "[2a04:5200:fff5::344a]:0",
+        "[2a04:5200:fff5::344a]:65536",
+        "[2a04:5200:fff5::344a]:abc",
+        "bad.example:61063",
+    ],
+)
+def test_ipv6_endpoint_rejects_non_global_ambiguous_or_dns_address(value):
+    with pytest.raises(VPNError):
+        _endpoint(value)

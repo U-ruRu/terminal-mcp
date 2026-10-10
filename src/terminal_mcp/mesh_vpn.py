@@ -37,6 +37,10 @@ class VPNError(ValueError):
     pass
 
 
+class VPNConnectivityError(VPNError):
+    """A checked VPN endpoint is temporarily unavailable; trust was valid."""
+
+
 def _run(*argv: str, input_data: bytes | None = None) -> bytes:
     try:
         return subprocess.run(
@@ -87,15 +91,41 @@ def _address(value: str) -> str:
 
 
 def _endpoint(value: str) -> str:
-    """Static public IPv4 endpoint avoids DNS rebinding in bootstrap manifests."""
+    """Pinned numeric IP underlay; IPv4:port or bracketed [IPv6]:port.
+
+    A literal IP prevents DNS identity changes after signed enrollment.
+    IPv6 enables an independent underlay when a provider filters IPv4 UDP.
+    """
+    if not isinstance(value, str):
+        raise VPNError("endpoint must be IPv4:port or [IPv6]:port")
+    if value.startswith("["):
+        host, marker, port = value[1:].partition("]:")
+        if not marker or "%" in host:
+            raise VPNError("invalid bracketed IPv6 endpoint")
+        try:
+            ip = ipaddress.IPv6Address(host)
+            number = int(port)
+        except ValueError as exc:
+            raise VPNError("invalid bracketed IPv6 endpoint") from exc
+        if (
+            not ip.is_global
+            or ip.is_multicast
+            or ip.is_unspecified
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.ipv4_mapped is not None
+            or not 1 <= number <= 65535
+        ):
+            raise VPNError("WireGuard IPv6 underlay must be a global unicast address:port")
+        return f"[{ip.compressed}]:{number}"
     host, sep, port = value.rpartition(":")
     if not sep:
-        raise VPNError("endpoint must be an IPv4:port")
+        raise VPNError("endpoint must be IPv4:port or [IPv6]:port")
     try:
         ip = ipaddress.IPv4Address(host)
         number = int(port)
     except ValueError as exc:
-        raise VPNError("endpoint must be an IPv4:port") from exc
+        raise VPNError("endpoint must be IPv4:port or [IPv6]:port") from exc
     if ip.is_unspecified or ip.is_multicast or not 1 <= number <= 65535:
         raise VPNError("invalid WireGuard endpoint")
     return f"{ip}:{number}"
@@ -439,7 +469,9 @@ def switch(
             if not observed["running"] or not (
                 handshake and 0 <= int(time.time() if now is None else now) - handshake <= 180
             ):
-                raise VPNError("WireGuard handshake not fresh; refusing transport switch")
+                raise VPNConnectivityError(
+                    "WireGuard handshake not fresh; refusing transport switch"
+                )
             # One successful request is not sufficient: an unreliable UDP
             # path can pass a single probe and still drop most Mesh events.
             # Require eight independent, consecutive HTTP connections before
@@ -449,9 +481,9 @@ def switch(
                 try:
                     response = httpx.get(health_url, timeout=2.0, trust_env=False)
                 except httpx.HTTPError as exc:
-                    raise VPNError("WireGuard application health probe failed") from exc
+                    raise VPNConnectivityError("WireGuard application health probe failed") from exc
                 if response.status_code != 200:
-                    raise VPNError("WireGuard application health probe failed")
+                    raise VPNConnectivityError("WireGuard application health probe failed")
         override = {
             "mode": "wireguard",
             "origin": f"http://{peer['overlay_ip']}:{peer['proxy_port']}",

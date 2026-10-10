@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.persistent_admission import current_admission_context
 from terminal_mcp.mesh_vpn import (
+    VPNConnectivityError,
     VPNError,
     _load,
     create_offer,
@@ -148,6 +149,8 @@ def build_mesh_vpn_control_router(controller, application, settings) -> APIRoute
     def response(call, *, conflict: bool = False):
         try:
             return call()
+        except VPNConnectivityError as exc:
+            return {"ok": False, "code": "vpn_unavailable", "error": str(exc)}
         except VPNError as exc:
             return {
                 "ok": False,

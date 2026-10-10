@@ -339,3 +339,62 @@ prompt state reconciliation.
    bump version according to the release contract, and deploy
    one server at a time with immediate HTTPS rollback.
 5. Do not remove public recovery access during the transport cutover.
+
+## 2026-10-10 — IPv6 underlay compatibility and long-idle QA
+
+After capturing a kernel-to-kernel failure over IPv4 UDP, we proved that
+encryption implementation was not the fault: Firstbyte's external NIC
+captured outgoing encrypted UDP packets to BacLOUD, while those packets
+were completely absent from BacLOUD's external `eth0` capture.
+
+**IPv6 underlay** offers an alternative path while preserving internal
+IPv4 overlay /32 addressing. Not all addresses on a multi-homed node
+are equivalently reachable:
+
+- Firstbyte reachable external IPv6: `2a04:5200:fff5::344a`
+  (BacLOUD to this address: 8/8 ICMP, while an alternate Firstbyte
+  IPv6 address failed 0/8).
+- BacLOUD external IPv6: `2a04:2181:c011:1::bafb:f78e`
+  (Firstbyte to this address: 8/8 ICMP).
+- Set the **underlay** endpoint to `[IPv6]:UDP-port` in Mesh VPN
+  init/mobile enrollment; both the signed enrollment offer and the
+  `wg set peer endpoint` use the canonical bracketed IPv6 literal.
+- The inside-the-tunnel Mesh host remains private IPv4.
+- The IPv6 endpoint parser rejects DNS names, zone-qualified addresses,
+  non-global IPv6, multicast, link-local, loopback and invalid UDP ports.
+
+### Kernel ↔ kernel, IPv6
+
+With UDP 61063 on Firstbyte and 42065 on BacLOUD, the IPv6 encrypted
+tunnel achieved 25/25 ICMP both directions initially and continued
+updating the handshake after more than ten minutes online. After an
+extended quiet window, 80/80 ICMP passed in each direction (RTT about
+47 ms), and authenticated, read-only Access Mesh snapshot completed
+3/3 in each direction, medians 79 and 64 ms.
+
+A temporary private TCP-to-127.0.0.1:8080 proxy returned 30/30
+healthy requests BacLOUD→Firstbyte. Firstbyte→BacLOUD initially yielded
+5/30 due to empty HTTP replies, although 80/80 ICMP passed; local
+application and local proxy retests on both servers returned 30/30
+HTTP 200. Record this as a **transient application/proxy QA concern**,
+not an unexplained WireGuard datagram loss.
+
+### Kernel ↔ wireguard-go, IPv6
+
+A separate userspace instance on BacLOUD first suffered severe packet
+loss on an independently chosen UDP pair 61064/42066. The same instance
+was switched to the proven IPv6 pair 61063/42065 (after releasing the
+kernel-kernel QA sockets) and achieved:
+
+- 50/50 ICMP Firstbyte kernel → BacLOUD wireguard-go, RTT 50.0 ms
+- 50/50 ICMP BacLOUD wireguard-go → Firstbyte kernel, RTT 49.8 ms
+- 30/30 private HTTP health checks in each direction, means 126/122 ms
+- 5/5 authenticated read-only Mesh snapshots in each direction,
+  medians 98/63 ms
+
+This is a successful **cross-backend interoperability and live Mesh
+application test**, not yet proof of a five-minute userspace idle/rekey
+window. Ensure this final extended test, rollback and versioned
+production acceptance before routing all production Mesh traffic
+through the new VPN. QA interfaces, keys, and helper binaries are
+temporary and must be cleaned up before the work session ends.
