@@ -11,6 +11,10 @@ from pathlib import Path
 from terminal_mcp.trace import current_trace_id, current_upstream_request_id
 
 _MINIMAL = {
+    "mcp_http_started",
+    "mcp_http_finished",
+    "mcp_tool_started",
+    "mcp_tool_finished",
     "application_started",
     "application_stopped",
     "runtime_config_reloaded",

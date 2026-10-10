@@ -1036,6 +1036,10 @@ def build_role_mcp(
 
     _install_activity_touch()
 
+    from terminal_mcp.attempt_diagnostics import install_role_attempt_diagnostics
+
+    install_role_attempt_diagnostics(mcp, service, role)
+
     registered = mcp._tool_manager._tools
     mcp._tool_manager._tools = {name: registered[name] for name in ROLE_TOOLS[role]}
     from terminal_mcp.operation_metadata import install_action_metadata
