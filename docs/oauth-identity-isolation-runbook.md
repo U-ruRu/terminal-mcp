@@ -115,3 +115,37 @@ NEVER delete the entire working directory, protected auth or key material.
 Old and new binaries must never concurrently write different identity stores.
 Live validation and independent QA are separate deployment gates.
 
+## B1–B4 release-blocker closure (candidate for independent QA)
+
+The forward migration refuses a missing or uninitialized protected auth.sqlite3
+(B1). It requires pre-existing AuthFoundation schema version 3, the core
+principal/grant tables, security generation row and protected verifier-key
+file. Missing protected state is a recovery incident: restore it from its
+verified backup while stopped. Do not run forward against a new blank file.
+
+Existing deployments also require all six auth identity tables AND a single
+completed oauth_identity_migration marker. Startup and clean start run this
+read-only preflight BEFORE initializing any runtime worker or moving working
+data; empty/replaced protected auth fails closed (B3). The sole new-install bootstrap path requires no protected auth DB or Access
+verifier key and either no runtime DB or only empty, pre-initialized
+access_mesh_* metadata tables (created by constructor composition). After its three identity stores initialize, startup
+writes the completed marker before serving requests. The operator must verify
+that no prior configuration or backup is being abandoned before approving a
+new installation.
+
+Before any transfer the tool validates the complete table definitions and
+required explicit indexes, including UNIQUE(console_devices.client_id),
+CHECK, defaults and AUTOINCREMENT, of source and pre-existing target (B2).
+Incompatible destinations are refused, even if empty. Transfer preserves
+the AUTOINCREMENT high-water mark of console_pairing_audit (B4), including
+previously issued IDs that have since been deleted, in both forward and
+reverse transactions. As before, credentials and grants remain unchanged.
+
+The quarantine destination must reside on the same filesystem as both main
+and output SQLite files and their sidecars, so every rename is atomic. The
+shipped clean action checks this before moving files. Verify this condition
+before the release window; otherwise arrange a separate filesystem-local
+quarantine/restore procedure approved by the release owner.
+
+All four negative scenarios must pass on the final exact SHA and receive
+independent QA acceptance before integrating or deploying this patch.

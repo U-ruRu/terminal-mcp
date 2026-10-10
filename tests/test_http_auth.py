@@ -25,6 +25,7 @@ def pkce(verifier: str) -> str:
 def settings(tmp_path, **overrides):
     data = dict(
         database_path=tmp_path / "db.sqlite3",
+        auth_database_path=tmp_path / "auth.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
         log_path=tmp_path / "terminal-mcp.log",
         metrics_port=0,
@@ -334,7 +335,12 @@ def test_bearer_actions_and_openapi(tmp_path):
 
         task_card = schema["components"]["schemas"]["TaskCard"]["properties"]
         assert task_card["state"]["enum"] == [
-            "ready", "in_progress", "qa", "blocked", "deferred", "done",
+            "ready",
+            "in_progress",
+            "qa",
+            "blocked",
+            "deferred",
+            "done",
         ]
         assert "isolation_hint" in task_card
         assert "blocking_dependencies" in task_card
@@ -495,9 +501,7 @@ def test_oauth_pkce_refresh_and_protected_action(tmp_path, file_oauth_credential
         assert resource["resource"] == "https://terminal.example/mcp"
         for role in ("executor", "coordinator"):
             role_path = f"/terminal-mcp/{role}/v1/mcp"
-            role_metadata = client.get(
-                f"/.well-known/oauth-protected-resource{role_path}"
-            )
+            role_metadata = client.get(f"/.well-known/oauth-protected-resource{role_path}")
             assert role_metadata.status_code == 200
             assert role_metadata.json()["resource"] == f"https://terminal.example{role_path}"
             embedded = client.get(f"{role_path}/.well-known/oauth-protected-resource")

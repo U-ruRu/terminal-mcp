@@ -308,3 +308,236 @@ def test_sqlite_backup_restore_old_working_schema_and_current_auth_reverse(tmp_p
     assert run(old_store.rotate_refresh(old_token)) is None
     assert run(old_store.rotate_refresh(new_token)) == (cid, "terminal:read")
     assert run(PairingStore(old_working).active_device_for_client(device.client_id))
+
+
+# Fail-closed cases B1–B4 independently reported by Zulu-2 QA.
+
+
+def test_b1_missing_protected_auth_fails_before_any_source_change(tmp_path):
+    runtime, auth, cid, *_ = seed(tmp_path)
+    auth.unlink()
+    assert not auth.exists()
+    with pytest.raises(IdentityMigrationError, match="protected auth database is missing"):
+        migrate(runtime, auth, tmp_path / "forbidden-backup")
+    assert not auth.exists()  # Never silently recreate AuthFoundation.
+    assert not (tmp_path / "forbidden-backup").exists()
+    assert run(OAuthStore(runtime).get_client(cid)) is not None
+
+
+def test_b2_destination_without_unique_client_id_fails_closed(tmp_path):
+    runtime, auth, cid, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(auth)) as db, db:
+        db.execute(
+            "CREATE TABLE console_devices("
+            "device_id TEXT PRIMARY KEY,client_id TEXT NOT NULL,"
+            "public_key TEXT NOT NULL,label TEXT NOT NULL,"
+            "created_at INTEGER NOT NULL,last_used_at INTEGER NOT NULL,revoked_at INTEGER)"
+        )
+        db.execute("CREATE INDEX ix_console_devices_client ON console_devices(client_id)")
+    with pytest.raises(IdentityMigrationError, match="DDL conflict"):
+        migrate(runtime, auth, tmp_path / "forbidden-backup")
+    assert run(OAuthStore(runtime).get_client(cid)) is not None
+    with closing(sqlite3.connect(auth)) as db:
+        assert db.execute("SELECT count(*) FROM console_devices").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("replacement", ["empty", "foundation-only", "missing-marker"])
+def test_b3_replacement_auth_blocks_startup_and_clean(tmp_path, replacement):
+    runtime, auth, cid, *_ = seed(tmp_path)
+    migrate(runtime, auth, tmp_path / "migration-backup")
+    auth.unlink()
+    if replacement == "empty":
+        sqlite3.connect(auth).close()
+    else:
+        run(AuthFoundationStore(auth).initialize())
+        if replacement == "missing-marker":
+            run(OAuthStore(auth).initialize())
+            run(PairingStore(auth).initialize())
+    assert inspect(runtime, auth)["status"] == "invalid-protected-auth"
+    with pytest.raises(IdentityMigrationError, match="protected|migration"):
+        assert_identity_isolated(runtime, auth)
+    output = tmp_path / "output.sqlite3"
+    with closing(sqlite3.connect(output)) as db, db:
+        db.execute("CREATE TABLE output_sentinel(value TEXT)")
+        db.execute("INSERT INTO output_sentinel VALUES('present')")
+    with pytest.raises(IdentityMigrationError, match="protected|migration"):
+        clean_working_data(runtime, auth, output, tmp_path / "blocked-clean")
+    assert runtime.exists() and output.exists()
+    with pytest.raises(IdentityMigrationError, match="protected|migration"):
+        with TestClient(create_app(settings(tmp_path, runtime, auth))):
+            pass
+    assert not (tmp_path / "blocked-clean").exists()
+
+
+def test_b3_loss_of_auth_after_clean_is_not_mistaken_for_first_install(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    migrate(runtime, auth, tmp_path / "migration-backup")
+    output = tmp_path / "output.sqlite3"
+    sqlite3.connect(output).close()
+    clean_working_data(runtime, auth, output, tmp_path / "clean-backup")
+    assert not runtime.exists() and auth.exists()
+    auth.unlink()  # Access key remains and proves previous installation.
+    with pytest.raises(IdentityMigrationError, match="protected auth database"):
+        assert_identity_isolated(runtime, auth)
+
+
+def test_b4_forward_preserves_deleted_tail_audit_autoincrement(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(runtime)) as db, db:
+        issued = db.execute(
+            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
+            "VALUES('synthetic','success',?)",
+            (int(time.time()),),
+        ).lastrowid
+        db.execute("DELETE FROM console_pairing_audit WHERE id=?", (issued,))
+        source_seq = db.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
+        ).fetchone()[0]
+        assert source_seq >= issued
+        assert (
+            db.execute("SELECT COALESCE(MAX(id),0) FROM console_pairing_audit").fetchone()[0]
+            < source_seq
+        )
+    migrate(runtime, auth, tmp_path / "forward-backup")
+    with closing(sqlite3.connect(auth)) as db, db:
+        assert (
+            db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
+            ).fetchone()[0]
+            == source_seq
+        )
+        new_id = db.execute(
+            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
+            "VALUES('later','success',?)",
+            (int(time.time()),),
+        ).lastrowid
+        assert new_id > source_seq
+
+
+def test_b4_reverse_preserves_deleted_tail_audit_autoincrement(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    migrate(runtime, auth, tmp_path / "forward-backup")
+    with closing(sqlite3.connect(auth)) as db, db:
+        issued = db.execute(
+            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
+            "VALUES('post-cutover','success',?)",
+            (int(time.time()),),
+        ).lastrowid
+        db.execute("DELETE FROM console_pairing_audit WHERE id=?", (issued,))
+        source_seq = db.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
+        ).fetchone()[0]
+        assert source_seq >= issued
+    migrate(runtime, auth, tmp_path / "reverse-backup", reverse=True)
+    with closing(sqlite3.connect(runtime)) as db, db:
+        assert (
+            db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
+            ).fetchone()[0]
+            == source_seq
+        )
+        new_id = db.execute(
+            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
+            "VALUES('after-rollback','success',?)",
+            (int(time.time()),),
+        ).lastrowid
+        assert new_id > issued
+
+
+def test_fresh_install_seals_auth_marker_and_survives_restart(tmp_path):
+    runtime = tmp_path / "first-runtime.sqlite3"
+    auth = tmp_path / "first-auth.sqlite3"
+    app_settings = settings(tmp_path, runtime, auth)
+    assert not runtime.exists() and not auth.exists()
+    assert assert_identity_isolated(runtime, auth) is True
+    with TestClient(create_app(app_settings)) as client:
+        assert client.get("/health/live").status_code == 200
+    with closing(sqlite3.connect(auth)) as db:
+        assert db.execute("SELECT version FROM oauth_identity_migration").fetchall() == [(1,)]
+    assert assert_identity_isolated(runtime, auth) is None
+    with TestClient(create_app(app_settings)) as client:
+        assert client.get("/health/live").status_code == 200
+
+
+def test_foundation_schema_version_drift_blocks_forward_even_with_valid_oauth(tmp_path):
+    runtime, auth, cid, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(auth)) as db, db:
+        db.execute("PRAGMA user_version=321")
+    with pytest.raises(IdentityMigrationError, match="AuthFoundation schema version"):
+        migrate(runtime, auth, tmp_path / "uncreated-backup")
+    assert not (tmp_path / "uncreated-backup").exists()
+    assert run(OAuthStore(runtime).get_client(cid)) is not None
+
+
+def test_b4_deleted_all_audit_rows_keeps_highwater(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(runtime)) as db, db:
+        db.execute("DELETE FROM console_pairing_audit")
+        highwater = db.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
+        ).fetchone()[0]
+        assert highwater > 0
+        assert db.execute("SELECT count(*) FROM console_pairing_audit").fetchone()[0] == 0
+    migrate(runtime, auth, tmp_path / "backup")
+    with closing(sqlite3.connect(auth)) as db, db:
+        new_id = db.execute(
+            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
+            "VALUES('later','success',?)",
+            (int(time.time()),),
+        ).lastrowid
+        assert new_id > highwater
+
+
+def test_b2_missing_explicit_target_index_fails_closed(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(auth)) as db, db:
+        db.execute(
+            "CREATE TABLE console_devices("
+            "device_id TEXT PRIMARY KEY,client_id TEXT NOT NULL UNIQUE,"
+            "public_key TEXT NOT NULL,label TEXT NOT NULL,"
+            "created_at INTEGER NOT NULL,last_used_at INTEGER NOT NULL,revoked_at INTEGER)"
+        )
+    with pytest.raises(IdentityMigrationError, match="index DDL conflict"):
+        migrate(runtime, auth, tmp_path / "backup")
+    assert not (tmp_path / "backup").exists()
+
+
+def test_inspect_reports_protected_auth_loss_after_clean(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    migrate(runtime, auth, tmp_path / "forward-backup")
+    output = tmp_path / "output.sqlite3"
+    sqlite3.connect(output).close()
+    clean_working_data(runtime, auth, output, tmp_path / "clean-quarantine")
+    auth.unlink()
+    assert inspect(runtime, auth)["status"] == "invalid-protected-auth"
+    with pytest.raises(IdentityMigrationError, match="protected auth database"):
+        assert_identity_isolated(runtime, auth)
+
+
+def test_b2_extra_unique_index_in_empty_target_is_refused(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(auth)) as db, db:
+        db.execute(
+            "CREATE TABLE console_devices("
+            "device_id TEXT PRIMARY KEY,client_id TEXT NOT NULL UNIQUE,"
+            "public_key TEXT NOT NULL,label TEXT NOT NULL,"
+            "created_at INTEGER NOT NULL,last_used_at INTEGER NOT NULL,revoked_at INTEGER)"
+        )
+        db.execute("CREATE INDEX ix_console_devices_client ON console_devices(client_id)")
+        db.execute("CREATE UNIQUE INDEX unexpected_label_unique ON console_devices(label)")
+    with pytest.raises(IdentityMigrationError, match="unexpected identity indexes"):
+        migrate(runtime, auth, tmp_path / "backup")
+    assert not (tmp_path / "backup").exists()
+
+
+def test_first_install_rejects_deleted_access_mesh_history_with_missing_auth(tmp_path):
+    runtime = tmp_path / "runtime.sqlite3"
+    auth = tmp_path / "auth.sqlite3"
+    with closing(sqlite3.connect(runtime)) as db, db:
+        db.execute(
+            "CREATE TABLE access_mesh_history(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)"
+        )
+        issued = db.execute("INSERT INTO access_mesh_history(name) VALUES('used')").lastrowid
+        db.execute("DELETE FROM access_mesh_history WHERE id=?", (issued,))
+    with pytest.raises(IdentityMigrationError, match="protected auth database"):
+        assert_identity_isolated(runtime, auth)
