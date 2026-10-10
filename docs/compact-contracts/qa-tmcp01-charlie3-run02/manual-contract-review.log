@@ -1,0 +1,4 @@
+PASS all 19 manual source/input/output/description rows; only 4 repaired descriptions
+PASS 9 + 2 + 2 canonical action whitelist/required/extra policies
+PASS 13 B IDs + G1/G2, source anchors/action scopes; runtime adversarial + whitespace cases
+Verdict NON_BLOCKING_OFFLINE; live ChatGPT A/B NOT TESTED

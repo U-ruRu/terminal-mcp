@@ -1,0 +1,795 @@
+{
+  "candidate": "baaf7744a94ca126ba0b913b6829f98e2a33b693",
+  "verdict": "NON_BLOCKING_OFFLINE",
+  "b_and_g": {
+    "B1": {
+      "verdict": "PASS",
+      "basis": "update expected_revision non-null and required"
+    },
+    "B2": {
+      "verdict": "PASS",
+      "basis": "all 9 canonical action allowlists/required/extras exact"
+    },
+    "B3": {
+      "verdict": "PASS",
+      "basis": "archive note precedence/whitespace masked fallback accurately described"
+    },
+    "B4": {
+      "verdict": "PASS",
+      "basis": "release_reason optional, supplied nonblank, unclaimed bypass"
+    },
+    "B5": {
+      "verdict": "PASS",
+      "basis": "task_state admitted nonowner, CAS revision stable, claims persist"
+    },
+    "B6": {
+      "verdict": "PASS",
+      "basis": "claim_intent nonblank, cross-action claim/release exclusions"
+    },
+    "B7": {
+      "verdict": "PASS",
+      "basis": "message null-vs-presence and scopes unchanged; source validators untouched"
+    },
+    "B8": {
+      "verdict": "PASS",
+      "basis": "comment nonblank, checkpoint forbidden-extra/nullable"
+    },
+    "B9": {
+      "verdict": "PASS",
+      "basis": "action-specific nonnull requirements unchanged, source scope stable"
+    },
+    "B10": {
+      "verdict": "PASS",
+      "basis": "update None omitted, empty arrays replace; prior independently verified"
+    },
+    "B11": {
+      "verdict": "PASS_OFFLINE_LIVE_NOT_TESTED",
+      "basis": "permissive 19 transport projections and 20 bounded HTTP errors"
+    },
+    "B12": {
+      "verdict": "PASS",
+      "basis": "task_comment checkpoint expected_revision forbidden"
+    },
+    "B13": {
+      "verdict": "PASS",
+      "basis": "open relation_kind plus runtime review_of; unchanged"
+    },
+    "G1": {
+      "verdict": "PASS",
+      "basis": "owner gates vs safe participant fields, unclaimed path tested"
+    },
+    "G2": {
+      "verdict": "PASS",
+      "basis": "candidate_ref frozen done/incoming review_of incl same value, null omitted"
+    }
+  },
+  "action_policies": {
+    "coordinator.task_manage": {
+      "create": {
+        "allowed": [
+          "action",
+          "candidate_ref",
+          "checkpoint",
+          "cooperative",
+          "dependencies",
+          "description",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "namespace",
+          "next_action",
+          "output_refs",
+          "priority",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "task_id",
+          "title"
+        ],
+        "required_non_null": [
+          "action",
+          "isolation_hint",
+          "namespace"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "comment_text",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "note",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "verdict"
+        ]
+      },
+      "update": {
+        "allowed": [
+          "action",
+          "blocker_reason",
+          "candidate_ref",
+          "cooperative",
+          "dependencies",
+          "description",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "lane",
+          "namespace",
+          "next_action",
+          "output_refs",
+          "priority",
+          "resource_context",
+          "result",
+          "tags",
+          "task_id",
+          "title"
+        ],
+        "required_non_null": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "archive_note",
+          "checkpoint",
+          "comment_text",
+          "dimensions",
+          "evidence",
+          "isolation_hint",
+          "note",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "state",
+          "verdict"
+        ]
+      },
+      "checkpoint": {
+        "allowed": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ]
+      },
+      "archive": {
+        "allowed": [
+          "action",
+          "archive_note",
+          "expected_revision",
+          "namespace",
+          "note",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ]
+      },
+      "review": {
+        "allowed": [
+          "action",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "namespace",
+          "task_id",
+          "verdict"
+        ],
+        "required_non_null": [
+          "action",
+          "dimensions",
+          "namespace",
+          "task_id",
+          "verdict"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title"
+        ]
+      },
+      "relate": {
+        "allowed": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ]
+      },
+      "unrelate": {
+        "allowed": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "related_task_id",
+          "relation_kind",
+          "task_id"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ]
+      },
+      "state": {
+        "allowed": [
+          "action",
+          "namespace",
+          "state",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "state",
+          "task_id"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "comment_text",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "tags",
+          "title",
+          "verdict"
+        ]
+      },
+      "comment": {
+        "allowed": [
+          "action",
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "archive_note",
+          "blocker_reason",
+          "candidate_ref",
+          "checkpoint",
+          "cooperative",
+          "dependencies",
+          "description",
+          "dimensions",
+          "evidence",
+          "expected_revision",
+          "force",
+          "force_reason",
+          "input_refs",
+          "isolation_hint",
+          "lane",
+          "next_action",
+          "note",
+          "output_refs",
+          "priority",
+          "related_namespace",
+          "related_task_id",
+          "relation_kind",
+          "request_id",
+          "resource_context",
+          "result",
+          "state",
+          "tags",
+          "title",
+          "verdict"
+        ]
+      }
+    },
+    "executor.task_claim": {
+      "claim": {
+        "allowed": [
+          "action",
+          "claim_intent",
+          "expected_revision",
+          "namespace",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "claim_intent",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "release_reason"
+        ]
+      },
+      "release": {
+        "allowed": [
+          "action",
+          "expected_revision",
+          "namespace",
+          "release_reason",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "claim_intent"
+        ]
+      }
+    },
+    "executor.task_comment": {
+      "comment": {
+        "allowed": [
+          "action",
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "required_non_null": [
+          "comment_text",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "checkpoint"
+        ]
+      },
+      "checkpoint": {
+        "allowed": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "required_non_null": [
+          "action",
+          "checkpoint",
+          "namespace",
+          "task_id"
+        ],
+        "forbidden": [
+          "comment_text"
+        ]
+      }
+    }
+  },
+  "all_19_tools": [
+    {
+      "tool": "access.session",
+      "field_count": 1,
+      "strict_required": [
+        "action"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.agent_observe",
+      "field_count": 0,
+      "strict_required": [],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.health",
+      "field_count": 1,
+      "strict_required": [],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.message",
+      "field_count": 13,
+      "strict_required": [
+        "action"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.session",
+      "field_count": 2,
+      "strict_required": [
+        "session_number"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.task_get",
+      "field_count": 6,
+      "strict_required": [
+        "namespace",
+        "task_id"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.task_graph",
+      "field_count": 6,
+      "strict_required": [
+        "namespace",
+        "task_id"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.task_list",
+      "field_count": 6,
+      "strict_required": [],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "coordinator.task_manage",
+      "field_count": 33,
+      "strict_required": [
+        "action",
+        "namespace"
+      ],
+      "description_changed": true,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.command_cancel",
+      "field_count": 1,
+      "strict_required": [
+        "cmd_hash"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.command_read",
+      "field_count": 3,
+      "strict_required": [],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.command_recovery",
+      "field_count": 1,
+      "strict_required": [
+        "command"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.command_run",
+      "field_count": 3,
+      "strict_required": [
+        "command"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.message",
+      "field_count": 13,
+      "strict_required": [
+        "action"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.session",
+      "field_count": 2,
+      "strict_required": [
+        "session_number"
+      ],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.task_claim",
+      "field_count": 6,
+      "strict_required": [
+        "action",
+        "namespace",
+        "task_id"
+      ],
+      "description_changed": true,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.task_comment",
+      "field_count": 5,
+      "strict_required": [
+        "namespace",
+        "task_id"
+      ],
+      "description_changed": true,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.task_list",
+      "field_count": 6,
+      "strict_required": [],
+      "description_changed": false,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    },
+    {
+      "tool": "executor.task_state",
+      "field_count": 3,
+      "strict_required": [
+        "namespace",
+        "state",
+        "task_id"
+      ],
+      "description_changed": true,
+      "source_input": "PASS",
+      "source_output": "PASS",
+      "semantic_contract": "PASS",
+      "public_transport": "PASS",
+      "public_output": "PASS"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+PASS adversarial runtime cases: 13
+{
+  "nonowner_safe_title_with_control_flags_and_null_candidate": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "nonowner_cooperative_unsafe": {
+    "ok": false,
+    "code": "owner_required",
+    "error": "task.update: live owner required for workflow-changing mutation"
+  },
+  "nonowner_stale_revision": {
+    "ok": false,
+    "code": "revision_conflict",
+    "error": "revision conflict"
+  },
+  "state_nonowner_stale_expected_rev": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "repeated_state": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "state_invariants": {
+    "revision_before": 2,
+    "revision_after": 2,
+    "events_before": 2,
+    "events_after_repeat": 2,
+    "claim_preserved": true
+  },
+  "unclaimed_relate": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "unclaimed_unrelate": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "unclaimed_archive_note": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "review_of_relation": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "incoming_review_freeze_same_value": {
+    "ok": false,
+    "code": "candidate_ref_frozen",
+    "error": "task.update: candidate_ref is frozen while review_of relation exists"
+  },
+  "incoming_review_candidate_null_is_omitted": {
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "not_claimed_release_whitespace_bypassed": {
+    "ok": true,
+    "code": null,
+    "error": null
+  }
+}

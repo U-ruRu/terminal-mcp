@@ -1,0 +1,221 @@
+{
+  "candidate": "baaf7744a94ca126ba0b913b6829f98e2a33b693",
+  "base": "2649bc445252b8af9d34b6eee1dec2ce1ea6a601",
+  "checks": {
+    "runtime_source_unmodified": true,
+    "strict-contracts.json_identical": true,
+    "before-access.json_identical": true,
+    "before-executor.json_identical": true,
+    "before-coordinator.json_identical": true,
+    "strict_sha256": "5bafb845096b00b43e2171024b467db8023808199ca5b27fa9f8642eabc7b694",
+    "original_QA_24_files_preserved": true,
+    "all_19_non_description_fields_same": true,
+    "changed_descriptions": [
+      "executor.task_claim",
+      "executor.task_state",
+      "executor.task_comment",
+      "coordinator.task_manage"
+    ],
+    "all_19_tool_input_output_unchanged": true
+  },
+  "tools": [
+    {
+      "name": "access.session",
+      "only_changed_field": [],
+      "before_description_chars": 858,
+      "after_description_chars": 858,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.session",
+      "only_changed_field": [],
+      "before_description_chars": 1118,
+      "after_description_chars": 1118,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.task_list",
+      "only_changed_field": [],
+      "before_description_chars": 1225,
+      "after_description_chars": 1225,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.command_run",
+      "only_changed_field": [],
+      "before_description_chars": 1027,
+      "after_description_chars": 1027,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.command_read",
+      "only_changed_field": [],
+      "before_description_chars": 1330,
+      "after_description_chars": 1330,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.command_cancel",
+      "only_changed_field": [],
+      "before_description_chars": 787,
+      "after_description_chars": 787,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.command_recovery",
+      "only_changed_field": [],
+      "before_description_chars": 794,
+      "after_description_chars": 794,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.task_claim",
+      "only_changed_field": [
+        "description"
+      ],
+      "before_description_chars": 1903,
+      "after_description_chars": 2040,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.task_state",
+      "only_changed_field": [
+        "description"
+      ],
+      "before_description_chars": 1059,
+      "after_description_chars": 1134,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.task_comment",
+      "only_changed_field": [
+        "description"
+      ],
+      "before_description_chars": 1794,
+      "after_description_chars": 1782,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "executor.message",
+      "only_changed_field": [],
+      "before_description_chars": 2745,
+      "after_description_chars": 2745,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.session",
+      "only_changed_field": [],
+      "before_description_chars": 1118,
+      "after_description_chars": 1118,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.task_get",
+      "only_changed_field": [],
+      "before_description_chars": 1134,
+      "after_description_chars": 1134,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.task_list",
+      "only_changed_field": [],
+      "before_description_chars": 1200,
+      "after_description_chars": 1200,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.task_manage",
+      "only_changed_field": [
+        "description"
+      ],
+      "before_description_chars": 7757,
+      "after_description_chars": 8804,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.task_graph",
+      "only_changed_field": [],
+      "before_description_chars": 995,
+      "after_description_chars": 995,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.agent_observe",
+      "only_changed_field": [],
+      "before_description_chars": 745,
+      "after_description_chars": 745,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.message",
+      "only_changed_field": [],
+      "before_description_chars": 2745,
+      "after_description_chars": 2745,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    },
+    {
+      "name": "coordinator.health",
+      "only_changed_field": [],
+      "before_description_chars": 1205,
+      "after_description_chars": 1205,
+      "inputSchema_same": true,
+      "outputSchema_same": true,
+      "annotations_same": true,
+      "public_transport_no_assertions": true
+    }
+  ]
+}

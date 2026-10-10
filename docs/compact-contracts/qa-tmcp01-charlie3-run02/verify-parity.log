@@ -1,0 +1,4 @@
+PASS exact SHA, unchanged runtime source, strict sidecar, before-baselines, 24 prior QA files
+PASS all 19 tools, every public record field except descriptions identical
+DESCRIPTIONS CHANGED ['executor.task_claim', 'executor.task_state', 'executor.task_comment', 'coordinator.task_manage']
+STRICT SHA256 5bafb845096b00b43e2171024b467db8023808199ca5b27fa9f8642eabc7b694

@@ -1,0 +1,44 @@
+{
+  "archive": {
+    "valid_top_level_and_canonical": true,
+    "ok": false,
+    "code": "owner_required",
+    "error": "task.archive: live owner required"
+  },
+  "relate": {
+    "valid_top_level_and_canonical": true,
+    "ok": false,
+    "code": "owner_required",
+    "error": "task.relate: live owner required"
+  },
+  "unrelate": {
+    "valid_top_level_and_canonical": true,
+    "ok": false,
+    "code": "owner_required",
+    "error": "task.unrelate: live owner required"
+  },
+  "update_unsafe": {
+    "valid_top_level_and_canonical": true,
+    "ok": false,
+    "code": "owner_required",
+    "error": "task.update: live owner required for workflow-changing mutation"
+  },
+  "update_safe": {
+    "valid_top_level_and_canonical": true,
+    "ok": true,
+    "code": null,
+    "error": null
+  },
+  "candidate_ref_after_done": {
+    "valid_top_level_and_canonical": true,
+    "ok": false,
+    "code": "candidate_ref_frozen",
+    "error": "task.update: candidate_ref is immutable after task completion"
+  },
+  "description_contains_owner_required": true,
+  "description_contains_live owner": true,
+  "description_contains_candidate_ref_frozen": true,
+  "description_contains_safe participant": true,
+  "description_contains_content revision unchanged": false,
+  "runtime_state_revision_semantics_described": true
+}

@@ -1,0 +1,10 @@
+check	exit_code	evidence
+remote_candidate_SHA	0	remote-head.txt, SHA.txt
+scope_parity_and_original_QA	0	verify-parity.log, scope-parity-independent.json
+generator_10_deterministic	0	build-check.log
+pytest_94_targeted	0	pytest-targeted.log, pytest-targeted-times.txt
+independent_19_tool_20_http	0	independent-audit-rerun.log, independent-evidence.json
+RUN01_G1_G2_rerun	0	rerun-runtime-gaps.log, runtime-gaps.json
+RUN01_whitespace_rerun	0	rerun-whitespace-regressions.log, whitespace-regressions.json
+additional_adversarial	0	adversarial-runtime.log, adversarial-runtime-evidence.json
+manual_19_B1-B13_G1-G2	0	manual-contract-review.log, b-g-manual-adjudication.json
