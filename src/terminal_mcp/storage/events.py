@@ -68,6 +68,91 @@ def compact_payload(payload: Any) -> str:
     return json.dumps(scalars, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
+# Durable journal changes represent meaningful state, never heartbeat/no-op
+# timestamp refreshes. SQLite AFTER UPDATE fires even if assigned values are
+# identical, so all published entity fields are compared null-safely.
+_UPDATE_TRIGGER_FIELDS = {
+    "tr_event_logical_agent_changed": (
+        "logical_agents",
+        (
+            "display_name",
+            "state",
+            "authority_node_id",
+            "authority_epoch",
+            "slot_revision",
+            "selector_generation",
+            "auth_generation",
+            "deleted_at",
+        ),
+    ),
+    "tr_event_work_session_changed": (
+        "logical_agent_work_sessions",
+        (
+            "logical_agent_id",
+            "session_epoch",
+            "authority_node_id",
+            "authority_epoch",
+            "hard_expires_at",
+            "state",
+            "origin_instance_id",
+            "ended_at",
+            "end_reason",
+            "auth_principal_id",
+            "auth_generation",
+        ),
+    ),
+}
+
+
+async def _upgrade_noop_update_triggers(db) -> None:
+    """Upgrade pre-existing unconditional triggers without replacing journal rows.
+
+    The trigger definitions installed by older builds are migrated inside one
+    SQLite write transaction. Already guarded databases are left unchanged.
+    """
+    old = {}
+    for name, (table, fields) in _UPDATE_TRIGGER_FIELDS.items():
+        row = await (
+            await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
+            )
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"missing event journal trigger: {name}")
+        ddl = row[0]
+        marker = "AFTER UPDATE ON " + table
+        if ddl.count(marker) != 1:
+            raise RuntimeError(f"unexpected event journal trigger: {name}")
+        if " WHEN (" not in ddl[: ddl.index("BEGIN")]:
+            guarded = ddl.replace(
+                marker,
+                marker
+                + " WHEN ("
+                + " OR ".join(f"OLD.{field} IS NOT NEW.{field}" for field in fields)
+                + ")",
+                1,
+            )
+            old[name] = guarded
+    if not old:
+        return
+    await db.execute("BEGIN IMMEDIATE")
+    try:
+        for name, guarded in old.items():
+            row = await (
+                await db.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
+                )
+            ).fetchone()
+            if row is not None and " WHEN (" in row[0][: row[0].index("BEGIN")]:
+                continue
+            await db.execute("DROP TRIGGER " + name)
+            await db.execute(guarded)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+
 async def install_event_journal(db) -> None:
     """Install journal storage and durable mutation-boundary triggers."""
 
@@ -332,6 +417,14 @@ async def install_event_journal(db) -> None:
 
         CREATE TRIGGER IF NOT EXISTS tr_event_logical_agent_changed
         AFTER UPDATE ON logical_agents
+        WHEN (OLD.display_name IS NOT NEW.display_name OR
+              OLD.state IS NOT NEW.state OR
+              OLD.authority_node_id IS NOT NEW.authority_node_id OR
+              OLD.authority_epoch IS NOT NEW.authority_epoch OR
+              OLD.slot_revision IS NOT NEW.slot_revision OR
+              OLD.selector_generation IS NOT NEW.selector_generation OR
+              OLD.auth_generation IS NOT NEW.auth_generation OR
+              OLD.deleted_at IS NOT NEW.deleted_at)
         BEGIN
             INSERT INTO instance_events(
                 event_type,entity_type,entity_id,actor_id,payload_json,created_at
@@ -373,6 +466,17 @@ async def install_event_journal(db) -> None:
 
         CREATE TRIGGER IF NOT EXISTS tr_event_work_session_changed
         AFTER UPDATE ON logical_agent_work_sessions
+        WHEN (OLD.logical_agent_id IS NOT NEW.logical_agent_id OR
+              OLD.session_epoch IS NOT NEW.session_epoch OR
+              OLD.authority_node_id IS NOT NEW.authority_node_id OR
+              OLD.authority_epoch IS NOT NEW.authority_epoch OR
+              OLD.hard_expires_at IS NOT NEW.hard_expires_at OR
+              OLD.state IS NOT NEW.state OR
+              OLD.origin_instance_id IS NOT NEW.origin_instance_id OR
+              OLD.ended_at IS NOT NEW.ended_at OR
+              OLD.end_reason IS NOT NEW.end_reason OR
+              OLD.auth_principal_id IS NOT NEW.auth_principal_id OR
+              OLD.auth_generation IS NOT NEW.auth_generation)
         BEGIN
             INSERT INTO instance_events(
                 event_type,entity_type,entity_id,actor_id,payload_json,created_at
@@ -583,6 +687,7 @@ async def install_event_journal(db) -> None:
         END;
         """
     )
+    await _upgrade_noop_update_triggers(db)
 
 
 class EventJournalStore:
@@ -666,9 +771,7 @@ class EventJournalStore:
         limit = max(1, min(int(limit), MAX_EVENT_LIMIT))
         async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             bounds = await (
-                await db.execute(
-                    "SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events"
-                )
+                await db.execute("SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events")
             ).fetchone()
             oldest = int(bounds[0]) if bounds[0] is not None else None
             high_water = int(bounds[1])
@@ -711,9 +814,7 @@ class EventJournalStore:
         limit = max(1, min(int(limit), MAX_EVENT_LIMIT))
         async with cancellation_safe_connection(aiosqlite.connect, self.path, timeout=1.0) as db:
             bounds = await (
-                await db.execute(
-                    "SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events"
-                )
+                await db.execute("SELECT MIN(seq),COALESCE(MAX(seq),0) FROM instance_events")
             ).fetchone()
             oldest = int(bounds[0]) if bounds[0] is not None else None
             high_water = int(bounds[1])

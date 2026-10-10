@@ -24,7 +24,7 @@ from terminal_mcp.storage.permissions import secure_database_path
 from terminal_mcp.storage.sqlite_observability import SqliteDiagnostics, observed_connection
 from terminal_mcp.storage.work_windows import install_work_window_schema
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 _COMMAND_COLUMNS = (
     "hash,cmd,status,pid,exit_code,error,started_at,finished_at,"

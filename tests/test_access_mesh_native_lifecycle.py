@@ -1,4 +1,7 @@
+import re
+import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -291,3 +294,89 @@ async def test_snapshot_rotation_preserves_session_but_missed_stop_fences(fixtur
     assert (await consumer.resolve(actor(), ManagedOperation.COMMAND_RUN))[
         "session_epoch"
     ] == initial["session_epoch"] + 1
+
+@pytest.mark.asyncio
+async def test_repeated_mesh_resolve_does_not_flood_entity_journal(fixture):
+    """Rechecking a stable Access cycle must not emit duplicate change events."""
+    f = fixture
+    await issued(f)
+    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    agent_id = attached["logical_agent_id"]
+    session_id = attached["work_session_id"]
+
+    def changes():
+        with sqlite3.connect(f.store.path) as db:
+            return db.execute(
+                "SELECT event_type,count(*) FROM instance_events "
+                "WHERE (event_type='logical_agent.changed' AND entity_id=?) "
+                "OR (event_type='work_session.changed' AND entity_id=?) "
+                "GROUP BY event_type ORDER BY event_type",
+                (agent_id, session_id),
+            ).fetchall()
+
+    original = changes()
+    for _ in range(8):
+        result = await f.app.resolve(actor(), ManagedOperation.COMMAND_RUN)
+        assert result["work_session_id"] == session_id
+    assert changes() == original
+
+
+@pytest.mark.asyncio
+async def test_existing_unconditional_event_triggers_upgrade_without_event_loss(fixture):
+    """Opening a pre-upgrade database installs guarded triggers exactly once."""
+    f = fixture
+    await issued(f)
+    attached = await f.app.attach(actor(), issuer_node_id="firstbyte", access_code="1234")
+    agent_id, session_id = attached["logical_agent_id"], attached["work_session_id"]
+    original_names = (
+        "tr_event_logical_agent_changed",
+        "tr_event_work_session_changed",
+    )
+
+    with sqlite3.connect(f.store.path) as db:
+        # Downgrade ONLY an isolated test database to the prior trigger DDL.
+        for name in original_names:
+            sql = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
+            ).fetchone()[0]
+            assert " WHEN (" in sql
+            old_sql = re.sub(r"\s+WHEN \(.*?\)\s+BEGIN", " BEGIN", sql, count=1, flags=re.S)
+            assert old_sql != sql
+            db.execute("DROP TRIGGER " + name)
+            db.execute(old_sql)
+        baseline = db.execute("SELECT count(*) FROM instance_events").fetchone()[0]
+        db.execute(
+            "UPDATE logical_agents SET updated_at=updated_at WHERE logical_agent_id=?",
+            (agent_id,),
+        )
+        db.execute(
+            "UPDATE logical_agent_work_sessions SET hard_expires_at=hard_expires_at "
+            "WHERE work_session_id=?", (session_id,),
+        )
+        assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline + 2
+
+    repository = SqliteRepository(f.store.path, Path(f.store.path).parent / "output.db")
+    await repository.initialize(preserve_active_commands=True)
+    await repository.initialize(preserve_active_commands=True)
+    with sqlite3.connect(f.store.path) as db:
+        for name in original_names:
+            ddl = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", (name,)
+            ).fetchone()[0]
+            assert " WHEN (" in ddl
+        baseline = db.execute("SELECT count(*) FROM instance_events").fetchone()[0]
+        db.execute(
+            "UPDATE logical_agents SET updated_at=updated_at WHERE logical_agent_id=?",
+            (agent_id,),
+        )
+        db.execute(
+            "UPDATE logical_agent_work_sessions SET hard_expires_at=hard_expires_at "
+            "WHERE work_session_id=?", (session_id,),
+        )
+        assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline
+        db.execute(
+            "UPDATE logical_agents SET slot_revision=slot_revision+1 WHERE logical_agent_id=?",
+            (agent_id,),
+        )
+        assert db.execute("SELECT count(*) FROM instance_events").fetchone()[0] == baseline + 1
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

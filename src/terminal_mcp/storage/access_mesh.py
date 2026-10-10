@@ -780,9 +780,11 @@ class AccessMeshStore(LocalAccessMesh):
             if same:
                 session_id, epoch = current["work_session_id"], current["session_epoch"]
                 db.execute(
+                    # SQLite fires AFTER UPDATE triggers even for identical values.
+                    # Avoid unbounded duplicate instance_events on each Mesh read.
                     "UPDATE logical_agent_work_sessions SET hard_expires_at=? "
-                    "WHERE work_session_id=?",
-                    (cycle["hard_expires_at"], session_id),
+                    "WHERE work_session_id=? AND hard_expires_at IS NOT ?",
+                    (cycle["hard_expires_at"], session_id, cycle["hard_expires_at"]),
                 )
             else:
                 epoch = db.execute(
@@ -817,7 +819,11 @@ class AccessMeshStore(LocalAccessMesh):
                     (slot.issuer_id, slot.slot_id, session_id, cycle["started_at"], epoch),
                 )
             db.execute(
-                "UPDATE logical_agents SET state='active',updated_at=? WHERE logical_agent_id=?",
+                # Materialize only a real state change; the prior unconditional
+                # timestamp refresh triggered redundant logical_agent.changed
+                # events on every read of an already-active cycle.
+                "UPDATE logical_agents SET state='active',updated_at=? "
+                "WHERE logical_agent_id=? AND state IS NOT 'active'",
                 (stamp, slot.logical_agent_id),
             )
             return {**identity, "work_session_id": session_id, "session_epoch": epoch}
