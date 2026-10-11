@@ -407,11 +407,13 @@ class AccessMeshApplication:
                 except Exception as exc:
                     self._scan_error = self.last_error = getattr(exc, "code", type(exc).__name__)
                     _LOG.warning("Access Mesh cycle reconciliation failed: %s", self.last_error)
+            # Cleanup errors must not starve slots on later pages. Advance
+            # the visited page while retaining its error until a clean sweep.
+            self._scan_after = slots[-1].logical_agent_id if len(slots) == 50 else ""
             await self.cleanup()
         except Exception as exc:
             self._scan_error = self.last_error = getattr(exc, "code", type(exc).__name__)
             raise
-        self._scan_after = slots[-1].logical_agent_id if len(slots) == 50 else ""
         if not self._scan_after:
             self.last_error = self._scan_error
 

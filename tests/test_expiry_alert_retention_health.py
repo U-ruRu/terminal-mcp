@@ -208,6 +208,32 @@ async def test_outer_failure_on_last_page_cannot_be_cleared_by_retry(phase):
     assert app.last_error == "RuntimeError"
     assert (await app.health_components())["access_mesh"]["status"] == "degraded"
     setattr(app.store if phase == "local_slots" else app, phase, original)
+    # An enumeration failure retries its page; a cleanup failure has already
+    # advanced the cursor and the next tick starts a fresh complete scan.
+    if phase == "local_slots":
+        await app.tick()
+        assert app.last_error == "RuntimeError"
+    await app.tick()
+    assert app.last_error == "RuntimeError"
+    await app.tick()
+    assert app.last_error is None
+
+
+async def test_repeated_cleanup_failures_do_not_starve_later_pages():
+    app = lifecycle_app(101)
+    healthy_cleanup = app.cleanup
+    app.cleanup = AsyncMock(side_effect=RuntimeError("cleanup unavailable"))
+    for expected_cursor in ["agent-049", "agent-099", ""]:
+        with pytest.raises(RuntimeError):
+            await app.tick()
+        assert app._scan_after == expected_cursor
+        assert app.last_error == "RuntimeError"
+    visited = {
+        call.args[0].logical_agent_id
+        for call in app.messages.ensure_session_alert.await_args_list
+    }
+    assert len(visited) == 101
+    app.cleanup = healthy_cleanup
     await app.tick()
     assert app.last_error == "RuntimeError"
     await app.tick()
