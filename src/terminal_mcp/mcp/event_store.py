@@ -62,12 +62,16 @@ def event_catalog():
                         "Agent has been inactive on this server for over 180 seconds."
                     ),
                     "session.ended": "A limited agent work session has ended on this server.",
-                    "message.received": "A new local message for this bound agent.",
+                    "message.received": "A new local message for the selected session number.",
                 }[name],
                 "delivery": ["webhook"],
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
+                    "properties": (
+                        {"session_number": {"type": "string", "pattern": "^[0-9]{4}$"}}
+                        if name == "message.received"
+                        else {}
+                    ),
                     "additionalProperties": False,
                 },
                 "payloadSchema": private_message if name == "message.received" else data,
@@ -79,6 +83,10 @@ def event_catalog():
 
 class SubscriptionAuthorizationError(PermissionError):
     """Subscription rights changed before the durable write."""
+
+
+class RecipientBindingChangedError(SubscriptionAuthorizationError):
+    """A refresh cannot redirect an existing public-number subscription."""
 
 
 class MCPEventStore:
@@ -720,7 +728,9 @@ class MCPEventStore:
         callback_verified_fresh=False,
         message_binding=None,
         authorization_checker=None,
+        arguments=None,
     ):
+        arguments_json = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"))
         now = utc_now()
         created_at = utc_text(now)
         expires_at = utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
@@ -738,6 +748,16 @@ class MCPEventStore:
             await db.execute("BEGIN IMMEDIATE")
             if message_binding is not None and authorization_checker is None:
                 raise SubscriptionAuthorizationError
+            if message_binding is not None and message_binding.role == "session_number":
+                existing = await (
+                    await db.execute(
+                        "SELECT id FROM mcp_event_subscriptions WHERE principal_id=? "
+                        "AND name=? AND arguments_json=? AND callback_url=? AND expires_at>?",
+                        (principal, name, arguments_json, callback, created_at),
+                    )
+                ).fetchall()
+                if any(row[0] != sub_id for row in existing):
+                    raise RecipientBindingChangedError
             if authorization_checker is not None:
                 candidate = {
                     "name": name,
@@ -755,6 +775,7 @@ class MCPEventStore:
                         recipient_issuer_id=message_binding.issuer_id,
                         recipient_slot_id=message_binding.slot_id,
                         recipient_role=message_binding.role,
+                        recipient_require_live=message_binding.role == "session_number",
                     )
                 try:
                     authorized = await authorization_checker(candidate)
@@ -783,7 +804,7 @@ class MCPEventStore:
                     credential_id,
                     auth_mode,
                     name,
-                    "{}",
+                    arguments_json,
                     callback,
                     secret,
                     created_at,
@@ -851,7 +872,7 @@ class MCPEventStore:
             )
             await db.commit()
 
-    async def unsubscribe_matching(self, principal, name, callback):
+    async def unsubscribe_matching(self, principal, name, callback, arguments=None):
         """Idempotent owner-authorized cleanup by the official subscription tuple.
 
         The stored recipient binding may already be revoked/expired. Never
@@ -859,9 +880,10 @@ class MCPEventStore:
         """
         selector = (
             "SELECT id FROM mcp_event_subscriptions WHERE principal_id=? "
-            "AND name=? AND arguments_json='{}' AND callback_url=?"
+            "AND name=? AND arguments_json=? AND callback_url=?"
         )
-        params = (principal, name, callback)
+        arguments_json = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"))
+        params = (principal, name, arguments_json, callback)
         async with aiosqlite.connect(self.path, timeout=5) as db:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
@@ -876,7 +898,7 @@ class MCPEventStore:
             )
             await db.execute(
                 "DELETE FROM mcp_event_subscriptions WHERE principal_id=? "
-                "AND name=? AND arguments_json='{}' AND callback_url=?",
+                "AND name=? AND arguments_json=? AND callback_url=?",
                 params,
             )
             await db.commit()

@@ -1,0 +1,146 @@
+{
+  "events": [
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "Agent acquired active local presence on this server.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "agent.attached",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "server"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "Agent has been inactive on this server for over 180 seconds.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "agent.inactive",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "server"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "A limited agent work session has ended on this server.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "session.ended",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "server"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "A new local message for the selected session number.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "session_number": {
+            "pattern": "^[0-9]{4}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "message.received",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "sender",
+          "recipient",
+          "message_id",
+          "text",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}
