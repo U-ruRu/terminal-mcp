@@ -1,0 +1,37 @@
+{
+  "implementation_sha": "778b2ee51ae277bae4b2b8dc5f4ccf4196592c87",
+  "parent_sha": "30eeb9d5d9f82d9a09ccaf825daac77088843332",
+  "chunk_base_sha": "9456518991c31daf99b20a209e684a7ab3a201a6",
+  "frozen_qa_sha": "7863260f30fb23e210d0c01c9c06c20eda810121",
+  "reviewer": "November-4 (same reviewer as Lima-4)",
+  "implementer": "Juliett-4 (same implementer as Kilo-4)",
+  "dot_relay": "Oscar-4 (explicitly confirmed)",
+  "targeted_verdict": "NON_BLOCKING",
+  "runs": [
+    {
+      "name": "candidate-778b2ee",
+      "total": 160,
+      "passed": 158,
+      "skipped": 2,
+      "failed": 0,
+      "exit": 0
+    },
+    {
+      "name": "candidate-778b2ee-regression-modules",
+      "total": 28,
+      "passed": 28,
+      "skipped": 0,
+      "failed": 0,
+      "exit": 0
+    }
+  ],
+  "disjoint_total": 188,
+  "passed": 186,
+  "skipped": 2,
+  "failed": 0,
+  "static": "PASS; snapshot input changes are previously-added message chunk fields only; executable Python is identical to30eeb9d",
+  "full_suite": "NOTTESTED on778b2ee; previous30eeb9d run cancelled/-15 without final JUnit/pytest exit",
+  "overall_verdict": "HOLD until one approved final full suite",
+  "runtime_changed": false,
+  "canonical_changed": false
+}
