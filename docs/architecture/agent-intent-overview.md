@@ -44,6 +44,11 @@ Repeated attach preserves both existing intent and its timestamp. Only the
 explicit intent action refreshes an existing declaration. Refresh is intentionally
 not advertised as idempotent: accepting the same text later advances its timestamp.
 It does not renew an Access cycle, create credentials or alter session expiry.
+Explicit intent refresh can materialize a newly Access-authorized local cycle after
+end/start without repeating attach. Old-cycle intent or first-call grace cannot
+admit a write into a different WorkSession ID; admission rechecks that transition.
+Grace is tied to both the WorkSession ID and the declaration timestamp, so a
+concurrent replacement declaration cannot inherit an obsolete allowance.
 Intent is shared by the two roles of the same local WorkSession, not by remote
 servers. Each new local WorkSession starts with missing intent.
 

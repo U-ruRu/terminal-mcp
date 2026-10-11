@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import secrets
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
@@ -23,6 +25,17 @@ from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderI
 from terminal_mcp.storage.access_mesh import AccessMeshStore, local_cycle, public_name
 
 _LOG = logging.getLogger(__name__)
+_INTENT_CALL: ContextVar[dict | None] = ContextVar("mesh_intent_call", default=None)
+_INTENT_SAFE = READ_OPERATIONS | frozenset(
+    {
+        ManagedOperation.SESSION_END,
+        ManagedOperation.COMMAND_CANCEL,
+        ManagedOperation.COMMAND_RECOVERY,
+        ManagedOperation.TASK_RELEASE,
+        ManagedOperation.MESSAGE_ACK,
+        ManagedOperation.MESSAGE_REPLY,
+    }
+)
 
 
 class AccessMeshApplication:
@@ -178,7 +191,13 @@ class AccessMeshApplication:
         slot = await asyncio.to_thread(self.store.attached_slot, self.connection_key(actor))
         if slot is None:
             raise AccessMeshError("session_attach_required")
-        identity = await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
+        await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+        identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+        if identity["cleanup_pending"]:
+            await self.cleanup(logical_agent_id=slot.logical_agent_id, budget_seconds=0.5)
+            identity = await asyncio.to_thread(self.store.local_identity, slot, now=self.clock())
+        if identity["cleanup_pending"]:
+            raise AccessMeshError("access_mesh_cleanup_pending")
         if not identity.get("work_session_id"):
             raise AccessMeshError("session_expired")
         return await asyncio.to_thread(
@@ -202,13 +221,24 @@ class AccessMeshApplication:
         # Preserve the lifecycle error for expired/revoked cycles. Intent never
         # grants access, extends a deadline, or starts a new execution cycle.
         live = bool(identity.get("work_session_id"))
-        return await asyncio.to_thread(
+        status = await asyncio.to_thread(
             self.store.intent_status,
             slot,
             now=self.clock(),
             observe=True,
             require_intent=require_intent and live,
         )
+        status["observed_work_session_id"] = identity.get("work_session_id")
+        return status
+
+    @contextmanager
+    def intent_call_context(self, status: dict):
+        """Scope first-call grace to the exact WorkSession observed by this MCP call."""
+        token = _INTENT_CALL.set(status)
+        try:
+            yield
+        finally:
+            _INTENT_CALL.reset(token)
 
     async def observe(
         self,
@@ -282,6 +312,32 @@ class AccessMeshApplication:
             and operation not in FINALIZATION_OPERATIONS
         ):
             raise AccessMeshError("session_draining")
+        call = _INTENT_CALL.get()
+        if call is not None and operation not in _INTENT_SAFE:
+            current_intent = await asyncio.to_thread(
+                self.store.intent_status, slot, now=self.clock(), observe=False, require_intent=True
+            )
+            same_declaration = call.get("observed_work_session_id") == identity[
+                "work_session_id"
+            ] and call.get("intent_updated_at") == current_intent.get("intent_updated_at")
+            if not same_declaration:
+                # Access can authorize another cycle, or another call can accept
+                # a new declaration, between preflight and actual admission.
+                # The old session/declaration grace must not carry across it.
+                status = await asyncio.to_thread(
+                    self.store.intent_status,
+                    slot,
+                    now=self.clock(),
+                    observe=True,
+                    require_intent=True,
+                )
+                status["observed_work_session_id"] = identity["work_session_id"]
+                call.clear()
+                call.update(status)
+                if status["blocked"]:
+                    raise AccessMeshError(
+                        "intent_required" if status["state"] == "missing" else "intent_stale"
+                    )
         await self._notify_local_presence(identity)
         await self._notify_local_presence(identity, activity=True)
         return identity

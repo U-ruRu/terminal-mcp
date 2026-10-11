@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from test_access_mesh_mcp_runtime import rpc, settings
 
 from terminal_mcp.app import create_app
+from terminal_mcp.core.managed_sessions import ManagedOperation
 
 
 def invoke(client, role, name, args, request_id=1, **kwargs):
@@ -262,3 +263,89 @@ def test_repeated_attach_preserves_intent_and_does_not_bypass_refresh(tmp_path):
             0
         ]
         assert record["current_intent"] == "Verify isolated fixture commands"
+
+
+def test_access_restart_without_reattach_requires_new_epoch_intent(tmp_path):
+    config = settings(tmp_path).model_copy(update={"fleet_instance_id": "server-a"})
+    app = create_app(config)
+    with TestClient(app, base_url="https://terminal.example") as client:
+        start(client)
+        first = invoke(client, "coordinator", "agent_observe", {})["structuredContent"]["agents"][0]
+        advance(app.state.access_mesh, 5)
+        assert invoke(client, "access", "session", {"action": "end"})["structuredContent"]["ok"]
+        advance(app.state.access_mesh, 5)
+        assert invoke(client, "access", "session", {"action": "start"})["structuredContent"]["ok"]
+        blocked = invoke(client, "executor", "command_run", {"command": "true"})[
+            "structuredContent"
+        ]
+        assert blocked["error"]["code"] == "intent_required"
+        with sqlite3.connect(config.database_path) as db:
+            assert db.execute("SELECT count(*) FROM commands").fetchone()[0] == 0
+        second = invoke(client, "coordinator", "agent_observe", {})["structuredContent"]["agents"][
+            0
+        ]
+        assert second["work_session_id"] != first["work_session_id"]
+        assert second["session_epoch"] == first["session_epoch"] + 1
+        assert second["current_intent"] is None
+        assert invoke(
+            client,
+            "executor",
+            "session",
+            {"action": "intent", "intent": "Check the restarted fixture cycle"},
+        )["structuredContent"]["ok"]
+        assert invoke(client, "executor", "command_run", {"command": "true"})["structuredContent"][
+            "ok"
+        ]
+
+
+def test_intent_refresh_materializes_authorized_restart_without_any_prior_write(tmp_path):
+    config = settings(tmp_path).model_copy(update={"fleet_instance_id": "server-a"})
+    app = create_app(config)
+    with TestClient(app, base_url="https://terminal.example") as client:
+        start(client)
+        advance(app.state.access_mesh, 5)
+        invoke(client, "access", "session", {"action": "end"})
+        advance(app.state.access_mesh, 5)
+        invoke(client, "access", "session", {"action": "start"})
+        assert invoke(
+            client,
+            "executor",
+            "session",
+            {"action": "intent", "intent": "Start the authorized next fixture cycle"},
+        )["structuredContent"]["ok"]
+        assert invoke(client, "executor", "command_run", {"command": "true"})["structuredContent"][
+            "ok"
+        ]
+
+
+def test_grace_does_not_cross_a_concurrently_replaced_declaration(tmp_path, monkeypatch):
+    config = settings(tmp_path).model_copy(update={"fleet_instance_id": "server-a"})
+    app = create_app(config)
+    with TestClient(app, base_url="https://terminal.example") as client:
+        issued = start(client)
+        mesh = app.state.access_mesh
+        advance(mesh, 180)
+        original_resolve = mesh.resolve
+        changed = False
+
+        async def interleaved_resolve(actor, operation):
+            nonlocal changed
+            if operation == ManagedOperation.COMMAND_RUN and not changed:
+                changed = True
+                slot = mesh.store.code_slot(mesh.store.local_node_id, issued["session_number"])
+                identity = mesh.store.observed_identity(slot, now=mesh.clock())
+                mesh.store.update_intent(
+                    slot,
+                    identity["work_session_id"],
+                    "Concurrent new fixture declaration",
+                    now=mesh.clock(),
+                )
+                now = advance(mesh, 180)
+                assert mesh.store.intent_status(slot, now=now, observe=True)["warn"]
+            return await original_resolve(actor, operation)
+
+        monkeypatch.setattr(mesh, "resolve", interleaved_resolve)
+        result = invoke(client, "executor", "command_run", {"command": "true"})["structuredContent"]
+        assert result["error"]["code"] == "intent_stale"
+        with sqlite3.connect(config.database_path) as db:
+            assert db.execute("SELECT count(*) FROM commands").fetchone()[0] == 0

@@ -41,7 +41,7 @@
     "src/terminal_mcp/mcp/output_planning.py": "36c0985dac32fdcba90b51ac00c8e27fd9caf07dfef478be38ea042c2619feb5",
     "src/terminal_mcp/mcp/role_contracts.py": "8fa684283f05879e680499d5bb8b6f6601e39d914d76ac8178b21e45d0bdc17c",
     "src/terminal_mcp/mcp/role_outputs.py": "21ae6177dd72ba2c73eae4f74e583f5db6baa68a26ce90f6d1e713413f50f3f8",
-    "src/terminal_mcp/mcp/roles.py": "43f699025e67f43011b60ba493cc4cb2810373ece27b152381ef4eb4c7409723",
+    "src/terminal_mcp/mcp/roles.py": "2757efb7dd7cab74151ee35707f7fb0778bf546a7bd835d301be085d14239c07",
     "src/terminal_mcp/mcp/schema_manifest.py": "f3c6224bdc08068dea59ce60f10a52e47bb42ea8a447f15f5577f73a91146038",
     "src/terminal_mcp/mcp/server.py": "2fcaebaeac553bc1c4116fa4d6d0e65222ab58a6145965392d317489ffdd33cf",
     "src/terminal_mcp/mcp/task_contract.py": "719b1834732d6161ce60c9a331affc12945740fc1dd090760ccae51b7d9f33c9",

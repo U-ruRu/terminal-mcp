@@ -1097,7 +1097,11 @@ def build_role_mcp(
                         )
                         result.meta = await _session_envelope(application, role)
                         return result
-                result = await _raw_fn(**kwargs)
+                if mesh:
+                    with mesh.intent_call_context(intent_status):
+                        result = await _raw_fn(**kwargs)
+                else:
+                    result = await _raw_fn(**kwargs)
                 if (
                     _name == "session"
                     and getattr(result, "structuredContent", {}).get("ok")
