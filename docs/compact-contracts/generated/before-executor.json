@@ -41,10 +41,16 @@
       "name": "session",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -56,19 +62,25 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -77,10 +89,10 @@
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -139,10 +151,16 @@
       "name": "task_list",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -151,6 +169,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -163,16 +187,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -184,10 +208,10 @@
           "tasks": {
             "type": "array"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -234,18 +258,15 @@
       "outputSchema": {
         "properties": {
           "cmd_hash": {
-            "type": "string"
-          },
-          "error": {
-            "type": "object"
-          },
-          "intent_warning": {
             "type": [
               "null",
               "string"
             ]
           },
-          "message_hash": {
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -290,12 +311,6 @@
               "null"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
@@ -304,12 +319,6 @@
           },
           "status": {
             "type": "string"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "warnings": {
             "type": [
@@ -371,6 +380,12 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "command": {
             "type": "object"
           },
@@ -418,12 +433,6 @@
           },
           "lines": {
             "type": "array"
-          },
-          "message_hash": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "messages": {
             "type": [
@@ -497,12 +506,6 @@
               "object"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
@@ -513,12 +516,6 @@
             "type": [
               "null",
               "object"
-            ]
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "warnings": {
@@ -566,7 +563,10 @@
             "type": "string"
           },
           "cmd_hash": {
-            "type": "string"
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "command": {
             "type": "object"
@@ -618,12 +618,6 @@
           },
           "lines": {
             "type": "array"
-          },
-          "message_hash": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "messages": {
             "type": [
@@ -706,12 +700,6 @@
               "null"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
@@ -726,12 +714,6 @@
           },
           "status": {
             "type": "string"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "warnings": {
             "type": [
@@ -778,7 +760,10 @@
             "type": "string"
           },
           "cmd_hash": {
-            "type": "string"
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "command": {
             "type": "object"
@@ -830,12 +815,6 @@
           },
           "lines": {
             "type": "array"
-          },
-          "message_hash": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "messages": {
             "type": [
@@ -918,12 +897,6 @@
               "null"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
@@ -938,12 +911,6 @@
           },
           "status": {
             "type": "string"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "warnings": {
             "type": [
@@ -1011,16 +978,16 @@
       "name": "task_claim",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "intent_warning": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
             ]
           },
-          "message_hash": {
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -1053,22 +1020,10 @@
               "object"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
-            ]
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "warnings": {
@@ -1136,16 +1091,16 @@
       "name": "task_state",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "intent_warning": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
             ]
           },
-          "message_hash": {
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -1178,22 +1133,10 @@
               "object"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
-            ]
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "warnings": {
@@ -1259,16 +1202,16 @@
       "name": "task_comment",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "intent_warning": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
             ]
           },
-          "message_hash": {
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -1301,22 +1244,10 @@
               "object"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
-            ]
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "warnings": {
@@ -1454,6 +1385,12 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
@@ -1508,12 +1445,6 @@
           "recipients": {
             "type": "array"
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
@@ -1534,12 +1465,6 @@
           },
           "state": {
             "type": "string"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "unavailable_peers": {
             "type": "array"

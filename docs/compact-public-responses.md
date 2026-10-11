@@ -132,3 +132,33 @@ in the outer MCP wrapper (`_meta` plus text), after response projection. That
 wrapper is not removed by this candidate. Full combined acceptance is NOTTESTED
 until an integration owner and base are approved. No runtime, canonical branch,
 or held intent worktree was changed.
+
+## Compact error notices and committed command recovery
+
+Incoming obligations occur once in root `messages`, including unsuccessful operations.
+The error body retains `code`, `message`, applicable non-message `details`, `outcome`
+and `retry`. The old `error.details.pending_messages`, aggregate flags and first-message
+`message_hash`/`text`/`required_action` aliases are removed from role wire schemas.
+Each incoming item retains its message ID, full authority name and required `ack`/`reply`.
+
+Application error normalization bounds the text preview before validating the repair
+model. It preserves legal public slot labels and marks shortened text explicitly.
+`incoming_messages_truncated` is a workflow warning, not an operation error. Follow the
+existing by-ID `text_offset` / `text_limit` read contract to recover the stored original.
+The projection does not ACK, reply, rename agents or rewrite stored messages.
+Preview limits account for UTF-8 JSON bytes and control-character escaping, not only
+character counts. Mandatory metadata remains separate from user-owned objects.
+
+If an accepted command's recovery output exceeds the final serialized response budget,
+the failure retains root `cmd_hash` and `error.outcome="committed"`, along with bounded
+incoming obligations. Use `command_read` on that receipt; do not run the command again.
+An authoritative `unknown` outcome likewise remains `unknown` through normalization.
+This guard concerns serialization only; command scheduling and stored output are unchanged.
+
+```json
+{"ok":false,"error":{"code":"output_item_too_large","message":"Request a summary or a smaller page.","outcome":"committed","retry":"repair"},"cmd_hash":"aabbccdd"}
+```
+
+Refresh Executor/Coordination catalogs after a separately approved deployment. These
+changes are an isolated compact candidate; they do not promote canonical or alter the
+Events, subscriptions or Mesh release branches.

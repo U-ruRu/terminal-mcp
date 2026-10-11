@@ -12,9 +12,7 @@ from terminal_mcp.core.public_errors import (
     MAX_ERROR_MESSAGE,
     MAX_ERROR_PATH,
     ErrorOutcome,
-    ErrorRepair,
     RecoveryAction,
-    normalize_public_error,
     public_error,
 )
 from terminal_mcp.core.read_contract import (
@@ -91,7 +89,13 @@ from terminal_mcp.core.task_projections import (
     WorkflowWarning as WorkflowWarning,
 )
 from terminal_mcp.core.task_projections import project_task_receipt
-from terminal_mcp.mcp.public_responses import OperationNotices, operation_notices, remaining_seconds
+from terminal_mcp.mcp.public_responses import (
+    OperationNotices,
+    ResponseErrorRepair,
+    error_response,
+    operation_notices,
+    remaining_seconds,
+)
 
 
 class _Strict(BaseModel):
@@ -162,12 +166,13 @@ class MessageState(StrEnum):
     replied = "replied"
 
 
-class AccessError(_Strict):
+class AccessError(OperationNotices):
+    cmd_hash: str | None = Field(default=None, min_length=1, max_length=128)
     ok: Literal[False]
     code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     message: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
     error: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
-    details: ErrorRepair | None = None
+    details: ResponseErrorRepair | None = None
     outcome: ErrorOutcome
     retry: RecoveryAction
     reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
@@ -767,7 +772,9 @@ def _workflow_warning(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _error_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    return normalize_public_error(raw).as_dict()
+    response = error_response(raw)
+    response.pop("_meta", None)  # MCP envelope metadata is attached by _result.
+    return response
 
 
 def serialized_call_tool_result_size(result: CallToolResult) -> int:
@@ -884,7 +891,27 @@ def _result(
     # Fail closed at the final public serialization boundary. Normal paginated
     # reads should stay below this via their lower page-data budget; this guard
     # also covers unexpectedly large coordination/error metadata.
-    bounded_error = public_error("output_item_too_large").as_dict()
+    receipt = raw.get("cmd_hash") or (raw.get("command") or {}).get("cmd_hash")
+    accepted_command = (
+        bool(receipt)
+        and tool in {"cmd", "command_run", "command_recovery", "command_cancel"}
+        and variant != "read"
+    )
+    bounded_error = public_error(
+        "output_item_too_large", outcome="committed" if accepted_command else None
+    ).as_dict()
+    if isinstance(receipt, str) and receipt:
+        bounded_error["cmd_hash"] = receipt
+    # Mandatory inbound actions must remain reachable even when body/output is too large.
+    bounded_error.update(
+        operation_notices(
+            {
+                key: raw[key]
+                for key in ("messages", "pending_messages", "coordination", "intent_warning")
+                if key in raw
+            }
+        )
+    )
     try:
         error_validated = output_model.model_validate(bounded_error)
     except ValidationError as exc:

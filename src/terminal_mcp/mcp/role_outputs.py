@@ -22,10 +22,8 @@ from terminal_mcp.adapters.mcp_identity import current_provider_evidence
 from terminal_mcp.core.provider_identity import ProviderIdentityRegistry
 from terminal_mcp.core.public_errors import (
     ErrorOutcome,
-    ErrorRepair,
     RecoveryAction,
     error_from_exception,
-    normalize_public_error,
     public_error,
 )
 from terminal_mcp.core.task_projections import (
@@ -51,12 +49,12 @@ from terminal_mcp.mcp.output_contracts import (
 )
 from terminal_mcp.mcp.output_planning import flat_output_schema
 from terminal_mcp.mcp.public_responses import (
-    IncomingMessage,
     OperationNotices,
     PublicTaskDetail,
     PublicTaskHistory,
     PublicTaskSnapshot,
-    incoming_messages,
+    ResponseErrorRepair,
+    error_response,
 )
 
 
@@ -345,7 +343,7 @@ logger = logging.getLogger(__name__)
 class RoleErrorBody(_Strict):
     code: str
     message: str
-    details: ErrorRepair | None = None
+    details: ResponseErrorRepair | None = None
     outcome: ErrorOutcome
     retry: RecoveryAction
     reason: str | None = None
@@ -353,15 +351,11 @@ class RoleErrorBody(_Strict):
     return_to_chat: bool | None = None
 
 
-class RoleFailure(_Strict):
-    messages: list[IncomingMessage] | None = Field(default=None, min_length=1)
+class RoleFailure(OperationNotices):
     ok: Literal[False]
     provider_identity: ProviderFingerprint | None = None
     error: RoleErrorBody
-    required_action: Literal["ack", "reply"] | None = None
-    message_hash: str | None = None
-    text: str | None = None
-    return_to_chat: bool | None = None
+    cmd_hash: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 _INTERNAL_SESSION_ERRORS = {
@@ -377,32 +371,21 @@ _INTERNAL_SESSION_ERRORS = {
 
 def role_error_result(raw: dict) -> CallToolResult:
     """Return a handled application failure as transport-successful structured data."""
-    normalized = normalize_public_error(raw)
-    exposed = _INTERNAL_SESSION_ERRORS.get(normalized.code)
+    canonical = error_response(raw)
+    exposed = _INTERNAL_SESSION_ERRORS.get(canonical["code"])
     if exposed:
-        normalized = public_error(exposed, outcome=normalized.outcome)
-    canonical = normalized.as_dict()
-    body = {key: value for key, value in canonical.items() if key not in {"ok", "error"}}
-    pending = (
-        canonical.get("details", {}).get("pending_messages", [])
-        if isinstance(canonical.get("details"), dict)
-        else []
-    )
-    first = pending[0] if pending else {}
-    action = (
-        canonical["details"].get("required_action")
-        if isinstance(canonical.get("details"), dict)
-        else None
-    )
+        canonical.update(public_error(exposed, outcome=canonical["outcome"]).as_dict())
+    notice_keys = set(OperationNotices.model_fields)
+    body = {
+        key: value
+        for key, value in canonical.items()
+        if key not in {"ok", "error", "cmd_hash", "_meta"} | notice_keys
+    }
     data = RoleFailure(
         ok=False,
-        messages=incoming_messages({"pending_messages": pending}) or None,
         error=RoleErrorBody.model_validate(body),
         provider_identity=session_provider_fingerprint(),
-        required_action=action if action in {"ack", "reply"} else None,
-        message_hash=first.get("message_hash"),
-        text=first.get("text"),
-        return_to_chat=canonical.get("return_to_chat"),
+        **{key: canonical[key] for key in notice_keys | {"cmd_hash"} if key in canonical},
     ).model_dump(mode="json", exclude_none=True)
     return CallToolResult(
         isError=False,
@@ -470,7 +453,7 @@ def install_role_output_contract(mcp, role: str, *, overrides=None, application=
                 raw = {key: value for key, value in raw.items() if key != "_meta"}
                 if raw.get("ok") is False:
                     result = role_error_result(raw)
-                    result.meta = await _session_envelope(application, role)
+                    result.meta = {**notice_meta, **await _session_envelope(application, role)}
                     return result
                 if _name == "session" and role != "access" and raw.get("action") == "start":
                     diagnostic = session_provider_fingerprint()

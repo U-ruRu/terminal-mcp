@@ -480,6 +480,15 @@ def test_public_source_error_codes_have_explicit_catalog_policy():
         for node in ast.walk(ast.parse(path.read_text())):
             values = []
             if isinstance(node, ast.Dict):
+                # Workflow notices have their own severity contract, not error/retry policy.
+                if any(
+                    isinstance(key, ast.Constant)
+                    and key.value == "severity"
+                    and isinstance(value, ast.Constant)
+                    and value.value in {"info", "warning"}
+                    for key, value in zip(node.keys, node.values, strict=True)
+                ):
+                    continue
                 values = [
                     value
                     for key, value in zip(node.keys, node.values, strict=True)

@@ -61,103 +61,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -235,6 +138,12 @@
           "title": "IssuerStartReceipt",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "ProviderFingerprint": {
           "additionalProperties": false,
           "properties": {
@@ -297,9 +206,6 @@
                 },
                 {
                   "$ref": "#/$defs/RetryRepair"
-                },
-                {
-                  "$ref": "#/$defs/CoordinationRepair"
                 },
                 {
                   "type": "null"
@@ -382,10 +288,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -395,7 +315,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -413,10 +333,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -429,25 +375,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -457,17 +388,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -539,6 +474,53 @@
           ],
           "title": "ValidationRepair",
           "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
+          "type": "object"
         }
       },
       "anyOf": [
@@ -605,103 +587,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -743,6 +628,12 @@
           "title": "IncomingMessage",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "MeshAgentObserve": {
           "additionalProperties": false,
           "properties": {
@@ -866,9 +757,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -949,10 +837,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -962,7 +864,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -980,10 +882,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -996,25 +924,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -1024,17 +937,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -1105,6 +1022,53 @@
             "validation_errors"
           ],
           "title": "ValidationRepair",
+          "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
           "type": "object"
         }
       },
@@ -1324,103 +1288,6 @@
             }
           },
           "title": "ConflictRepair",
-          "type": "object"
-        },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
           "type": "object"
         },
         "ExtendedHealthSuccess": {
@@ -1712,9 +1579,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -1795,10 +1659,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -1808,7 +1686,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -1826,10 +1704,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -1842,25 +1746,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -1870,17 +1759,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -2378,103 +2271,6 @@
             }
           },
           "title": "ConflictRepair",
-          "type": "object"
-        },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
           "type": "object"
         },
         "Cursor": {
@@ -3859,9 +3655,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -3942,10 +3735,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -3955,7 +3762,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -3973,10 +3780,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -3989,25 +3822,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -4017,17 +3835,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -4294,103 +4116,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -4432,6 +4157,12 @@
           "title": "IncomingMessage",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "MeshAttachReceipt": {
           "additionalProperties": false,
           "properties": {
@@ -4509,9 +4240,6 @@
                 },
                 {
                   "$ref": "#/$defs/RetryRepair"
-                },
-                {
-                  "$ref": "#/$defs/CoordinationRepair"
                 },
                 {
                   "type": "null"
@@ -4594,10 +4322,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -4607,7 +4349,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -4625,10 +4367,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -4641,25 +4409,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -4669,17 +4422,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -4750,6 +4507,53 @@
             "validation_errors"
           ],
           "title": "ValidationRepair",
+          "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
           "type": "object"
         }
       },
@@ -4870,103 +4674,6 @@
             }
           },
           "title": "ConflictRepair",
-          "type": "object"
-        },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
           "type": "object"
         },
         "IncomingMessage": {
@@ -5542,9 +5249,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -5625,10 +5329,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -5638,7 +5356,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -5656,10 +5374,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -5672,25 +5416,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -5700,17 +5429,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -6574,103 +6307,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "Cursor": {
           "title": "Cursor",
           "type": "string"
@@ -6716,6 +6352,12 @@
           "title": "IncomingMessage",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "ProviderFingerprint": {
           "additionalProperties": false,
           "properties": {
@@ -6778,9 +6420,6 @@
                 },
                 {
                   "$ref": "#/$defs/RetryRepair"
-                },
-                {
-                  "$ref": "#/$defs/CoordinationRepair"
                 },
                 {
                   "type": "null"
@@ -6863,10 +6502,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -6876,7 +6529,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -6894,10 +6547,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -6910,25 +6589,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -6938,17 +6602,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -7150,6 +6818,53 @@
           ],
           "title": "ValidationRepair",
           "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
+          "type": "object"
         }
       },
       "anyOf": [
@@ -7305,103 +7020,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "Cursor": {
           "title": "Cursor",
           "type": "string"
@@ -7447,6 +7065,12 @@
           "title": "IncomingMessage",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "Namespace": {
           "minLength": 1,
           "title": "Namespace",
@@ -7514,9 +7138,6 @@
                 },
                 {
                   "$ref": "#/$defs/RetryRepair"
-                },
-                {
-                  "$ref": "#/$defs/CoordinationRepair"
                 },
                 {
                   "type": "null"
@@ -7599,10 +7220,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -7612,7 +7247,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -7630,10 +7265,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -7646,25 +7307,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -7674,17 +7320,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -7905,6 +7555,53 @@
             "validation_errors"
           ],
           "title": "ValidationRepair",
+          "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
           "type": "object"
         }
       },
@@ -8668,103 +8365,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -8881,9 +8481,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -8964,10 +8561,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -8977,7 +8588,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -8995,10 +8606,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -9011,25 +8648,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -9039,17 +8661,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -10902,103 +10528,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "CoordinationState": {
           "additionalProperties": false,
           "properties": {
@@ -11822,9 +11351,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -11905,10 +11431,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -11918,7 +11458,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -11936,10 +11476,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -11952,25 +11518,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -11980,17 +11531,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -12845,103 +12400,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "CoordinationState": {
           "additionalProperties": false,
           "properties": {
@@ -13765,9 +13223,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -13848,10 +13303,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -13861,7 +13330,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -13879,10 +13348,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -13895,25 +13390,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -13923,17 +13403,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -15101,103 +14585,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "CoordinationState": {
           "additionalProperties": false,
           "properties": {
@@ -16021,9 +15408,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -16104,10 +15488,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -16117,7 +15515,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -16135,10 +15533,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -16151,25 +15575,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -16179,17 +15588,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -16602,103 +16015,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -16810,9 +16126,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -16893,10 +16206,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -16906,7 +16233,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -16924,10 +16251,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -16940,25 +16293,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -16968,17 +16306,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -17473,103 +16815,6 @@
             }
           },
           "title": "ConflictRepair",
-          "type": "object"
-        },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
           "type": "object"
         },
         "Cursor": {
@@ -18954,9 +18199,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -19037,10 +18279,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -19050,7 +18306,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -19068,10 +18324,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -19084,25 +18366,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -19112,17 +18379,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -19389,103 +18660,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -19527,6 +18701,12 @@
           "title": "IncomingMessage",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "MeshAttachReceipt": {
           "additionalProperties": false,
           "properties": {
@@ -19604,9 +18784,6 @@
                 },
                 {
                   "$ref": "#/$defs/RetryRepair"
-                },
-                {
-                  "$ref": "#/$defs/CoordinationRepair"
                 },
                 {
                   "type": "null"
@@ -19689,10 +18866,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -19702,7 +18893,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -19720,10 +18911,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -19736,25 +18953,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -19764,17 +18966,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -19845,6 +19051,53 @@
             "validation_errors"
           ],
           "title": "ValidationRepair",
+          "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
           "type": "object"
         }
       },
@@ -19996,103 +19249,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -20204,9 +19360,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -20287,10 +19440,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -20300,7 +19467,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -20318,10 +19485,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -20334,25 +19527,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -20362,17 +19540,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -20718,103 +19900,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "IncomingMessage": {
           "additionalProperties": false,
           "properties": {
@@ -20926,9 +20011,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -21009,10 +20091,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -21022,7 +20118,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -21040,10 +20136,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -21056,25 +20178,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -21084,17 +20191,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -21466,103 +20577,6 @@
           "title": "ConflictRepair",
           "type": "object"
         },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
-          "type": "object"
-        },
         "Cursor": {
           "title": "Cursor",
           "type": "string"
@@ -21608,6 +20622,12 @@
           "title": "IncomingMessage",
           "type": "object"
         },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
         "Namespace": {
           "minLength": 1,
           "title": "Namespace",
@@ -21675,9 +20695,6 @@
                 },
                 {
                   "$ref": "#/$defs/RetryRepair"
-                },
-                {
-                  "$ref": "#/$defs/CoordinationRepair"
                 },
                 {
                   "type": "null"
@@ -21760,10 +20777,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -21773,7 +20804,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -21791,10 +20822,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -21807,25 +20864,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -21835,17 +20877,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [
@@ -22067,6 +21113,53 @@
           ],
           "title": "ValidationRepair",
           "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
+          "type": "object"
         }
       },
       "anyOf": [
@@ -22158,103 +21251,6 @@
             }
           },
           "title": "ConflictRepair",
-          "type": "object"
-        },
-        "CoordinationMessage": {
-          "additionalProperties": false,
-          "properties": {
-            "message_hash": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Message Hash",
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "notify",
-                "ack",
-                "alert"
-              ],
-              "title": "Mode",
-              "type": "string"
-            },
-            "sender": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Sender"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "maxLength": 500,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Text"
-            }
-          },
-          "required": [
-            "message_hash",
-            "mode"
-          ],
-          "title": "CoordinationMessage",
-          "type": "object"
-        },
-        "CoordinationRepair": {
-          "additionalProperties": false,
-          "properties": {
-            "ack_required_pending": {
-              "default": false,
-              "title": "Ack Required Pending",
-              "type": "boolean"
-            },
-            "alert_pending": {
-              "default": false,
-              "title": "Alert Pending",
-              "type": "boolean"
-            },
-            "pending_messages": {
-              "items": {
-                "$ref": "#/$defs/CoordinationMessage"
-              },
-              "maxItems": 4,
-              "minItems": 1,
-              "title": "Pending Messages",
-              "type": "array"
-            },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            }
-          },
-          "required": [
-            "pending_messages"
-          ],
-          "title": "CoordinationRepair",
           "type": "object"
         },
         "IncomingMessage": {
@@ -22368,9 +21364,6 @@
                   "$ref": "#/$defs/RetryRepair"
                 },
                 {
-                  "$ref": "#/$defs/CoordinationRepair"
-                },
-                {
                   "type": "null"
                 }
               ],
@@ -22451,10 +21444,24 @@
         "RoleFailure": {
           "additionalProperties": false,
           "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
             "error": {
               "$ref": "#/$defs/RoleErrorBody"
             },
-            "message_hash": {
+            "intent_warning": {
               "anyOf": [
                 {
                   "type": "string"
@@ -22464,7 +21471,7 @@
                 }
               ],
               "default": null,
-              "title": "Message Hash"
+              "title": "Intent Warning"
             },
             "messages": {
               "anyOf": [
@@ -22482,10 +21489,36 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
             },
             "provider_identity": {
               "anyOf": [
@@ -22498,25 +21531,10 @@
               ],
               "default": null
             },
-            "required_action": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "ack",
-                    "reply"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Required Action"
-            },
             "return_to_chat": {
               "anyOf": [
                 {
+                  "const": true,
                   "type": "boolean"
                 },
                 {
@@ -22526,17 +21544,21 @@
               "default": null,
               "title": "Return To Chat"
             },
-            "text": {
+            "warnings": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
                 },
                 {
                   "type": "null"
                 }
               ],
               "default": null,
-              "title": "Text"
+              "title": "Warnings"
             }
           },
           "required": [

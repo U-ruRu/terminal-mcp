@@ -292,9 +292,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "capability_not_allowed": "This endpoint does not allow the operation.",
         "coordination_alert": "Подтверди Alert через Message",
-        "coordination_ack_required": (
-            "Acknowledge the pending message before continuing."
-        ),
+        "coordination_ack_required": ("Acknowledge the pending message before continuing."),
         "session_contract_conflict": (
             "Use the role and contract version that opened the active session. "
             "End it through that endpoint before starting a different role or version."
@@ -316,7 +314,9 @@ def _catalog() -> Mapping[str, ErrorSpec]:
                 kind, recovery, messages.get(code, code.replace("_", " ").capitalize() + ".")
             )
     for code in (
-        "capability_not_allowed", "legacy_admission_disabled", "access_denied",
+        "capability_not_allowed",
+        "legacy_admission_disabled",
+        "access_denied",
         "session_expired",
     ):
         spec = result[code]
@@ -373,7 +373,8 @@ class CoordinationMessage(_BoundedValue):
     message_hash: str = Field(min_length=1, max_length=128)
     mode: Literal["notify", "ack", "alert"]
     text: str | None = Field(default=None, max_length=500)
-    sender: str | None = Field(default=None, max_length=64)
+    sender: str | None = Field(default=None, max_length=120)
+    truncated: Literal[True] | None = None
 
 
 class CoordinationRepair(_BoundedValue):
@@ -382,6 +383,7 @@ class CoordinationRepair(_BoundedValue):
         max_length=MAX_COORDINATION_MESSAGES,
         strict=False,
     )
+    messages_remaining: int | None = Field(default=None, gt=0)
     ack_required_pending: bool = False
     alert_pending: bool = False
     required_action: Literal["ack", "reply"] | None = None
@@ -559,18 +561,26 @@ def _repair(code: str, kind: ErrorKind, raw: object) -> ErrorRepair | None:
                 CoordinationMessage(
                     message_hash=message_hash,
                     mode=mode,
-                    text=text if isinstance(text, str) else None,
+                    text=text[:500] if isinstance(text, str) else None,
                     sender=sender if isinstance(sender, str) else None,
+                    truncated=True
+                    if (isinstance(text, str) and len(text) > 500) or item.get("truncated") is True
+                    else None,
                 )
             )
         if not messages:
             return None
         return CoordinationRepair(
             pending_messages=tuple(messages),
+            messages_remaining=max(
+                len(source) - len(messages), int(raw.get("messages_remaining") or 0)
+            )
+            or None,
             ack_required_pending=bool(raw.get("ack_required_pending")),
             alert_pending=bool(raw.get("alert_pending")),
             required_action=raw.get("required_action")
-            if raw.get("required_action") in {"ack", "reply"} else None,
+            if raw.get("required_action") in {"ack", "reply"}
+            else None,
         )
     expected_type = _REPAIR_TYPES.get(kind)
     if expected_type and isinstance(raw, expected_type):
@@ -633,7 +643,9 @@ def normalize_public_error(raw: Mapping[str, object] | PublicError) -> PublicErr
     # Preserve already-canonical bounded repair data, while extra legacy fields
     # fail closed into the whitelist path below.
     try:
-        return PublicError.model_validate(raw)
+        return PublicError.model_validate(
+            {key: raw[key] for key in PublicError.model_fields if key in raw}
+        )
     except ValidationError:
         pass
     code = raw.get("code")
@@ -650,7 +662,12 @@ def normalize_public_error(raw: Mapping[str, object] | PublicError) -> PublicErr
         )
     # Accept one old envelope layer, never recursively expand diagnostics.
     details = raw.get("details")
-    return public_error(code, details=details if isinstance(details, Mapping) else raw)
+    outcome = raw.get("outcome")
+    return public_error(
+        code,
+        details=details if isinstance(details, Mapping) else raw,
+        outcome=outcome if outcome in {"committed", "not_committed", "unknown"} else None,
+    )
 
 
 class PublicFailure(Exception):

@@ -57,7 +57,23 @@ def canonical_application_result(result):
         and result.get("ok") is False
         and isinstance(result.get("code"), str)
     ):
-        return normalize_public_error(result).as_dict()
+        normalized = normalize_public_error(result).as_dict()
+        # Preserve only operation-owned notice/receipt channels for the public adapter.
+        # Domain errors and their bounded repair remain normalized above.
+        for key in (
+            "messages",
+            "pending_messages",
+            "coordination",
+            "warnings",
+            "postcommit_warning",
+            "intent_warning",
+            "return_to_chat",
+            "_meta",
+            "cmd_hash",
+        ):
+            if result.get(key):
+                normalized[key] = result[key]
+        return normalized
     return result
 
 

@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from terminal_mcp.core.public_errors import MAX_COORDINATION_MESSAGES
-from terminal_mcp.core.read_contract import summary_message
+from terminal_mcp.core.public_errors import (
+    MAX_COORDINATION_MESSAGES,
+    ConflictRepair,
+    RetryRepair,
+    ValidationRepair,
+    normalize_public_error,
+)
+from terminal_mcp.core.read_contract import CALL_TOOL_RESULT_BUDGET_BYTES, summary_message
 from terminal_mcp.core.task_projections import (
     TaskDependency,
     TaskEvent,
@@ -20,6 +27,8 @@ from terminal_mcp.core.task_projections import (
     TaskState,
     WorkflowWarning,
 )
+
+ResponseErrorRepair = ValidationRepair | ConflictRepair | RetryRepair
 
 
 class _Strict(BaseModel):
@@ -117,11 +126,17 @@ class PublicTaskHistory(_Strict):
     next_cursor: str | None = None
 
 
+def _incoming_sources(raw: dict) -> list[dict]:
+    sources = [raw]
+    for key in ("coordination", "details"):
+        if isinstance(raw.get(key), dict):
+            sources.append(raw[key])
+    return sources
+
+
 def incoming_messages(raw: dict) -> list[dict]:
     """Merge the two incoming-obligation aliases without performing receipt writes."""
-    sources = [raw]
-    if isinstance(raw.get("coordination"), dict):
-        sources.append(raw["coordination"])
+    sources = _incoming_sources(raw)
     result: dict[str, dict] = {}
     for source in sources:
         for key in ("messages", "pending_messages"):
@@ -173,19 +188,41 @@ def operation_notices(raw: dict) -> dict:
     incoming = incoming_messages(raw)
     visible = incoming[:MAX_COORDINATION_MESSAGES]
     messages = []
-    truncated = False
+    sources = _incoming_sources(raw)
+    truncated = any(
+        isinstance(item, dict) and item.get("truncated") is True
+        for source in sources
+        for key in ("messages", "pending_messages")
+        for item in source.get(key) or []
+    )
     for item in visible:
         preview = summary_message(item)
         messages.append({**item, "text": preview["text"]})
         truncated = truncated or preview["truncated"]
+    # Bound actual UTF-8 JSON, including escaping of control characters. Keep
+    # names, IDs and requirements whole; only the explicitly advertised text preview shrinks.
+    text_limit = 512
+    while (
+        len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+        > (CALL_TOOL_RESULT_BUDGET_BYTES // 4)
+        and text_limit
+    ):
+        text_limit //= 2
+        messages = [{**item, "text": item["text"][:text_limit]} for item in messages]
+        truncated = True
     if messages:
         result["messages"] = messages
-    remaining = len(incoming) - len(messages)
+    remaining = max(
+        len(incoming) - len(messages),
+        *(int(source.get("messages_remaining") or 0) for source in sources),
+    )
     if remaining:
         result["messages_remaining"] = remaining
     if raw.get("warnings"):
         result["warnings"] = list(raw["warnings"])
-    if truncated or remaining:
+    if (truncated or remaining) and not any(
+        item.get("code") == "incoming_messages_truncated" for item in result.get("warnings", [])
+    ):
         count_note = (
             f" {remaining} additional incoming entries are not displayed." if remaining else ""
         )
@@ -208,6 +245,19 @@ def operation_notices(raw: dict) -> dict:
     if raw.get("return_to_chat") or lifecycle.get("return_to_chat"):
         result["return_to_chat"] = True
     return result
+
+
+def error_response(raw: dict) -> dict:
+    """Project bounded failure notices once, retaining authoritative operation outcome."""
+    canonical = normalize_public_error(raw).as_dict()
+    notices = operation_notices({**raw, **canonical})
+    if canonical["code"] in {"coordination_alert", "coordination_ack_required"}:
+        # The same incoming obligations are now represented only by root messages.
+        canonical.pop("details", None)
+    receipt = raw.get("cmd_hash")
+    if isinstance(receipt, str) and 0 < len(receipt) <= 128:
+        canonical["cmd_hash"] = receipt
+    return {**canonical, **notices}
 
 
 def remaining_seconds(raw: dict) -> int | None:

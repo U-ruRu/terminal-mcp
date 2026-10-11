@@ -42,10 +42,16 @@
       "name": "session",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
@@ -57,19 +63,25 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -81,10 +93,10 @@
           "session_number": {
             "type": "string"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
