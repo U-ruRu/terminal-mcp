@@ -454,6 +454,7 @@ def local_message(source, recipient, key, text):
     store = AccessMeshMessageStore(source.path, "source")
     wire = {
         "message_hash": "source:localmsg:" + key,
+        "origin_node_id": "source",
         "sender_id": "fixture-sender",
         "sender_name": "Bravo",
         "target": "Alpha",
