@@ -107,12 +107,12 @@
       {
         "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")",
         "source": "src/terminal_mcp/application/access_mesh_messages.py",
-        "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack."
+        "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack. Send mode defaults to notify. mode=notify marks read_at automatically on first recipient display, so acknowledged=true means read/handled and does not prove an explicit ACK. mode=ack requires action=ack to set read_at. mode=alert requires a reply to release its reply obligation; action=ack alone does not satisfy it. Either alert=true or require_reply=true promotes notify/ack to alert. first_seen_at records first display; read_at records notify auto-read or explicit ACK; replied_at records actual reply. Repeated ACK is idempotent and creates no new message."
       },
       {
-        "anchor": "if (namespace is None) != (task_id is None):",
+        "anchor": "def _route_issue(",
         "source": "src/terminal_mcp/application/access_mesh_messages.py",
-        "text": "namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target."
+        "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
     "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
@@ -938,12 +938,12 @@
       {
         "anchor": "normalized_mode = mode or (\"alert\" if alert or require_reply else \"notify\")",
         "source": "src/terminal_mcp/application/access_mesh_messages.py",
-        "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack."
+        "text": "For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack. Send mode defaults to notify. mode=notify marks read_at automatically on first recipient display, so acknowledged=true means read/handled and does not prove an explicit ACK. mode=ack requires action=ack to set read_at. mode=alert requires a reply to release its reply obligation; action=ack alone does not satisfy it. Either alert=true or require_reply=true promotes notify/ack to alert. first_seen_at records first display; read_at records notify auto-read or explicit ACK; replied_at records actual reply. Repeated ACK is idempotent and creates no new message."
       },
       {
-        "anchor": "if (namespace is None) != (task_id is None):",
+        "anchor": "def _route_issue(",
         "source": "src/terminal_mcp/application/access_mesh_messages.py",
-        "text": "namespace and task_id must be both absent/null or both present/non-null; otherwise invalid_task_target. For send, missing/null target means local broadcast (which can fail no_active_recipients); reply inherits target from the parent and ignores supplied target."
+        "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
     "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",

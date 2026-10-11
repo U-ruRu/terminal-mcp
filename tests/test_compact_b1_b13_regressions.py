@@ -224,7 +224,7 @@ def test_B7_message_null_is_presence_sensitive_for_both_roles(role):
     assert "scope=fleet" in d and "feature_disabled" in d
     assert "nullable mode defaults to notify" in d
     assert "forces final mode=alert" in d
-    assert "invalid_task_target" in d
+    assert "input_validation_failed" in d and "path/reason/repair hint" in d
     assert "missing/null target means local broadcast" in d
     assert accepts(
         MeshMessageInput,

@@ -15,6 +15,8 @@ _MINIMAL = {
     "mcp_http_finished",
     "mcp_tool_started",
     "mcp_tool_finished",
+    "mcp_task_mutation_returned",
+    "mcp_task_response_ready",
     "application_started",
     "application_stopped",
     "runtime_config_reloaded",

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.orchestration import utc_text
+from terminal_mcp.core.public_errors import ValidationIssue, ValidationRepair, public_error
 from terminal_mcp.core.read_contract import (
     InvalidCursor,
     OutputItemTooLarge,
@@ -50,6 +51,38 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+def _route_issue(namespace, task_id, target=None):
+    """Shared local route rule for wire validation and public request repairs."""
+    if namespace is None and task_id is not None:
+        return ("namespace", "missing_required", "Provide namespace together with task_id.")
+    if task_id is None and namespace is not None:
+        return ("task_id", "missing_required", "Provide task_id together with namespace.")
+    if namespace is not None and isinstance(target, str) and target.casefold() != "broadcast":
+        return (
+            "target",
+            "conflicting_fields",
+            (
+                "For a task route, omit target or set it to broadcast; "
+                "remove the task pair for a named target."
+            ),
+        )
+    return None
+
+
+def _route_failure(issue):
+    path, reason, hint = issue
+    repair = ValidationRepair(
+        validation_errors=(ValidationIssue(error_class=reason, path=path, description=hint),)
+    )
+    return public_error(
+        "input_validation_failed",
+        reason=reason,
+        path=path,
+        details=repair,
+        outcome="not_committed",
+    ).as_dict()
+
+
 class MeshWireMessage(_Strict):
     message_hash: str = Field(min_length=1, max_length=128)
     origin_node_id: str = Field(min_length=1, max_length=80)
@@ -68,10 +101,9 @@ class MeshWireMessage(_Strict):
 
     @model_validator(mode="after")
     def valid_route(self):
-        if (self.namespace is None) != (self.task_id is None):
-            raise ValueError("namespace and task_id form one task target")
-        if self.namespace is not None and self.target != "broadcast":
-            raise ValueError("choose public_name or a task target")
+        issue = _route_issue(self.namespace, self.task_id, self.target)
+        if issue is not None:
+            raise ValueError(issue[2])
         stamp = datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
         if stamp.tzinfo is None:
             raise ValueError("created_at requires an explicit timezone")
@@ -432,6 +464,9 @@ class AccessMeshMessaging:
             target, scope, namespace, task_id = parent["sender_name"], "local", None, None
         if isinstance(target, str) and target.casefold() == "broadcast":
             target = "broadcast"
+        issue = _route_issue(namespace, task_id, target)
+        if issue is not None:
+            return _route_failure(issue)
         if isinstance(target, str) and (
             target.casefold() == identity["public_name"].casefold()
             or await self._target_is_merged_self(target, identity["logical_agent_id"])
@@ -680,8 +715,11 @@ class AccessMeshMessaging:
                 raise MeshMessagingError("input_validation_failed")
             if type(require_reply) is not bool or type(alert) is not bool:
                 raise MeshMessagingError("input_validation_failed")
-            if (namespace is None) != (task_id is None):
-                raise MeshMessagingError("invalid_task_target")
+            issue = _route_issue(
+                namespace, task_id, target if message_hash is None and text is not None else None
+            )
+            if issue is not None:
+                return _route_failure(issue)
             is_read = text is None and message_hash is None
             if recipients and not is_read:
                 raise MeshMessagingError("input_validation_failed")

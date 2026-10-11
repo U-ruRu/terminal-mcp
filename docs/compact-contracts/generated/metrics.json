@@ -125,19 +125,19 @@
     "coordinator": {
       "after": {
         "component_byte_shares": {
-          "descriptions": 0.624773,
-          "input_schemas": 0.20718,
-          "output_schemas": 0.12154
+          "descriptions": 0.635906,
+          "input_schemas": 0.201033,
+          "output_schemas": 0.117933
         },
         "component_utf8_bytes": {
-          "descriptions": 18552,
+          "descriptions": 19460,
           "input_schemas": 6152,
           "output_schemas": 3609
         },
         "serialized_tools_list": {
-          "characters": 29694,
-          "tokens": 6849,
-          "utf8_bytes": 29694
+          "characters": 30600,
+          "tokens": 7038,
+          "utf8_bytes": 30602
         },
         "tools": {
           "agent_observe": {
@@ -181,11 +181,11 @@
             "utf8_bytes": 2507
           },
           "message": {
-            "characters": 4813,
+            "characters": 5719,
             "description": {
-              "characters": 2790,
-              "tokens": 632,
-              "utf8_bytes": 2790
+              "characters": 3696,
+              "tokens": 821,
+              "utf8_bytes": 3698
             },
             "input_schema": {
               "characters": 1241,
@@ -197,8 +197,8 @@
               "tokens": 144,
               "utf8_bytes": 613
             },
-            "tokens": 1130,
-            "utf8_bytes": 4813
+            "tokens": 1319,
+            "utf8_bytes": 5721
           },
           "session": {
             "characters": 2066,
@@ -483,22 +483,22 @@
       },
       "delta": {
         "characters": {
-          "after": 29694,
+          "after": 30600,
           "before": 40414,
-          "change_pct": -26.525,
-          "delta": -10720
+          "change_pct": -24.284,
+          "delta": -9814
         },
         "tokens": {
-          "after": 6849,
+          "after": 7038,
           "before": 9881,
-          "change_pct": -30.685,
-          "delta": -3032
+          "change_pct": -28.772,
+          "delta": -2843
         },
         "utf8_bytes": {
-          "after": 29694,
+          "after": 30602,
           "before": 40414,
-          "change_pct": -26.525,
-          "delta": -10720
+          "change_pct": -24.279,
+          "delta": -9812
         }
       },
       "per_tool_delta": {
@@ -544,22 +544,22 @@
         },
         "message": {
           "characters": {
-            "after": 4813,
+            "after": 5719,
             "before": 2672,
-            "change_pct": 80.127,
-            "delta": 2141
+            "change_pct": 114.034,
+            "delta": 3047
           },
           "tokens": {
-            "after": 1130,
+            "after": 1319,
             "before": 617,
-            "change_pct": 83.144,
-            "delta": 513
+            "change_pct": 113.776,
+            "delta": 702
           },
           "utf8_bytes": {
-            "after": 4813,
+            "after": 5721,
             "before": 2672,
-            "change_pct": 80.127,
-            "delta": 2141
+            "change_pct": 114.109,
+            "delta": 3049
           }
         },
         "session": {
@@ -667,19 +667,19 @@
     "executor": {
       "after": {
         "component_byte_shares": {
-          "descriptions": 0.499233,
-          "input_schemas": 0.203,
-          "output_schemas": 0.236972
+          "descriptions": 0.514605,
+          "input_schemas": 0.196768,
+          "output_schemas": 0.229698
         },
         "component_utf8_bytes": {
-          "descriptions": 14313,
+          "descriptions": 15221,
           "input_schemas": 5820,
           "output_schemas": 6794
         },
         "serialized_tools_list": {
-          "characters": 28670,
-          "tokens": 6471,
-          "utf8_bytes": 28670
+          "characters": 29576,
+          "tokens": 6660,
+          "utf8_bytes": 29578
         },
         "tools": {
           "command_cancel": {
@@ -763,11 +763,11 @@
             "utf8_bytes": 2798
           },
           "message": {
-            "characters": 4813,
+            "characters": 5719,
             "description": {
-              "characters": 2790,
-              "tokens": 632,
-              "utf8_bytes": 2790
+              "characters": 3696,
+              "tokens": 821,
+              "utf8_bytes": 3698
             },
             "input_schema": {
               "characters": 1241,
@@ -779,8 +779,8 @@
               "tokens": 144,
               "utf8_bytes": 613
             },
-            "tokens": 1130,
-            "utf8_bytes": 4813
+            "tokens": 1319,
+            "utf8_bytes": 5721
           },
           "session": {
             "characters": 2066,
@@ -1105,22 +1105,22 @@
       },
       "delta": {
         "characters": {
-          "after": 28670,
+          "after": 29576,
           "before": 16145,
-          "change_pct": 77.578,
-          "delta": 12525
+          "change_pct": 83.19,
+          "delta": 13431
         },
         "tokens": {
-          "after": 6471,
+          "after": 6660,
           "before": 3706,
-          "change_pct": 74.609,
-          "delta": 2765
+          "change_pct": 79.709,
+          "delta": 2954
         },
         "utf8_bytes": {
-          "after": 28670,
+          "after": 29578,
           "before": 16145,
-          "change_pct": 77.578,
-          "delta": 12525
+          "change_pct": 83.202,
+          "delta": 13433
         }
       },
       "per_tool_delta": {
@@ -1206,22 +1206,22 @@
         },
         "message": {
           "characters": {
-            "after": 4813,
+            "after": 5719,
             "before": 2672,
-            "change_pct": 80.127,
-            "delta": 2141
+            "change_pct": 114.034,
+            "delta": 3047
           },
           "tokens": {
-            "after": 1130,
+            "after": 1319,
             "before": 617,
-            "change_pct": 83.144,
-            "delta": 513
+            "change_pct": 113.776,
+            "delta": 702
           },
           "utf8_bytes": {
-            "after": 4813,
+            "after": 5721,
             "before": 2672,
-            "change_pct": 80.127,
-            "delta": 2141
+            "change_pct": 114.109,
+            "delta": 3049
           }
         },
         "session": {
@@ -1331,22 +1331,22 @@
   "serialization": "json.dumps(sort_keys=True,separators=(',', ':'),ensure_ascii=False)",
   "three_catalogs_total": {
     "characters": {
-      "after": 60453,
+      "after": 62265,
       "before": 57679,
-      "change_pct": 4.809,
-      "delta": 2774
+      "change_pct": 7.951,
+      "delta": 4586
     },
     "tokens": {
-      "after": 13787,
+      "after": 14165,
       "before": 13856,
-      "change_pct": -0.498,
-      "delta": -69
+      "change_pct": 2.23,
+      "delta": 309
     },
     "utf8_bytes": {
-      "after": 60453,
+      "after": 62269,
       "before": 57679,
-      "change_pct": 4.809,
-      "delta": 2774
+      "change_pct": 7.958,
+      "delta": 4590
     }
   },
   "tokenizer": "tiktoken==0.12.0 / cl100k_base"

@@ -35,6 +35,7 @@ from terminal_mcp.application.task_requests import (
     TaskUnrelateRequest,
     TaskUpdateRequest,
 )
+from terminal_mcp.attempt_diagnostics import traced_task_mutation, traced_task_response
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
 from terminal_mcp.core.public_errors import public_error
@@ -841,10 +842,13 @@ def build_role_mcp(
             canonical, failure = _task_request(payload, TaskStateRequest)
             if failure is not None:
                 return failure
-            raw = await application.task(_actor(application, role), canonical)
-            if raw.get("ok"):
-                return {"ok": True}
-            return _structured(task_result(raw, "state"))
+            raw, started = await traced_task_mutation(
+                application, _actor(application, role), canonical, role=role, tool="task_state"
+            )
+            response = {"ok": True} if raw.get("ok") else _structured(task_result(raw, "state"))
+            return traced_task_response(
+                application, canonical, raw, response, started, role=role, tool="task_state"
+            )
 
         @mcp.tool(
             name="task_comment",
@@ -905,15 +909,20 @@ def build_role_mcp(
             canonical, failure = _task_request(payload, _TASK_MANAGE_MODELS[request.action])
             if failure is not None:
                 return failure
-            raw = await application.task(_actor(application, role), canonical)
-            if raw.get("ok"):
-                if request.action == "create":
-                    return {"ok": True, "task_id": raw["task"]["task_id"]}
-                if request.action == "update":
-                    return {"ok": True, "revision": raw["task"]["revision"]}
-                if request.action in {"comment", "checkpoint"}:
-                    return {"ok": True}
-            return _structured(task_result(raw, request.action))
+            raw, started = await traced_task_mutation(
+                application, _actor(application, role), canonical, role=role, tool="task_manage"
+            )
+            if raw.get("ok") and request.action == "create":
+                response = {"ok": True, "task_id": raw["task"]["task_id"]}
+            elif raw.get("ok") and request.action == "update":
+                response = {"ok": True, "revision": raw["task"]["revision"]}
+            elif raw.get("ok") and request.action in {"comment", "checkpoint"}:
+                response = {"ok": True}
+            else:
+                response = _structured(task_result(raw, request.action))
+            return traced_task_response(
+                application, canonical, raw, response, started, role=role, tool="task_manage"
+            )
 
         @mcp.tool(
             name="task_graph",
