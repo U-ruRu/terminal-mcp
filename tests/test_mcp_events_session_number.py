@@ -82,7 +82,9 @@ def test_number_catalog_and_other_schemas_unchanged():
     events = {item["name"]: item for item in event_catalog()["events"]}
     assert events["message.received"]["inputSchema"] == {
         "type": "object",
-        "properties": {"session_number": {"type": "string", "pattern": "^[0-9]{4}$"}},
+        "properties": {"session_number": {
+            "type": "string", "pattern": "^[0-9]{4}$", "minLength": 4, "maxLength": 4
+        }},
         "additionalProperties": False,
     }
     for name in ("agent.attached", "agent.inactive", "session.ended"):
@@ -91,11 +93,14 @@ def test_number_catalog_and_other_schemas_unchanged():
         }
 
 
-@pytest.mark.parametrize("number", [None, 1234, "123", "12345", "１２３４", "12a4", " 1234"])
+@pytest.mark.parametrize(
+    "number", [None, 1234, "123", "12345", "１２３４", "12a4", " 1234", "1234\n"]
+)
 def test_invalid_number_rejected_before_challenge(tmp_path, number):
     app = create_app(config(tmp_path))
     sink = Sink()
     app.state.access_events.sender = sink
+    app.state.mcp_events.sender = sink
     with TestClient(app, base_url="https://terminal.example") as client:
         result = register(client, number)
         assert result["error"]["code"] == -32602
@@ -106,6 +111,7 @@ def test_unissued_number_and_unauthenticated_request_rejected(tmp_path):
     app = create_app(config(tmp_path))
     sink = Sink()
     app.state.access_events.sender = sink
+    app.state.mcp_events.sender = sink
     with TestClient(app, base_url="https://terminal.example") as client:
         assert register(client, "1234")["error"]["code"] == -32001
         response = client.post(
@@ -179,6 +185,7 @@ def test_expiry_rejects_new_subscription_and_reuse_never_retargets(tmp_path):
     app = create_app(config(tmp_path))
     sink = Sink()
     app.state.access_events.sender = sink
+    app.state.mcp_events.sender = sink
     with TestClient(app, base_url="https://terminal.example") as client:
         number_a, slot_a, _, _ = issue(client, app, "old")
         sub_id = register(client, number_a)["result"]["id"]
@@ -234,7 +241,7 @@ def test_expiry_rejects_new_subscription_and_reuse_never_retargets(tmp_path):
                 "INSERT INTO mcp_event_deliveries(event_id,subscription_id,next_attempt_at) "
                 "VALUES(?,?,?)", ("fixture-reuse", sub_id, stamp),
             )
-        client.portal.call(app.state.access_events.deliver_due)
+        client.portal.call(app.state.mcp_events.deliver_due)
         assert stored(app, sub_id) is not None
         assert not any(data.get("name") == "message.received" for _, data, _ in sink.requests)
         with sqlite3.connect(app.state.settings.database_path) as db:
@@ -302,6 +309,7 @@ def test_oauth_number_subscription_requires_no_provider_metadata(tmp_path):
     app = create_app(settings(tmp_path))
     sink = Sink()
     app.state.access_events.sender = sink
+    app.state.mcp_events.sender = sink
     with TestClient(app, base_url=ISSUER) as client:
         _, token, _, slot = provision(client, app)
         number = app.state.access_mesh.store.numbers.number_for_slot(

@@ -459,6 +459,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         mcp_event_store,
         reconcile=service.reconcile_agent_sessions,
         access_checker=checked_subscription_access,
+        message_resolver=message_subscriber_resolver,
         events_enabled=False,
     )
     executor_events = MCPEventsAdapter(

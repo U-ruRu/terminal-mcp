@@ -68,7 +68,10 @@ def event_catalog():
                 "inputSchema": {
                     "type": "object",
                     "properties": (
-                        {"session_number": {"type": "string", "pattern": "^[0-9]{4}$"}}
+                        {"session_number": {
+                            "type": "string", "pattern": "^[0-9]{4}$",
+                            "minLength": 4, "maxLength": 4,
+                        }}
                         if name == "message.received"
                         else {}
                     ),

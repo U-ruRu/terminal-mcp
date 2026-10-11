@@ -4,7 +4,7 @@ The native Access MCP Events catalog declares an optional message.received argum
 
     {"session_number":"0123"}
 
-Use the four-character string returned by Access session(action="start"), preserving leading zeros. Subscribe through the Access endpoint using the usual webhook delivery URL and signing secret. The server validates normal authenticated MCP access and terminal:read scope. The number is a public routing identifier, not a credential. Other authorized agents in this server's shared access space may subscribe to the same number with their own verified callbacks.
+Use the four-character string returned by Access session(action="start"), preserving leading zeros. Subscribe through the original issuing server's Access endpoint using the usual webhook delivery URL and signing secret. Choosing that Access endpoint is the client's responsibility; this patch adds no origin-based request rejection or subscription-transfer mechanism. Attaching an executor or coordinator elsewhere does not change the intended receiving server. The server validates normal authenticated MCP access and terminal:read scope. The number is a public routing identifier, not a credential. Other authorized agents in this server's shared access space may subscribe to the same number with their own verified callbacks.
 
 ## Recipient and fan-out
 
