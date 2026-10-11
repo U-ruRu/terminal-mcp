@@ -271,6 +271,17 @@ async def _message(application, actor, request: MessageInput) -> dict:
             return public_error("identity_not_bound").as_dict()
 
     history = request.action == "history"
+    chunk = request.action == "read" and request.message_hash is not None
+    message_hash = None if chunk else request.message_hash
+    text_options = (
+        {
+            "read_message_hash": request.message_hash,
+            "text_offset": request.text_offset,
+            "text_limit": request.text_limit,
+        }
+        if chunk
+        else {}
+    )
     mesh_messages = getattr(application.service, "access_mesh_messages", None)
     if mesh_messages is not None:
 
@@ -281,7 +292,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
                     sender=sender,
                     text=request.text,
                     target=request.target,
-                    message_hash=request.message_hash,
+                    message_hash=message_hash,
                     mode=request.mode,
                     require_reply=request.require_reply,
                     alert=request.alert,
@@ -299,7 +310,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
                 actor,
                 text=request.text,
                 target=request.target,
-                message_hash=request.message_hash,
+                message_hash=message_hash,
                 mode=request.mode,
                 require_reply=request.require_reply,
                 alert=request.alert,
@@ -312,17 +323,29 @@ async def _message(application, actor, request: MessageInput) -> dict:
                 namespace=request.namespace,
                 task_id=request.task_id,
                 response_preflight=preflight,
+                **text_options,
             )
         if raw.get("ok"):
             await application.session_gate.touch_provider(actor)
         return project(raw)
+    if chunk:
+        from terminal_mcp.mcp.server import _preflight_message_inbox_result
+
+        text_options["response_preflight"] = lambda preview: _preflight_message_inbox_result(
+            preview,
+            sender=sender,
+            target=None,
+            mode=None,
+            require_reply=False,
+            alert=False,
+        )
     raw = await application.message(
         resolution.actor,
         sender=sender,
         code=None,
         text=request.text,
         target=request.target,
-        message_hash=request.message_hash,
+        message_hash=message_hash,
         mode=request.mode,
         require_reply=request.require_reply,
         alert=request.alert,
@@ -333,6 +356,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
         namespace=request.namespace,
         task_id=request.task_id,
         recipients=request.action == "recipients",
+        **text_options,
     )
     if request.action == "recipients":
         return raw
@@ -342,7 +366,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
             sender=sender,
             text=request.text,
             target=request.target,
-            message_hash=request.message_hash,
+            message_hash=message_hash,
             mode=request.mode,
             require_reply=request.require_reply,
             alert=request.alert,

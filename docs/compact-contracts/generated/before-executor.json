@@ -1392,6 +1392,14 @@
           "text": {
             "default": null,
             "description": "string"
+          },
+          "text_limit": {
+            "default": null,
+            "description": "integer"
+          },
+          "text_offset": {
+            "default": null,
+            "description": "integer"
           }
         },
         "type": "object",

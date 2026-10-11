@@ -66,7 +66,7 @@
     "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [
-      "ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
+      "ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
     "exact_input_fallbacks": [],
     "input_fields": [
@@ -74,6 +74,8 @@
       "text",
       "target",
       "message_hash",
+      "text_offset",
+      "text_limit",
       "mode",
       "require_reply",
       "alert",
@@ -88,7 +90,7 @@
     "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
     "output_fallback": "strict-contracts.json:coordinator.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
-    "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
+    "published_input_sha256": "a59385b95c8f8d1c9bc9e1d87a1f128ddfb01d06d6459a01d4c574a36b6c91ce",
     "published_output_sha256": "3555c67d18791cb075555b13cd93d7435decd841d00c0f41a331638eeb63bcf1",
     "required_fields": [
       "action"
@@ -115,8 +117,8 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
-    "strict_output_sha256": "6df2386f386b04cd583b0be20e82fdd3efc8cd3c455ef8b1f5c7c220d2188a4b"
+    "strict_input_sha256": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+    "strict_output_sha256": "9f8d01261d86a6b166fc754d2e233daecf63560a70a5bdd490a9808d8cc48036"
   },
   "coordinator.session": {
     "action_models": {},
@@ -820,7 +822,7 @@
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
-    "strict_output_sha256": "6da59d575f48697d88081bda273ba3ad491449efbf8934ab0596d523d78f5908"
+    "strict_output_sha256": "131e1ec2adb3bab95f0be81705aa72befc95c8dfcd2480755b0a254666005c0f"
   },
   "executor.command_read": {
     "action_models": {},
@@ -841,7 +843,7 @@
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "6caae35abafd494d83e6ac8491a7018504df059cad5539697582a8f95c236693",
-    "strict_output_sha256": "d87276bb12e6d8419bcf99a58af19ffb8911fac99e4f76123a1b3e504f9b9b9f"
+    "strict_output_sha256": "997061b5381b1f56f529e5dd7867abcb72e1d433b414e121fdccc3e9905823eb"
   },
   "executor.command_recovery": {
     "action_models": {},
@@ -862,7 +864,7 @@
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
-    "strict_output_sha256": "6da59d575f48697d88081bda273ba3ad491449efbf8934ab0596d523d78f5908"
+    "strict_output_sha256": "131e1ec2adb3bab95f0be81705aa72befc95c8dfcd2480755b0a254666005c0f"
   },
   "executor.command_run": {
     "action_models": {},
@@ -897,7 +899,7 @@
     "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [
-      "ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
+      "ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
     "exact_input_fallbacks": [],
     "input_fields": [
@@ -905,6 +907,8 @@
       "text",
       "target",
       "message_hash",
+      "text_offset",
+      "text_limit",
       "mode",
       "require_reply",
       "alert",
@@ -919,7 +923,7 @@
     "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
     "output_fallback": "strict-contracts.json:executor.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
-    "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
+    "published_input_sha256": "a59385b95c8f8d1c9bc9e1d87a1f128ddfb01d06d6459a01d4c574a36b6c91ce",
     "published_output_sha256": "3555c67d18791cb075555b13cd93d7435decd841d00c0f41a331638eeb63bcf1",
     "required_fields": [
       "action"
@@ -946,8 +950,8 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
-    "strict_output_sha256": "6df2386f386b04cd583b0be20e82fdd3efc8cd3c455ef8b1f5c7c220d2188a4b"
+    "strict_input_sha256": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+    "strict_output_sha256": "9f8d01261d86a6b166fc754d2e233daecf63560a70a5bdd490a9808d8cc48036"
   },
   "executor.session": {
     "action_models": {},

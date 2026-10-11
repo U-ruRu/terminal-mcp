@@ -539,6 +539,7 @@ class PersistentBackend:
         namespace: str | None = None,
         task_id: str | None = None,
         _resolved_identity: dict | None = None,
+        read_message_hash: str | None = None,
     ) -> dict:
         normalized_mode = "notify"
         if mode is not None:
@@ -573,6 +574,11 @@ class PersistentBackend:
                 namespace=namespace,
                 task_id=task_id,
                 sender_identity=_resolved_identity,
+                **(
+                    {"read_message_hash": read_message_hash}
+                    if read_message_hash is not None
+                    else {}
+                ),
             )
         sender = (
             _resolved_identity
@@ -602,6 +608,11 @@ class PersistentBackend:
                 surface_limit=surface_limit,
                 namespace=namespace,
                 task_id=task_id,
+                **(
+                    {"read_message_hash": read_message_hash}
+                    if read_message_hash is not None
+                    else {}
+                ),
             )
         return await self._fleet_access_message(
             sender,
@@ -617,6 +628,7 @@ class PersistentBackend:
             surface_limit=surface_limit,
             namespace=namespace,
             task_id=task_id,
+            **({"read_message_hash": read_message_hash} if read_message_hash is not None else {}),
         )
 
     async def _persistent_message_entry(self, item: dict) -> dict:
@@ -855,6 +867,7 @@ class PersistentBackend:
         surface_limit: int | None,
         namespace: str | None,
         task_id: str | None,
+        read_message_hash: str | None = None,
     ) -> dict:
         sender_id = str(sender["logical_agent_id"])
         sender_name = str(sender["public_name"])
@@ -954,6 +967,38 @@ class PersistentBackend:
 
         if text is None:
             try:
+                if read_message_hash is not None:
+                    # Scan only the authority's existing caller-filtered history. No ACK,
+                    # direct database access or changed cross-node protocol is introduced.
+                    found = []
+                    scan_offset = 0
+                    while True:
+                        batch = await self.fleet_bridge.message_inbox(
+                            sender_id,
+                            work_session_id=work_session_id,
+                            session_epoch=session_epoch,
+                            show_all=True,
+                            recent_seconds=300,
+                            limit=500,
+                            offset=scan_offset,
+                        )
+                        found = [
+                            item for item in batch if item.get("message_ref") == read_message_hash
+                        ]
+                        if found or len(batch) < 500:
+                            break
+                        scan_offset += len(batch)
+                    if not found:
+                        return await self._access_message_legacy(
+                            sender_name,
+                            sender_identity=sender,
+                            read_message_hash=read_message_hash,
+                            show_all=True,
+                            surface_limit=0,
+                            limit=1,
+                        )
+                    visible = [await self._persistent_message_entry(item) for item in found[:1]]
+                    return {"ok": True, "sender": sender_name, "messages": visible}
                 rows = await self.fleet_bridge.message_inbox(
                     sender_id,
                     work_session_id=work_session_id,
@@ -1127,6 +1172,7 @@ class PersistentBackend:
         surface_limit: int | None = None,
         namespace: str | None = None,
         task_id: str | None = None,
+        read_message_hash: str | None = None,
     ) -> dict:
         sender = sender_identity or await self.access_sender_identity(sender_public_name)
         if not sender.get("ok"):
@@ -1179,11 +1225,14 @@ class PersistentBackend:
         if not text:
             page_limit = max(1, min(int(limit), 500))
             page_offset = max(0, int(offset))
-            if show_all:
+            if show_all or read_message_hash is not None:
                 rows = await coordinator.store.message_journal(
                     sender_id,
                     limit=page_limit,
                     offset=page_offset,
+                    **(
+                        {"message_hash": read_message_hash} if read_message_hash is not None else {}
+                    ),
                 )
             else:
                 open_hashes = {

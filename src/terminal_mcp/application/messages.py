@@ -9,6 +9,7 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.base import ApplicationCapability, application_operation
 from terminal_mcp.application.projections import _read_error
 from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.message_text import message_text_slice, text_slice_arguments
 from terminal_mcp.core.read_contract import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -62,11 +63,38 @@ class MessagingApplication(ApplicationCapability):
         task_id: str | None = None,
         recipients: bool = False,
         response_preflight: Callable[[dict], dict | None] | None = None,
+        read_message_hash: str | None = None,
+        text_offset: int | None = None,
+        text_limit: int | None = None,
     ) -> dict:
         backend = self.backend
         if backend is None:
             return {"ok": False, "code": "policy_incompatible", "error": "policy_incompatible"}
         is_read = text is None and message_hash is None
+        if read_message_hash is None and (text_offset is not None or text_limit is not None):
+            return _read_error("input_validation_failed", "text offsets require read_message_hash")
+        if read_message_hash is not None:
+            if (
+                not is_read
+                or history
+                or recipients
+                or cursor is not None
+                or target is not None
+                or mode is not None
+                or require_reply
+                or alert
+                or namespace is not None
+                or task_id is not None
+            ):
+                return _read_error(
+                    "input_validation_failed", "by-ID read cannot combine operations"
+                )
+            if not isinstance(read_message_hash, str) or not 1 <= len(read_message_hash) <= 128:
+                return _read_error("input_validation_failed", "invalid read_message_hash")
+            try:
+                text_slice_arguments(text_offset, text_limit)
+            except ValueError as exc:
+                return _read_error("input_validation_failed", str(exc))
         scope = {
             "kind": "message.recipients" if recipients else "message.read",
             "sender": sender,
@@ -99,8 +127,11 @@ class MessagingApplication(ApplicationCapability):
             page = [{"public_name": item["public_name"]} for item in rows[:limit]]
             next_cursor = encode_cursor(offset + len(page), scope) if len(rows) > limit else None
             return {
-                "ok": True, "action": "recipients", "sender": sender or "anonymous",
-                "recipients": page, "next_cursor": next_cursor,
+                "ok": True,
+                "action": "recipients",
+                "sender": sender or "anonymous",
+                "recipients": page,
+                "next_cursor": next_cursor,
             }
         resolution = await self.gate.resolve_message_actor(actor, sender, code, operation)
         if resolution.failure is not None:
@@ -121,12 +152,23 @@ class MessagingApplication(ApplicationCapability):
             surface_limit=0 if is_read else None,
             namespace=namespace,
             task_id=task_id,
+            **({"read_message_hash": read_message_hash} if read_message_hash is not None else {}),
         )
         if not is_read or not result.get("ok"):
             return result
         raw = list(result.get("messages") or result.get("inbox") or [])
         candidate = raw[:limit]
-        rows = [summary_message(item) for item in candidate] if detail == "summary" else candidate
+        if read_message_hash is not None:
+            if not candidate:
+                return _read_error("message_not_found", "message is not in the caller's history")
+            try:
+                rows = [message_text_slice(candidate[0], offset=text_offset, limit=text_limit)]
+            except ValueError as exc:
+                return _read_error("input_validation_failed", str(exc))
+        else:
+            rows = (
+                [summary_message(item) for item in candidate] if detail == "summary" else candidate
+            )
         try:
             page, _ignored = bounded_page(
                 rows, limit=limit, cursor=None, scope={"kind": "message-page"}

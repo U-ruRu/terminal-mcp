@@ -141,6 +141,48 @@ class MessageInput(StrictRoleInput):
         json_schema_extra={
             "allOf": [
                 {
+                    "if": {
+                        "anyOf": [
+                            {
+                                "properties": {"text_offset": {"type": "integer"}},
+                                "required": ["text_offset"],
+                            },
+                            {
+                                "properties": {"text_limit": {"type": "integer"}},
+                                "required": ["text_limit"],
+                            },
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "action": {"const": "read"},
+                            "message_hash": {"type": "string"},
+                        },
+                        "required": ["message_hash"],
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "action": {"const": "read"},
+                            "message_hash": {"type": "string"},
+                        },
+                        "required": ["action", "message_hash"],
+                    },
+                    "then": {
+                        "properties": {
+                            "text": {"type": "null"},
+                            "target": {"type": "null"},
+                            "cursor": {"type": "null"},
+                            "namespace": {"type": "null"},
+                            "task_id": {"type": "null"},
+                            "mode": {"type": "null"},
+                            "require_reply": {"const": False},
+                            "alert": {"const": False},
+                        }
+                    },
+                },
+                {
                     "if": {"properties": {"action": {"const": "send"}}, "required": ["action"]},
                     "then": {"required": ["text"]},
                 },
@@ -160,6 +202,8 @@ class MessageInput(StrictRoleInput):
     text: Annotated[str | None, Field(max_length=MAX_MESSAGE_TEXT_CHARS)] = None
     target: Identifier | None = None
     message_hash: Hash | None = None
+    text_offset: Annotated[int | None, Field(ge=0, le=2147483647)] = None
+    text_limit: Annotated[int | None, Field(ge=1, le=2048)] = None
     mode: Literal["notify", "ack", "alert"] | None = None
     require_reply: bool = False
     alert: bool = False
@@ -171,16 +215,33 @@ class MessageInput(StrictRoleInput):
 
     @model_validator(mode="after")
     def validate_mode(self):
+        chunk = self.action == "read" and self.message_hash is not None
+        if (self.text_offset is not None or self.text_limit is not None) and not chunk:
+            raise ValueError("text_offset/text_limit require action=read and message_hash")
+        if chunk and any(
+            (
+                self.text is not None,
+                self.target is not None,
+                self.cursor is not None,
+                self.namespace is not None,
+                self.task_id is not None,
+                self.mode is not None,
+                self.require_reply,
+                self.alert,
+            )
+        ):
+            raise ValueError("by-ID text read cannot be combined with send flags or page filters")
         if self.action == "send":
             if self.text is None:
                 raise ValueError("text is required for action=send")
             if self.message_hash is not None:
                 raise ValueError("message_hash is not allowed for action=send")
-        elif self.action in {"read", "history", "recipients"}:
+        elif self.action == "read":
+            if self.text is not None:
+                raise ValueError("text is not allowed for action=read")
+        elif self.action in {"history", "recipients"}:
             if self.text is not None or self.message_hash is not None:
-                raise ValueError(
-                    "text and message_hash are not allowed for read/history/recipients"
-                )
+                raise ValueError("text and message_hash are not allowed for history/recipients")
         elif self.action == "ack":
             if self.message_hash is None:
                 raise ValueError("message_hash is required for action=ack")
@@ -425,7 +486,12 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ),
     ("executor", "task_comment"): ("Append a comment/checkpoint note to canonical task history."),
     ("executor", "message"): (
-        "Managed inbox: send needs text; ack needs message_hash; reply needs both."
+        "Managed inbox: send needs text; ack needs message_hash; reply needs both. Read"
+        " full text by action=read with message_hash, text_offset (default0), "
+        "text_limit (1..2048, default2048). Offsets count Unicode code points; "
+        "concatenate text chunks and follow next_text_offset until absent. text_length "
+        "is total code points. Find other IDs using summary history and its cursor; "
+        "reading does not satisfy ACK/reply."
     ),
     ("coordinator", "session"): (
         "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
@@ -454,7 +520,12 @@ ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "Read compact current LogicalAgent, WorkWindow, and WorkSession state."
     ),
     ("coordinator", "message"): (
-        "Managed inbox: send needs text; ack needs message_hash; reply needs both."
+        "Managed inbox: send needs text; ack needs message_hash; reply needs both. Read"
+        " full text by action=read with message_hash, text_offset (default0), "
+        "text_limit (1..2048, default2048). Offsets count Unicode code points; "
+        "concatenate text chunks and follow next_text_offset until absent. text_length "
+        "is total code points. Find other IDs using summary history and its cursor; "
+        "reading does not satisfy ACK/reply."
     ),
     ("coordinator", "health"): (
         "Read ok, healthy, application, agent_name, version and storage. extended=true "

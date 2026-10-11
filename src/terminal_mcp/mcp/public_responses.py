@@ -195,10 +195,10 @@ def operation_notices(raw: dict) -> dict:
                 "severity": "warning",
                 "message": "Incoming messages are shown as bounded previews."
                 + count_note
-                + " Use message(action='history', detail='full') and its next_cursor to read "
-                "messages and remaining IDs. Oversized full-text items can still return "
-                "output_item_too_large under the existing read limit; text-chunk reading is not "
-                "available yet. Pending ACK/reply obligations are unchanged.",
+                + " Find IDs via message(action='history', detail='summary') and next_cursor. "
+                "Read full text with message(action='read', message_hash=ID, text_offset=0) and "
+                "follow next_text_offset. Compatibility MCP uses read_message_hash=ID instead. "
+                "Pending ACK/reply obligations are unchanged.",
             }
         )
     for key in ("postcommit_warning", "intent_warning"):

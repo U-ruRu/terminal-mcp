@@ -2021,6 +2021,89 @@
       "allOf": [
         {
           "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "text_offset": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "text_offset"
+                ]
+              },
+              {
+                "properties": {
+                  "text_limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "text_limit"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "action": {
+                "const": "read"
+              },
+              "message_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_hash"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "read"
+              },
+              "message_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "message_hash"
+            ]
+          },
+          "then": {
+            "properties": {
+              "alert": {
+                "const": false
+              },
+              "cursor": {
+                "type": "null"
+              },
+              "mode": {
+                "type": "null"
+              },
+              "namespace": {
+                "type": "null"
+              },
+              "require_reply": {
+                "const": false
+              },
+              "target": {
+                "type": "null"
+              },
+              "task_id": {
+                "type": "null"
+              },
+              "text": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "properties": {
               "action": {
                 "const": "send"
@@ -2218,6 +2301,34 @@
           ],
           "default": null,
           "title": "Text"
+        },
+        "text_limit": {
+          "anyOf": [
+            {
+              "maximum": 2048,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Limit"
+        },
+        "text_offset": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Offset"
         }
       },
       "required": [
@@ -3132,6 +3243,19 @@
               ],
               "default": null
             },
+            "next_text_offset": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Next Text Offset"
+            },
             "outcome": {
               "anyOf": [
                 {
@@ -3299,6 +3423,32 @@
               ],
               "default": null,
               "title": "Text"
+            },
+            "text_length": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Length"
+            },
+            "text_offset": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Offset"
             },
             "timestamp": {
               "anyOf": [
@@ -11355,6 +11505,19 @@
               ],
               "default": null
             },
+            "next_text_offset": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Next Text Offset"
+            },
             "outcome": {
               "anyOf": [
                 {
@@ -11522,6 +11685,32 @@
               ],
               "default": null,
               "title": "Text"
+            },
+            "text_length": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Length"
+            },
+            "text_offset": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Offset"
             },
             "timestamp": {
               "anyOf": [
@@ -13259,6 +13448,19 @@
               ],
               "default": null
             },
+            "next_text_offset": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Next Text Offset"
+            },
             "outcome": {
               "anyOf": [
                 {
@@ -13426,6 +13628,32 @@
               ],
               "default": null,
               "title": "Text"
+            },
+            "text_length": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Length"
+            },
+            "text_offset": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Offset"
             },
             "timestamp": {
               "anyOf": [
@@ -15476,6 +15704,19 @@
               ],
               "default": null
             },
+            "next_text_offset": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Next Text Offset"
+            },
             "outcome": {
               "anyOf": [
                 {
@@ -15643,6 +15884,32 @@
               ],
               "default": null,
               "title": "Text"
+            },
+            "text_length": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Length"
+            },
+            "text_offset": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Offset"
             },
             "timestamp": {
               "anyOf": [
@@ -16849,6 +17116,89 @@
       "allOf": [
         {
           "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "text_offset": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "text_offset"
+                ]
+              },
+              {
+                "properties": {
+                  "text_limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "text_limit"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "action": {
+                "const": "read"
+              },
+              "message_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_hash"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "read"
+              },
+              "message_hash": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "message_hash"
+            ]
+          },
+          "then": {
+            "properties": {
+              "alert": {
+                "const": false
+              },
+              "cursor": {
+                "type": "null"
+              },
+              "mode": {
+                "type": "null"
+              },
+              "namespace": {
+                "type": "null"
+              },
+              "require_reply": {
+                "const": false
+              },
+              "target": {
+                "type": "null"
+              },
+              "task_id": {
+                "type": "null"
+              },
+              "text": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "properties": {
               "action": {
                 "const": "send"
@@ -17046,6 +17396,34 @@
           ],
           "default": null,
           "title": "Text"
+        },
+        "text_limit": {
+          "anyOf": [
+            {
+              "maximum": 2048,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Limit"
+        },
+        "text_offset": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text Offset"
         }
       },
       "required": [
@@ -17960,6 +18338,19 @@
               ],
               "default": null
             },
+            "next_text_offset": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Next Text Offset"
+            },
             "outcome": {
               "anyOf": [
                 {
@@ -18127,6 +18518,32 @@
               ],
               "default": null,
               "title": "Text"
+            },
+            "text_length": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Length"
+            },
+            "text_offset": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text Offset"
             },
             "timestamp": {
               "anyOf": [

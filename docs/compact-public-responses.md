@@ -43,17 +43,35 @@ A real truncation produces `warnings` with code `incoming_messages_truncated`.
 When entries are omitted, positive `messages_remaining` counts only entries not
 displayed in this operation preview; it is not an ACK or delivery-state counter.
 No unbounded identifier array is added. Displayed IDs/senders/requirements remain
-intact. Continue with the specialized `message(action="history", detail="full")`
-operation and its existing `next_cursor`. Stored text and pending obligations
-remain unchanged. The command receipt survives even a large incoming batch.
+intact. Continue the existing `message(action="history", detail="summary")` pages
+with `next_cursor` to obtain every message ID. Read each complete body with
+`message(action="read", message_hash=ID, text_offset=0, text_limit=2048)` and follow
+`messages[0].next_text_offset` until absent. The compatibility MCP uses the separate
+`read_message_hash=ID` parameter, preserving its hash-only ACK spelling.
 
-**Existing full-read limit:** a single maximum-length Unicode message can itself
-exceed the full-history item/transport budget. Full history then returns
-`output_item_too_large`; using `limit=1` does not solve that case. The specialized
-message API currently has no text-chunk continuation. This is a separately
-confirmed acceptance blocker, not a claim that the preview offers complete
-recovery for every accepted message. The preview warning states this limitation;
-it must not encourage rerunning an already accepted command.
+The new by-ID text path returns `text`, `text_offset`, `text_length`, and
+`next_text_offset` only when more text remains. Offsets/lengths count Unicode code
+points, not UTF-8 bytes or UTF-16 code units. Never increment an offset by byte
+length. Concatenation reconstructs the original string and UTF-8 encoding,
+including emoji, combining characters, control characters and quotes. An exact-end
+offset returns an empty string; a beyond-end offset is an explicit input error.
+The per-response text limit is 2048 code points. Final encoded MCP response budget
+is preflighted before receipt surfacing. Stored maximum accepted text remains
+16384 characters. No stored body is shortened or rewritten.
+
+Native Mesh by-ID reads retain history authorization/retention and existing read
+semantics: normal notifications become read; required ACK/reply only become seen.
+Local compatibility reads use recipient-filtered history and preserve existing
+read semantics. Per-recipient outgoing delivery tables are omitted from the
+text-only slice, and remain available through message history. Chunk arguments
+are rejected on ACK, reply, send and cursor-based list operations. Reading another
+agent's inaccessible ID returns `message_not_found` without surfacing any receipt.
+
+The old full-history path may still reject a single oversized Unicode body; it
+is retained unchanged. The summary-history plus by-ID chunk path replaces it as
+the supported bounded recovery route. Pure role and compatibility fixtures verify
+exact maximum-length reconstruction, final encoded bytes and unchanged ACK/reply.
+Independent acceptance of the new immutable candidate is a separate gate.
 
 The projection performs no receipt mutation. Backend delivery/seen/ACK/reply
 rules are unchanged. Ordinary `task_claim` succeeds with exactly `{"ok":true}`;

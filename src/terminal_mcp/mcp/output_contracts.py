@@ -310,6 +310,9 @@ class MessageRecipientReceipt(_Strict):
 
 
 class MessageRecord(_Strict):
+    text_offset: int | None = Field(default=None, ge=0)
+    text_length: int | None = Field(default=None, ge=0)
+    next_text_offset: int | None = Field(default=None, gt=0)
     message_hash: MessageId | None = None
     message_id: MessageId | None = None
     sender: str | None = None

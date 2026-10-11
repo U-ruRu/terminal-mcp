@@ -258,7 +258,10 @@ def build_mcp(
             "omit code; legacy compatibility callers may supply the slot Access code. "
             "A read (no text and no message_hash) defaults to the active inbox; history=true "
             "selects history. "
-            "Read pages use limit/cursor and compact summary records by default."
+            "Read pages use limit/cursor and compact summary records by default. "
+            "Use read_message_hash with text_offset/text_limit (1..2048 Unicode code points) "
+            "for bounded full text; follow next_text_offset until absent. "
+            "The separate message_hash parameter retains its ACK/reply meaning."
         ),
     )
     async def access_message_tool(
@@ -268,6 +271,11 @@ def build_mcp(
         text: Annotated[str | None, Field(max_length=MAX_MESSAGE_TEXT_CHARS)] = None,
         target: Annotated[str | None, Field(min_length=1, max_length=MAX_PUBLIC_NAME_CHARS)] = None,
         message_hash: Annotated[str | None, Field(min_length=1, max_length=MAX_HASH_CHARS)] = None,
+        read_message_hash: Annotated[
+            str | None, Field(min_length=1, max_length=MAX_HASH_CHARS)
+        ] = None,
+        text_offset: Annotated[int | None, Field(ge=0, le=2147483647, strict=True)] = None,
+        text_limit: Annotated[int | None, Field(ge=1, le=2048, strict=True)] = None,
         mode: Literal["notify", "ack", "alert"] | None = None,
         require_reply: bool = False,
         alert: bool = False,
@@ -288,6 +296,15 @@ def build_mcp(
             text=text,
             target=target,
             message_hash=message_hash,
+            **(
+                {
+                    "read_message_hash": read_message_hash,
+                    "text_offset": text_offset,
+                    "text_limit": text_limit,
+                }
+                if any(value is not None for value in (read_message_hash, text_offset, text_limit))
+                else {}
+            ),
             mode=mode,
             require_reply=require_reply,
             alert=alert,

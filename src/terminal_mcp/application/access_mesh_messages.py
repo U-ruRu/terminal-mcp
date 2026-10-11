@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.core.message_text import message_text_slice, text_slice_arguments
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.public_errors import ValidationIssue, ValidationRepair, public_error
 from terminal_mcp.core.read_contract import (
@@ -606,6 +607,9 @@ class AccessMeshMessaging:
         namespace,
         task_id,
         response_preflight=None,
+        read_message_hash=None,
+        text_offset=None,
+        text_limit=None,
     ):
         query = {
             "kind": "mesh.message.history" if history else "mesh.message.inbox",
@@ -619,13 +623,22 @@ class AccessMeshMessaging:
         raw = await asyncio.to_thread(
             self.store.page,
             identity["logical_agent_id"],
-            history=history,
+            history=history or read_message_hash is not None,
             before=before,
-            limit=limit + 1,
+            limit=1 if read_message_hash is not None else limit + 1,
             namespace=namespace,
             task_id=task_id,
+            **({"message_hash": read_message_hash} if read_message_hash is not None else {}),
         )
         candidate = [self._view(row) for row in raw[:limit]]
+        if read_message_hash is not None:
+            if not candidate:
+                raise MeshMessagingError("message_not_found")
+            try:
+                candidate = [message_text_slice(candidate[0], offset=text_offset, limit=text_limit)]
+            except ValueError as exc:
+                raise MeshMessagingError("input_validation_failed") from exc
+            detail = "full"
         if detail == "summary":
             candidate = [
                 {"message_hash": row["message_hash"], **summary_message(row)} for row in candidate
@@ -705,6 +718,9 @@ class AccessMeshMessaging:
         namespace=None,
         task_id=None,
         response_preflight=None,
+        read_message_hash=None,
+        text_offset=None,
+        text_limit=None,
     ):
         try:
             if scope not in {"local", "fleet"} or detail not in {"summary", "full"}:
@@ -721,6 +737,25 @@ class AccessMeshMessaging:
             if issue is not None:
                 return _route_failure(issue)
             is_read = text is None and message_hash is None
+            if read_message_hash is None and (text_offset is not None or text_limit is not None):
+                raise MeshMessagingError("input_validation_failed")
+            if read_message_hash is not None:
+                if not is_read or recipients or cursor is not None or history or target is not None:
+                    raise MeshMessagingError("input_validation_failed")
+                if (
+                    mode is not None
+                    or require_reply
+                    or alert
+                    or namespace is not None
+                    or task_id is not None
+                ):
+                    raise MeshMessagingError("input_validation_failed")
+                if not isinstance(read_message_hash, str) or not 1 <= len(read_message_hash) <= 128:
+                    raise MeshMessagingError("input_validation_failed")
+                try:
+                    text_slice_arguments(text_offset, text_limit)
+                except ValueError as exc:
+                    raise MeshMessagingError("input_validation_failed") from exc
             if recipients and not is_read:
                 raise MeshMessagingError("input_validation_failed")
             expiry_alert_ack = False
@@ -765,6 +800,15 @@ class AccessMeshMessaging:
                     namespace=namespace,
                     task_id=task_id,
                     response_preflight=response_preflight,
+                    **(
+                        {
+                            "read_message_hash": read_message_hash,
+                            "text_offset": text_offset,
+                            "text_limit": text_limit,
+                        }
+                        if read_message_hash is not None
+                        else {}
+                    ),
                 )
             if message_hash and text is None:
                 return await asyncio.to_thread(

@@ -384,7 +384,17 @@ class AccessMeshMessageStore:
                 )
                 self._queue_receipt_tx(db, message_hash, agent_id)
 
-    def page(self, agent_id, *, history=False, before=0, limit=21, namespace=None, task_id=None):
+    def page(
+        self,
+        agent_id,
+        *,
+        history=False,
+        before=0,
+        limit=21,
+        namespace=None,
+        task_id=None,
+        message_hash=None,
+    ):
         where = [
             "substr(x.message_hash,1,?)=? AND julianday(m.created_at)>julianday(?)",
             "(r.recipient_agent_id IS NOT NULL OR m.sender_agent_id=?)"
@@ -400,6 +410,9 @@ class AccessMeshMessageStore:
         ]
         if history:
             params.append(agent_id)
+        if message_hash is not None:
+            where.append("m.message_hash=?")
+            params.append(message_hash)
         if before:
             where.append("x.sequence<?")
             params.append(before)
