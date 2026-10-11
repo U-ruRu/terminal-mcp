@@ -18,14 +18,41 @@ from terminal_mcp.mcp.role_contracts import (
 
 
 class AttachInput(StrictRoleInput):
-    action: Literal["attach"] = "attach"
+    action: Literal["attach", "intent"] = "attach"
     session_number: Annotated[
-        str,
+        str | None,
         Field(
             pattern=r"^[0-9]{4}$",
-            description="Four-digit session number, including leading zeros.",
+            description="Required for attach only. Four digits, including leading zeros.",
         ),
-    ]
+    ] = None
+    intent: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=1000,
+            description="Required for action=intent; optional initial intent on attach.",
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def action_fields(self):
+        if self.action == "attach" and self.session_number is None:
+            raise ValueError("session_number is required for attach")
+        if self.action == "intent" and (self.intent is None or not self.intent.strip()):
+            raise ValueError("intent is required for refresh")
+        if self.action == "intent" and self.session_number is not None:
+            raise ValueError("intent refresh uses the existing connector binding")
+        if self.intent is not None and not self.intent.strip():
+            raise ValueError("intent must contain text")
+        return self
+
+
+class MeshAgentObserveInput(StrictRoleInput):
+    limit: Annotated[int, Field(ge=1, le=100)] = 20
+    cursor: Cursor | None = None
+    include_inactive: bool = False
+    logical_agent_id: Annotated[str | None, Field(min_length=1, max_length=160)] = None
 
 
 class IssuerSessionInput(StrictRoleInput):
@@ -116,8 +143,14 @@ class MeshAttachReceipt(_Strict):
     ok: Literal[True]
 
 
-class MeshSessionOutput(RootModel[MeshAttachReceipt | AccessError]):
-    __success_type__: ClassVar = MeshAttachReceipt
+class MeshIntentReceipt(_Strict):
+    ok: Literal[True]
+    intent_updated_at: str
+    refresh_due_at: str
+
+
+class MeshSessionOutput(RootModel[MeshAttachReceipt | MeshIntentReceipt | AccessError]):
+    __success_type__: ClassVar = MeshAttachReceipt | MeshIntentReceipt
 
 
 class IssuerStartReceipt(_Strict):
@@ -168,6 +201,17 @@ class MeshUnboundSession(_Strict):
 
 
 class MeshAgentView(_Strict):
+    logical_agent_id: str
+    display_name: str
+    current_intent: str | None
+    intent_updated_at: str | None
+    intent_state: Literal["missing", "fresh", "stale"]
+    activity_stale: bool
+    work_session_id: str | None
+    session_epoch: int | None
+    session_state: str
+    session_started_at: str | None
+    hard_expires_at: str | None
     public_name: str
     last_server: str
     session_duration: int
@@ -176,7 +220,10 @@ class MeshAgentView(_Strict):
 
 class MeshAgentObserve(_Strict):
     ok: Literal[True]
+    scope: Literal["local"]
+    server_id: str
     agents: list[MeshAgentView]
+    next_cursor: str | None = None
 
 
 class MeshObserveOutput(RootModel[MeshAgentObserve | AccessError]):

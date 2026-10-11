@@ -131,7 +131,7 @@ def tool_action_effects(role, name, *, mesh=False):
         return {"start": APPEND_EFFECTS, "status": READ_EFFECTS, "end": DELETE_EFFECTS}
     if name == "session":
         return (
-            {"attach": effects(idempotent=True)}
+            {"attach": effects(idempotent=True), "intent": effects()}
             if mesh
             else {"start": APPEND_EFFECTS, "status": READ_EFFECTS, "end": DELETE_EFFECTS}
         )

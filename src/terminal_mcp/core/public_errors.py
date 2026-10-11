@@ -50,7 +50,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             """
             validation_error input_validation_failed invalid_request invalid_command invalid_queue
             invalid_mode invalid_state invalid_session_number invalid_session_attempt
-            invalid_session_timestamp
+            invalid_session_timestamp invalid_intent
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
             mode_required access_code_required legacy_code_not_allowed invalid_connect_url
             output_item_too_large execution_argument_invalid
@@ -154,6 +154,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "repair",
             """
             access_mode_mismatch attachment_not_active slot_not_armed wrong_authority
+            intent_required intent_stale
             control_authority_rehome_requires_standalone control_authority_required
             managed_access_policy_missing managed_control_not_adopted
             managed_node_mesh_missing projection_topology_missing
@@ -250,6 +251,13 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ("transient", "retry", "claim_release_failed"),
     )
     messages = {
+        "intent_required": (
+            "Set initial intent with session(action='intent', intent=...) before writing."
+        ),
+        "intent_stale": (
+            "Refresh intent with session(action='intent', intent=...) before the next write."
+        ),
+        "invalid_intent": "Provide a non-empty intent of at most 1000 characters.",
         "session_attach_required": "Введи номер сессии",
         "invalid_session_number": "Неверный номер сессии",
         "session_already_started": "Сессия уже запущена",
@@ -292,9 +300,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "capability_not_allowed": "This endpoint does not allow the operation.",
         "coordination_alert": "Подтверди Alert через Message",
-        "coordination_ack_required": (
-            "Acknowledge the pending message before continuing."
-        ),
+        "coordination_ack_required": ("Acknowledge the pending message before continuing."),
         "session_contract_conflict": (
             "Use the role and contract version that opened the active session. "
             "End it through that endpoint before starting a different role or version."
@@ -316,7 +322,9 @@ def _catalog() -> Mapping[str, ErrorSpec]:
                 kind, recovery, messages.get(code, code.replace("_", " ").capitalize() + ".")
             )
     for code in (
-        "capability_not_allowed", "legacy_admission_disabled", "access_denied",
+        "capability_not_allowed",
+        "legacy_admission_disabled",
+        "access_denied",
         "session_expired",
     ):
         spec = result[code]
@@ -441,6 +449,7 @@ PUBLIC_FIELDS = frozenset(
     """
     issuer_node_id session_number slot_id policy duration_seconds cooldown_seconds
     rearm_enabled release_on_end warning_seconds draining_seconds scope
+    intent logical_agent_id include_inactive
     request action mode code display_name subject namespace task_id lane state
     operational_status tags detail show_done show_archived limit cursor sender text
     target message_hash require_reply alert history command cmd_hash queue_id task_scope
@@ -570,7 +579,8 @@ def _repair(code: str, kind: ErrorKind, raw: object) -> ErrorRepair | None:
             ack_required_pending=bool(raw.get("ack_required_pending")),
             alert_pending=bool(raw.get("alert_pending")),
             required_action=raw.get("required_action")
-            if raw.get("required_action") in {"ack", "reply"} else None,
+            if raw.get("required_action") in {"ack", "reply"}
+            else None,
         )
     expected_type = _REPAIR_TYPES.get(kind)
     if expected_type and isinstance(raw, expected_type):

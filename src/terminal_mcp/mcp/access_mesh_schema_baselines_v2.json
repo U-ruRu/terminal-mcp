@@ -28,17 +28,17 @@
         {
           "annotations": {
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": false,
             "openWorldHint": false,
             "readOnlyHint": false
           },
           "name": "session",
-          "planning_input_bytes": 448,
-          "planning_input_digest": "805a895aa18033aae60df4500cccd13a3dbe5663bf86ccf4e058b41791e637c1",
-          "planning_output_bytes": 313,
-          "planning_output_digest": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
-          "runtime_input_digest": "77e9251dfe512d4214046438c0ebad27973d42e11ae137d50a8d2002107bb06c",
-          "runtime_output_digest": "dc8da2e47f7437d4d50f98f3c0a62c34f5f031735ee6f2ecbd301dab0f118212"
+          "planning_input_bytes": 905,
+          "planning_input_digest": "a3581dd95d46732fad748ed03745cee436ca59c8493c649e8cbceea69dd00d0e",
+          "planning_output_bytes": 386,
+          "planning_output_digest": "eb74b3bff2c963f8d1597bb3f8cbba4da6d8b532f3e41ffdca9ccdeea97d6653",
+          "runtime_input_digest": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
+          "runtime_output_digest": "b9a309f29dac23ac59024636be0780e173c88b0522b08a33eade9910565f38ee"
         },
         {
           "annotations": {
@@ -108,12 +108,12 @@
             "readOnlyHint": true
           },
           "name": "agent_observe",
-          "planning_input_bytes": 196,
-          "planning_input_digest": "f561792fa84836dd7d44e67b4e136a95fad65b1af935384950c26e2ae99cbcec",
-          "planning_output_bytes": 339,
-          "planning_output_digest": "31aa8931299dc19baa2c1322bcb8628e7758e92a805939b1b0f9833adc1ec3ee",
-          "runtime_input_digest": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
-          "runtime_output_digest": "3c152adf49d762df881503bdbd1efe95a85128f6d094be59f43f75c9264e71ed"
+          "planning_input_bytes": 411,
+          "planning_input_digest": "db9f015dc98d4d5585a001f7bb2b7eff5df526c1f679a490ba716345d93d8bb9",
+          "planning_output_bytes": 436,
+          "planning_output_digest": "6ae3f0be3a4e3f371b5755563b6e5f8731fadf57684a566faa72dbbcfb97117c",
+          "runtime_input_digest": "81581d2ab243c53902f1e33d6bd27df82a28a7f40f3bb979cdf3bdd02b265535",
+          "runtime_output_digest": "2b06cfaf52fd7b64f2795d9b2bdeb4508572910c827a2cef225af4e8771acf18"
         },
         {
           "annotations": {
@@ -153,17 +153,17 @@
         {
           "annotations": {
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": false,
             "openWorldHint": false,
             "readOnlyHint": false
           },
           "name": "session",
-          "planning_input_bytes": 448,
-          "planning_input_digest": "805a895aa18033aae60df4500cccd13a3dbe5663bf86ccf4e058b41791e637c1",
-          "planning_output_bytes": 313,
-          "planning_output_digest": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
-          "runtime_input_digest": "77e9251dfe512d4214046438c0ebad27973d42e11ae137d50a8d2002107bb06c",
-          "runtime_output_digest": "dc8da2e47f7437d4d50f98f3c0a62c34f5f031735ee6f2ecbd301dab0f118212"
+          "planning_input_bytes": 905,
+          "planning_input_digest": "a3581dd95d46732fad748ed03745cee436ca59c8493c649e8cbceea69dd00d0e",
+          "planning_output_bytes": 386,
+          "planning_output_digest": "eb74b3bff2c963f8d1597bb3f8cbba4da6d8b532f3e41ffdca9ccdeea97d6653",
+          "runtime_input_digest": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
+          "runtime_output_digest": "b9a309f29dac23ac59024636be0780e173c88b0522b08a33eade9910565f38ee"
         },
         {
           "annotations": {

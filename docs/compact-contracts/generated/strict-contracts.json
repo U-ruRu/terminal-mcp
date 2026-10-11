@@ -655,14 +655,37 @@
               "title": "Agents",
               "type": "array"
             },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Next Cursor"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
               "type": "boolean"
+            },
+            "scope": {
+              "const": "local",
+              "title": "Scope",
+              "type": "string"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
             }
           },
           "required": [
             "ok",
+            "scope",
+            "server_id",
             "agents"
           ],
           "title": "MeshAgentObserve",
@@ -671,6 +694,56 @@
         "MeshAgentView": {
           "additionalProperties": false,
           "properties": {
+            "activity_stale": {
+              "title": "Activity Stale",
+              "type": "boolean"
+            },
+            "current_intent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Current Intent"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "hard_expires_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hard Expires At"
+            },
+            "intent_state": {
+              "enum": [
+                "missing",
+                "fresh",
+                "stale"
+              ],
+              "title": "Intent State",
+              "type": "string"
+            },
+            "intent_updated_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Updated At"
+            },
             "last_activity": {
               "anyOf": [
                 {
@@ -686,6 +759,10 @@
               "title": "Last Server",
               "type": "string"
             },
+            "logical_agent_id": {
+              "title": "Logical Agent Id",
+              "type": "string"
+            },
             "public_name": {
               "title": "Public Name",
               "type": "string"
@@ -693,9 +770,57 @@
             "session_duration": {
               "title": "Session Duration",
               "type": "integer"
+            },
+            "session_epoch": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Epoch"
+            },
+            "session_started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Started At"
+            },
+            "session_state": {
+              "title": "Session State",
+              "type": "string"
+            },
+            "work_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Work Session Id"
             }
           },
           "required": [
+            "logical_agent_id",
+            "display_name",
+            "current_intent",
+            "intent_updated_at",
+            "intent_state",
+            "activity_stale",
+            "work_session_id",
+            "session_epoch",
+            "session_state",
+            "session_started_at",
+            "hard_expires_at",
             "public_name",
             "last_server",
             "session_duration",
@@ -3527,21 +3652,44 @@
       "additionalProperties": false,
       "properties": {
         "action": {
-          "const": "attach",
           "default": "attach",
+          "enum": [
+            "attach",
+            "intent"
+          ],
           "title": "Action",
           "type": "string"
         },
+        "intent": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for action=intent; optional initial intent on attach.",
+          "title": "Intent"
+        },
         "session_number": {
-          "description": "Four-digit session number, including leading zeros.",
-          "pattern": "^[0-9]{4}$",
-          "title": "Session Number",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[0-9]{4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for attach only. Four digits, including leading zeros.",
+          "title": "Session Number"
         }
       },
-      "required": [
-        "session_number"
-      ],
       "title": "AttachInput",
       "type": "object"
     },
@@ -3698,6 +3846,31 @@
             "ok"
           ],
           "title": "MeshAttachReceipt",
+          "type": "object"
+        },
+        "MeshIntentReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "intent_updated_at": {
+              "title": "Intent Updated At",
+              "type": "string"
+            },
+            "ok": {
+              "const": true,
+              "title": "Ok",
+              "type": "boolean"
+            },
+            "refresh_due_at": {
+              "title": "Refresh Due At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok",
+            "intent_updated_at",
+            "refresh_due_at"
+          ],
+          "title": "MeshIntentReceipt",
           "type": "object"
         },
         "ProviderFingerprint": {
@@ -3995,10 +4168,13 @@
           "$ref": "#/$defs/MeshAttachReceipt"
         },
         {
+          "$ref": "#/$defs/MeshIntentReceipt"
+        },
+        {
           "$ref": "#/$defs/RoleFailure"
         }
       ],
-      "title": "RootModel[Union[MeshAttachReceipt, RoleFailure]]"
+      "title": "RootModel[Union[MeshAttachReceipt, MeshIntentReceipt, RoleFailure]]"
     }
   },
   "coordinator.task_get": {
@@ -17775,21 +17951,44 @@
       "additionalProperties": false,
       "properties": {
         "action": {
-          "const": "attach",
           "default": "attach",
+          "enum": [
+            "attach",
+            "intent"
+          ],
           "title": "Action",
           "type": "string"
         },
+        "intent": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for action=intent; optional initial intent on attach.",
+          "title": "Intent"
+        },
         "session_number": {
-          "description": "Four-digit session number, including leading zeros.",
-          "pattern": "^[0-9]{4}$",
-          "title": "Session Number",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[0-9]{4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for attach only. Four digits, including leading zeros.",
+          "title": "Session Number"
         }
       },
-      "required": [
-        "session_number"
-      ],
       "title": "AttachInput",
       "type": "object"
     },
@@ -17946,6 +18145,31 @@
             "ok"
           ],
           "title": "MeshAttachReceipt",
+          "type": "object"
+        },
+        "MeshIntentReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "intent_updated_at": {
+              "title": "Intent Updated At",
+              "type": "string"
+            },
+            "ok": {
+              "const": true,
+              "title": "Ok",
+              "type": "boolean"
+            },
+            "refresh_due_at": {
+              "title": "Refresh Due At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok",
+            "intent_updated_at",
+            "refresh_due_at"
+          ],
+          "title": "MeshIntentReceipt",
           "type": "object"
         },
         "ProviderFingerprint": {
@@ -18243,10 +18467,13 @@
           "$ref": "#/$defs/MeshAttachReceipt"
         },
         {
+          "$ref": "#/$defs/MeshIntentReceipt"
+        },
+        {
           "$ref": "#/$defs/RoleFailure"
         }
       ],
-      "title": "RootModel[Union[MeshAttachReceipt, RoleFailure]]"
+      "title": "RootModel[Union[MeshAttachReceipt, MeshIntentReceipt, RoleFailure]]"
     }
   },
   "executor.task_claim": {
