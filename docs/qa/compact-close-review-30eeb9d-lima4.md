@@ -4,6 +4,7 @@
 
 ## Вердикт и точные версии
 
+**Общая приёмка: HOLD** — полный прогон не завершён, в его логе есть падения.
 Целевой независимый вердикт: **NON_BLOCKING** для отдельного compact/chunk-кандидата.
 **158 PASS, 0 FAIL, 2 SKIP; 160 случаев; exit 0**, 54.34 секунды.
 Полный набор репозитория выполняет только Kilo-4; его итог на момент публикации
@@ -130,3 +131,27 @@ clean checkout/SHA и создаёт atomic marker против дублиров
 latest_checkpoint.checkpoint вместо JSON-строки, две коллекции связей и extended
 health. text_offset/text_limit используются для дочитывания сообщений по ID.
 Действующие коннекторы, canonical и runtime этой проверкой не изменялись.
+
+## Проверка единственного полного прогона — 17:40:38 UTC
+
+Полный запуск Kilo-4: Terminal MCP `a0f1aa25`, старт 17:36:15 UTC,
+точный опубликованный `30eeb9d5d9f82d9a09ccaf825daac77088843332`.
+Проверены full-suite.sha, final-provenance.txt, скрипт clean/SHA guard и atomic
+маркер запуска. Рабочая копия была чистой, независимые тесты входят в commit.
+
+На последней проверке лог показывал 28% и **8 маркеров F**; итоговые
+`full-suite.xml` и `full-suite.exit` отсутствовали. Это частичный прогресс, а не
+финальное число failures/PASS. Общую приёмку закрывать нельзя.
+
+Без исполнения тестов проведён только `pytest --collect-only` (команда fba26b4c):
+2535 test IDs. При последовательном порядке первые F соответствуют трём
+access_mesh_mcp_runtime, одному metadata manifest, session_restart, двум
+access_message_cmd_gates и application_boundary exact-contract случаю.
+Список — full-progress-mapping.txt. Это локализация по порядку, не доказательство
+причины: различие старых ожиданий и реальной регрессии устанавливается по traceback.
+
+Безопасное продолжение: сначала прочитать результат существующего `a0f1aa25` и
+`/workspace/terminal-mcp-artifacts/compact-close-kilo4-20261011/full-suite.{sha,log,xml,exit}`.
+Сверить итоговые JUnit totals, failures/errors, exit и SHA. Не запускать run-full.sh
+повторно и не удалять full-suite.started. Остаточные исправления принадлежат
+единственному исполнителю Kilo-4 или согласованному с dot преемнику.

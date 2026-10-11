@@ -111,5 +111,19 @@
       "serialized_call_tool_result_bytes": "28547"
     }
   },
-  "full_suite": "Kilo-4 sole owner; reviewer verifies artifacts only"
+  "full_suite": "Kilo-4 sole owner; reviewer verifies artifacts only",
+  "overall_verdict": "HOLD: full-suite incomplete with failure markers",
+  "full_suite_observation": {
+    "owner": "Kilo-4",
+    "sha": "30eeb9d5d9f82d9a09ccaf825daac77088843332",
+    "receipt": "a0f1aa25",
+    "observed_utc": "2026-10-11T17:40:38Z",
+    "visible_percent": 28,
+    "partial_failure_markers": 8,
+    "junit_available": false,
+    "exit_available": false,
+    "final_counts": null,
+    "collection_only_count": 2535,
+    "second_full_run": false
+  }
 }
