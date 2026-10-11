@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from test_access_mesh_mcp_runtime import rpc, settings
 
 from terminal_mcp.app import create_app
+from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import ManagedOperation
 
 
@@ -149,14 +150,17 @@ def test_overview_local_scope_real_name_stable_id_and_expired_filter(tmp_path):
         slot = mesh.store.code_slot(mesh.store.local_node_id, issued["session_number"])
         with sqlite3.connect(config.database_path) as db:
             db.execute(
-                "UPDATE logical_agents SET display_name='Fixture reviewer' "
-                "WHERE logical_agent_id=?",
-                (slot.logical_agent_id,),
+                "UPDATE access_mesh_slot_replicas SET display_suffix='Fixture reviewer' "
+                "WHERE issuer_id=? AND slot_id=?",
+                (slot.issuer_id, slot.slot_id),
             )
         result = invoke(client, "coordinator", "agent_observe", {})["structuredContent"]
         assert result["scope"] == "local" and result["server_id"] == mesh.store.local_node_id
         record = result["agents"][0]
-        assert record["display_name"] == "Fixture reviewer"
+        expected_name = full_agent_name(
+            number_agent_name(issued["session_number"]), "Fixture reviewer"
+        )
+        assert record["display_name"] == record["public_name"] == expected_name
         assert record["logical_agent_id"] == slot.logical_agent_id
         assert record["current_intent"] == "Verify isolated fixture commands"
         assert record["intent_state"] == "fresh" and record["intent_updated_at"]
