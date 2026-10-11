@@ -1,0 +1,154 @@
+{
+  "events": [
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "Agent acquired active local presence on a trusted fleet source server.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "agent.attached",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "server"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "Agent has been inactive on its trusted fleet source server for over 180 seconds.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "agent.inactive",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "server"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "A limited agent work session has ended on a trusted fleet source server.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "session.ended",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_name": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "manual for an explicit end, expired for timer expiry; other committed causes retain their stored reason.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_name",
+          "server",
+          "reason"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery": [
+        "webhook"
+      ],
+      "description": "A new message for the selected session number on a trusted source server.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "session_number": {
+            "maxLength": 4,
+            "minLength": 4,
+            "pattern": "^[0-9]{4}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "message.received",
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "sender",
+          "recipient",
+          "message_id",
+          "text",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

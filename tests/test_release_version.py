@@ -235,3 +235,71 @@ def test_prior_qa_release_metadata_must_match_actual_installed_files(tmp_path):
     (before / "app.py").write_text("def run(): return 2\n")
     with pytest.raises(ValueError, match="code fingerprint"):
         release_version.verify_prior_metadata(before, meta)
+
+
+def events_manifest(target, *, reason=False, description="Original wording"):
+    properties = {"agent_name": {"type": "string"}, "description": {"type": "string"}}
+    required = ["agent_name"]
+    if reason:
+        properties["reason"] = {"type": "string", "minLength": 1}
+        required.append("reason")
+    value = {
+        "events": [{"name": "session.ended", "description": description,
+                    "payloadSchema": {"type": "object", "properties": properties,
+                                      "required": required}}]
+    }
+    path = target / release_version.EVENT_SCHEMA_MANIFESTS[0]
+    path.write_text(json.dumps(value))
+    return path, value
+
+
+def test_legacy_023_native_events_addition_classifies_024_schema(tmp_path):
+    previous = package(tmp_path / "installed", "0.23.0")
+    incoming = package(tmp_path / "candidate")
+    legacy_hash = release_version.schema_fingerprint(previous)
+    events_manifest(incoming, reason=True)
+    assert release_version.schema_fingerprint(previous) == legacy_hash
+    result = release_version.calculate(incoming, previous)
+    assert (result["version"], result["bump"]) == ("0.24.0", "schema")
+
+
+def test_existing_events_reason_change_classifies_schema(tmp_path):
+    previous = package(tmp_path / "installed", "0.23.0")
+    incoming = package(tmp_path / "candidate")
+    events_manifest(previous)
+    events_manifest(incoming, reason=True)
+    result = release_version.calculate(incoming, previous)
+    assert (result["version"], result["bump"]) == ("0.24.0", "schema")
+
+
+def test_events_unchanged_with_code_change_remains_patch(tmp_path):
+    previous = package(tmp_path / "installed", "0.23.0")
+    incoming = package(tmp_path / "candidate")
+    events_manifest(previous, reason=True)
+    events_manifest(incoming, reason=True)
+    (incoming / "app.py").write_text("def run(): return 2\n")
+    result = release_version.calculate(incoming, previous)
+    assert (result["version"], result["bump"]) == ("0.23.1", "code")
+
+
+def test_events_nonsemantic_regeneration_is_stable_and_properties_remain_significant(tmp_path):
+    previous = package(tmp_path / "installed", "0.23.0")
+    incoming = package(tmp_path / "candidate")
+    events_manifest(previous, reason=True)
+    path, value = events_manifest(incoming, reason=True, description="Reworded documentation")
+    value["events"][0]["payloadSchema"]["required"].reverse()
+    path.write_text(json.dumps(value, sort_keys=True, indent=4))
+    result = release_version.calculate(incoming, previous)
+    assert (result["version"], result["bump"]) == ("0.23.0", "unchanged")
+    value["events"][0]["payloadSchema"]["properties"]["description"]["maxLength"] = 10
+    path.write_text(json.dumps(value))
+    assert release_version.calculate(incoming, previous)["version"] == "0.24.0"
+
+
+def test_generated_mesh_events_contract_is_release_significant(tmp_path):
+    previous = package(tmp_path / "installed", "0.23.0")
+    incoming = package(tmp_path / "candidate")
+    (incoming / release_version.EVENT_SCHEMA_MANIFESTS[1]).write_text(
+        json.dumps({"maxWireBytes": 65536, "message-events/chunk": {"type": "object"}})
+    )
+    assert release_version.calculate(incoming, previous)["version"] == "0.24.0"

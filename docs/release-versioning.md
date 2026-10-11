@@ -17,7 +17,8 @@ at `/health/live` as `version` and `release`, and in
 
 `deploy/install.sh update` derives the version automatically from the
 last installed release and a **disposable copy** of the candidate source.
-It compares the published Access Mesh and role MCP schema manifests and
+It compares the published Access Mesh, role MCP and generated Native/Mesh Events
+schema manifests and
 the runtime/authentication SQLite schema revision numbers. A changed
 schema increments the second component and resets the last component.
 Other changes to Python package source files increment the third
@@ -57,3 +58,10 @@ python3 scripts/release_version.py --source . --source-repo .
 
 Build source stamping is reserved for the installer or an isolated
 non-Git source copy using `--stamp --output <path>`.
+
+Native and Mesh Events generators also package their contract manifests. The
+classifier treats these as optional for older installed releases, preserving
+their already-issued fingerprints. Adding or changing a contract increments
+the schema component. Formatting, object-key order, Events listing order and
+JSON Schema descriptions/annotations do not cause a schema bump; declared
+property names and validation constraints remain significant.

@@ -20,6 +20,11 @@ SCHEMA_MANIFESTS = (
     "mcp/access_mesh_schema_baselines_v2.json",
     "mcp/role_schema_baselines_v1.json",
 )
+# Optional: absence in old packages must preserve their issued fingerprint.
+EVENT_SCHEMA_MANIFESTS = (
+    "mcp/native_event_schema_baselines_v1.json",
+    "mcp/mesh_event_schema_baselines_v1.json",
+)
 STORAGE_REVISIONS = (
     ("storage/sqlite.py", "SCHEMA_VERSION"),
     ("auth/foundation.py", "AUTH_SCHEMA_VERSION"),
@@ -53,12 +58,38 @@ def constant(path: Path, name: str) -> int | None:
     raise ValueError(f"cannot find static integer {name} in {path}")
 
 
+def event_contract_semantics(value, *, property_names=False):
+    """Ignore schema annotations and presentation order, preserving named properties."""
+    if isinstance(value, dict):
+        result = {}
+        for key, child in value.items():
+            if not property_names and key in {"description", "title", "$comment", "examples"}:
+                continue
+            normalized = event_contract_semantics(
+                child,
+                property_names=key in {"properties", "patternProperties", "$defs", "definitions"},
+            )
+            if key in {"required", "enum"} and isinstance(normalized, list):
+                normalized = sorted(normalized, key=lambda item: json.dumps(item, sort_keys=True))
+            elif key == "events" and isinstance(normalized, list):
+                normalized = sorted(normalized, key=lambda item: item["name"])
+            result[key] = normalized
+        return result
+    if isinstance(value, list):
+        return [event_contract_semantics(item) for item in value]
+    return value
+
+
 def schema_fingerprint(package: Path) -> str:
     state: dict[str, object] = {}
     for name in SCHEMA_MANIFESTS:
         path = package / name
         # Missing manifests are significant; never silently treat absence as a match.
         state[name] = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    for name in EVENT_SCHEMA_MANIFESTS:
+        path = package / name
+        if path.is_file():
+            state[name] = event_contract_semantics(json.loads(path.read_text(encoding="utf-8")))
     for name, symbol in STORAGE_REVISIONS:
         state[f"{name}:{symbol}"] = constant(package / name, symbol)
     for name, symbol in OPTIONAL_STORAGE_REVISIONS:

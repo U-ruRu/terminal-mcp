@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO / "src"))
 from terminal_mcp.mcp.event_store import event_catalog  # noqa: E402
 
 ARTIFACT = REPO / "docs/contracts/mcp-events-list.json"
+PACKAGE_ARTIFACT = REPO / "src/terminal_mcp/mcp/native_event_schema_baselines_v1.json"
 
 
 def main():
@@ -22,12 +23,16 @@ def main():
     args = parser.parse_args()
     generated = json.dumps(event_catalog(), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if args.check:
-        if not ARTIFACT.exists() or ARTIFACT.read_text() != generated:
+        if any(
+            not path.exists() or path.read_text() != generated
+            for path in (ARTIFACT, PACKAGE_ARTIFACT)
+        ):
             raise SystemExit("Native Events catalog is stale; run scripts/build_event_catalog.py")
         print("Native Events catalog is current.")
     else:
-        ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
-        ARTIFACT.write_text(generated)
+        for path in (ARTIFACT, PACKAGE_ARTIFACT):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(generated)
 
 
 if __name__ == "__main__":
