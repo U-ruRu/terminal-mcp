@@ -351,7 +351,10 @@ async def test_hold_http_anti_entropy_outage_and_withdrawal(tmp_path):
         source.store.recipient_holds.merge([row], authenticated_peer_id="firstbyte")
         await replica_rep.sync_recipient_holds(replica_rep.peers[0])
         await replica_rep.sync_numbers(replica_rep.peers[0])
-        assert replica.store.recipient_holds.local_recipients() == []
+        expected = [{key: row[key] for key in (
+            "recipient_agent_id", "issuer_id", "slot_id", "number"
+        )}]
+        assert replica.store.recipient_holds.local_recipients() == expected
         attached = await replica.attach(
             actor(), issuer_node_id="firstbyte", access_code="7312"
         )
@@ -361,10 +364,10 @@ async def test_hold_http_anti_entropy_outage_and_withdrawal(tmp_path):
         replica.clock = lambda: T0 + timedelta(days=1)
         held = replica.store.recipient_holds.local_recipients()
         assert len(held) == 1 and held[0]["recipient_agent_id"] == issued["logical_agent_id"]
-        # A replicated grant alone is not local messaging presence.
+        # An issuer-owned hold confers presence independently of attachments.
         with replica.store._connect() as db:
             db.execute("DELETE FROM access_mesh_attachments")
-        assert replica.store.recipient_holds.local_recipients() == []
+        assert replica.store.recipient_holds.local_recipients() == expected
         routes.offline.add("firstbyte")
         future = datetime.now(UTC) + timedelta(days=1)
         assert not replica.store.numbers.reserve(
@@ -382,6 +385,9 @@ async def test_hold_http_anti_entropy_outage_and_withdrawal(tmp_path):
                 "WHERE source_node_id='firstbyte' AND hold_id='fixture-sub'"
             ).fetchone()
         assert tuple(state) == ("released", 2)
+        # After withdrawal, the remaining replicated Slot/grant alone is ineligible.
+        assert replica.store.slot("firstbyte", issued["slot_id"]).state == "active"
+        assert replica.store.recipient_holds.local_recipients() == []
 
 
 def test_concurrent_refresh_and_unsubscribe_leave_pin_transactionally_consistent(tmp_path):
