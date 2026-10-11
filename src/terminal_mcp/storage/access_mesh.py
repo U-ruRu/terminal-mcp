@@ -14,7 +14,7 @@ import json
 import secrets
 import sqlite3
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -33,6 +33,16 @@ _mutation_receipt: ContextVar[dict | None] = ContextVar("mesh_issuer_receipt", d
 _mutation_number: ContextVar[dict | None] = ContextVar("mesh_session_number", default=None)
 _mutation_end: ContextVar[dict | None] = ContextVar("mesh_session_end", default=None)
 _mutation_start: ContextVar[dict | None] = ContextVar("mesh_session_start", default=None)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentOverviewPage:
+    """Private scan positions, kept outside all public agent records."""
+
+    agents: list[dict]
+    row_offsets: list[int]
+    scanned_until: int
+    has_more: bool
 
 
 def public_name(issuer_id: str, logical_agent_id: str) -> str:
@@ -687,8 +697,9 @@ class AccessMeshStore(LocalAccessMesh):
         include_inactive=False,
         logical_agent_id=None,
         offset=0,
-    ) -> list[dict]:
-        """Bounded projection of the existing local slot/session registry."""
+    ) -> AgentOverviewPage:
+        """Bounded raw scan with continuation independent of merged-cycle filtering."""
+        scan_limit = max(1, min(limit, 100))
         with self._connect() as db:
             rows = db.execute(
                 "SELECT DISTINCT r.*,l.work_session_id,l.session_epoch,l.current_intent,"
@@ -711,12 +722,14 @@ class AccessMeshStore(LocalAccessMesh):
                     logical_agent_id,
                     include_inactive,
                     _text(now),
-                    limit,
+                    scan_limit + 1,
                     offset,
                 ),
-            )
+            ).fetchall()
+            scanned = rows[:scan_limit]
             result = []
-            for row in rows:
+            row_offsets = []
+            for index, row in enumerate(scanned, start=offset + 1):
                 slot = self._snapshot(row)
                 cycle = self.merged_cycle(slot, now)
                 live = cycle["state"] in {"active", "warning", "draining"}
@@ -757,9 +770,13 @@ class AccessMeshStore(LocalAccessMesh):
                         "session_started_at": started,
                     }
                 )
-                if len(result) >= limit:
-                    break
-            return result
+                row_offsets.append(index)
+            return AgentOverviewPage(
+                agents=result,
+                row_offsets=row_offsets,
+                scanned_until=offset + len(scanned),
+                has_more=len(rows) > scan_limit,
+            )
 
     def last_activity(self, issuer_id: str, slot_id: str) -> str | None:
         with self._connect() as db:

@@ -14,7 +14,11 @@ fields remain. The composition deliberately changes from active message-location
 records to local durable session records. `message(action="recipients")` remains
 the address book; it is not the overview and is not used to infer intent.
 
-Default `limit` is 20, maximum 100. Continue `next_cursor` unchanged. The cursor
+Default `limit` is 20, maximum 100. Continue `next_cursor` unchanged.
+Each call scans at most 100 SQL-qualified rows plus one raw lookahead. A page
+may be empty after authoritative cycle filtering and still have `next_cursor`;
+continue until the cursor is absent. Count/byte-budget cuts retain all un-emitted
+records. Raw scan positions remain private and never enter agent records. The cursor
 is bound to `include_inactive` and `logical_agent_id` filters. Default results
 include live sessions; `include_inactive=true` adds the latest ended or expired
 session for each attached slot. This is not an unbounded session-history API.

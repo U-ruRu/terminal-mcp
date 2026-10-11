@@ -259,7 +259,7 @@ class AccessMeshApplication:
         }
         offset = decode_cursor(cursor, scope)
         # Cursor offsets are tied to filters; IDs remain the event lookup key.
-        rows = await asyncio.to_thread(
+        scan = await asyncio.to_thread(
             self.store.agent_overview,
             now=self.clock(),
             limit=limit + 1,
@@ -267,15 +267,20 @@ class AccessMeshApplication:
             include_inactive=include_inactive,
             logical_agent_id=logical_agent_id,
         )
-        page, _ = bounded_page(rows, limit=limit, cursor=None, scope=scope)
+        page, _ = bounded_page(scan.agents, limit=limit, cursor=None, scope=scope)
         result = {
             "ok": True,
             "scope": "local",
             "server_id": self.store.local_node_id,
             "agents": page,
         }
-        if len(rows) > len(page):
-            result["next_cursor"] = encode_cursor(offset + len(page), scope)
+        if len(page) < len(scan.agents):
+            # A count/byte-budget cut resumes immediately after the last
+            # emitted raw row, retaining every un-emitted visible record.
+            result["next_cursor"] = encode_cursor(scan.row_offsets[len(page) - 1], scope)
+        elif scan.has_more:
+            # Even an empty filtered page can have later raw rows to inspect.
+            result["next_cursor"] = encode_cursor(scan.scanned_until, scope)
         return result
 
     async def resolve(self, actor: ActorContext, operation: ManagedOperation) -> dict:
