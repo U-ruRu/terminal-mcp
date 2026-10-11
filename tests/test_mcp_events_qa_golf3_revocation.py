@@ -158,7 +158,7 @@ def test_suspended_access_slot_blocks_new_message_subscription(tmp_path):
             assert db.execute("SELECT COUNT(*) FROM mcp_event_subscriptions").fetchone()[0] == 0
 
 
-def test_suspension_blocks_pending_callback_and_deletes_subscription(tmp_path):
+def test_suspension_blocks_pending_callback_and_preserves_subscription_hold(tmp_path):
     """Test the outbound path, not merely a mocked checker boolean."""
     from terminal_mcp.core.orchestration import utc_text
 
@@ -208,7 +208,7 @@ def test_suspension_blocks_pending_callback_and_deletes_subscription(tmp_path):
                 db.execute(
                     "SELECT COUNT(*) FROM mcp_event_subscriptions WHERE id=?", (sid,)
                 ).fetchone()[0]
-                == 0
+                == 1
             )
 
 

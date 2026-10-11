@@ -14,6 +14,12 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
+from terminal_mcp.storage.access_mesh_recipient_holds import (
+    HOLD_SCHEMA,
+    acquire_hold,
+    reconcile_holds,
+    release_holds,
+)
 from terminal_mcp.storage.permissions import secure_database_path
 
 EVENT_NAMES = ("agent.attached", "agent.inactive", "session.ended", "message.received")
@@ -144,7 +150,7 @@ class MCPEventStore:
                     previous_signing_secret TEXT,
                     rotation_until TEXT,
                     created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
+                    expires_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS mcp_event_message_bindings(
                     subscription_id TEXT PRIMARY KEY,
@@ -234,6 +240,35 @@ class MCPEventStore:
                 )
             if "auth_mode" not in columns:
                 await db.execute("ALTER TABLE mcp_event_subscriptions ADD COLUMN auth_mode TEXT")
+            info = await (await db.execute(
+                "PRAGMA table_info(mcp_event_subscriptions)"
+            )).fetchall()
+            if any(row[1] == "expires_at" and row[3] for row in info):
+                await db.execute("BEGIN IMMEDIATE")
+                await db.execute(
+                    "ALTER TABLE mcp_event_subscriptions RENAME TO mcp_event_subscriptions_v1"
+                )
+                await db.execute("""
+                    CREATE TABLE mcp_event_subscriptions(
+                        id TEXT PRIMARY KEY, principal_id TEXT NOT NULL,
+                        credential_id TEXT, auth_mode TEXT, name TEXT NOT NULL,
+                        arguments_json TEXT NOT NULL, callback_url TEXT NOT NULL,
+                        signing_secret TEXT NOT NULL, previous_signing_secret TEXT,
+                        rotation_until TEXT, created_at TEXT NOT NULL, expires_at TEXT)
+                """)
+                await db.execute(
+                    "INSERT INTO mcp_event_subscriptions SELECT "
+                    "id,principal_id,credential_id,auth_mode,name,arguments_json,"
+                    "callback_url,signing_secret,previous_signing_secret,rotation_until,"
+                    "created_at,expires_at FROM mcp_event_subscriptions_v1"
+                )
+                await db.execute("DROP TABLE mcp_event_subscriptions_v1")
+                await db.commit()
+            for statement in HOLD_SCHEMA:
+                await db.execute(statement)
+            await db.execute("BEGIN IMMEDIATE")
+            await reconcile_holds(db, self.node_id)
+            await db.commit()
             await db.execute(
                 "INSERT OR IGNORE INTO mcp_event_cursor(singleton,last_seq) "
                 "SELECT 1,COALESCE(MAX(seq),0) FROM instance_events"
@@ -400,7 +435,8 @@ class MCPEventStore:
                                     "ON b.subscription_id=s.id "
                                     "WHERE s.name='message.received' "
                                     "AND b.recipient_agent_id=? AND b.recipient_node_id=? "
-                                    "AND s.created_at<=? AND s.expires_at>? LIMIT 1",
+                                    "AND s.created_at<=? "
+                                    "AND (s.expires_at IS NULL OR s.expires_at>?) LIMIT 1",
                                     (
                                         recipient,
                                         self.node_id,
@@ -601,8 +637,9 @@ class MCPEventStore:
                     "WHERE b.subscription_id=s.id AND "
                     "b.recipient_agent_id=e.recipient_agent_id "
                     "AND b.recipient_node_id=?)) "
-                    "AND e.occurred_at >= s.created_at AND e.occurred_at < s.expires_at "
-                    "AND s.expires_at>?",
+                    "AND e.occurred_at >= s.created_at "
+                    "AND (s.expires_at IS NULL OR e.occurred_at < s.expires_at) "
+                    "AND (s.expires_at IS NULL OR s.expires_at>?)",
                     (stamp, self.node_id, stamp),
                 )
                 await db.commit()
@@ -725,6 +762,19 @@ class MCPEventStore:
             ).fetchone()
             return bool(row)
 
+    async def message_subscription_binding(self, principal, arguments, callback):
+        arguments_json = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"))
+        async with aiosqlite.connect(self.path, timeout=5) as db:
+            db.row_factory = aiosqlite.Row
+            row = await (await db.execute(
+                "SELECT s.id,b.* FROM mcp_event_subscriptions s "
+                "JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
+                "WHERE s.principal_id=? AND s.name='message.received' "
+                "AND s.arguments_json=? AND s.callback_url=?",
+                (principal, arguments_json, callback),
+            )).fetchone()
+        return dict(row) if row else None
+
     async def save_subscription(
         self,
         *,
@@ -736,6 +786,8 @@ class MCPEventStore:
         callback,
         secret,
         ttl_ms=None,
+        no_expiry=False,
+        refresh_existing=False,
         callback_verified_fresh=False,
         message_binding=None,
         authorization_checker=None,
@@ -744,7 +796,10 @@ class MCPEventStore:
         arguments_json = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"))
         now = utc_now()
         created_at = utc_text(now)
-        expires_at = utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
+        expires_at = (
+            None if no_expiry else
+            utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
+        )
         async with aiosqlite.connect(self.path, timeout=5) as db:
             # OAuth continuity stores credentials in protected auth SQLite,
             # while Access Mesh bindings and subscriptions live in main SQLite.
@@ -763,8 +818,8 @@ class MCPEventStore:
                 existing = await (
                     await db.execute(
                         "SELECT id FROM mcp_event_subscriptions WHERE principal_id=? "
-                        "AND name=? AND arguments_json=? AND callback_url=? AND expires_at>?",
-                        (principal, name, arguments_json, callback, created_at),
+                        "AND name=? AND arguments_json=? AND callback_url=?",
+                        (principal, name, arguments_json, callback),
                     )
                 ).fetchall()
                 if any(row[0] != sub_id for row in existing):
@@ -772,6 +827,7 @@ class MCPEventStore:
             if authorization_checker is not None:
                 candidate = {
                     "name": name,
+                    "subscription_id": sub_id,
                     "principal_id": principal,
                     "credential_id": credential_id,
                     "auth_mode": auth_mode,
@@ -786,7 +842,9 @@ class MCPEventStore:
                         recipient_issuer_id=message_binding.issuer_id,
                         recipient_slot_id=message_binding.slot_id,
                         recipient_role=message_binding.role,
-                        recipient_require_live=message_binding.role == "session_number",
+                        recipient_require_live=(
+                            message_binding.role == "session_number" and not refresh_existing
+                        ),
                     )
                 try:
                     authorized = await authorization_checker(candidate)
@@ -850,6 +908,8 @@ class MCPEventStore:
                         message_binding.role,
                     ),
                 )
+            if message_binding is not None:
+                await acquire_hold(db, self.node_id, sub_id)
             # Only a fresh signed challenge grants a new verification window.
             # A cached refresh must never extend the window indefinitely.
             if callback_verified_fresh:
@@ -866,6 +926,11 @@ class MCPEventStore:
     async def unsubscribe(self, sub_id, principal):
         async with aiosqlite.connect(self.path, timeout=5) as db:
             await db.execute("BEGIN IMMEDIATE")
+            await release_holds(
+                db, self.node_id,
+                "SELECT id FROM mcp_event_subscriptions WHERE id=? AND principal_id=?",
+                (sub_id, principal),
+            )
             await db.execute(
                 "DELETE FROM mcp_event_deliveries WHERE subscription_id=? AND EXISTS"
                 "(SELECT 1 FROM mcp_event_subscriptions WHERE id=? AND principal_id=?)",
@@ -897,6 +962,7 @@ class MCPEventStore:
         params = (principal, name, arguments_json, callback)
         async with aiosqlite.connect(self.path, timeout=5) as db:
             await db.execute("BEGIN IMMEDIATE")
+            await release_holds(db, self.node_id, selector, params)
             await db.execute(
                 "DELETE FROM mcp_event_deliveries WHERE subscription_id IN (" + selector + ")",
                 params,
@@ -935,7 +1001,8 @@ class MCPEventStore:
                         "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "
                         "LEFT JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
                         "WHERE d.state='pending' AND d.next_attempt_at<=? "
-                        "AND s.expires_at>? ORDER BY d.next_attempt_at LIMIT ?",
+                        "AND (s.expires_at IS NULL OR s.expires_at>?) "
+                        "ORDER BY d.next_attempt_at LIMIT ?",
                         (stamp, stamp, limit),
                     )
                 ).fetchall()
@@ -950,6 +1017,23 @@ class MCPEventStore:
             except BaseException:
                 await db.rollback()
                 raise
+
+    async def dispatch_is_current(self, item):
+        """Suppress a claimed delivery removed/changed before HTTP dispatch.
+
+        An HTTP request already in progress cannot be recalled by unsubscribe.
+        """
+        async with aiosqlite.connect(self.path, timeout=5) as db:
+            row = await (await db.execute(
+                "SELECT 1 FROM mcp_event_deliveries d "
+                "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "
+                "WHERE d.event_id=? AND d.subscription_id=? AND d.state='sending' "
+                "AND s.callback_url=? AND s.signing_secret=? "
+                "AND (s.expires_at IS NULL OR s.expires_at>?)",
+                (item["event_id"],item["subscription_id"],item["callback_url"],
+                 item["signing_secret"],utc_text()),
+            )).fetchone()
+        return row is not None
 
     async def finish_attempt(self, event_id, sub_id, *, status=None):
         async with aiosqlite.connect(self.path, timeout=5) as db:

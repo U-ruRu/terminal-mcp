@@ -285,6 +285,36 @@ class AccessMeshMessaging:
             after = slots[-1].logical_agent_id
             if len(slots) < 100:
                 break
+        # A local webhook binding is message-only presence. Never create a
+        # WorkSession, grant, attachment, or extend the existing work deadline.
+        for hold in await asyncio.to_thread(self.mesh.store.recipient_holds.local_recipients):
+            if hold["recipient_agent_id"] in records:
+                continue
+            slot = await asyncio.to_thread(
+                self.mesh.store.slot, hold["issuer_id"], hold["slot_id"]
+            )
+            identity = await asyncio.to_thread(
+                self.mesh.store.observed_identity, slot, now=self.mesh.clock()
+            )
+            lifecycle = identity.get("session_lifecycle") or {}
+            name = self.mesh.store.human_name(slot)
+            records[hold["recipient_agent_id"]] = {
+                "logical_agent_id": hold["recipient_agent_id"],
+                "server_id": self.node_id,
+                "public_name": name,
+                "_name_aliases": list(dict.fromkeys([
+                    name, self.mesh.store.human_name(slot, short=True), _public_name(slot),
+                ])),
+                "session_state": "inactive",
+                "session_started_at": lifecycle.get("started_at"),
+                "hard_expires_at": identity.get("hard_expires_at"),
+                "remaining_seconds": 0,
+                "last_active_at": await asyncio.to_thread(
+                    self.store.activity, slot.issuer_id, slot.slot_id
+                ),
+            }
+            if len(records) > MAX_RECIPIENTS:
+                raise MeshMessagingError("output_item_too_large")
         return list(records.values())
 
     async def _targets(self, wire, excluded=()):
@@ -348,7 +378,10 @@ class AccessMeshMessaging:
         It uses a dedicated read-only presence endpoint so the retired message
         recipient endpoint can stay terminally disabled.
         """
-        rows = {item["logical_agent_id"]: item for item in await self._local_recipients()}
+        rows = {
+            item["logical_agent_id"]: item for item in await self._local_recipients()
+            if item["session_state"] == "active"
+        }
         if self.replication is not None:
             for peer in self.peers:
                 after = ""
@@ -406,7 +439,7 @@ class AccessMeshMessaging:
             rows = [
                 item
                 for item in await self._local_recipients()
-                if item["logical_agent_id"] > request.after
+                if item["logical_agent_id"] > request.after and item["session_state"] == "active"
             ]
             rows.sort(key=lambda item: item["logical_agent_id"])
             page = rows[: request.limit]

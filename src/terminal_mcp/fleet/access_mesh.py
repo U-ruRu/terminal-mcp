@@ -373,6 +373,26 @@ class AccessMeshReplication:
             if not cursor:
                 return
 
+    async def sync_recipient_holds(self, peer):
+        """Repair durable pins and withdrawal tombstones from their owning node."""
+        cursor = ""
+        while True:
+            result = await self.request(
+                peer, "numbers/recipient-holds", {"after": cursor, "limit": 25}
+            )
+            if result.get("ok") is not True or not isinstance(result.get("holds"), list):
+                raise AccessMeshError("invalid_recipient_hold_snapshot")
+            await asyncio.to_thread(
+                self.store.recipient_holds.merge, result["holds"],
+                authenticated_peer_id=peer.instance_id,
+            )
+            following = result.get("next_cursor")
+            if not following:
+                return
+            if not isinstance(following, str) or following <= cursor:
+                raise AccessMeshError("invalid_recipient_hold_snapshot")
+            cursor = following
+
     async def sync_incidents(self, peer):
         """Anti-entropy for late reservation and true identity collisions."""
         cursor = ""
@@ -510,6 +530,7 @@ class AccessMeshReplication:
                 or now - self._last_snapshot_pass[peer.instance_id] >= ANTI_ENTROPY_SECONDS
             ):
                 await self._snapshot(peer)
+                await self.sync_recipient_holds(peer)
                 await self.sync_numbers(peer)
                 await self.sync_starts(peer)
                 await self.sync_ends(peer)
@@ -692,6 +713,31 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         except AccessMeshError as exc:
             return {"ok": False, "code": exc.code}
         return {"ok": True, "outcome": outcome}
+
+    @router.post("/internal/fleet/access-mesh/numbers/recipient-holds", include_in_schema=False)
+    async def recipient_holds(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) - {"after", "limit"}:
+            raise HTTPException(400, "invalid recipient hold snapshot")
+        try:
+            rows = await asyncio.to_thread(
+                mesh.store.recipient_holds.snapshot,
+                after=payload.get("after", ""), limit=payload.get("limit", 25),
+            )
+        except AccessMeshError as exc:
+            raise HTTPException(400, exc.code) from exc
+        limit = payload.get("limit", 25)
+        result = {
+            "ok": True, "holds": rows,
+            "next_cursor": rows[-1]["hold_id"] if len(rows) == limit else None,
+        }
+        bounded(result)
+        return result
 
     @router.post("/internal/fleet/access-mesh/numbers/reserve", include_in_schema=False)
     async def number_reserve(

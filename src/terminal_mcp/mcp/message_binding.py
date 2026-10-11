@@ -258,6 +258,25 @@ class MeshMessageSubscriberResolver:
                 and slot.issuer_id == delivery.get("recipient_issuer_id")
                 and slot.slot_id == delivery.get("recipient_slot_id")
             )
+        # Durable subscribed presence does not require a live WorkSession.
+        # The original provider attachment must still name the exact same slot.
+        sub_id = delivery.get("subscription_id") or delivery.get("id")
+        if sub_id and role in {"executor", "coordinator"}:
+            async with aiosqlite.connect(self.mesh.store.path, timeout=3) as db:
+                held = await (await db.execute(
+                    "SELECT 1 FROM access_mesh_recipient_holds h "
+                    "JOIN access_mesh_attachments a ON a.issuer_id=h.issuer_id "
+                    "AND a.slot_id=h.slot_id AND a.logical_agent_id=h.recipient_agent_id "
+                    "JOIN access_mesh_slot_replicas s ON s.issuer_id=h.issuer_id "
+                    "AND s.slot_id=h.slot_id "
+                    "WHERE h.source_node_id=? AND h.hold_id=? AND h.state='held' "
+                    "AND h.recipient_agent_id=? AND h.issuer_id=? AND h.slot_id=? "
+                    "AND a.connection_key=? AND s.state='active'",
+                    (self.mesh.store.local_node_id,sub_id,delivery.get("recipient_agent_id"),
+                     delivery.get("recipient_issuer_id"),delivery.get("recipient_slot_id"),key),
+                )).fetchone()
+            if held is not None:
+                return True
         current = await self._lookup(key)
         return bool(
             role in {"executor", "coordinator"}

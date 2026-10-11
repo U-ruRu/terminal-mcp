@@ -124,10 +124,22 @@ class MCPEventsAdapter:
                         item["event_id"], item["subscription_id"], status=410
                     )
                     continue
+                if item.get("name") == "message.received":
+                    # Revocation stops delivery, but is not owner unsubscribe.
+                    # Keep the immutable association and pin removable by owner.
+                    await self.store.finish_attempt(
+                        item["event_id"], item["subscription_id"], status=410
+                    )
+                    continue
                 # Revoked credentials invalidate the durable subscription as well.
                 await self.store.unsubscribe(
                     item["subscription_id"],
                     item["principal_id"],
+                )
+                continue
+            if not await self.store.dispatch_is_current(item):
+                await self.store.finish_attempt(
+                    item["event_id"], item["subscription_id"], status=None
                 )
                 continue
             payload = {
@@ -281,10 +293,15 @@ class MCPEventsAdapter:
             emit(method, "persistence", "unsubscribed", cid)
             return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         binding = None
+        refresh_existing = False
         if name == "message.received":
             admission = current_admission_context()
             provider_meta = provider_metadata_from_events(params)
-            if number is None and provider_meta is None:
+            existing = (
+                await self.store.message_subscription_binding(principal, arguments, callback)
+                if number is not None else None
+            )
+            if existing is None and number is None and provider_meta is None:
                 return reject(
                     "authorization",
                     "identity_metadata_missing",
@@ -299,7 +316,26 @@ class MCPEventsAdapter:
                     "Recipient binding unavailable",
                 )
             try:
-                if number is not None:
+                if existing is not None:
+                    from terminal_mcp.mcp.message_binding import MessageSubscriber
+
+                    if not await self.message_resolver.still_bound(existing):
+                        return reject(
+                            "authorization", "recipient_binding_changed", -32001,
+                            "Subscription recipient changed; unsubscribe before selecting it again",
+                            {"reason": "recipient_binding_changed"},
+                        )
+                    binding = MessageSubscriber(
+                        recipient_agent_id=existing["recipient_agent_id"],
+                        work_session_id=existing["recipient_session_id"],
+                        session_epoch=existing["recipient_epoch"],
+                        connection_key=existing["recipient_connection_key"],
+                        issuer_id=existing["recipient_issuer_id"],
+                        slot_id=existing["recipient_slot_id"],
+                        role=existing["recipient_role"],
+                    )
+                    refresh_existing = True
+                elif number is not None:
                     binding = await self.message_resolver.resolve_number(
                         admission, number, self.endpoint_role
                     )
@@ -382,6 +418,8 @@ class MCPEventsAdapter:
                 callback=callback,
                 secret=secret,
                 ttl_ms=ttl_ms,
+                no_expiry="ttlMs" in params and ttl_ms is None,
+                refresh_existing=refresh_existing,
                 callback_verified_fresh=callback_verified_fresh,
                 message_binding=binding,
                 authorization_checker=self.access_checker,
