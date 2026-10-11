@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -86,6 +87,15 @@ class Runtime:
 
     def clock(self):
         return self.now
+
+    async def observe_intent_call(self, actor, *, require_intent):
+        # This transport-only Runtime supplies no intent persistence. Role-wire
+        # chunk tests use safe reads; real write/intent admission has own fixtures.
+        assert not require_intent
+        return {}
+
+    def intent_call_context(self, status):
+        return nullcontext()
 
     def connection_key(self, actor):
         return f"{self.store.local_node_id}/{actor.principal_id}/{actor.endpoint_role}"
