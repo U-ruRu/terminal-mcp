@@ -269,7 +269,7 @@ def test_native_access_attach_message_and_signed_callback_independent(tmp_path):
             token,
             a_coord,
             name="session",
-            arguments={"session_number": a_number},
+            arguments={"session_number": a_number, "intent": "Receive fixture message"},
         )
         assert "result" in attached and not attached["result"]["isError"], attached
         client.portal.call(app.state.mcp_events.store.pump)
@@ -305,7 +305,9 @@ def test_native_access_attach_message_and_signed_callback_independent(tmp_path):
             token,
             b_coord,
             name="session",
-            arguments={"session_number": b_content["session_number"]},
+            arguments={
+                "session_number": b_content["session_number"], "intent": "Send fixture message",
+            },
         )
         assert "result" in b_attach and not b_attach["result"]["isError"], b_attach
         assert b_slot["logical_agent_id"] != a_id
@@ -329,6 +331,10 @@ def test_native_access_attach_message_and_signed_callback_independent(tmp_path):
             },
         )
         assert "result" in sent and not sent["result"]["isError"], sent
+        sent_content = sent["result"].get("structuredContent") or json.loads(
+            sent["result"]["content"][0]["text"]
+        )
+        assert sent_content["ok"] and sent_content["message_hash"], sent_content
         client.portal.call(app.state.mcp_events.store.pump)
         client.portal.call(app.state.access_events.deliver_due)
         events = [p for p in sink.calls if p.get("name") == "message.received"]

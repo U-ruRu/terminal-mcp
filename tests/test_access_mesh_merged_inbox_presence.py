@@ -8,6 +8,7 @@ from test_access_mesh_replication_http import Routes, actor, node
 
 from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
 from terminal_mcp.core.managed_sessions import ManagedOperation
+from terminal_mcp.mcp.access_contracts import MeshAgentObserve, MeshAgentView
 from terminal_mcp.storage.agents import AgentStore
 
 
@@ -40,7 +41,9 @@ async def test_preexisting_losing_attach_is_visible_under_winner_without_reconne
         assert observed["ok"], observed
         assert len(observed["agents"]) == 1
         agent = observed["agents"][0]
-        assert set(agent) == {"public_name", "last_server", "last_activity", "session_duration"}
+        MeshAgentObserve.model_validate(observed)
+        assert set(agent) == set(MeshAgentView.model_fields)
+        assert observed["scope"] == "local" and observed["server_id"] == "bacloud"
         assert agent["public_name"] == winner["public_name"]
         assert agent["last_server"] == "bacloud"
 

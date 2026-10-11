@@ -36,6 +36,12 @@ def test_manual_start_resumes_original_window_then_allocates_next_window(tmp_pat
         resumed_slot = mesh.store.code_slot("firstbyte", number)
         assert resumed_slot.anchor == slot.anchor
         assert resumed_slot.deadline_at == original_end
+        declared = call(
+            client, "executor", "session",
+            {"action": "intent", "intent": "Exercise original lifecycle window"},
+            request_id=1031,
+        )
+        assert declared["ok"], declared
         assert call(client, "executor", "command_run", {"command": "true"}, request_id=104)["ok"]
         now[0] += timedelta(seconds=2)
         assert call(client, "access", "session", {"action": "end"}, request_id=105) == {"ok": True}
@@ -48,6 +54,12 @@ def test_manual_start_resumes_original_window_then_allocates_next_window(tmp_pat
         restarted = call(client, "access", "session", {"action": "start"}, request_id=107)
         assert restarted == {"ok": True, "session_number": number}, restarted
         assert mesh.store.code_slot("firstbyte", number).anchor == now[0]
+        declared = call(
+            client, "executor", "session",
+            {"action": "intent", "intent": "Exercise original lifecycle window"},
+            request_id=1071,
+        )
+        assert declared["ok"], declared
         after = call(client, "executor", "command_run", {"command": "true"}, request_id=108)
         if not after["ok"] and after["error"]["code"] == "coordination_alert":
             assert after["required_action"] == "ack"

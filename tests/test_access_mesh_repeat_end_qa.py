@@ -27,6 +27,12 @@ def test_two_separate_ends_of_one_cycle_remain_durable_and_fence_each_restart(tm
         now[0] += timedelta(seconds=5)
         resumed = call(client, "access", "session", {"action": "start"}, request_id=803)
         assert resumed == {"ok": True, "session_number": number}, resumed
+        declared = call(
+            client, "executor", "session",
+            {"action": "intent", "intent": "Exercise explicit restarted cycle"},
+            request_id=8031,
+        )
+        assert declared["ok"], declared
         assert call(
             client,
             "executor",
@@ -55,6 +61,12 @@ def test_two_separate_ends_of_one_cycle_remain_durable_and_fence_each_restart(tm
         now[0] += timedelta(seconds=5)
         restarted = call(client, "access", "session", {"action": "start"}, request_id=807)
         assert restarted == {"ok": True, "session_number": number}
+        declared = call(
+            client, "executor", "session",
+            {"action": "intent", "intent": "Exercise explicit restarted cycle"},
+            request_id=8071,
+        )
+        assert declared["ok"], declared
         assert call(
             client,
             "executor",

@@ -61,7 +61,8 @@ def issue(client, app, label):
     slot = app.state.access_mesh.store.numbers.winner(number)
     coordination_meta = meta(label, label + "-coordination")
     tool(
-        client, "coordinator", "session", {"session_number": number},
+        client, "coordinator", "session",
+        {"session_number": number, "intent": "Events routing regression fixture"},
         evidence=coordination_meta,
     )
     return number, slot, access_meta, coordination_meta
@@ -147,7 +148,7 @@ def test_shared_number_fanout_exact_recipient_refresh_and_selective_unsubscribe(
         assert stored(app, first)["recipient_role"] == "session_number"
         assert stored(app, first)["recipient_agent_id"] == slot_a["logical_agent_id"]
         assert register(client, number_a)["result"]["id"] == first
-        tool(
+        sent = tool(
             client, "coordinator", "message",
             {"action": "send", "scope": "local", "mode": "notify",
              "target": app.state.access_mesh.store.observed_identity(
@@ -155,6 +156,7 @@ def test_shared_number_fanout_exact_recipient_refresh_and_selective_unsubscribe(
              )["public_name"], "text": "only A gets this"},
             evidence=coord_b,
         )
+        assert sent["ok"] and sent["message_hash"], sent
         client.portal.call(app.state.mcp_events.store.pump)
         client.portal.call(app.state.mcp_events.deliver_due)
         events = [(url, data) for url, data, _ in sink.requests
@@ -331,7 +333,7 @@ def test_revoked_number_binding_or_credentials_stop_pending_delivery(tmp_path, r
         number, slot, _, _ = issue(client, app, "recipient")
         _, _, _, sender = issue(client, app, "sender")
         sub_id = register(client, number)["result"]["id"]
-        tool(
+        sent = tool(
             client, "coordinator", "message",
             {"action": "send", "scope": "local", "mode": "notify",
              "target": app.state.access_mesh.store.observed_identity(
@@ -339,6 +341,7 @@ def test_revoked_number_binding_or_credentials_stop_pending_delivery(tmp_path, r
              )["public_name"], "text": "pending fixture"},
             evidence=sender,
         )
+        assert sent["ok"] and sent["message_hash"], sent
         client.portal.call(app.state.mcp_events.store.pump)
         if revocation == "credential":
             app.state.settings.bearer_tokens = "test-bearer-b"

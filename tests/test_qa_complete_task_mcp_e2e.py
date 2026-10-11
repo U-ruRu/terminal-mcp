@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from test_access_mesh_mcp_runtime import call, rpc, settings
 
 from terminal_mcp.app import create_app
+from terminal_mcp.mcp.access_contracts import MeshAgentObserve, MeshAgentView
 from terminal_mcp.storage.tasks import TaskStore
 
 
@@ -113,12 +114,9 @@ def test_access_attach_task_api_six_states_cas_append_and_self_send(tmp_path):
         active = call(client, "coordinator", "agent_observe", {}, request_id=160)
         assert active["ok"] and len(active["agents"]) == 1
         name = active["agents"][0]["public_name"]
-        assert set(active["agents"][0]) == {
-            "public_name",
-            "last_server",
-            "session_duration",
-            "last_activity",
-        }
+        MeshAgentObserve.model_validate(active)
+        assert set(active["agents"][0]) == set(MeshAgentView.model_fields)
+        assert active["scope"] == "local" and active["server_id"] == "firstbyte"
         self_send = call(
             client,
             "executor",
