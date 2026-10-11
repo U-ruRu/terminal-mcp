@@ -1,0 +1,15 @@
+{
+  "ordinary_run_required": ["ok", "remaining_seconds", "cmd_hash", "status"],
+  "ordinary_run_optional": ["queue_id"],
+  "compact_health_keys": ["ok", "healthy", "application", "agent_name", "version", "storage"],
+  "extended_health_extra": ["components", "terminal", "workflow"],
+  "incoming_required": ["id", "sender", "text"],
+  "incoming_requirements": ["ack", "reply"],
+  "opaque_user_object": {"enabled": false, "attempts": 0, "nothing": null, "array": [], "object": {}, "nested": {"payload": {"mode": null, "active": false}}, "serialized": "{\"keep\":true}"},
+  "legacy_checkpoint_values": [{"value": false, "count": 0, "empty": null}, [], [false, 0, null, {}, []], "ordinary text", "{\"literal\":true}", "false", "0", "null"],
+  "removed_detail": ["operational_status", "output_state_id", "review_requirements", "owner", "active", "dependencies"],
+  "nonempty_detail": ["input_refs", "output_refs", "participants", "blocking_dependencies", "resource_context", "relations"],
+  "removed_claim": ["claim_age_seconds", "role"],
+  "removed_event": ["logical_agent_id", "work_session_id", "session_epoch"],
+  "ordinary_claim": {"ok": true}
+}
