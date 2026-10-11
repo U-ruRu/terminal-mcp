@@ -15,6 +15,8 @@ import ssl
 import time
 from urllib.parse import urlsplit
 
+from terminal_mcp.mcp.event_diagnostics import classify_callback_response
+
 
 class CallbackEndpointError(ValueError):
     def __init__(self, reason):
@@ -81,7 +83,7 @@ def validate_callback_url(url):
     return parsed, port
 
 
-def _pinned_https_post(url, body, headers):
+def _pinned_https_post(url, body, headers, response_metadata=None):
     """Never connect to an address other than an inspected public DNS answer."""
     parsed, port = validate_callback_url(url)
     host = parsed.hostname
@@ -112,6 +114,12 @@ def _pinned_https_post(url, body, headers):
         data = response.read(65537)
         if len(data) > 65536:
             raise CallbackEndpointError("response_too_large")
+        if response_metadata is not None:
+            try:
+                response_metadata.update(classify_callback_response(data, response.getheader))
+            except Exception:
+                # Diagnostics must not turn a successful callback into a rejection.
+                pass
         return response.status, data
     except (OSError, ssl.SSLError, TimeoutError) as exc:
         raise CallbackEndpointError("transport_error") from exc
@@ -128,6 +136,7 @@ async def post_signed(
     *,
     sender=None,
     previous_secret=None,
+    response_metadata=None,
 ):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(body) > 262144:
@@ -141,7 +150,7 @@ async def post_signed(
     )
     if sender is not None:
         return await sender(url, body, headers)
-    return await asyncio.to_thread(_pinned_https_post, url, body, headers)
+    return await asyncio.to_thread(_pinned_https_post, url, body, headers, response_metadata)
 
 
 async def verify_callback(url, secret, subscription_id, *, sender=None, observer=None):
@@ -149,6 +158,12 @@ async def verify_callback(url, secret, subscription_id, *, sender=None, observer
     challenge = secrets.token_urlsafe(36)
     verification_id = "msg_verification_" + secrets.token_hex(16)
     started = time.monotonic()
+    response_metadata = {}
+    try:
+        parsed, _ = validate_callback_url(url)
+        response_metadata["callback_explicit_default_port"] = parsed.port == 443
+    except CallbackEndpointError:
+        pass
 
     def observe(
         result,
@@ -172,7 +187,10 @@ async def verify_callback(url, secret, subscription_id, *, sender=None, observer
             "challenge_is_string": is_string,
             "challenge_matches": matches,
         }
+        details.update(response_metadata)
         try:
+            if isinstance(body, bytes):
+                details.update(classify_callback_response(body))
             observer(details)
         except Exception:
             # Observability must never change callback verification semantics.
@@ -186,6 +204,7 @@ async def verify_callback(url, secret, subscription_id, *, sender=None, observer
             verification_id,
             {"type": "verification", "challenge": challenge},
             sender=sender,
+            response_metadata=response_metadata,
         )
     except CallbackEndpointError as exc:
         observe(exc.reason)

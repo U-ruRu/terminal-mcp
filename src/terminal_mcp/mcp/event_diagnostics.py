@@ -60,10 +60,82 @@ _CALLBACK_RESULTS = frozenset(
 )
 
 
+# Only recognized response categories and header-presence booleans are retained.
+_RESPONSE_CONTENT_TYPES = frozenset(
+    {"application/json", "application/problem+json", "text/html", "text/plain"}
+)
+_RESPONSE_ERROR_CODES = frozenset(
+    {
+        "invalid_signature",
+        "signature_mismatch",
+        "missing_signature",
+        "invalid_timestamp",
+        "timestamp_expired",
+        "invalid_secret",
+        "unauthorized",
+        "forbidden",
+        "invalid_challenge",
+    }
+)
+
+
+def safe_callback_response_metadata(details: dict) -> dict:
+    """Second allowlist at the logging boundary; never truncate arbitrary strings."""
+    safe = {}
+    for key, allowed in {
+        "response_content_type": _RESPONSE_CONTENT_TYPES | {"other", "missing"},
+        "response_body_kind": {"json", "html", "empty", "other"},
+        "response_error_code": _RESPONSE_ERROR_CODES,
+    }.items():
+        value = details.get(key)
+        if isinstance(value, str) and value in allowed:
+            safe[key] = value
+    for key in (
+        "callback_explicit_default_port",
+        "response_cf_challenge",
+        "response_request_id_present",
+        "response_cf_ray_present",
+    ):
+        if type(details.get(key)) is bool:
+            safe[key] = details[key]
+    return safe
+
+
+def classify_callback_response(body: bytes, getheader=None) -> dict:
+    """Classify bounded bytes locally, emitting neither body text nor arbitrary headers."""
+    if not isinstance(body, bytes) or len(body) > 65536:
+        return {}
+    details = {"response_body_kind": "empty" if not body else "other"}
+    if body:
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError, RecursionError):
+            if body.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html")):
+                details["response_body_kind"] = "html"
+        else:
+            details["response_body_kind"] = "json"
+            if isinstance(parsed, dict):
+                error = parsed.get("error")
+                code = error.get("code") if isinstance(error, dict) else parsed.get("code")
+                if isinstance(code, str) and code in _RESPONSE_ERROR_CODES:
+                    details["response_error_code"] = code
+    if getheader is not None:
+        content_type = getheader("content-type")
+        media_type = content_type.split(";", 1)[0].strip().lower() if content_type else "missing"
+        details["response_content_type"] = (
+            media_type if media_type in _RESPONSE_CONTENT_TYPES | {"missing"} else "other"
+        )
+        details["response_cf_challenge"] = getheader("cf-mitigated") == "challenge"
+        details["response_request_id_present"] = bool(getheader("x-request-id"))
+        details["response_cf_ray_present"] = bool(getheader("cf-ray"))
+    return safe_callback_response_metadata(details)
+
+
 def emit_callback_probe(cid: str, details: dict) -> None:
     """Emit ONLY bounded, non-identifying callback verification metadata.
 
-    Never persist the destination URL, challenge, response body, headers or key.
+    Never persist the destination URL, challenge, response body, arbitrary headers or key.
+    Only allowlisted response categories and header-presence booleans are retained.
     These fields correlate server diagnosis with the pre-existing Events CID.
     """
     status = details.get("http_status")
@@ -89,6 +161,7 @@ def emit_callback_probe(cid: str, details: dict) -> None:
         if type(details.get("challenge_matches")) is bool
         else None,
     }
+    values.update(safe_callback_response_metadata(details))
     _LOG.info("tmcp_events_callback %s", json.dumps(values, separators=(",", ":")))
 
 
