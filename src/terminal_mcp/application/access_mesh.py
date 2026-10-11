@@ -495,12 +495,14 @@ class AccessMeshApplication:
             attempt_id = "nr_" + secrets.token_urlsafe(16)
             announcement_deadline = None
             reserved_number = None
-            if code is None and self.replication is not None:
+            if self.replication is not None:
                 (
                     reserved_number,
                     attempt_id,
                     announcement_deadline,
-                ) = await self.replication.negotiate_number()
+                ) = await self.replication.negotiate_number(
+                    preferred=code, exact=code is not None
+                )
             elif code is None:
                 candidate = f"{secrets.randbelow(10000):04d}"
                 proposed = await asyncio.to_thread(

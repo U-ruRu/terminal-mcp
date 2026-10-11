@@ -196,8 +196,8 @@ def test_claims_survive_store_reopen(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_offline_peer_allows_local_issuance_before_30_second_budget(tmp_path):
-    """Partitioned node finishes locally within the bounded negotiation window."""
+async def test_offline_peer_blocks_issuance_within_30_second_budget(tmp_path):
+    """An unavailable peer cannot prove a free number; no fallback issues a slot."""
     import time
 
     import httpx
@@ -209,14 +209,12 @@ async def test_offline_peer_allows_local_issuance_before_30_second_budget(tmp_pa
         local.replication = replication
         routes.offline.add("bacloud")
         started = time.monotonic()
-        issued = await local.issue(actor())
+        with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
+            await local.issue(actor())
         duration = time.monotonic() - started
-        assert issued["ok"] is True
         assert duration < 30, duration
-        assert (
-            local.store.numbers.winner(issued["access_code"])["logical_agent_id"]
-            == issued["logical_agent_id"]
-        )
+        assert local.store.numbers.snapshot() == []
+        assert local.store.numbers.reservations() == []
 
 
 @pytest.mark.asyncio

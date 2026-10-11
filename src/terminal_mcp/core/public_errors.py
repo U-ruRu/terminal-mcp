@@ -224,7 +224,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "reconcile",
             """
             access_mesh_identity_conflict access_mesh_binding_conflict access_mesh_event_conflict
-            access_mesh_code_in_use access_mesh_code_capacity
+            access_mesh_code_in_use access_mesh_code_capacity access_mesh_subscription_hold
+            subscription_recipient_identity_conflict recipient_hold_revision_conflict
         """,
         ),
         ("missing", "repair", "access_mesh_slot_not_found access_mesh_unknown_slot"),
@@ -234,6 +235,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             """
             access_mesh_event_gap access_mesh_cleanup_pending access_mesh_claim_cleanup_pending
             access_mesh_execution_cleanup_pending access_mesh_delivery_failed
+            session_number_unconfirmed
         """,
         ),
     )
@@ -287,6 +289,14 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         "identity_not_bound": "The provider identity is not bound to a LogicalAgent.",
         "session_required": "Сначала запусти сессию",
         "session_expired": "Сессия закончилась",
+        "session_number_unconfirmed": (
+            "Unable to confirm a free session number on every configured server. "
+            "Retry when connectivity recovers."
+        ),
+        "access_mesh_subscription_hold": (
+            "This number is held by a message subscription. "
+            "Unsubscribe before deleting or reassigning it."
+        ),
         "recipient_not_found": "Получатель не найден",
         "invalid_cursor": "Restart the read without a cursor, or use its matching next cursor.",
         "output_item_too_large": "Request a summary or a smaller page.",

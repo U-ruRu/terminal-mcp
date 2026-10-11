@@ -7,6 +7,7 @@ import httpx
 import pytest
 from test_access_mesh_replication_http import Routes, actor, node
 
+from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.fleet.access_mesh import AccessMeshReplication
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
 
@@ -31,7 +32,7 @@ async def test_issuance_broadcasts_slot_before_first_remote_attach(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_one_fast_conflict_replaces_number_while_other_peer_hangs(tmp_path, monkeypatch):
+async def test_fast_conflict_cannot_admit_replacement_while_other_peer_hangs(tmp_path, monkeypatch):
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
         issuer, _ = await node(tmp_path, "firstbyte", "bacloud", routes, client)
@@ -61,20 +62,14 @@ async def test_one_fast_conflict_replaces_number_while_other_peer_hangs(tmp_path
 
         monkeypatch.setattr(replication, "request", fake_request)
         start = monotonic()
-        number, attempt, deadline = await replication.negotiate_number(
-            preferred="0001",
-            _budget_seconds=0.35,
-        )
+        with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
+            await replication.negotiate_number(preferred="0001", _budget_seconds=0.35)
         elapsed = monotonic() - start
-        assert number == "0002", attempts
         assert 0.2 <= elapsed < 0.6
-        assert deadline <= start + 0.4
         assert ("bacloud", "0001") in attempts
         assert ("bacloud", "0002") in attempts
-        reservations = issuer.store.numbers.reservations()
-        assert {r["number"] for r in reservations} >= {"0001", "0002"}
-        issuer.store.numbers.release(attempt)
         assert issuer.store.numbers.reservations() == []
+        assert issuer.store.numbers.snapshot() == []
 
 
 @pytest.mark.asyncio
@@ -102,7 +97,7 @@ async def test_all_responding_peers_finish_without_waiting_for_deadline(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_late_conflict_after_decision_is_durable_incident_without_renumber(
+async def test_late_conflict_after_refusal_is_durable_incident_without_allocation(
     tmp_path, monkeypatch
 ):
     """A delayed cancellation cannot force a renumber after the deadline."""
@@ -116,6 +111,8 @@ async def test_late_conflict_after_decision_is_durable_incident_without_renumber
         )
 
         async def conflicting_after_cancel(peer, path, payload):
+            if path == "numbers/release":
+                return {"ok": True}
             try:
                 await asyncio.sleep(10)
             except asyncio.CancelledError:
@@ -128,17 +125,16 @@ async def test_late_conflict_after_decision_is_durable_incident_without_renumber
 
         monkeypatch.setattr(replica, "request", conflicting_after_cancel)
         start = monotonic()
-        number, attempt, _deadline = await replica.negotiate_number(
-            preferred="0097", _budget_seconds=0.20
-        )
-        assert number == "0097"
+        with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
+            await replica.negotiate_number(preferred="0097", _budget_seconds=0.20)
+        assert issuer.store.numbers.snapshot() == []
         assert monotonic() - start < 0.30
         await asyncio.sleep(0.18)
         incidents = issuer.store.numbers.incidents()
         assert len(incidents) == 1
         row = incidents[0]
         assert row["number"] == "0097"
-        assert row["slot_id"] == attempt
+        assert row["slot_id"].startswith("nr_")
         assert row["collided_with"] == "late_reservation:bacloud:0098"
         # Restarting this store retains the incident.
         from terminal_mcp.storage.access_mesh import AccessMeshStore

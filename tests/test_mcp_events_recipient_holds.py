@@ -192,7 +192,7 @@ def test_lifecycle_subscriptions_do_not_pin_and_claimed_unsubscribe_cannot_dispa
             )
             assert response["result"]["refreshBefore"] is None
         assert pins(app) == []
-        number, _, _, _ = issue(client, app, "dispatch")
+        number, claim, _, _ = issue(client, app, "dispatch")
         sub = subscribe(client, number)["result"]["id"]
         with sqlite3.connect(app.state.settings.database_path) as db:
             stamp = datetime.now(UTC).isoformat()
@@ -206,10 +206,22 @@ def test_lifecycle_subscriptions_do_not_pin_and_claimed_unsubscribe_cannot_dispa
                 "VALUES('race',?,?)",
                 (sub, stamp),
             )
-        claimed = client.portal.call(app.state.mcp_events.store.due_deliveries)[0]
+        claimed = next(
+            row for row in client.portal.call(app.state.mcp_events.store.due_deliveries)
+            if row["subscription_id"] == sub
+        )
         assert client.portal.call(app.state.mcp_events.store.dispatch_is_current, claimed)
+        slot = app.state.access_mesh.store.slot(claim["issuer_id"], claim["slot_id"])
+        before = app.state.access_mesh.store.observed_identity(slot)
         remove(client, number)
         assert not client.portal.call(app.state.mcp_events.store.dispatch_is_current, claimed)
+        after = app.state.access_mesh.store.observed_identity(slot)
+        assert after["work_session_id"] == before["work_session_id"]
+        assert after["hard_expires_at"] == before["hard_expires_at"]
+        assert after["session_lifecycle"]["state"] in {"active", "warning", "draining"}
+        assert not app.state.access_mesh.store.numbers.reserve(
+            number=number, attempt_id="last-unsubscribe-live-check"
+        )["ok"]
 
 
 def test_pin_replica_tombstones_refcounts_known_collision_and_restart(tmp_path):

@@ -162,6 +162,8 @@ class AccessMeshReplication:
         if budget <= 0:
             return
         tasks = [asyncio.create_task(request) for request in requests]
+        if not tasks:
+            return
         done, pending = await asyncio.wait(tasks, timeout=budget)
         for task in done:
             cls._consume_abandoned(task)
@@ -170,31 +172,50 @@ class AccessMeshReplication:
             task.cancel()
 
     async def negotiate_number(
-        self, *, preferred: str | None = None, _budget_seconds: float = 30.0
+        self, *, preferred: str | None = None, exact=False, _budget_seconds: float = 30.0
     ):
-        """Choose a reserved number within one fixed 30-second admission budget.
+        """Reserve only after every configured peer confirms the same number.
 
-        A conflict from any peer is processed immediately, even while other
-        peers are unresponsive. Individual retries never reset the deadline.
+        Missing or timed-out peer proof never means globally free, even for a
+        number this node has never seen. The original 30-second bound remains.
         """
         loop = asyncio.get_running_loop()
         end = loop.time() + min(30.0, max(0.0, _budget_seconds))
-        # Reserve at most the last three seconds for commit/outbox fanout.
         negotiation_end = max(loop.time(), end - min(3.0, _budget_seconds * 0.1))
+        peers = self.peers
+        if len(peers) != len(self.config.peers):
+            raise AccessMeshError("session_number_unconfirmed")
+        peer_keys = tuple((p.instance_id, p.origin, p.transport) for p in peers)
         attempt_id = "nr_" + secrets.token_urlsafe(16)
         number = preferred or f"{secrets.randbelow(10000):04d}"
+
+        async def abandon(code):
+            # Local cleanup is authoritative; unavailable peers retain only
+            # their existing three-minute reservation lease, never a new slot.
+            await asyncio.to_thread(self.store.numbers.release, attempt_id)
+            await self._hard_bounded_fanout(
+                (self.request(p, "numbers/release", {"attempt_id": attempt_id}) for p in peers),
+                budget=max(0, end-loop.time()),
+            )
+            raise AccessMeshError(code)
+
         while True:
             local = await asyncio.to_thread(
                 self.store.numbers.reserve, number=number, attempt_id=attempt_id
             )
             if not local["ok"]:
+                if exact:
+                    await abandon("access_mesh_code_in_use")
                 number = local["suggested_number"]
                 if loop.time() < negotiation_end:
                     continue
-                # The suggested number is itself reserved by the local store.
+                if not peers:
+                    return number, attempt_id, end
+                await abandon("session_number_unconfirmed")
+            if not peers:
                 return number, attempt_id, end
-            if not self.peers or loop.time() >= negotiation_end:
-                return number, attempt_id, end
+            if loop.time() >= negotiation_end:
+                await abandon("session_number_unconfirmed")
 
             tasks = {
                 asyncio.create_task(
@@ -202,7 +223,7 @@ class AccessMeshReplication:
                         peer, "numbers/reserve", {"number": number, "attempt_id": attempt_id}
                     )
                 ): peer.instance_id
-                for peer in self.peers
+                for peer in peers
             }
             pending = set(tasks)
             suggested = None
@@ -228,36 +249,39 @@ class AccessMeshReplication:
                         ):
                             suggested = response["suggested_number"]
                             break
-                        if isinstance(response, dict) and response.get("ok") is True:
+                        if (
+                            isinstance(response, dict) and response.get("ok") is True
+                            and response.get("number") == number
+                        ):
                             confirmed += 1
                     if suggested is not None:
                         break
             finally:
-                # Cancellation of remote transports is not guaranteed to be
-                # prompt. Never await them after the fixed negotiation cap.
+                # Cancellation acknowledgements cannot extend the public cap.
                 for task, peer_id in tasks.items():
                     if not task.done():
                         task.add_done_callback(
                             partial(
                                 self._record_late_reservation_reply,
-                                number=number,
-                                attempt_id=attempt_id,
-                                peer_id=peer_id,
+                                number=number, attempt_id=attempt_id, peer_id=peer_id,
                             )
                         )
                         task.cancel()
 
-            if suggested is not None and loop.time() < negotiation_end:
-                number = suggested
-                continue
-            if confirmed == len(tasks) or not pending:
-                # Every peer responded: success completes early only if all
-                # accepted. Failed calls consume the remaining bounded window.
-                if confirmed == len(tasks):
-                    return number, attempt_id, end
+            if suggested is not None:
+                if exact:
+                    await abandon("access_mesh_code_in_use")
+                if loop.time() < negotiation_end:
+                    number = suggested
+                    continue
+            if confirmed == len(tasks):
+                current = tuple((p.instance_id, p.origin, p.transport) for p in self.peers)
+                if current != peer_keys:
+                    await abandon("session_number_unconfirmed")
+                return number, attempt_id, end
             if loop.time() < negotiation_end:
-                await asyncio.sleep(max(0, negotiation_end - loop.time()))
-            return number, attempt_id, end
+                await asyncio.sleep(max(0, negotiation_end-loop.time()))
+            await abandon("session_number_unconfirmed")
 
     async def announce_number(
         self,
