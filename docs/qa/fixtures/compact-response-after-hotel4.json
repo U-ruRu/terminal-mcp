@@ -1,0 +1,12 @@
+{
+  "command_run": {
+    "ok": true,
+    "remaining_seconds": 0,
+    "cmd_hash": "aabbccdd",
+    "status": "queued",
+    "queue_id": 3
+  },
+  "task_claim": {
+    "ok": true
+  }
+}

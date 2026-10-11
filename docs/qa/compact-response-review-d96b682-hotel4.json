@@ -1,0 +1,161 @@
+{
+  "reviewer": "Hotel-4",
+  "source_sha": "d96b682045744a9127140bf8b494afecd2a33184",
+  "canonical_observed": "a1a2a45f0199a2e50fbc322f938068e00bf76823",
+  "verdict": "FAIL/HOLD",
+  "summary": {
+    "total": 112,
+    "passed": 100,
+    "failed": 10,
+    "skipped": 2,
+    "exit_code": 1
+  },
+  "matrix": [
+    {
+      "area": "Обычный command_run",
+      "status": "PASS",
+      "evidence": "Точные корневые поля; пять действующих статусов; remaining_seconds=0; без ожидания статуса/вывода"
+    },
+    {
+      "area": "command_read",
+      "status": "PASS",
+      "evidence": "Тело команды, stdout/stderr, отмена и завершение, exit_code, обрезание/сохранность, курсор"
+    },
+    {
+      "area": "Входящие в успешных ответах",
+      "status": "PASS",
+      "evidence": "id/sender/text, ack/reply, дедупликация aliases, нет неявного ACK/reply"
+    },
+    {
+      "area": "Входящие в ошибках",
+      "status": "FAIL",
+      "evidence": "H4-B1 и H4-B2"
+    },
+    {
+      "area": "Минимальный task_claim",
+      "status": "PASS",
+      "evidence": "Обычный результат ровно {\"ok\":true}; непустые уведомления условны"
+    },
+    {
+      "area": "Ошибки task_claim/command_run",
+      "status": "FAIL",
+      "evidence": "Дубли служебных полей; допустимые сообщения теряют код и ID"
+    },
+    {
+      "area": "Конфликт ревизии",
+      "status": "PASS",
+      "evidence": "Правильная ревизия для восстановления, отсутствие изменения задачи/claim"
+    },
+    {
+      "area": "task_get detail/snapshot",
+      "status": "PASS",
+      "evidence": "Удаление заданных полей; непустые служебные коллекции; исходный тип checkpoint"
+    },
+    {
+      "area": "Пользовательские checkpoint/result/payload",
+      "status": "PASS",
+      "evidence": "Ключи, вложенные false/0/null и пустые коллекции сохранены; blind JSON parsing отсутствует"
+    },
+    {
+      "area": "История событий и комментариев",
+      "status": "PASS",
+      "evidence": "Payload и persistent_mutation сохранены; comments не меняются; лишние оболочки удалены"
+    },
+    {
+      "area": "Пагинация истории",
+      "status": "PASS",
+      "evidence": "task.next_cursor продолжает стабильный поток; изменение выбранного потока явно даёт invalid_cursor, требуется начать заново"
+    },
+    {
+      "area": "Связи и review-требования",
+      "status": "PASS",
+      "evidence": "Дедупликация blocking/relations; существующие тесты актуального output-state/review gate проходят"
+    },
+    {
+      "area": "Health",
+      "status": "PASS",
+      "evidence": "Короткая и расширенная проекции; hidden required components влияют на healthy"
+    },
+    {
+      "area": "Полные имена на всех Mesh-путях",
+      "status": "NOTTESTED",
+      "evidence": "Проверен lookup существующих authority-имён; отдельный naming-кандидат есть в новом canonical, объединение не принято"
+    },
+    {
+      "area": "Intent: warning и последующий write gate",
+      "status": "NOTTESTED",
+      "evidence": "Два skip на standalone; объединённый runtime/источник не запускался"
+    },
+    {
+      "area": "Events",
+      "status": "PASS / NOTTESTED",
+      "evidence": "Генерируемый каталог PASS; совместимость финального объединения и подписок NOTTESTED"
+    },
+    {
+      "area": "Контракты/генерируемые файлы standalone",
+      "status": "PASS",
+      "evidence": "Проверки синхронизации прошли; отрицательные случаи требуют изменения схем"
+    },
+    {
+      "area": "Финальный полный прогон",
+      "status": "NOTTESTED",
+      "evidence": "Не назначен согласованный интегратор/база; полный suite не запускался"
+    }
+  ],
+  "failed_cases": [
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_rejected_operation_incoming_is_root_and_actionable[command_run-ack-coordination_ack_required-ack]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_rejected_operation_incoming_is_root_and_actionable[command_run-alert-coordination_alert-reply]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_rejected_operation_incoming_is_root_and_actionable[task_claim-ack-coordination_ack_required-ack]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_rejected_operation_incoming_is_root_and_actionable[task_claim-alert-coordination_alert-reply]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_legal_message_error_retains_code_and_actionable_id[501-char-message-ack-coordination_ack_required-ack]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_legal_message_error_retains_code_and_actionable_id[501-char-message-alert-coordination_alert-reply]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_legal_message_error_retains_code_and_actionable_id[max-unicode-message-ack-coordination_ack_required-ack]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_legal_message_error_retains_code_and_actionable_id[max-unicode-message-alert-coordination_alert-reply]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_legal_message_error_retains_code_and_actionable_id[long-slot-suffix-ack-coordination_ack_required-ack]"
+    },
+    {
+      "classname": "tests.test_compact_error_notices_independent",
+      "name": "test_legal_message_error_retains_code_and_actionable_id[long-slot-suffix-alert-coordination_alert-reply]"
+    }
+  ],
+  "skipped_cases": [
+    {
+      "name": "test_actual_intent_boundary_warns_on_minimal_success_then_blocks[command_run]",
+      "reason": "Requires the separately coordinated intent integration candidate"
+    },
+    {
+      "name": "test_actual_intent_boundary_warns_on_minimal_success_then_blocks[task_claim]",
+      "reason": "Requires the separately coordinated intent integration candidate"
+    }
+  ],
+  "artifacts": "/workspace/terminal-mcp-artifacts/compact-qa-hotel4-20261011",
+  "full_suite_started": false,
+  "runtime_changed": false,
+  "canonical_changed": false
+}

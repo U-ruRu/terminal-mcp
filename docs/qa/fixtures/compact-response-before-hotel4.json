@@ -1,0 +1,75 @@
+{
+  "command_run": {
+    "session_lifecycle": {
+      "state": "active",
+      "remaining_seconds": 0,
+      "hard_expires_at": "2026-01-01T00:00:00Z"
+    },
+    "ok": true,
+    "action": "run",
+    "command": {
+      "cmd_hash": "aabbccdd",
+      "status": "queued",
+      "queue_id": 3,
+      "queue_position": 0,
+      "exit_code": null,
+      "execution_started": false,
+      "claimed_at": "2026-01-01T00:00:00Z",
+      "started_at": "2026-01-01T00:00:00Z",
+      "finished_at": "2026-01-01T00:00:00Z"
+    },
+    "task_scope": "none",
+    "task_targets": [],
+    "task_scope_options": [
+      "none"
+    ],
+    "lines": [
+      "must remain available via read"
+    ],
+    "overall_lines_count": 1,
+    "displayed_lines_count": 1,
+    "has_more": false,
+    "output_truncated": false,
+    "output_retained": true,
+    "output_bytes": 4,
+    "coordination": {
+      "messages": [],
+      "pending_messages": [],
+      "ack_required_pending": false,
+      "alert_pending": false
+    },
+    "identity": {
+      "logical_agent_id": "internal-agent",
+      "work_session_id": "internal-session",
+      "session_epoch": 1
+    }
+  },
+  "task_claim": {
+    "ok": true,
+    "action": "claim",
+    "task": {
+      "namespace": "acceptance",
+      "task_id": "ONE",
+      "title": "Wire contract",
+      "lane": "review",
+      "priority": "P2",
+      "state": "in_progress",
+      "operational_status": "in_progress",
+      "revision": 3,
+      "claim": {
+        "agent_name": "Alpha-7 acceptance",
+        "claimed_at": "2026-01-01T00:00:00Z",
+        "claim_age_seconds": 0,
+        "claim_intent": "independent acceptance",
+        "role": "owner"
+      },
+      "next_action": "review",
+      "description_preview": "body",
+      "description_truncated": false,
+      "blocking_dependencies": [],
+      "recent_comments": [],
+      "recent_checkpoints": []
+    },
+    "warnings": []
+  }
+}
