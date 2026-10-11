@@ -117,12 +117,31 @@ They also preserve message-only addressability on peers with an already existing
 exact local attachment. A replicated grant without a local attachment does not
 create message presence on a new node.
 
-Allocation retains its existing partition-availability contract: after the
-bounded negotiation window, it may issue without every peer confirming. A hold
-created only on an unreachable peer cannot be known by another issuer until
-reconnection. Absolute prevention of unknown partition reuse would require an
-approved allocation-policy change, such as requiring all peers to confirm
-reused-number admission. This candidate does not change that policy.
+### Strict allocation during a partition
+
+New number allocation requires every configured trusted Mesh peer to confirm a
+reservation for the same number. This includes numbers never seen by the local
+node: local absence cannot prove that an unreachable peer has no existing hold.
+A missing, failed, timed-out or mismatched reply returns the retryable
+session_number_unconfirmed error and creates no slot or number claim. No
+timeout fallback issues an unconfirmed number. The existing 30-second total
+negotiation bound remains, including best-effort cleanup; peers that cannot be
+reached retain only the existing short-lived reservation lease.
+
+This deliberately trades new registration availability for held-number safety.
+Existing sessions, command/write deadlines, message subscriptions and normal
+peer reconciliation are unchanged. With no configured peers, local reservation
+is sufficient. Explicitly selected numbers use the same proof when replication
+is configured, and a conflict does not silently substitute another number.
+
+After owner unsubscribe, the atomic local hold withdrawal and revisioned peer
+tombstone remove only subscription occupancy. Every peer must still accept the
+number under its remaining live-session/grant/reservation rules before it can
+be reassigned. During reconnect/catch-up a peer may conservatively keep rejecting
+until its release tombstone arrives; no old subscription is retargeted.
+
+No existing subscription lease is restarted, no historical number attribution
+is deleted, and no network/security setting is changed by this policy update.
 
 Unsubscribe suppresses queued deliveries and already-claimed deliveries whose
 subscription was removed before dispatch. An HTTP callback request already in
