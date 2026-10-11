@@ -14,7 +14,7 @@ from test_access_mesh_replication_http import (
 )
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
-from terminal_mcp.core.access_mesh_grants import SlotPolicy
+from terminal_mcp.core.access_mesh_grants import AccessMeshError, SlotPolicy
 from terminal_mcp.fleet.access_mesh import (
     AccessMeshReplication,
     build_access_mesh_router,
@@ -61,7 +61,7 @@ async def three_node_cluster(tmp_path, client, routes, *, now):
         )
         routes.apps[name] = app
         replica = AccessMeshReplication(runtime, config, client=client)
-        runtime.replication = replica
+        # Keep replication dormant until the fixture joins the trusted Mesh.
         nodes[name] = (runtime, replica)
     return nodes
 
@@ -77,12 +77,21 @@ async def test_new_node_catches_collisions_reservations_and_slots_without_rewrit
         first, f_rep = nodes["firstbyte"]
         second, s_rep = nodes["bacloud"]
         newcomer, n_rep = nodes["newnode"]
-        # New node absent when the same four digits are issued independently.
-        routes.offline.add("newnode")
+        # Historical standalone issuers could independently choose the same
+        # digits before joining Mesh. Current configured-peer issuance must
+        # never recreate this collision by treating missing proof as free.
         original = await first.issue(actor(), code="0356", policy=SlotPolicy(300))
         clock[0] += timedelta(seconds=15)
         later = await second.issue(actor(), code="0356", policy=SlotPolicy(600))
         assert original["logical_agent_id"] != later["logical_agent_id"]
+        for mesh, replica in nodes.values():
+            mesh.replication = replica
+        routes.offline.add("newnode")
+        # Joining Mesh enables the current strict proof rule even for a new
+        # number; historical collision repair does not allow fresh fail-open.
+        with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
+            await f_rep.negotiate_number(preferred="0358", exact=True, _budget_seconds=0.05)
+        assert first.store.numbers.winner("0358") is None
         number = "0356"
         # A delayed conflict is an audit record, not a grant. A joining node
         # must recover it even if its original issuer is offline at creation.

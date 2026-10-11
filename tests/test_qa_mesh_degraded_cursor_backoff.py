@@ -12,6 +12,8 @@ from terminal_mcp.fleet.access_mesh import AccessMeshReplication
 async def test_degraded_peer_with_pending_snapshot_cursor_is_rate_limited():
     peer = SimpleNamespace(instance_id="unreachable-qa-peer")
     replication = object.__new__(AccessMeshReplication)
+    # Match the normal constructor: this fixture has no Event forwarding.
+    replication.lifecycle_events = None
     replication.config = SimpleNamespace(peers=(peer,))
     replication.store = SimpleNamespace(trusted_issuers={peer.instance_id})
     replication._stop = asyncio.Event()
