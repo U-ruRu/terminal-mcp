@@ -117,6 +117,7 @@ async def subscribe(n, sub_id, name="agent.attached", ttl_ms=3600000):
         callback="https://callback.invalid/" + sub_id,
         secret=SECRET,
         ttl_ms=ttl_ms,
+        no_expiry=ttl_ms is None,
     )
 
 
@@ -609,3 +610,215 @@ def test_generated_mesh_wire_catalog_is_current():
 
     artifact = Path(__file__).resolve().parents[1] / "docs/contracts/mcp-mesh-events.json"
     assert json.loads(artifact.read_text()) == mesh_event_contracts()
+
+
+@pytest.mark.asyncio
+async def test_noexpiry_subscription_interest_survives_upgrade_and_work_end(tmp_path):
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        access = await node(tmp_path, "access", ("source", "access"), routes, client)
+        expires = await subscribe(access, "never", ttl_ms=None)
+        assert expires is None
+        before = await access.events.subscription("never")
+        assert before["expires_at"] is None
+        assert (await access.lifecycle.local_interest(now=utc_now() + timedelta(days=2)))[
+            "event_names"
+        ] == ["agent.attached"]
+        await SqliteRepository(access.path).initialize()
+        restored = MCPEventStore(access.path, "access")
+        await restored.initialize()
+        assert await restored.subscription("never") == before
+        lifecycle = LifecycleEventMesh(
+            restored, access.replication.request, authorization_checker=allowed
+        )
+        assert (await lifecycle.local_interest())["event_names"] == ["agent.attached"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["Я" * 16384, "😀" * 16384])
+async def test_legal_unicode_event_canonical_frames_and_chunk_restart(tmp_path, text):
+    from terminal_mcp.fleet.message_event_mesh import wire_bytes
+
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        source = await node(tmp_path, "source", ("source", "access"), routes, client)
+        access = await node(tmp_path, "access", ("source", "access"), routes, client)
+        actor = ActorContext(
+            auth_mode="bearer",
+            principal_id="fixture-user",
+            credential_id="fixture",
+            auth_generation=1,
+            scopes=frozenset({"terminal:read", "terminal:execute"}),
+            provider="openai",
+            provider_metadata={"openai/subject": "s", "openai/session": "unicode"},
+            transport="mcp",
+            endpoint_role="access",
+        )
+        slot = await access.mesh.issue(actor, code="1234")
+        await access.replication.tick()
+        await message_subscription(access, slot)
+        await access.replication.tick()
+        original = local_message(source, slot["logical_agent_id"], "unicode", text)
+        await source.events.pump()
+        if text.startswith("😀"):
+            routes.drop_ack.add(("access", "/internal/fleet/access-mesh/message-events/chunk"))
+        await source.replication.tick()
+        if text.startswith("😀"):
+            assert not [r for r in records(access) if r[1] == "message.received"]
+            with sqlite3.connect(access.path) as db:
+                assert (
+                    db.execute("SELECT count(*) FROM mcp_event_mesh_message_chunks").fetchone()[0]
+                    == 1
+                )
+            await access.events.initialize()
+            with sqlite3.connect(source.path) as db:
+                db.execute("UPDATE mcp_event_mesh_outbox SET next_attempt_at=?", (utc_text(),))
+            await source.replication.tick()
+        private = [r for r in records(access) if r[1] == "message.received"]
+        assert len(private) == 1 and json.loads(private[0][3])["text"] == text
+        assert json.loads(private[0][3])["timestamp"] == original["created_at"]
+        assert all(
+            len(wire_bytes(body)) <= 65536
+            for _, path, body in routes.requests
+            if "/message-events/" in path
+        )
+        assert [r for r in records(source) if r[1] == "message.received"][0][0] == private[0][0]
+        with sqlite3.connect(access.path) as db:
+            assert (
+                db.execute("SELECT count(*) FROM mcp_event_mesh_message_chunks").fetchone()[0] == 0
+            )
+        await access.events.pump()
+        assert len(await access.events.due_deliveries()) == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_recipient_pages_over128_restart_and_withdrawal(tmp_path):
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        source = await node(tmp_path, "source", ("source", "access"), routes, client)
+        access = await node(tmp_path, "access", ("source", "access"), routes, client)
+        actor = ActorContext(
+            auth_mode="bearer",
+            principal_id="fixture-user",
+            credential_id="fixture",
+            auth_generation=1,
+            scopes=frozenset({"terminal:read", "terminal:execute"}),
+            provider="openai",
+            provider_metadata={"openai/subject": "s", "openai/session": "pages"},
+            transport="mcp",
+            endpoint_role="access",
+        )
+        await access.mesh.issue(actor, code="1234")
+        await access.replication.tick()
+        with sqlite3.connect(source.path) as db:
+            db.row_factory = sqlite3.Row
+            template = dict(
+                db.execute(
+                    "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id='access'"
+                ).fetchone()
+            )
+            fields = list(template)
+            placeholders = ",".join("?" for _ in fields)
+            for index in range(130):
+                row = {
+                    **template,
+                    "slot_id": "page-slot-" + str(index),
+                    "logical_agent_id": "page-agent-" + str(index),
+                    "code_tag": "page-code-tag-" + str(index),
+                }
+                db.execute(
+                    "INSERT INTO access_mesh_slot_replicas("
+                    + ",".join(fields)
+                    + ") VALUES("
+                    + placeholders
+                    + ")",
+                    [row[f] for f in fields],
+                )
+        stamp = utc_text()
+        with sqlite3.connect(access.path) as db:
+            for index in range(130):
+                key = "page-sub-" + str(index)
+                db.execute(
+                    "INSERT INTO mcp_event_subscriptions "
+                    "(id,principal_id,credential_id,auth_mode,name,arguments_json,"
+                    "callback_url,signing_secret,created_at,expires_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,NULL)",
+                    (
+                        key,
+                        "fixture-user",
+                        "bearer:fixture",
+                        "bearer",
+                        "message.received",
+                        "{}",
+                        "https://callback.invalid/" + key,
+                        SECRET,
+                        stamp,
+                    ),
+                )
+                db.execute(
+                    "INSERT INTO mcp_event_message_bindings VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        key,
+                        "page-agent-" + str(index),
+                        "ended",
+                        1,
+                        "page-connection-" + str(index),
+                        "access",
+                        "access",
+                        "page-slot-" + str(index),
+                        "access",
+                    ),
+                )
+        await access.lifecycle.message_events.sync_peer(access.config.peers[0])
+        with sqlite3.connect(source.path) as db:
+            assert (
+                db.execute("SELECT count(*) FROM mcp_event_mesh_message_interest").fetchone()[0]
+                == 0
+            )
+            assert (
+                db.execute("SELECT count(*) FROM mcp_event_mesh_message_interest_parts").fetchone()[
+                    0
+                ]
+                == 128
+            )
+        await source.events.initialize()
+        from terminal_mcp.fleet.message_event_mesh import MessageEventMesh
+
+        restored = MessageEventMesh(access.lifecycle)
+        await restored.sync_peer(access.config.peers[0])
+        await restored.sync_peer(access.config.peers[0])
+        with sqlite3.connect(source.path) as db:
+            assert (
+                db.execute("SELECT count(*) FROM mcp_event_mesh_message_interest").fetchone()[0]
+                == 130
+            )
+        await access.events.unsubscribe("page-sub-0", "fixture-user")
+        await restored.sync_peer(access.config.peers[0])
+        with sqlite3.connect(source.path) as db:
+            assert (
+                db.execute("SELECT count(*) FROM mcp_event_mesh_message_interest").fetchone()[0]
+                == 130
+            )
+        await restored.sync_peer(access.config.peers[0])
+        with sqlite3.connect(source.path) as db:
+            assert (
+                db.execute("SELECT count(*) FROM mcp_event_mesh_message_interest").fetchone()[0]
+                == 129
+            )
+        assert all(
+            len(body["recipients"]) <= 128
+            for _, path, body in routes.requests
+            if path.endswith("message-events/interest")
+        )
+
+
+def test_generated_mesh_pages_and_chunk_contracts():
+    import jsonschema
+
+    from terminal_mcp.fleet.event_mesh import mesh_event_contracts
+
+    contracts = mesh_event_contracts()
+    jsonschema.validate(
+        {"version": 1, "recipients": [], "offset": 0, "complete": True},
+        contracts["message-events/interest"],
+    )

@@ -253,6 +253,8 @@ class LifecycleEventMesh:
             raise ValueError("invalid lifecycle event")
         parse_utc(item["timestamp"])
         data = item["data"]
+        if item["name"] == "session.ended" and not data.get("reason"):
+            raise ValueError("missing session end reason")
         allowed = {"agent_name", "server", "task"}
         if item["name"] == "session.ended":
             allowed.add("reason")
@@ -433,7 +435,10 @@ def build_lifecycle_event_router(lifecycle, replication_auth, trusted_issuers):
         peer = replication_auth.authenticate(peer_id, authorization)
         if peer is None or peer.instance_id not in trusted_issuers:
             raise HTTPException(401, "invalid access mesh peer")
-        if len(json.dumps(payload, separators=(",", ":")).encode()) > MAX_WIRE_BYTES:
+        if (
+            len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode())
+            > MAX_WIRE_BYTES
+        ):
             raise HTTPException(413, "lifecycle payload exceeds byte budget")
         return peer.instance_id
 
@@ -537,6 +542,8 @@ def mesh_event_contracts():
             "type": "object",
             "properties": {
                 "version": version,
+                "offset": {"type": "integer", "minimum": 0},
+                "complete": {"type": "boolean"},
                 "recipients": {
                     "type": "array",
                     "maxItems": 128,
@@ -552,8 +559,22 @@ def mesh_event_contracts():
                     },
                 },
             },
-            "required": ["version", "recipients"],
+            "required": ["version", "recipients", "offset", "complete"],
             "additionalProperties": False,
         },
         "message-events/events": batch(envelope("message.received", private=True)),
+        "message-events/chunk": {
+            "type": "object",
+            "properties": {
+                "eventId": {"type": "string", "pattern": "^evt_[0-9a-f]{32}$"},
+                "timestamp": timestamp,
+                "recipient": recipient,
+                "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "index": {"type": "integer", "minimum": 0, "maximum": 3},
+                "total": {"type": "integer", "minimum": 1, "maximum": 4},
+                "part": {"type": "string", "maxLength": 43692},
+            },
+            "required": ["eventId", "timestamp", "recipient", "digest", "index", "total", "part"],
+            "additionalProperties": False,
+        },
     }

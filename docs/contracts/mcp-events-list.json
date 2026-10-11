@@ -103,7 +103,7 @@
       "delivery": [
         "webhook"
       ],
-      "description": "A new local message for the selected session number.",
+      "description": "A new message for the selected session number on a trusted source server.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

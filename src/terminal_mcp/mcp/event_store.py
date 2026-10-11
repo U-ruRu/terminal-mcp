@@ -15,7 +15,11 @@ from terminal_mcp.core.orchestration import (
     utc_text,
 )
 from terminal_mcp.core.session_end_reasons import session_end_reason
-from terminal_mcp.fleet.event_mesh import initialize_mesh_storage, queue_lifecycle_events
+from terminal_mcp.fleet.event_mesh import (
+    initialize_mesh_storage,
+    prune_mesh_storage,
+    queue_lifecycle_events,
+)
 from terminal_mcp.fleet.message_event_mesh import queue_message_events, remote_message_interest
 from terminal_mcp.storage.access_mesh_recipient_holds import (
     HOLD_SCHEMA,
@@ -91,24 +95,33 @@ def event_catalog():
                     "session.ended": (
                         "A limited agent work session has ended on a trusted fleet source server."
                     ),
-                    "message.received": "A new local message for the selected session number.",
+                    "message.received": (
+                        "A new message for the selected session number "
+                        "on a trusted source server."
+                    ),
                 }[name],
                 "delivery": ["webhook"],
                 "inputSchema": {
                     "type": "object",
                     "properties": (
-                        {"session_number": {
-                            "type": "string", "pattern": "^[0-9]{4}$",
-                            "minLength": 4, "maxLength": 4,
-                        }}
+                        {
+                            "session_number": {
+                                "type": "string",
+                                "pattern": "^[0-9]{4}$",
+                                "minLength": 4,
+                                "maxLength": 4,
+                            }
+                        }
                         if name == "message.received"
                         else {}
                     ),
                     "additionalProperties": False,
                 },
                 "payloadSchema": (
-                    private_message if name == "message.received"
-                    else ended_data if name == "session.ended"
+                    private_message
+                    if name == "message.received"
+                    else ended_data
+                    if name == "session.ended"
                     else data
                 ),
             }
@@ -246,6 +259,8 @@ class MCPEventStore:
                 END;
             """)
             await initialize_mesh_storage(db)
+            # Migrations below open explicit write transactions.
+            await db.commit()
             record_columns = {
                 row[1]
                 for row in await (
@@ -268,9 +283,7 @@ class MCPEventStore:
                 )
             if "auth_mode" not in columns:
                 await db.execute("ALTER TABLE mcp_event_subscriptions ADD COLUMN auth_mode TEXT")
-            info = await (await db.execute(
-                "PRAGMA table_info(mcp_event_subscriptions)"
-            )).fetchall()
+            info = await (await db.execute("PRAGMA table_info(mcp_event_subscriptions)")).fetchall()
             if any(row[1] == "expires_at" and row[3] for row in info):
                 await db.execute("BEGIN IMMEDIATE")
                 await db.execute(
@@ -294,6 +307,8 @@ class MCPEventStore:
                 await db.commit()
             for statement in HOLD_SCHEMA:
                 await db.execute(statement)
+            # Finish idempotent schema/claim recovery before the hold transaction.
+            await db.commit()
             await db.execute("BEGIN IMMEDIATE")
             await reconcile_holds(db, self.node_id)
             await db.commit()
@@ -474,17 +489,24 @@ class MCPEventStore:
                                 )
                             ).fetchone()
                             remote_allowed = await remote_message_interest(
-                                db, recipient, message["created_at"], stamp,
+                                db,
+                                recipient,
+                                message["created_at"],
+                                stamp,
                             )
                             if allowed or remote_allowed:
                                 wire = json.loads(message["wire_json"])
                                 deliveries = json.loads(message["receipt_json"]).get(
                                     "deliveries", []
                                 )
-                                recipient_name = next((
-                                    delivery.get("public_name") for delivery in deliveries
-                                    if delivery.get("logical_agent_id") == recipient
-                                ), None)
+                                recipient_name = next(
+                                    (
+                                        delivery.get("public_name")
+                                        for delivery in deliveries
+                                        if delivery.get("logical_agent_id") == recipient
+                                    ),
+                                    None,
+                                )
                                 if not recipient_name:
                                     # Never attribute old deliveries to a newly renamed slot.
                                     continue
@@ -680,6 +702,11 @@ class MCPEventStore:
                 )
                 await queue_lifecycle_events(db, stamp)
                 await queue_message_events(db, stamp)
+                await prune_mesh_storage(db, current)
+                await db.execute(
+                    "DELETE FROM mcp_event_mesh_message_chunks WHERE stored_at<?",
+                    (utc_text(current - timedelta(days=1)),),
+                )
                 await db.commit()
             except BaseException:
                 await db.rollback()
@@ -804,13 +831,15 @@ class MCPEventStore:
         arguments_json = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"))
         async with aiosqlite.connect(self.path, timeout=5) as db:
             db.row_factory = aiosqlite.Row
-            row = await (await db.execute(
-                "SELECT s.id,b.* FROM mcp_event_subscriptions s "
-                "JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
-                "WHERE s.principal_id=? AND s.name='message.received' "
-                "AND s.arguments_json=? AND s.callback_url=?",
-                (principal, arguments_json, callback),
-            )).fetchone()
+            row = await (
+                await db.execute(
+                    "SELECT s.id,b.* FROM mcp_event_subscriptions s "
+                    "JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
+                    "WHERE s.principal_id=? AND s.name='message.received' "
+                    "AND s.arguments_json=? AND s.callback_url=?",
+                    (principal, arguments_json, callback),
+                )
+            ).fetchone()
         return dict(row) if row else None
 
     async def save_subscription(
@@ -835,8 +864,9 @@ class MCPEventStore:
         now = utc_now()
         created_at = utc_text(now)
         expires_at = (
-            None if no_expiry else
-            utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
+            None
+            if no_expiry
+            else utc_text(now + timedelta(milliseconds=min(ttl_ms or 3600000, 3600000)))
         )
         async with aiosqlite.connect(self.path, timeout=5) as db:
             # OAuth continuity stores credentials in protected auth SQLite,
@@ -965,7 +995,8 @@ class MCPEventStore:
         async with aiosqlite.connect(self.path, timeout=5) as db:
             await db.execute("BEGIN IMMEDIATE")
             await release_holds(
-                db, self.node_id,
+                db,
+                self.node_id,
                 "SELECT id FROM mcp_event_subscriptions WHERE id=? AND principal_id=?",
                 (sub_id, principal),
             )
@@ -1062,15 +1093,22 @@ class MCPEventStore:
         An HTTP request already in progress cannot be recalled by unsubscribe.
         """
         async with aiosqlite.connect(self.path, timeout=5) as db:
-            row = await (await db.execute(
-                "SELECT 1 FROM mcp_event_deliveries d "
-                "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "
-                "WHERE d.event_id=? AND d.subscription_id=? AND d.state='sending' "
-                "AND s.callback_url=? AND s.signing_secret=? "
-                "AND (s.expires_at IS NULL OR s.expires_at>?)",
-                (item["event_id"],item["subscription_id"],item["callback_url"],
-                 item["signing_secret"],utc_text()),
-            )).fetchone()
+            row = await (
+                await db.execute(
+                    "SELECT 1 FROM mcp_event_deliveries d "
+                    "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "
+                    "WHERE d.event_id=? AND d.subscription_id=? AND d.state='sending' "
+                    "AND s.callback_url=? AND s.signing_secret=? "
+                    "AND (s.expires_at IS NULL OR s.expires_at>?)",
+                    (
+                        item["event_id"],
+                        item["subscription_id"],
+                        item["callback_url"],
+                        item["signing_secret"],
+                        utc_text(),
+                    ),
+                )
+            ).fetchone()
         return row is not None
 
     async def finish_attempt(self, event_id, sub_id, *, status=None):

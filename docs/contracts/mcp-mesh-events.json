@@ -204,6 +204,74 @@
   },
   "maxAttempts": 288,
   "maxWireBytes": 65536,
+  "message-events/chunk": {
+    "additionalProperties": false,
+    "properties": {
+      "digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "eventId": {
+        "pattern": "^evt_[0-9a-f]{32}$",
+        "type": "string"
+      },
+      "index": {
+        "maximum": 3,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "part": {
+        "maxLength": 43692,
+        "type": "string"
+      },
+      "recipient": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "recipient_agent_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "slot_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer_id",
+          "slot_id",
+          "recipient_agent_id"
+        ],
+        "type": "object"
+      },
+      "timestamp": {
+        "format": "date-time",
+        "maxLength": 40,
+        "type": "string"
+      },
+      "total": {
+        "maximum": 4,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "eventId",
+      "timestamp",
+      "recipient",
+      "digest",
+      "index",
+      "total",
+      "part"
+    ],
+    "type": "object"
+  },
   "message-events/events": {
     "additionalProperties": false,
     "properties": {
@@ -304,6 +372,13 @@
   "message-events/interest": {
     "additionalProperties": false,
     "properties": {
+      "complete": {
+        "type": "boolean"
+      },
+      "offset": {
+        "minimum": 0,
+        "type": "integer"
+      },
       "recipients": {
         "items": {
           "additionalProperties": false,
@@ -342,7 +417,9 @@
     },
     "required": [
       "version",
-      "recipients"
+      "recipients",
+      "offset",
+      "complete"
     ],
     "type": "object"
   },
