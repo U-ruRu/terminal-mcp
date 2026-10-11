@@ -25,8 +25,10 @@ async def test_remote_cancellation_does_not_extend_global_negotiation_deadline(
         replica = AccessMeshReplication(issuer, FleetConfig("firstbyte", "key", (peer,), 1.0, 1.0))
 
         attempts = []
+        peer_tasks = []
 
         async def late_peer(_peer, _suffix, body):
+            peer_tasks.append(asyncio.current_task())
             attempts.append(body["attempt_id"])
             try:
                 await asyncio.sleep(10)
@@ -37,12 +39,19 @@ async def test_remote_cancellation_does_not_extend_global_negotiation_deadline(
 
         monkeypatch.setattr(replica, "request", late_peer)
         start = monotonic()
-        with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
-            await replica.negotiate_number(preferred="0097", _budget_seconds=0.18)
-        elapsed = monotonic() - start
-        assert attempts and all(attempts)
-        assert len(set(attempts)) == 1
-        assert not issuer.store.numbers.reservations()
-        assert not issuer.store.numbers.snapshot()
-        assert not issuer.store.local_slots()
-        assert elapsed < 0.29, f"30-second scaled hard cap violated: {elapsed:.3f}s"
+        try:
+            with pytest.raises(AccessMeshError, match="session_number_unconfirmed"):
+                await replica.negotiate_number(preferred="0097", _budget_seconds=0.18)
+            elapsed = monotonic() - start
+            assert attempts and all(attempts)
+            assert len(set(attempts)) == 1
+            assert not issuer.store.numbers.reservations()
+            assert not issuer.store.numbers.snapshot()
+            assert not issuer.store.local_slots()
+            assert elapsed < 0.29, f"30-second scaled hard cap violated: {elapsed:.3f}s"
+        finally:
+            # Drain cancellation-resistant fixture work after measuring and
+            # asserting the public deadline, never as part of admission time.
+            await asyncio.wait_for(
+                asyncio.gather(*peer_tasks, return_exceptions=True), timeout=1.0
+            )
