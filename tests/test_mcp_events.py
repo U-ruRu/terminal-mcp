@@ -23,6 +23,7 @@ from terminal_mcp.mcp.event_webhooks import (
     signed_headers,
     validate_callback_url,
 )
+from terminal_mcp.mcp.message_binding import MessageSubscriber
 from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
 
@@ -243,12 +244,35 @@ async def test_subscription_challenge_refresh_unsubscribe_and_persistence(contex
         assert receiver.requests[0][2]["X-MCP-Subscription-Id"] == sub_id
         assert (await adapter.handle(request))["result"]["id"] == sub_id
         assert len(receiver.requests) == 1
+        # Cached refresh must preserve the original verification deadline.
+        with sqlite3.connect(path) as db:
+            original_verified_until = db.execute(
+                "SELECT verified_until FROM mcp_event_verified_callbacks "
+                "WHERE principal_id=? AND callback_url=?",
+                ("test-user", CALLBACK),
+            ).fetchone()[0]
+        await adapter.handle(request)
+        with sqlite3.connect(path) as db:
+            cache_until = db.execute(
+                "SELECT verified_until FROM mcp_event_verified_callbacks "
+                "WHERE principal_id=? AND callback_url=?",
+                ("test-user", CALLBACK),
+            ).fetchone()[0]
+            # Simulate natural expiry without sleeping or touching a live endpoint.
+            db.execute(
+                "UPDATE mcp_event_verified_callbacks SET verified_until=? "
+                "WHERE principal_id=? AND callback_url=?",
+                ("2000-01-01T00:00:00Z", "test-user", CALLBACK),
+            )
+        assert original_verified_until == cache_until
+        await adapter.handle(request)
+        assert len(receiver.requests) == 2  # A fresh verification took place.
         assert (await events.subscription(sub_id))["principal_id"] == "test-user"
         await _agent(agents)
         await events.pump()
         await adapter.deliver_due()
-        assert len(receiver.requests) == 2
-        delivery = receiver.requests[1][1]
+        assert len(receiver.requests) == 3
+        delivery = receiver.requests[2][1]
         assert delivery["eventId"].startswith("evt_")
         assert delivery["data"] == {"agent_name": "Alpha", "server": NODE}
         request["method"] = "events/unsubscribe"
@@ -746,3 +770,54 @@ async def test_subscription_auth_schema_upgrade_fails_closed(context):
     assert migrated["credential_id"] is None
     assert migrated["auth_mode"] is None
     assert migrated["previous_signing_secret"] is None
+
+
+@pytest.mark.asyncio
+async def test_message_unsubscribe_after_binding_loss_uses_owner_not_active_mesh(context):
+    path, _, events = context
+    adapter = MCPEventsAdapter(None, events, message_resolver=None)
+    # Create durable rows representing already-established issuer bindings.
+    # They are intentionally unresolvable at unsubscribe time.
+    for principal, recipient in (("test-user", "agent-a"), ("other-user", "agent-b")):
+        binding = MessageSubscriber(
+            recipient_agent_id=recipient,
+            work_session_id="",
+            session_epoch=0,
+            connection_key="former-" + recipient,
+            issuer_id="secondary-test",
+            slot_id="slot-" + recipient,
+            role="access",
+        )
+        sid = adapter._id(principal, "message.received", {}, CALLBACK, binding=binding)
+        await events.save_subscription(
+            sub_id=sid,
+            principal=principal,
+            credential_id="test-credential",
+            auth_mode="test",
+            name="message.received",
+            callback=CALLBACK,
+            secret=SECRET,
+            message_binding=binding,
+            authorization_checker=access_allowed,
+        )
+    token = bind_admission_context(_admission())
+    try:
+        request = {
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "events/unsubscribe",
+            "params": {
+                "name": "message.received",
+                "arguments": {},
+                "delivery": {"mode": "webhook", "url": CALLBACK},
+            },
+        }
+        assert (await adapter.handle(request))["result"] == {}
+        assert (await adapter.handle(request))["result"] == {}  # idempotent
+    finally:
+        reset_admission_context(token)
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT principal_id FROM mcp_event_subscriptions").fetchall() == [
+            ("other-user",)
+        ]
+        assert db.execute("SELECT COUNT(*) FROM mcp_event_message_bindings").fetchone()[0] == 1

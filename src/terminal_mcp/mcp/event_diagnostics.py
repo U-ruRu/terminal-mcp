@@ -41,6 +41,57 @@ def emit(method: str, stage: str, code: str, cid: str) -> None:
     _LOG.info("tmcp_events_diag %s", json.dumps(values, separators=(",", ":")))
 
 
+_CALLBACK_RESULTS = frozenset(
+    {
+        "verified",
+        "http_rejected",
+        "invalid_json",
+        "challenge_missing",
+        "challenge_not_string",
+        "challenge_mismatch",
+        "transport_error",
+        "dns_failed",
+        "unsafe_address",
+        "invalid_url",
+        "response_too_large",
+        "payload_too_large",
+        "unexpected_error",
+    }
+)
+
+
+def emit_callback_probe(cid: str, details: dict) -> None:
+    """Emit ONLY bounded, non-identifying callback verification metadata.
+
+    Never persist the destination URL, challenge, response body, headers or key.
+    These fields correlate server diagnosis with the pre-existing Events CID.
+    """
+    status = details.get("http_status")
+    elapsed = details.get("elapsed_ms")
+    body_size = details.get("body_size")
+    code = details.get("result")
+    values = {
+        "correlation_id": cid if re.fullmatch(r"ev_[a-f0-9]{16}", cid) else "unknown",
+        "result": code if code in _CALLBACK_RESULTS else "unexpected_error",
+        "http_status": status if type(status) is int and 100 <= status <= 599 else None,
+        "elapsed_ms": elapsed if type(elapsed) is int and 0 <= elapsed <= 120000 else None,
+        "body_size": body_size if type(body_size) is int and 0 <= body_size <= 65537 else None,
+        "json_valid": details.get("json_valid")
+        if type(details.get("json_valid")) is bool
+        else None,
+        "challenge_present": details.get("challenge_present")
+        if type(details.get("challenge_present")) is bool
+        else None,
+        "challenge_is_string": details.get("challenge_is_string")
+        if type(details.get("challenge_is_string")) is bool
+        else None,
+        "challenge_matches": details.get("challenge_matches")
+        if type(details.get("challenge_matches")) is bool
+        else None,
+    }
+    _LOG.info("tmcp_events_callback %s", json.dumps(values, separators=(",", ":")))
+
+
 class MCPEventIngressProbe:
     """Capture Events ingress before OAuth middleware without logging request data.
 

@@ -144,24 +144,89 @@ async def post_signed(
     return await asyncio.to_thread(_pinned_https_post, url, body, headers)
 
 
-async def verify_callback(url, secret, subscription_id, *, sender=None):
-    # Fresh, single-use challenge, bound to its signed request.
+async def verify_callback(url, secret, subscription_id, *, sender=None, observer=None):
+    """Verify the challenge and optionally report safe, category-only diagnostics."""
     challenge = secrets.token_urlsafe(36)
     verification_id = "msg_verification_" + secrets.token_hex(16)
-    status, response_body = await post_signed(
-        url,
-        secret,
-        subscription_id,
-        verification_id,
-        {"type": "verification", "challenge": challenge},
-        sender=sender,
-    )
+    started = time.monotonic()
+
+    def observe(
+        result,
+        *,
+        status=None,
+        body=None,
+        json_valid=None,
+        present=None,
+        is_string=None,
+        matches=None,
+    ):
+        if observer is None:
+            return
+        details = {
+            "result": result,
+            "http_status": status,
+            "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "body_size": len(body) if isinstance(body, bytes) else None,
+            "json_valid": json_valid,
+            "challenge_present": present,
+            "challenge_is_string": is_string,
+            "challenge_matches": matches,
+        }
+        try:
+            observer(details)
+        except Exception:
+            # Observability must never change callback verification semantics.
+            pass
+
+    try:
+        status, response_body = await post_signed(
+            url,
+            secret,
+            subscription_id,
+            verification_id,
+            {"type": "verification", "challenge": challenge},
+            sender=sender,
+        )
+    except CallbackEndpointError as exc:
+        observe(exc.reason)
+        raise
+    except Exception:
+        observe("unexpected_error")
+        raise
     if status < 200 or status >= 300:
+        observe("http_rejected", status=status, body=response_body)
         raise CallbackEndpointError("challenge_failed")
     try:
         echoed = json.loads(response_body)
-        got = echoed["challenge"] if isinstance(echoed, dict) else ""
-    except (ValueError, KeyError, TypeError) as exc:
-        raise CallbackEndpointError("challenge_failed") from exc
-    if not isinstance(got, str) or not hmac.compare_digest(got, challenge):
+    except (ValueError, TypeError):
+        observe("invalid_json", status=status, body=response_body, json_valid=False)
+        raise CallbackEndpointError("challenge_failed") from None
+    present = isinstance(echoed, dict) and "challenge" in echoed
+    if not present:
+        observe(
+            "challenge_missing", status=status, body=response_body, json_valid=True, present=False
+        )
+        raise CallbackEndpointError("challenge_failed")
+    got = echoed["challenge"]
+    if not isinstance(got, str):
+        observe(
+            "challenge_not_string",
+            status=status,
+            body=response_body,
+            json_valid=True,
+            present=True,
+            is_string=False,
+        )
+        raise CallbackEndpointError("challenge_failed")
+    matches = hmac.compare_digest(got, challenge)
+    observe(
+        "verified" if matches else "challenge_mismatch",
+        status=status,
+        body=response_body,
+        json_valid=True,
+        present=True,
+        is_string=True,
+        matches=matches,
+    )
+    if not matches:
         raise CallbackEndpointError("challenge_failed")

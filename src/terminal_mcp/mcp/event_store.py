@@ -717,6 +717,7 @@ class MCPEventStore:
         callback,
         secret,
         ttl_ms=None,
+        callback_verified_fresh=False,
         message_binding=None,
         authorization_checker=None,
     ):
@@ -817,13 +818,16 @@ class MCPEventStore:
                         message_binding.role,
                     ),
                 )
-            await db.execute(
-                "INSERT INTO mcp_event_verified_callbacks"
-                "(principal_id,callback_url,verified_until) VALUES(?,?,?) "
-                "ON CONFLICT(principal_id,callback_url) DO UPDATE SET "
-                "verified_until=excluded.verified_until",
-                (principal, callback, utc_text(now + timedelta(minutes=10))),
-            )
+            # Only a fresh signed challenge grants a new verification window.
+            # A cached refresh must never extend the window indefinitely.
+            if callback_verified_fresh:
+                await db.execute(
+                    "INSERT INTO mcp_event_verified_callbacks"
+                    "(principal_id,callback_url,verified_until) VALUES(?,?,?) "
+                    "ON CONFLICT(principal_id,callback_url) DO UPDATE SET "
+                    "verified_until=excluded.verified_until",
+                    (principal, callback, utc_text(now + timedelta(minutes=10))),
+                )
             await db.commit()
         return expires_at
 
@@ -844,6 +848,36 @@ class MCPEventStore:
             await db.execute(
                 "DELETE FROM mcp_event_subscriptions WHERE id=? AND principal_id=?",
                 (sub_id, principal),
+            )
+            await db.commit()
+
+    async def unsubscribe_matching(self, principal, name, callback):
+        """Idempotent owner-authorized cleanup by the official subscription tuple.
+
+        The stored recipient binding may already be revoked/expired. Never
+        consult or create a new binding while removing an existing subscription.
+        """
+        selector = (
+            "SELECT id FROM mcp_event_subscriptions WHERE principal_id=? "
+            "AND name=? AND arguments_json='{}' AND callback_url=?"
+        )
+        params = (principal, name, callback)
+        async with aiosqlite.connect(self.path, timeout=5) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM mcp_event_deliveries WHERE subscription_id IN (" + selector + ")",
+                params,
+            )
+            await db.execute(
+                "DELETE FROM mcp_event_message_bindings WHERE subscription_id IN ("
+                + selector
+                + ")",
+                params,
+            )
+            await db.execute(
+                "DELETE FROM mcp_event_subscriptions WHERE principal_id=? "
+                "AND name=? AND arguments_json='{}' AND callback_url=?",
+                params,
             )
             await db.commit()
 

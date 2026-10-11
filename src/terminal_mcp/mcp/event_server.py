@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse, Response
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import current_admission_context
-from terminal_mcp.mcp.event_diagnostics import correlation_id, emit
+from terminal_mcp.mcp.event_diagnostics import correlation_id, emit, emit_callback_probe
 from terminal_mcp.mcp.event_store import (
     EVENT_NAMES,
     MCPEventStore,
@@ -240,6 +240,18 @@ class MCPEventsAdapter:
                 "validation", "callback_url_invalid", -32602, "Invalid HTTPS callback URL"
             )
         emit(method, "validation", "accepted", cid)
+        # Unsubscribe is authorized by the authenticated subscription owner,
+        # including after a message recipient's Access/attach binding expires.
+        # This cannot mint or rebind a recipient: it only removes the owner's
+        # existing tuple and associated queued deliveries.
+        if method == "events/unsubscribe":
+            if set(delivery) - {"mode", "url"}:
+                return reject(
+                    "validation", "unsubscribe_invalid", -32602, "Invalid unsubscribe delivery"
+                )
+            await self.store.unsubscribe_matching(principal, name, callback)
+            emit(method, "persistence", "unsubscribed", cid)
+            return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         binding = None
         if name == "message.received":
             admission = current_admission_context()
@@ -280,14 +292,6 @@ class MCPEventsAdapter:
                 )
             emit(method, "authorization", "recipient_bound", cid)
         sub_id = self._id(principal, name, arguments, callback, binding=binding)
-        if method == "events/unsubscribe":
-            if set(delivery) - {"mode", "url"}:
-                return reject(
-                    "validation", "unsubscribe_invalid", -32602, "Invalid unsubscribe delivery"
-                )
-            await self.store.unsubscribe(sub_id, principal)
-            emit(method, "persistence", "unsubscribed", cid)
-            return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         if method != "events/subscribe":
             return reject("validation", "method_unknown", -32601, "Method not found")
         secret = delivery.get("secret")
@@ -301,6 +305,7 @@ class MCPEventsAdapter:
         if ttl_ms is not None and (type(ttl_ms) is not int or ttl_ms < 1000):
             return reject("validation", "ttl_invalid", -32602, "Invalid ttlMs")
         emit(method, "callback", "challenge_started", cid)
+        callback_verified_fresh = False
         try:
             if not await self.store.verified_recently(principal, callback):
                 await verify_callback(
@@ -308,7 +313,11 @@ class MCPEventsAdapter:
                     secret,
                     sub_id,
                     sender=self.sender,
+                    observer=lambda details: emit_callback_probe(cid, details),
                 )
+                callback_verified_fresh = True
+            else:
+                emit(method, "callback", "verification_cache_hit", cid)
         except CallbackEndpointError as exc:
             return reject(
                 "callback",
@@ -340,6 +349,7 @@ class MCPEventsAdapter:
                 callback=callback,
                 secret=secret,
                 ttl_ms=ttl_ms,
+                callback_verified_fresh=callback_verified_fresh,
                 message_binding=binding,
                 authorization_checker=self.access_checker,
             )
