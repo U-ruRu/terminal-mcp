@@ -106,6 +106,24 @@ class MCPEventsAdapter:
                 )
                 continue
             if not valid:
+                try:
+                    reassigned = (
+                        item.get("recipient_role") == "session_number"
+                        and self.message_resolver is not None
+                        and await self.message_resolver.number_reassigned(item)
+                    )
+                except Exception:
+                    await self.store.finish_attempt(
+                        item["event_id"], item["subscription_id"], status=None
+                    )
+                    continue
+                if reassigned:
+                    # Keep the pinned association until TTL/explicit unsubscribe;
+                    # otherwise an automatic refresh could follow number reuse.
+                    await self.store.finish_attempt(
+                        item["event_id"], item["subscription_id"], status=410
+                    )
+                    continue
                 # Revoked credentials invalidate the durable subscription as well.
                 await self.store.unsubscribe(
                     item["subscription_id"],

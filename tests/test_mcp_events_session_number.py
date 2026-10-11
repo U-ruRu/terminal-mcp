@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from test_mcp_events_message_binding import KEY, URL, config, meta, rpc, tool
 
 from terminal_mcp.app import create_app
+from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import VerifiedAdmissionContext
 from terminal_mcp.mcp.event_store import event_catalog
 
@@ -216,8 +217,33 @@ def test_expiry_rejects_new_subscription_and_reuse_never_retargets(tmp_path):
         assert not client.portal.call(
             app.state.access_events.message_resolver.still_bound, old_binding
         )
+        # A pending old delivery cannot erase the association and let a native
+        # automatic refresh silently select the recycled recipient.
+        with sqlite3.connect(app.state.settings.database_path) as db:
+            stamp = utc_text()
+            db.execute(
+                "INSERT INTO mcp_event_records(event_id,source_key,name,occurred_at,"
+                "data_json,recipient_agent_id) VALUES(?,?,?,?,?,?)",
+                ("fixture-reuse", "fixture-reuse", "message.received", stamp,
+                 json.dumps({"server": "firstbyte", "sender": "fixture",
+                             "recipient": "fixture", "message_id": "fixture",
+                             "text": "old recipient only", "timestamp": stamp}),
+                 slot_a["logical_agent_id"]),
+            )
+            db.execute(
+                "INSERT INTO mcp_event_deliveries(event_id,subscription_id,next_attempt_at) "
+                "VALUES(?,?,?)", ("fixture-reuse", sub_id, stamp),
+            )
+        client.portal.call(app.state.access_events.deliver_due)
+        assert stored(app, sub_id) is not None
+        assert not any(data.get("name") == "message.received" for _, data, _ in sink.requests)
+        with sqlite3.connect(app.state.settings.database_path) as db:
+            assert db.execute(
+                "SELECT state FROM mcp_event_deliveries WHERE event_id='fixture-reuse'"
+            ).fetchone()[0] == "dead"
         changed = register(client, number_a)
         assert changed["error"]["code"] == -32001
+        assert changed["error"]["data"]["reason"] == "recipient_binding_changed"
         assert "recipient changed" in changed["error"]["message"]
         assert stored(app, sub_id)["recipient_agent_id"] == slot_a["logical_agent_id"]
         assert remove(client, number_a)["result"] == {}

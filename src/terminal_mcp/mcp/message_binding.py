@@ -200,6 +200,31 @@ class MeshMessageSubscriberResolver:
             role="session_number",
         )
 
+    async def number_reassigned(self, delivery: dict) -> bool:
+        """Keep an old recipient association visible to an explicit refresh."""
+        key = delivery.get("recipient_connection_key") or ""
+        if (
+            delivery.get("recipient_role") != "session_number"
+            or delivery.get("recipient_node_id") != self.mesh.store.local_node_id
+            or not key.startswith("session-number:")
+        ):
+            return False
+        winner = await asyncio.to_thread(
+            self.mesh.store.numbers.winner, key.removeprefix("session-number:")
+        )
+        return bool(
+            winner
+            and (
+                winner["logical_agent_id"],
+                winner["issuer_id"],
+                winner["slot_id"],
+            ) != (
+                delivery.get("recipient_agent_id"),
+                delivery.get("recipient_issuer_id"),
+                delivery.get("recipient_slot_id"),
+            )
+        )
+
     async def still_bound(self, delivery: dict) -> bool:
         key = delivery.get("recipient_connection_key")
         if not key or delivery.get("recipient_node_id") != self.mesh.store.local_node_id:
