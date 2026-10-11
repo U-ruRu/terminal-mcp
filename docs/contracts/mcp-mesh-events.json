@@ -1,0 +1,350 @@
+{
+  "leaseSeconds": 600,
+  "lifecycle/events": {
+    "additionalProperties": false,
+    "properties": {
+      "events": {
+        "items": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "data": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent_name": {
+                      "type": "string"
+                    },
+                    "server": {
+                      "type": "string"
+                    },
+                    "task": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agent_name",
+                    "server"
+                  ],
+                  "type": "object"
+                },
+                "eventId": {
+                  "pattern": "^evt_[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "name": {
+                  "const": "agent.attached"
+                },
+                "timestamp": {
+                  "format": "date-time",
+                  "maxLength": 40,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "eventId",
+                "name",
+                "timestamp",
+                "data"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "data": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent_name": {
+                      "type": "string"
+                    },
+                    "server": {
+                      "type": "string"
+                    },
+                    "task": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agent_name",
+                    "server"
+                  ],
+                  "type": "object"
+                },
+                "eventId": {
+                  "pattern": "^evt_[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "name": {
+                  "const": "agent.inactive"
+                },
+                "timestamp": {
+                  "format": "date-time",
+                  "maxLength": 40,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "eventId",
+                "name",
+                "timestamp",
+                "data"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "data": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agent_name": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "description": "manual for an explicit end, expired for timer expiry; other committed causes retain their stored reason.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "server": {
+                      "type": "string"
+                    },
+                    "task": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "agent_name",
+                    "server",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                "eventId": {
+                  "pattern": "^evt_[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "name": {
+                  "const": "session.ended"
+                },
+                "timestamp": {
+                  "format": "date-time",
+                  "maxLength": 40,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "eventId",
+                "name",
+                "timestamp",
+                "data"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "maxItems": 20,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "events"
+    ],
+    "type": "object"
+  },
+  "lifecycle/interest": {
+    "additionalProperties": false,
+    "properties": {
+      "event_names": {
+        "items": {
+          "enum": [
+            "agent.attached",
+            "agent.inactive",
+            "session.ended"
+          ]
+        },
+        "maxItems": 3,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "started_at": {
+        "additionalProperties": false,
+        "properties": {
+          "agent.attached": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          },
+          "agent.inactive": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          },
+          "session.ended": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "version": {
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "version",
+      "event_names",
+      "started_at"
+    ],
+    "type": "object"
+  },
+  "maxAttempts": 288,
+  "maxWireBytes": 65536,
+  "message-events/events": {
+    "additionalProperties": false,
+    "properties": {
+      "events": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": false,
+              "properties": {
+                "message_id": {
+                  "type": "string"
+                },
+                "recipient": {
+                  "type": "string"
+                },
+                "sender": {
+                  "type": "string"
+                },
+                "server": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "timestamp": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "server",
+                "sender",
+                "recipient",
+                "message_id",
+                "text",
+                "timestamp"
+              ],
+              "type": "object"
+            },
+            "eventId": {
+              "pattern": "^evt_[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "name": {
+              "const": "message.received"
+            },
+            "recipient": {
+              "additionalProperties": false,
+              "properties": {
+                "issuer_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "recipient_agent_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "slot_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "issuer_id",
+                "slot_id",
+                "recipient_agent_id"
+              ],
+              "type": "object"
+            },
+            "timestamp": {
+              "format": "date-time",
+              "maxLength": 40,
+              "type": "string"
+            }
+          },
+          "required": [
+            "eventId",
+            "name",
+            "timestamp",
+            "data",
+            "recipient"
+          ],
+          "type": "object"
+        },
+        "maxItems": 20,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "events"
+    ],
+    "type": "object"
+  },
+  "message-events/interest": {
+    "additionalProperties": false,
+    "properties": {
+      "recipients": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "created_at": {
+              "format": "date-time",
+              "maxLength": 40,
+              "type": "string"
+            },
+            "recipient_agent_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id",
+            "recipient_agent_id",
+            "created_at"
+          ],
+          "type": "object"
+        },
+        "maxItems": 128,
+        "type": "array"
+      },
+      "version": {
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "version",
+      "recipients"
+    ],
+    "type": "object"
+  },
+  "retentionSeconds": 86400
+}

@@ -544,3 +544,68 @@ async def test_message_event_initial_gap_issuer_binding_end_restart_and_unsubscr
         private_wires = [b for _, p, b in routes.requests if "/message-events/" in p]
         assert SECRET not in json.dumps(private_wires)
         assert "callback.invalid" not in json.dumps(private_wires)
+
+
+@pytest.mark.asyncio
+async def test_same_interest_recovers_outage_gap_and_never_requeues_expired_history(tmp_path):
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        source = await node(tmp_path, "source", ("source", "access"), routes, client)
+        access = await node(tmp_path, "access", ("source", "access"), routes, client)
+        await subscribe(access, "one")
+        snapshot = await access.lifecycle.local_interest()
+        await source.lifecycle.receive_interest("access", snapshot)
+        with sqlite3.connect(source.path) as db:
+            db.execute("UPDATE mcp_event_mesh_interest SET expires_at=?", (utc_text(),))
+        await attach(source)
+        assert not outbox(source)
+        await source.lifecycle.receive_interest("access", snapshot)
+        pending = await source.lifecycle.due("access")
+        assert len(pending) == 1
+        await source.lifecycle.finish(
+            "access", [i["eventId"] for i in pending], {i["eventId"] for i in pending}
+        )
+        with sqlite3.connect(source.path) as db:
+            old = utc_text(utc_now() - timedelta(days=2))
+            db.execute("UPDATE mcp_event_records SET occurred_at=?", (old,))
+            db.execute("UPDATE mcp_event_mesh_outbox SET created_at=?", (old,))
+        assert not await source.lifecycle.due("access")
+        assert not outbox(source)
+        assert not await source.lifecycle.due("access")
+        assert not outbox(source)
+
+
+@pytest.mark.asyncio
+async def test_failed_claim_cleanup_is_contained_and_stale_claim_recovers(tmp_path, monkeypatch):
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        source = await node(tmp_path, "source", ("source", "access"), routes, client)
+        access = await node(tmp_path, "access", ("source", "access"), routes, client)
+        await subscribe(access, "one")
+        await access.replication.tick()
+        await attach(source)
+        original_finish = source.lifecycle.finish
+
+        async def unavailable(*args, **kwargs):
+            raise sqlite3.OperationalError("isolated transient write contention")
+
+        monkeypatch.setattr(source.lifecycle, "finish", unavailable)
+        # finish fails on the success path and again during error cleanup.
+        await source.lifecycle.sync_peer(source.config.peers[0])
+        assert outbox(source)[0][2] == "sending"
+        monkeypatch.setattr(source.lifecycle, "finish", original_finish)
+        with sqlite3.connect(source.path) as db:
+            db.execute("UPDATE mcp_event_mesh_outbox SET next_attempt_at=?", (utc_text(),))
+        source.lifecycle._announced.clear()
+        await source.lifecycle.sync_peer(source.config.peers[0])
+        assert outbox(source)[0][2] == "sent"
+        assert len(records(access)) == 1
+
+
+def test_generated_mesh_wire_catalog_is_current():
+    from pathlib import Path
+
+    from terminal_mcp.fleet.event_mesh import mesh_event_contracts
+
+    artifact = Path(__file__).resolve().parents[1] / "docs/contracts/mcp-mesh-events.json"
+    assert json.loads(artifact.read_text()) == mesh_event_contracts()

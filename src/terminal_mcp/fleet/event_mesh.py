@@ -462,3 +462,98 @@ def build_lifecycle_event_router(lifecycle, replication_auth, trusted_issuers):
             raise HTTPException(400, "invalid lifecycle events") from None
 
     return router
+
+
+def mesh_event_contracts():
+    from terminal_mcp.mcp.event_store import event_catalog
+
+    catalogs = {event["name"]: event for event in event_catalog()["events"]}
+    version = {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}
+    timestamp = {"type": "string", "format": "date-time", "maxLength": 40}
+    identity = {"type": "string", "minLength": 1, "maxLength": 128}
+    recipient = {
+        "type": "object",
+        "properties": {
+            "issuer_id": identity,
+            "slot_id": identity,
+            "recipient_agent_id": identity,
+        },
+        "required": ["issuer_id", "slot_id", "recipient_agent_id"],
+        "additionalProperties": False,
+    }
+
+    def envelope(name, private=False):
+        properties = {
+            "eventId": {"type": "string", "pattern": "^evt_[0-9a-f]{32}$"},
+            "name": {"const": name},
+            "timestamp": timestamp,
+            "data": catalogs[name]["payloadSchema"],
+        }
+        if private:
+            properties["recipient"] = recipient
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+
+    def batch(events):
+        return {
+            "type": "object",
+            "properties": {
+                "events": {"type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": events},
+            },
+            "required": ["events"],
+            "additionalProperties": False,
+        }
+
+    return {
+        "maxWireBytes": MAX_WIRE_BYTES,
+        "leaseSeconds": INTEREST_LEASE_SECONDS,
+        "retentionSeconds": MESH_RETENTION_SECONDS,
+        "maxAttempts": MAX_PEER_ATTEMPTS,
+        "lifecycle/interest": {
+            "type": "object",
+            "properties": {
+                "version": version,
+                "event_names": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "uniqueItems": True,
+                    "items": {"enum": list(LIFECYCLE_NAMES)},
+                },
+                "started_at": {
+                    "type": "object",
+                    "properties": {name: timestamp for name in LIFECYCLE_NAMES},
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["version", "event_names", "started_at"],
+            "additionalProperties": False,
+        },
+        "lifecycle/events": batch({"oneOf": [envelope(name) for name in LIFECYCLE_NAMES]}),
+        "message-events/interest": {
+            "type": "object",
+            "properties": {
+                "version": version,
+                "recipients": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "slot_id": identity,
+                            "recipient_agent_id": identity,
+                            "created_at": timestamp,
+                        },
+                        "required": ["slot_id", "recipient_agent_id", "created_at"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["version", "recipients"],
+            "additionalProperties": False,
+        },
+        "message-events/events": batch(envelope("message.received", private=True)),
+    }
