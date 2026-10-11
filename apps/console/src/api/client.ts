@@ -1,3 +1,4 @@
+import { decodeManagedSlotStatus, decodeAccessMeshSlot, decodeAccessMeshSlots, decodeAccessMeshDefaults, decodeSlotMutation, publicErrorCode } from './slotContracts'
 import {
   ConsoleContractError,
   decodeActivityFeed,
@@ -10,6 +11,10 @@ import {
   decodeWebSocketTicket,
 } from './contracts'
 import type {
+  AccessMeshDefaultsReadModel,
+  AccessMeshMutationRequest,
+  AccessMeshSlotReadModel,
+  ManagedSlotStatusReadModel,
   ActivityFeedReadModel,
   AgentCollectionReadModel,
   ConsoleSnapshotReadModel,
@@ -55,13 +60,6 @@ async function payload(response: Response): Promise<unknown> {
   }
 }
 
-function errorCode(value: unknown): string {
-  if (value && typeof value === 'object' && 'error' in value) {
-    const code = (value as { error?: unknown }).error
-    if (typeof code === 'string') return code
-  }
-  return 'request_failed'
-}
 
 export class ConsoleClient {
   private readonly origin: string
@@ -140,16 +138,58 @@ export class ConsoleClient {
   async persistentMutation(path: string, body: Record<string, unknown>): Promise<PersistentMutationResult> {
     if (!path.startsWith('/actions/persistent/')) throw new Error('invalid_persistent_path')
     const raw = await this.request(path, { method: 'POST', body: JSON.stringify(body) })
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ConsoleContractError('$', 'persistent mutation response was not an object')
-    const payload = raw as Record<string, unknown>
-    if (typeof payload.ok !== 'boolean') throw new ConsoleContractError('$.ok', 'expected boolean')
-    return {
-      ok: payload.ok,
-      code: typeof payload.code === 'string' ? payload.code : undefined,
-      error: typeof payload.error === 'string' ? payload.error : undefined,
-      blockers: Array.isArray(payload.blockers) ? payload.blockers.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : undefined,
-      payload,
+    return decodeSlotMutation(raw)
+  }
+
+  async managedSlotStatus(logicalAgentId: string): Promise<ManagedSlotStatusReadModel> {
+    const status = decodeManagedSlotStatus(await this.request('/actions/persistent/managed/status', {
+      method: 'POST', body: JSON.stringify({ logical_agent_id: logicalAgentId }),
+    }))
+    if (status.logicalAgentId !== logicalAgentId) throw new ConsoleContractError('$.logical_agent_id', 'response belongs to another slot')
+    return status
+  }
+
+  async accessMeshDefaults(): Promise<AccessMeshDefaultsReadModel> {
+    return decodeAccessMeshDefaults(await this.request('/actions/access/defaults'))
+  }
+
+  async accessMeshSlot(slotId: string): Promise<AccessMeshSlotReadModel> {
+    const slot = decodeAccessMeshSlot(await this.request('/actions/access/slots/' + encodeURIComponent(slotId)))
+    if (slot.slotId !== slotId) throw new ConsoleContractError('$.slot.slot_id', 'response belongs to another slot')
+    return slot
+  }
+
+  async accessMeshSlots(options: { limit?: number; cursor?: string } = {}) {
+    const params = new URLSearchParams({ limit: String(options.limit ?? 100) })
+    if (options.cursor) params.set('cursor', options.cursor)
+    return decodeAccessMeshSlots(await this.request('/actions/access/slots?' + params.toString()))
+  }
+
+  async accessMeshAllSlots(): Promise<AccessMeshSlotReadModel[]> {
+    const slots: AccessMeshSlotReadModel[] = []
+    const cursors = new Set<string>()
+    const ids = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < 100; page += 1) {
+      const next = await this.accessMeshSlots({ limit: 100, cursor })
+      for (const slot of next.slots) {
+        const key = slot.issuerNodeId + '/' + slot.slotId
+        if (ids.has(key)) throw new ConsoleContractError('$.slots', 'duplicate slot across pages; refresh required')
+        ids.add(key)
+        slots.push(slot)
+      }
+      if (next.nextCursor === null) return slots
+      if (cursors.has(next.nextCursor)) throw new ConsoleContractError('$.next_cursor', 'cursor did not advance')
+      cursors.add(next.nextCursor)
+      cursor = next.nextCursor
     }
+    throw new ConsoleContractError('$.next_cursor', 'slot page limit reached')
+  }
+
+  async accessMeshMutation(body: AccessMeshMutationRequest): Promise<PersistentMutationResult> {
+    return decodeSlotMutation(await this.request('/actions/access/mutate', {
+      method: 'POST', body: JSON.stringify(body),
+    }))
   }
 
   async meshVpnStatus(): Promise<MeshVpnStatus> {
@@ -281,7 +321,7 @@ export class ConsoleClient {
 
     const body = await payload(response)
     if (!response.ok) {
-      throw new ConsoleHttpError(response.status, errorCode(body))
+      throw new ConsoleHttpError(response.status, publicErrorCode(body))
     }
     return body
   }
