@@ -170,7 +170,7 @@ def test_shared_number_fanout_exact_recipient_refresh_and_selective_unsubscribe(
         assert client.portal.call(
             app.state.access_events.message_resolver.still_bound, stored(app, first)
         )
-        assert register(client, number_a)["error"]["code"] == -32001
+        assert register(client, number_a)["result"]["id"] == first
         resumed = tool(
             client, "access", "session", {"action": "start"}, evidence=access_a
         )["session_number"]
@@ -194,7 +194,8 @@ def test_expiry_rejects_new_subscription_and_reuse_never_retargets(tmp_path):
         old_binding = stored(app, sub_id)
         clock = app.state.access_mesh.clock
         app.state.access_mesh.clock = lambda: datetime.now(UTC) + timedelta(days=1)
-        assert register(client, number_a)["error"]["code"] == -32001
+        assert register(client, number_a)["result"]["id"] == sub_id
+        assert register(client, number_a, url=URL+"/new") ["error"]["code"] == -32001
         app.state.access_mesh.clock = clock
         _, slot_b, _, _ = issue(client, app, "new")
         # Isolated fixture simulates the existing allocator's nonoverlapping reuse.
@@ -354,4 +355,4 @@ def test_revoked_number_binding_or_credentials_stop_pending_delivery(tmp_path, r
                 )
         client.portal.call(app.state.mcp_events.deliver_due)
         assert not any(data.get("name") == "message.received" for _, data, _ in sink.requests)
-        assert stored(app, sub_id) is None
+        assert stored(app, sub_id) is not None  # only owner unsubscribe releases association

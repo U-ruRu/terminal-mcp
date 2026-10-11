@@ -71,3 +71,58 @@ timer: SlotSuspended, SlotDeleted, replicated_cycle_fence,
 snapshot_catchup, and session_interrupt are examples. A local cycle change is
 expired only when its stored hard deadline actually elapsed; otherwise its
 original cause remains. Historical rows without a recorded cause use unknown.
+
+## Durable subscribed recipient identity
+
+A message.received subscription pins its exact recipient LogicalAgent, issuer,
+slot and four-digit number. This applies to public-number arguments and existing
+provider-bound message subscriptions. Lifecycle subscriptions with empty
+arguments do not pin any identity.
+
+A held recipient remains discoverable and addressable on the subscription node
+after its WorkSession ends. Discovery reports inactive message-only presence,
+with zero work time. Sending a message does not start a WorkSession, renew its
+deadline or grant command/write access. Slot deletion, code rotation and known
+number reuse are rejected while any matching hold exists.
+
+Each subscription owns one durable hold. Owner-authorized exact-tuple unsubscribe
+deletes the subscription, binding and queued deliveries, and commits its hold
+withdrawal in one SQLite transaction. Removing one subscription preserves all
+other holds. Removing the last hold does not bypass a live grant, session,
+reservation or any other existing number constraint. Credential revocation or a
+callback 410/413 stops delivery without pretending that the owner unsubscribed.
+
+### Expiration and persistence
+
+The official MCP Events contract distinguishes omitted ttlMs (server default),
+explicit null (requested no expiration), and a finite requested duration.
+This server grants explicit null with refreshBefore:null. Omission preserves the
+one-hour default. Finite requests preserve the existing one-hour maximum and
+return the actual granted ISO expiration in refreshBefore; delivery stops at
+that expiration. Identity holds remain until explicit removal, including when a
+finite delivery lease expires. Use no-expiry for persistent monitoring.
+
+Upgrades make expires_at nullable by copying all existing subscription fields
+without changing callback, signing/rotation configuration, recipient association,
+created_at or expiration. Existing finite leases are not silently converted to
+no-expiry. Durable bindings backfill missing holds, and ordinary restart recovers
+queued delivery without requiring an agent to subscribe again. No deployment
+step should reset these SQLite tables or renew a lease.
+
+Only a hold's owning subscription node can advance its authenticated Mesh
+snapshot. Revisioned release tombstones reject delayed older snapshots; callbacks,
+secrets, credentials and message bodies are never part of this hold transport.
+Known replicated holds survive peer outage and reject local number reuse.
+
+Allocation retains its existing partition-availability contract: after the
+bounded negotiation window, it may issue without every peer confirming. A hold
+created only on an unreachable peer cannot be known by another issuer until
+reconnection. Absolute prevention of unknown partition reuse would require an
+approved allocation-policy change, such as requiring all peers to confirm
+reused-number admission. This candidate does not change that policy.
+
+Unsubscribe suppresses queued deliveries and already-claimed deliveries whose
+subscription was removed before dispatch. An HTTP callback request already in
+progress cannot be recalled. At-least-once retry behavior remains unchanged.
+
+Official contract: https://developers.openai.com/plugins/build/mcp-events

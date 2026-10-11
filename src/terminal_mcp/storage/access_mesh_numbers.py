@@ -17,7 +17,10 @@ class MeshSessionNumbers:
 
     def __init__(self, store):
         self.store = store
+        from terminal_mcp.storage.access_mesh_recipient_holds import initialize_holds
+
         with store._connect() as db:
+            initialize_holds(db)
             db.execute(
                 "CREATE TABLE IF NOT EXISTS access_mesh_number_reservations(number TEXT "
                 "PRIMARY KEY, attempt_id TEXT NOT NULL, expires_at TEXT NOT NULL)"
@@ -96,6 +99,11 @@ class MeshSessionNumbers:
         # finished work window indefinitely. Active grants remain protected
         # separately: an active/rearmable slot retains its number.
         as_of = as_of or self.stamp(self.store.clock())
+        if db.execute(
+            "SELECT 1 FROM access_mesh_recipient_holds "
+            "WHERE number=? AND state='held' LIMIT 1", (number,)
+        ).fetchone():
+            return True
         # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
         for issuer in self.store.trusted_issuers:
             tag = self.store.code_tag(issuer, number)
@@ -211,6 +219,15 @@ class MeshSessionNumbers:
         stamp = self.stamp(now or datetime.now(UTC))
         with self.store._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            pinned = db.execute(
+                "SELECT c.* FROM access_mesh_recipient_holds h "
+                "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
+                "WHERE h.number=? AND h.state='held' AND "
+                "(h.issuer_id!=? OR h.slot_id!=?) AND c.started_at<=? LIMIT 1",
+                (number, issuer_id, slot_id, start),
+            ).fetchone()
+            if pinned is not None:
+                raise AccessMeshError("access_mesh_subscription_hold")
             existing = db.execute(
                 "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
                 (issuer_id, slot_id),

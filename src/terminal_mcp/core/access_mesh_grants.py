@@ -526,6 +526,9 @@ class LocalAccessMesh:
     def _prepare_new_slot(self, db, event: AccessSlotEvent) -> None:
         """Hook: native adapters may recycle expired grants in this transaction."""
 
+    def _before_slot_update(self, db, old, *, state, code_tag):
+        """Subclass invariants participate in the same mutation transaction."""
+
     def apply_event(
         self,
         event: AccessSlotEvent,
@@ -638,6 +641,7 @@ class LocalAccessMesh:
                     if policy.rearm_enabled
                     else None
                 )
+            self._before_slot_update(db, old, state=state, code_tag=tag)
             release_claims = (
                 event.kind == "SlotDeleted"
                 or (old["kind"] == "legacy" and event.kind == "SlotSuspended")

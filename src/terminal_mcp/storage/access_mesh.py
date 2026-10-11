@@ -120,6 +120,9 @@ class AccessMeshStore(LocalAccessMesh):
         from terminal_mcp.storage.access_mesh_numbers import MeshSessionNumbers
 
         self.numbers = MeshSessionNumbers(self)
+        from terminal_mcp.storage.access_mesh_recipient_holds import MeshRecipientHolds
+
+        self.recipient_holds = MeshRecipientHolds(self)
 
     def set_delivery_notifier(self, callback) -> None:
         """Register an in-process wakeup, never a network call or durability gate."""
@@ -301,6 +304,12 @@ class AccessMeshStore(LocalAccessMesh):
         if event.kind == "SlotIssued" and number is not None:
             started = event.effective_at or self.clock()
             expires = started + timedelta(seconds=slot.policy.duration_seconds)
+            if db.execute(
+                "SELECT 1 FROM access_mesh_recipient_holds WHERE number=? "
+                "AND state='held' AND (issuer_id!=? OR slot_id!=?) LIMIT 1",
+                (number["number"],event.issuer_id,event.slot_id),
+            ).fetchone():
+                raise AccessMeshError("access_mesh_subscription_hold")
             db.execute(
                 "INSERT INTO access_mesh_number_claims "
                 "(issuer_id,slot_id,number,logical_agent_id,started_at,hard_expires_at) "
@@ -444,6 +453,10 @@ class AccessMeshStore(LocalAccessMesh):
                 if start is not None
                 else None
             )
+            from terminal_mcp.storage.access_mesh_recipient_holds import slot_held
+
+            if slot_held(db, previous.issuer_id, previous.slot_id):
+                raise AccessMeshError("access_mesh_subscription_hold")
             if previous.policy.rearm_enabled or end is None or now < end:
                 raise AccessMeshError("access_mesh_code_in_use")
             db.execute(
@@ -467,6 +480,15 @@ class AccessMeshStore(LocalAccessMesh):
                 stamp=stamp,
                 release_claims=True,
             )
+
+    def _before_slot_update(self, db, old, *, state, code_tag):
+        from terminal_mcp.storage.access_mesh_recipient_holds import slot_held
+
+        if (
+            (state == "deleted" or code_tag != old["code_tag"])
+            and slot_held(db, old["issuer_id"], old["slot_id"])
+        ):
+            raise AccessMeshError("access_mesh_subscription_hold")
 
     def apply_event(
         self,
@@ -1307,6 +1329,10 @@ class AccessMeshStore(LocalAccessMesh):
                     return "duplicate"
                 if old["state"] == "deleted" and raw["state"] != "deleted":
                     raise AccessMeshError("access_mesh_deleted_slot")
+            if old:
+                self._before_slot_update(
+                    db, old, state=raw["state"], code_tag=raw["code_tag"]
+                )
             columns = tuple(sorted(fields))
             db.execute(
                 f"INSERT INTO access_mesh_slot_replicas ({','.join(columns)}) "
