@@ -37,11 +37,11 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
             if role in {"executor", "coordinator"} and tool.name == "session":
                 # The public connector must know the Access Code is mandatory,
                 # and that only attachment (never lifecycle mutation) is valid.
-                assert schema["required"] == ["session_number"]
-                assert schema["properties"]["action"]["const"] == "attach"
+                assert "required" not in schema
+                assert schema["properties"]["action"]["enum"] == ["attach", "intent"]
                 assert schema["properties"]["session_number"]["type"] == "string"
                 assert "issuer_node_id" not in schema["properties"]
-                assert "allOf" not in schema
+                assert "allOf" in schema
             elif role == "executor" and tool.name == "task_state":
                 assert set(schema["required"]) == {"namespace", "task_id", "state"}
                 assert "allOf" not in schema
@@ -63,7 +63,7 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
     assert (
         servers["executor"]._tool_manager.get_tool("session").annotations.destructiveHint is False
     )
-    assert servers["executor"]._tool_manager.get_tool("session").annotations.idempotentHint is True
+    assert servers["executor"]._tool_manager.get_tool("session").annotations.idempotentHint is False
 
 
 def test_http_action_metadata_and_mesh_schemas_are_authenticated_separately(tmp_path):
@@ -93,7 +93,8 @@ def test_http_action_metadata_and_mesh_schemas_are_authenticated_separately(tmp_
         assert rpc(client, "access", "tools/list", token=False).status_code == 401
         assert call(client, "executor", "command_read", {}, meta=False)["ok"] is True
 
-def test_executor_and_coordinator_publish_identical_attach_only_session_schema(tmp_path):
+
+def test_executor_and_coordinator_publish_identical_attach_and_intent_session_schema(tmp_path):
     app = create_app(settings(tmp_path))
     executor = app.state.executor_mcp._tool_manager.get_tool("session")
     coordinator = app.state.coordinator_mcp._tool_manager.get_tool("session")
@@ -103,8 +104,11 @@ def test_executor_and_coordinator_publish_identical_attach_only_session_schema(t
     validator = Draft202012Validator(schema)
     validator.validate({"session_number": "0427"})
     validator.validate({"action": "attach", "session_number": "0427"})
+    validator.validate({"action": "intent", "intent": "Inspect fixture"})
     for invalid in (
         {},
+        {"action": "intent"},
+        {"action": "intent", "intent": "Inspect fixture", "session_number": "0427"},
         {"action": "start", "session_number": "0427"},
         {"action": "end", "session_number": "0427"},
         {"action": "detach", "session_number": "0427"},
@@ -113,4 +117,4 @@ def test_executor_and_coordinator_publish_identical_attach_only_session_schema(t
         with pytest.raises(JsonSchemaValidationError):
             validator.validate(invalid)
     assert "Attach this connector once" in coordinator.description
-    assert "mandatory" in coordinator.description
+    assert "Before any domain write" in coordinator.description

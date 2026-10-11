@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ToolAnnotations
+from mcp.types import TextContent, ToolAnnotations
 from pydantic import ValidationError
 
 from terminal_mcp.adapters.actor import actor_for
@@ -38,7 +38,7 @@ from terminal_mcp.application.task_requests import (
 from terminal_mcp.attempt_diagnostics import traced_task_mutation, traced_task_response
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
-from terminal_mcp.core.public_errors import public_error
+from terminal_mcp.core.public_errors import error_from_exception, public_error
 from terminal_mcp.core.read_contract import (
     InvalidCursor,
     OutputItemTooLarge,
@@ -54,6 +54,7 @@ from terminal_mcp.core.task_projections import (
 )
 from terminal_mcp.mcp.access_contracts import (
     AttachInput,
+    MeshAgentObserveInput,
     MeshCommandReadInput,
     MeshCommandReadOutput,
     MeshMessageInput,
@@ -95,7 +96,11 @@ from terminal_mcp.mcp.role_contracts import (
     validate_boundary,
     validation_error,
 )
-from terminal_mcp.mcp.role_outputs import install_role_output_contract
+from terminal_mcp.mcp.role_outputs import (
+    _session_envelope,
+    install_role_output_contract,
+    role_error_result,
+)
 
 RoleName = Literal["executor", "coordinator"]
 EXECUTOR_TOOLS = (
@@ -619,6 +624,7 @@ def build_role_mcp(
     mesh = getattr(application.service, "access_mesh", None)
     input_overrides = (
         {
+            **({(role, "agent_observe"): MeshAgentObserveInput} if role == "coordinator" else {}),
             (role, "session"): AttachInput,
             (role, "message"): MeshMessageInput,
             **(
@@ -673,7 +679,12 @@ def build_role_mcp(
         if mesh:
             actor = _actor(application, role)
             with actor.bind():
-                return await mesh.attach(actor, session_number=request.session_number)
+                if request.action == "intent":
+                    return await mesh.update_intent(actor, request.intent)
+                result = await mesh.attach(actor, session_number=request.session_number)
+                if request.intent is not None:
+                    await mesh.update_intent(actor, request.intent, initial_only=True)
+                return result
         request = SessionInput.model_validate(request)
         raw = await application.session(
             _actor(application, role),
@@ -946,9 +957,9 @@ def build_role_mcp(
             request, failure = _validate(boundary, role, "agent_observe")
             if failure is not None:
                 return failure
-            AgentObserveInput.model_validate(request)
             if mesh:
-                return await mesh.observe(_actor(application, role))
+                return await mesh.observe(_actor(application, role), **request.model_dump())
+            AgentObserveInput.model_validate(request)
             return await application.agent_observe(_actor(application, role))
 
         @mcp.tool(
@@ -982,7 +993,14 @@ def build_role_mcp(
             if tool.name == "session":
                 tool.description = (
                     "Attach this connector once using session_number. "
-                    "Session number is mandatory; action is attach-only. "
+                    "Use action='attach' with session_number and optional initial intent. "
+                    "Repeated attach preserves existing intent and its timer. "
+                    "Before any domain write, set intent here with action='intent', intent=...; "
+                    "refresh uses the existing binding and never needs session_number. "
+                    "Refresh intent every 180 seconds. The first due call warns; the next write "
+                    "is blocked until refresh. Reads, cancel, recovery, release and "
+                    "message ACK/reply "
+                    "remain available under their existing policy. Access only issues the number. "
                     "The local binding survives restart and automatic work-cycle rearm. "
                     "Manage issuance and end the shared access cycle through Access MCP. "
                     "Contract updated for Terminal MCP 0.14.1."
@@ -1006,7 +1024,16 @@ def build_role_mcp(
                     "command journal. Access Code and active work cycle are unnecessary. "
                     "Use the returned opaque cursor for the next bounded page."
                 )
-            elif tool.name in {"task_list", "task_get", "task_graph", "agent_observe", "health"}:
+            elif tool.name == "agent_observe":
+                tool.description = (
+                    "List the bounded local agent overview with stable logical_agent_id, real "
+                    "display_name/public_name, server, current intent and timestamps. Default "
+                    "includes live sessions; include_inactive adds ended/expired latest sessions. "
+                    "Filter logical_agent_id to resolve an Events agent ID. Continue next_cursor. "
+                    "Intent staleness, activity staleness and session expiry are separate states. "
+                    "Available without an active work cycle or Access Code."
+                )
+            elif tool.name in {"task_list", "task_get", "task_graph", "health"}:
                 tool.description = text + " Available without an active work cycle or Access Code."
             elif tool.name == "message":
                 tool.description = (
@@ -1025,8 +1052,69 @@ def build_role_mcp(
         for tool in mcp._tool_manager.list_tools():
             raw_fn = tool.fn
 
-            async def touched(*, _raw_fn=raw_fn, **kwargs):
+            async def touched(*, _raw_fn=raw_fn, _name=tool.name, **kwargs):
+                intent_status = {}
+                args = {}
+                if mesh:
+                    boundary = kwargs.get("boundary")
+                    args = getattr(boundary, "raw_arguments", {})
+                    safe = _name in {
+                        "session",
+                        "command_read",
+                        "command_cancel",
+                        "command_recovery",
+                        "task_list",
+                        "task_get",
+                        "task_graph",
+                        "agent_observe",
+                        "health",
+                    }
+                    if _name == "message":
+                        safe = args.get("action", "read") in {
+                            "read",
+                            "history",
+                            "recipients",
+                            "ack",
+                            "reply",
+                        }
+                    if _name == "task_claim" and args.get("action") == "release":
+                        safe = True
+                    try:
+                        intent_status = await mesh.observe_intent_call(
+                            _actor(application, role), require_intent=not safe
+                        )
+                    except Exception as exc:
+                        result = role_error_result(error_from_exception(exc).as_dict())
+                        result.meta = await _session_envelope(application, role)
+                        return result
+                    if intent_status.get("blocked"):
+                        result = role_error_result(
+                            public_error(
+                                "intent_required"
+                                if intent_status["state"] == "missing"
+                                else "intent_stale"
+                            ).as_dict()
+                        )
+                        result.meta = await _session_envelope(application, role)
+                        return result
                 result = await _raw_fn(**kwargs)
+                if (
+                    _name == "session"
+                    and getattr(result, "structuredContent", {}).get("ok")
+                    and args.get("action") == "intent"
+                ):
+                    intent_status = {}
+                if intent_status.get("warn"):
+                    warning = (
+                        "Update intent or the next write will be blocked. "
+                        "Call session(action='intent', intent=...)."
+                    )
+                    result.meta = {
+                        **(result.meta or {}),
+                        "intent_warning": warning,
+                        "intent_refresh_due_at": intent_status["refresh_due_at"],
+                    }
+                    result.content.append(TextContent(type="text", text=warning))
                 structured = getattr(result, "structuredContent", None)
                 succeeded = (
                     structured.get("ok") is True

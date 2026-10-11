@@ -171,71 +171,82 @@ class AccessMeshApplication:
             "contract_version": actor.contract_version,
         }
 
-    async def observe(self, actor: ActorContext) -> dict:
-        """Minimal public observation of named active local agents."""
-        now = self.clock()
-        if self.messages is not None:
-            locations = await self.messages.active_agent_locations()
-            records = []
-            for item in locations:
-                started = item.get("session_started_at")
-                expiry = item.get("hard_expires_at")
-                if not item.get("public_name") or not started or not expiry:
-                    continue
-                try:
-                    start = datetime.fromisoformat(started.replace("Z", "+00:00"))
-                    end = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    continue
-                records.append(
-                    {
-                        "public_name": item["public_name"],
-                        "last_server": item["server_id"],
-                        "session_duration": max(0, int((end - start).total_seconds())),
-                        "last_activity": item.get("last_active_at"),
-                    }
-                )
-            return {"ok": True, "agents": sorted(records, key=lambda item: item["public_name"])}
-        records = []
-        after = ""
-        while True:
-            slots = await asyncio.to_thread(self.store.local_slots, after=after, limit=100)
-            if not slots:
-                break
-            for slot in slots:
-                identity = await asyncio.to_thread(self.store.observed_identity, slot, now=now)
-                cycle = identity.get("session_lifecycle") or {}
-                name = identity.get("public_name")
-                if (
-                    not name
-                    or not cycle.get("started_at")
-                    or cycle.get("state")
-                    not in {
-                        "active",
-                        "warning",
-                        "draining",
-                    }
-                    or not identity.get("work_session_id")
-                ):
-                    continue
-                start = datetime.fromisoformat(cycle["started_at"])
-                end = datetime.fromisoformat(cycle["hard_expires_at"])
-                records.append(
-                    {
-                        "public_name": name,
-                        "last_server": self.store.local_node_id,
-                        "session_duration": max(0, int((end - start).total_seconds())),
-                        "last_activity": await asyncio.to_thread(
-                            self.store.last_activity,
-                            slot.issuer_id,
-                            slot.slot_id,
-                        ),
-                    }
-                )
-            if len(slots) < 100:
-                break
-            after = slots[-1].logical_agent_id
-        return {"ok": True, "agents": records}
+    async def update_intent(self, actor: ActorContext, intent: str, *, initial_only=False) -> dict:
+        self.require_write(actor)
+        if not isinstance(intent, str) or not intent.strip() or len(intent) > 1000:
+            raise AccessMeshError("invalid_intent")
+        slot = await asyncio.to_thread(self.store.attached_slot, self.connection_key(actor))
+        if slot is None:
+            raise AccessMeshError("session_attach_required")
+        identity = await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
+        if not identity.get("work_session_id"):
+            raise AccessMeshError("session_expired")
+        return await asyncio.to_thread(
+            self.store.update_intent,
+            slot,
+            identity["work_session_id"],
+            intent.strip(),
+            now=self.clock(),
+            initial_only=initial_only,
+        )
+
+    async def observe_intent_call(self, actor: ActorContext, *, require_intent=False) -> dict:
+        """One MCP call observation, before validation or any domain mutation."""
+        try:
+            slot = await asyncio.to_thread(self.store.attached_slot, self.connection_key(actor))
+        except AccessMeshError:
+            return {}
+        if slot is None:
+            return {}
+        identity = await asyncio.to_thread(self.store.observed_identity, slot, now=self.clock())
+        # Preserve the lifecycle error for expired/revoked cycles. Intent never
+        # grants access, extends a deadline, or starts a new execution cycle.
+        live = bool(identity.get("work_session_id"))
+        return await asyncio.to_thread(
+            self.store.intent_status,
+            slot,
+            now=self.clock(),
+            observe=True,
+            require_intent=require_intent and live,
+        )
+
+    async def observe(
+        self,
+        actor: ActorContext,
+        *,
+        limit=20,
+        cursor=None,
+        include_inactive=False,
+        logical_agent_id=None,
+    ) -> dict:
+        """Authoritative bounded local overview, independent of the address book."""
+        from terminal_mcp.core.read_contract import bounded_page, decode_cursor, encode_cursor
+
+        scope = {
+            "kind": "agent_overview",
+            "include_inactive": include_inactive,
+            "logical_agent_id": logical_agent_id,
+        }
+        offset = decode_cursor(cursor, scope)
+        # Cursor offsets are tied to filters; IDs remain the event lookup key.
+        rows = await asyncio.to_thread(
+            self.store.agent_overview,
+            now=self.clock(),
+            limit=limit + 1,
+            offset=offset,
+            include_inactive=include_inactive,
+            logical_agent_id=logical_agent_id,
+        )
+        page, _ = bounded_page(rows, limit=limit, cursor=None, scope=scope)
+        result = {
+            "ok": True,
+            "scope": "local",
+            "server_id": self.store.local_node_id,
+            "agents": page,
+        }
+        if len(rows) > len(page):
+            result["next_cursor"] = encode_cursor(offset + len(page), scope)
+        return result
 
     async def resolve(self, actor: ActorContext, operation: ManagedOperation) -> dict:
         if operation not in READ_OPERATIONS:

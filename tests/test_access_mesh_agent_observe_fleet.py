@@ -1,49 +1,29 @@
-"""Agent Observe selects the server of the latest activity across Mesh nodes."""
-from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+"""Agent overview is authoritative locally and independent of message recipients."""
 
 from fastapi.testclient import TestClient
 from test_access_mesh_mcp_runtime import call, settings
-from test_access_mesh_native_lifecycle import actor
 
 from terminal_mcp.app import create_app
 
 
-def test_agent_observe_uses_latest_remote_activity_and_four_fields(tmp_path):
-    app = create_app(settings(tmp_path))
+def test_agent_observe_preserves_public_fields_but_is_explicitly_local(tmp_path):
+    config = settings(tmp_path).model_copy(update={"fleet_instance_id": "server-a"})
+    app = create_app(config)
     with TestClient(app, base_url="https://terminal.example") as client:
-        started = call(client, "access", "session", {"action": "start"})
-        assert started["ok"]
-        assert call(client, "executor", "session", {
-            "session_number": started["session_number"]
-        }) == {"ok": True}
-        messages = app.state.access_mesh.messages
-        local = client.portal.call(messages._local_recipients)
-        assert len(local) == 1
-        remote = dict(local[0])
-        remote["server_id"] = "bacloud"
-        remote["last_active_at"] = (
-            datetime.now(UTC) + timedelta(minutes=1)
-        ).isoformat()
+        issued = call(client, "access", "session", {"action": "start"})
+        assert call(
+            client, "executor", "session", {"session_number": issued["session_number"]}
+        ) == {"ok": True}
 
-        class Peer:
-            peers = (SimpleNamespace(instance_id="bacloud"),)
+        async def unavailable_address_book():
+            raise AssertionError("overview must not use active message recipients")
 
-            async def request(self, peer, path, payload):
-                assert path == "agents/locations"
-                return {"ok": True, "recipients": [remote], "after": None}
-
-        messages.replication = Peer()
-        observed = client.portal.call(
-            app.state.access_mesh.observe, actor("coordinator")
-        )
-        assert observed["ok"] is True, observed
-        assert observed["agents"] == [{
-            "public_name": local[0]["public_name"],
-            "last_server": "bacloud",
-            "session_duration": local[0]["session_duration"]
-            if "session_duration" in local[0] else
-            int((datetime.fromisoformat(remote["hard_expires_at"]) -
-                 datetime.fromisoformat(remote["session_started_at"])).total_seconds()),
-            "last_activity": remote["last_active_at"],
-        }]
+        app.state.access_mesh.messages.active_agent_locations = unavailable_address_book
+        observed = call(client, "coordinator", "agent_observe", {})
+        assert observed["scope"] == "local"
+        assert observed["server_id"] == "server-a"
+        assert len(observed["agents"]) == 1
+        record = observed["agents"][0]
+        assert {"public_name", "last_server", "session_duration", "last_activity"} <= set(record)
+        assert record["last_server"] == "server-a"
+        assert record["logical_agent_id"]

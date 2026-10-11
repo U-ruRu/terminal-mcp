@@ -37,11 +37,11 @@
     "output_fallback": "strict-contracts.json:coordinator.agent_observe.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "5a7142eb5ec1c1341dc74f8874b7cde5a471dc3869832cd74e94cb469e8f69fa",
-    "published_output_sha256": "31aa8931299dc19baa2c1322bcb8628e7758e92a805939b1b0f9833adc1ec3ee",
+    "published_output_sha256": "6ae3f0be3a4e3f371b5755563b6e5f8731fadf57684a566faa72dbbcfb97117c",
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
-    "strict_output_sha256": "3c152adf49d762df881503bdbd1efe95a85128f6d094be59f43f75c9264e71ed"
+    "strict_output_sha256": "2b06cfaf52fd7b64f2795d9b2bdeb4508572910c827a2cef225af4e8771acf18"
   },
   "coordinator.health": {
     "action_models": {},
@@ -122,22 +122,19 @@
     "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/action"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "action",
-      "session_number"
+      "session_number",
+      "intent"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.AttachInput",
     "output_fallback": "strict-contracts.json:coordinator.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
-    "published_input_sha256": "6b21e30a3ab2a8105f10c53d2d44b6843453a6212cf129f2b03fb6475a5456b9",
-    "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
-    "required_fields": [
-      "session_number"
-    ],
+    "published_input_sha256": "1b98066f7dd5d967b7dd0e608e934ccca06c5eb8fce9ff65979bb2e2e22566ee",
+    "published_output_sha256": "eb74b3bff2c963f8d1597bb3f8cbba4da6d8b532f3e41ffdca9ccdeea97d6653",
+    "required_fields": [],
     "runtime_annotations": [
       {
         "anchor": "class AttachInput",
@@ -145,8 +142,8 @@
         "text": "attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle"
       }
     ],
-    "strict_input_sha256": "77e9251dfe512d4214046438c0ebad27973d42e11ae137d50a8d2002107bb06c",
-    "strict_output_sha256": "dc8da2e47f7437d4d50f98f3c0a62c34f5f031735ee6f2ecbd301dab0f118212"
+    "strict_input_sha256": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
+    "strict_output_sha256": "b9a309f29dac23ac59024636be0780e173c88b0522b08a33eade9910565f38ee"
   },
   "coordinator.task_get": {
     "action_models": {},
@@ -953,22 +950,19 @@
     "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [],
-    "exact_input_fallbacks": [
-      "$/properties/action"
-    ],
+    "exact_input_fallbacks": [],
     "input_fields": [
       "action",
-      "session_number"
+      "session_number",
+      "intent"
     ],
     "local_types": [],
     "model": "terminal_mcp.mcp.access_contracts.AttachInput",
     "output_fallback": "strict-contracts.json:executor.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
-    "published_input_sha256": "6b21e30a3ab2a8105f10c53d2d44b6843453a6212cf129f2b03fb6475a5456b9",
-    "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
-    "required_fields": [
-      "session_number"
-    ],
+    "published_input_sha256": "1b98066f7dd5d967b7dd0e608e934ccca06c5eb8fce9ff65979bb2e2e22566ee",
+    "published_output_sha256": "eb74b3bff2c963f8d1597bb3f8cbba4da6d8b532f3e41ffdca9ccdeea97d6653",
+    "required_fields": [],
     "runtime_annotations": [
       {
         "anchor": "class AttachInput",
@@ -976,8 +970,8 @@
         "text": "attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle"
       }
     ],
-    "strict_input_sha256": "77e9251dfe512d4214046438c0ebad27973d42e11ae137d50a8d2002107bb06c",
-    "strict_output_sha256": "dc8da2e47f7437d4d50f98f3c0a62c34f5f031735ee6f2ecbd301dab0f118212"
+    "strict_input_sha256": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
+    "strict_output_sha256": "b9a309f29dac23ac59024636be0780e173c88b0522b08a33eade9910565f38ee"
   },
   "executor.task_claim": {
     "action_models": {

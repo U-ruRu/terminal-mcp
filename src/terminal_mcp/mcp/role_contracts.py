@@ -508,17 +508,29 @@ def planning_schema(model: type[StrictRoleInput]) -> dict:
         return {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "const": "attach", "default": "attach"},
+                "action": {"type": "string", "enum": ["attach", "intent"], "default": "attach"},
                 "session_number": {
                     "type": "string",
                     "minLength": 4,
                     "maxLength": 4,
                     "pattern": r"^[0-9]{4}$",
-                    "description": "Four-digit session number.",
+                    "description": "Required only for attach; forbidden for intent refresh.",
+                },
+                "intent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "Required for intent refresh; optional on attach.",
                 },
             },
-            "required": ["session_number"],
             "additionalProperties": False,
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "intent"}}, "required": ["action"]},
+                    "then": {"required": ["intent"], "not": {"required": ["session_number"]}},
+                    "else": {"required": ["session_number"]},
+                },
+            ],
         }
     if model is TaskStateInput:
         return {
@@ -614,6 +626,7 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
         for candidate in (
             "issuer_node_id",
             "session_number",
+            "intent",
             "mode",
             "code",
             "task_id",

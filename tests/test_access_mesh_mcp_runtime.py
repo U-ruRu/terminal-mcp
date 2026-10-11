@@ -57,6 +57,15 @@ def rpc(
 
 
 def call(client, role, name, arguments, **kwargs):
+    # Normal runtime fixtures explicitly start work with synthetic intent. Tests
+    # for the missing-intent path use the raw rpc helper instead.
+    if (
+        role in {"executor", "coordinator"}
+        and name == "session"
+        and arguments.get("action", "attach") == "attach"
+        and "session_number" in arguments
+    ):
+        arguments = {"intent": "Exercise isolated runtime fixture", **arguments}
     response = rpc(client, role, "tools/call", {"name": name, "arguments": arguments}, **kwargs)
     assert response.status_code == 200, response.text
     body = response.json()
@@ -80,8 +89,9 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
                 schema = tool["inputSchema"]
                 assert schema["type"] == "object"
                 if role in {"executor", "coordinator"} and tool["name"] == "session":
-                    assert schema["required"] == ["session_number"]
-                    assert schema["properties"]["action"]["const"] == "attach"
+                    assert "required" not in schema
+                    assert "allOf" in schema
+                    assert schema["properties"]["action"]["enum"] == ["attach", "intent"]
                 elif role == "executor" and tool["name"] == "task_state":
                     # The public state mutation has precisely three required inputs.
                     assert set(schema["required"]) == {"namespace", "task_id", "state"}
@@ -96,7 +106,7 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
         rejected = call(client, "executor", "session", {"action": "start"})
         assert rejected["error"]["code"] == "input_validation_failed"
         unbound = call(client, "coordinator", "agent_observe", {}, meta=False)
-        assert unbound == {"ok": True, "agents": []}
+        assert unbound == {"ok": True, "scope": "local", "server_id": "firstbyte", "agents": []}
         read = call(client, "executor", "task_list", {}, meta=False)
         assert read["ok"] is True
         assert call(client, "executor", "command_read", {}, meta=False)["commands"] == []
@@ -106,15 +116,11 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
     config = settings(tmp_path)
     app = create_app(config)
     with TestClient(app, base_url="https://terminal.example") as client:
-        issued = call(
-            client, "access", "session", {"action": "start"}, request_id=42
-        )
+        issued = call(client, "access", "session", {"action": "start"}, request_id=42)
         assert issued["ok"] is True, issued
         record = app.state.access_mesh.store.numbers.winner(issued["session_number"])
         assert record["issuer_id"] == "firstbyte"
-        replay = call(
-            client, "access", "session", {"action": "start"}, request_id=42
-        )
+        replay = call(client, "access", "session", {"action": "start"}, request_id=42)
         assert replay["ok"] is False
         assert replay["error"]["code"] == "session_already_started"
         binding = {"session_number": issued["session_number"]}
@@ -156,7 +162,7 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
         assert resumed == {"ok": True, "session_number": issued["session_number"]}
         state = call(client, "coordinator", "agent_observe", {})
         assert all(
-            set(row) == {"public_name", "last_server", "session_duration", "last_activity"}
+            {"public_name", "last_server", "session_duration", "last_activity"} <= set(row)
             for row in state["agents"]
         )
         assert call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)["ok"]
@@ -192,6 +198,7 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             conversation="receiver-access",
         )
         from terminal_mcp.storage.access_mesh import public_name
+
         recipient_slot = app.state.access_mesh.store.numbers.winner(receiver["session_number"])
         recipient_name = public_name(
             recipient_slot["issuer_id"], recipient_slot["logical_agent_id"]

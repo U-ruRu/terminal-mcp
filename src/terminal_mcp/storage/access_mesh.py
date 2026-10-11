@@ -122,6 +122,13 @@ class AccessMeshStore(LocalAccessMesh):
                 session_epoch INTEGER NOT NULL,
                 PRIMARY KEY(issuer_id,slot_id)
             ) WITHOUT ROWID""")
+            db.execute("BEGIN IMMEDIATE")
+            columns = {
+                row[1] for row in db.execute("PRAGMA table_info(access_mesh_local_sessions)")
+            }
+            for name in ("current_intent", "intent_updated_at", "intent_warned_at"):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE access_mesh_local_sessions ADD COLUMN {name} TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_cleanup_jobs (
                 job_id TEXT PRIMARY KEY, issuer_id TEXT NOT NULL, slot_id TEXT NOT NULL,
                 logical_agent_id TEXT NOT NULL, work_session_id TEXT,
@@ -596,6 +603,164 @@ class AccessMeshStore(LocalAccessMesh):
                 (stamp, stamp, connection_key),
             )
 
+    def intent_status(
+        self, slot: SlotSnapshot, *, now: datetime, observe=False, require_intent=False
+    ) -> dict:
+        """Atomically observe one session's due warning; reads never refresh intent.
+
+        The first call at >=180 seconds receives grace. A serialized later write
+        cannot share that grace, including concurrent calls and process restarts.
+        """
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT current_intent,intent_updated_at,intent_warned_at,work_session_id "
+                "FROM access_mesh_local_sessions WHERE issuer_id=? AND slot_id=?",
+                (slot.issuer_id, slot.slot_id),
+            ).fetchone()
+            if row is None or not row[0] or not row[1]:
+                return {"state": "missing", "blocked": require_intent, "warn": False}
+            due = _parse(row[1]) + timedelta(seconds=180)
+            stale = _utc(now) >= due
+            first = stale and not row[2] and observe
+            if first:
+                db.execute(
+                    "UPDATE access_mesh_local_sessions SET intent_warned_at=? "
+                    "WHERE work_session_id=? AND intent_warned_at IS NULL",
+                    (_text(now), row[3]),
+                )
+            return {
+                "state": "stale" if stale else "fresh",
+                "intent_updated_at": row[1],
+                "refresh_due_at": _text(due),
+                "warn": bool(first),
+                "blocked": bool(require_intent and stale and row[2]),
+            }
+
+    def update_intent(
+        self,
+        slot: SlotSnapshot,
+        work_session_id: str,
+        intent: str,
+        *,
+        now: datetime,
+        initial_only=False,
+    ) -> dict:
+        stamp = _text(now)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if initial_only:
+                existing = db.execute(
+                    "SELECT intent_updated_at FROM access_mesh_local_sessions "
+                    "WHERE issuer_id=? AND slot_id=? AND work_session_id=? "
+                    "AND current_intent IS NOT NULL",
+                    (slot.issuer_id, slot.slot_id, work_session_id),
+                ).fetchone()
+                if existing and existing[0]:
+                    return {
+                        "ok": True,
+                        "intent_updated_at": existing[0],
+                        "refresh_due_at": _text(_parse(existing[0]) + timedelta(seconds=180)),
+                    }
+            updated = db.execute(
+                "UPDATE access_mesh_local_sessions SET current_intent=?,intent_updated_at=?,"
+                "intent_warned_at=NULL WHERE issuer_id=? AND slot_id=? AND work_session_id=? "
+                "AND EXISTS(SELECT 1 FROM logical_agent_work_sessions s WHERE "
+                "s.work_session_id=access_mesh_local_sessions.work_session_id AND s.state='active' "
+                "AND s.hard_expires_at>?)",
+                (intent, stamp, slot.issuer_id, slot.slot_id, work_session_id, stamp),
+            ).rowcount
+            if not updated:
+                raise AccessMeshError("session_expired")
+        return {
+            "ok": True,
+            "intent_updated_at": stamp,
+            "refresh_due_at": _text(_utc(now) + timedelta(seconds=180)),
+        }
+
+    def agent_overview(
+        self,
+        *,
+        now: datetime,
+        after="",
+        limit=20,
+        include_inactive=False,
+        logical_agent_id=None,
+        offset=0,
+    ) -> list[dict]:
+        """Bounded projection of the existing local slot/session registry."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT DISTINCT r.*,l.work_session_id,l.session_epoch,l.current_intent,"
+                "l.intent_updated_at,s.state AS work_state,s.started_at AS work_started,"
+                "s.hard_expires_at AS work_expiry,g.display_name,"
+                "(SELECT MAX(y.last_active_at) FROM access_mesh_activity y "
+                "JOIN access_mesh_attachments z USING(connection_key) "
+                "WHERE z.issuer_id=r.issuer_id AND z.slot_id=r.slot_id) AS last_activity "
+                "FROM access_mesh_slot_replicas r "
+                "JOIN access_mesh_attachments a USING(issuer_id,slot_id) "
+                "LEFT JOIN access_mesh_local_sessions l USING(issuer_id,slot_id) "
+                "LEFT JOIN logical_agent_work_sessions s USING(work_session_id) "
+                "LEFT JOIN logical_agents g ON g.logical_agent_id=r.logical_agent_id "
+                "WHERE r.logical_agent_id>? AND (? IS NULL OR r.logical_agent_id=?) "
+                "AND (? OR (r.state='active' AND s.state='active' AND s.hard_expires_at>?)) "
+                "ORDER BY r.logical_agent_id LIMIT ? OFFSET ?",
+                (
+                    after,
+                    logical_agent_id,
+                    logical_agent_id,
+                    include_inactive,
+                    _text(now),
+                    limit,
+                    offset,
+                ),
+            )
+            result = []
+            for row in rows:
+                slot = self._snapshot(row)
+                cycle = self.merged_cycle(slot, now)
+                live = cycle["state"] in {"active", "warning", "draining"}
+                if not include_inactive and not live:
+                    continue
+                updated = row["intent_updated_at"]
+                last = row["last_activity"]
+                started = row["work_started"] or cycle["started_at"]
+                expiry = row["work_expiry"] or cycle["hard_expires_at"]
+                result.append(
+                    {
+                        "logical_agent_id": slot.logical_agent_id,
+                        "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+                        "display_name": row["display_name"]
+                        or public_name(slot.issuer_id, slot.logical_agent_id),
+                        "last_server": self.local_node_id,
+                        "session_duration": max(
+                            0, int((_parse(expiry) - _parse(started)).total_seconds())
+                        )
+                        if started and expiry
+                        else 0,
+                        "last_activity": last,
+                        "activity_stale": last is None
+                        or (_utc(now) - _parse(last)).total_seconds() >= 180,
+                        "current_intent": row["current_intent"],
+                        "intent_updated_at": updated,
+                        "intent_state": "missing"
+                        if not updated
+                        else "stale"
+                        if _utc(now) >= _parse(updated) + timedelta(seconds=180)
+                        else "fresh",
+                        "work_session_id": row["work_session_id"],
+                        "session_epoch": row["session_epoch"],
+                        "session_state": row["work_state"]
+                        if row["work_state"] == "ended"
+                        else cycle["state"],
+                        "hard_expires_at": expiry,
+                        "session_started_at": started,
+                    }
+                )
+                if len(result) >= limit:
+                    break
+            return result
+
     def last_activity(self, issuer_id: str, slot_id: str) -> str | None:
         with self._connect() as db:
             row = db.execute(
@@ -823,7 +988,8 @@ class AccessMeshStore(LocalAccessMesh):
                     VALUES(?,?,?,?,?)
                     ON CONFLICT(issuer_id,slot_id) DO UPDATE SET
                     work_session_id=excluded.work_session_id,cycle_started_at=excluded.cycle_started_at,
-                    session_epoch=excluded.session_epoch""",
+                    session_epoch=excluded.session_epoch,current_intent=NULL,
+                    intent_updated_at=NULL,intent_warned_at=NULL""",
                     (slot.issuer_id, slot.slot_id, session_id, cycle["started_at"], epoch),
                 )
             db.execute(
