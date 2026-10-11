@@ -1,0 +1,115 @@
+{
+  "implementation_sha": "30eeb9d5d9f82d9a09ccaf825daac77088843332",
+  "base_sha": "9456518991c31daf99b20a209e684a7ab3a201a6",
+  "qa_sha": "7863260f30fb23e210d0c01c9c06c20eda810121",
+  "total": 160,
+  "passed": 158,
+  "failed": 0,
+  "skipped": 2,
+  "exit": 0,
+  "verdict": "NON_BLOCKING for standalone compact/chunk lane",
+  "failures": [],
+  "skips": [
+    "test_actual_intent_boundary_warns_on_minimal_success_then_blocks[command_run]",
+    "test_actual_intent_boundary_warns_on_minimal_success_then_blocks[task_claim]"
+  ],
+  "metrics": {
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[mixed-notify]": {
+      "max_serialized_call_tool_result_bytes": "6578",
+      "original_utf8_bytes": "35499",
+      "chunk_count": "17"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[mixed-ack]": {
+      "max_serialized_call_tool_result_bytes": "6484",
+      "original_utf8_bytes": "35499",
+      "chunk_count": "17"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[mixed-alert]": {
+      "max_serialized_call_tool_result_bytes": "6488",
+      "original_utf8_bytes": "35499",
+      "chunk_count": "17"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[escaped-notify]": {
+      "max_serialized_call_tool_result_bytes": "15971",
+      "original_utf8_bytes": "16384",
+      "chunk_count": "8"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[escaped-ack]": {
+      "max_serialized_call_tool_result_bytes": "15877",
+      "original_utf8_bytes": "16384",
+      "chunk_count": "8"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[escaped-alert]": {
+      "max_serialized_call_tool_result_bytes": "15881",
+      "original_utf8_bytes": "16384",
+      "chunk_count": "8"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[astral-notify]": {
+      "max_serialized_call_tool_result_bytes": "18015",
+      "original_utf8_bytes": "65536",
+      "chunk_count": "8"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[astral-ack]": {
+      "max_serialized_call_tool_result_bytes": "17921",
+      "original_utf8_bytes": "65536",
+      "chunk_count": "8"
+    },
+    "test_independent_chunk_reconstruction_bounds_and_empty_tail[astral-alert]": {
+      "max_serialized_call_tool_result_bytes": "17925",
+      "original_utf8_bytes": "65536",
+      "chunk_count": "8"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[unicode-run]": {
+      "serialized_call_tool_result_bytes": "14233"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[unicode-read]": {
+      "serialized_call_tool_result_bytes": "15345"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[unicode-cancel]": {
+      "serialized_call_tool_result_bytes": "14981"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[unicode-recovery]": {
+      "serialized_call_tool_result_bytes": "15317"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[escaped-run]": {
+      "serialized_call_tool_result_bytes": "28569"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[escaped-read]": {
+      "serialized_call_tool_result_bytes": "29681"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[escaped-cancel]": {
+      "serialized_call_tool_result_bytes": "29317"
+    },
+    "test_accepted_command_and_recovery_receipt_survives_large_incoming[escaped-recovery]": {
+      "serialized_call_tool_result_bytes": "29653"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[ack-coordination_ack_required-ack-run]": {
+      "serialized_call_tool_result_bytes": "5671"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[ack-coordination_ack_required-ack-read]": {
+      "serialized_call_tool_result_bytes": "5671"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[ack-coordination_ack_required-ack-cancel]": {
+      "serialized_call_tool_result_bytes": "5671"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[ack-coordination_ack_required-ack-recovery]": {
+      "serialized_call_tool_result_bytes": "5671"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[alert-coordination_alert-reply-run]": {
+      "serialized_call_tool_result_bytes": "5647"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[alert-coordination_alert-reply-read]": {
+      "serialized_call_tool_result_bytes": "5647"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[alert-coordination_alert-reply-cancel]": {
+      "serialized_call_tool_result_bytes": "5647"
+    },
+    "test_command_refusal_retains_action_and_bounded_unicode_notice[alert-coordination_alert-reply-recovery]": {
+      "serialized_call_tool_result_bytes": "5647"
+    },
+    "test_recovery_large_output_plus_incoming_retains_committed_receipt": {
+      "serialized_call_tool_result_bytes": "28547"
+    }
+  },
+  "full_suite": "Kilo-4 sole owner; reviewer verifies artifacts only"
+}
