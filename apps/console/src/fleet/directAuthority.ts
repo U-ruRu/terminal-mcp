@@ -57,6 +57,22 @@ export class BrowserDirectAuthorityClient {
     return this.withClient(instanceId, (client) => client.persistentMutation(path, body))
   }
 
+  managedSlotStatus(instanceId: string, logicalAgentId: string) {
+    return this.withClient(instanceId, (client) => client.managedSlotStatus(logicalAgentId))
+  }
+
+  accessMeshSlots(instanceId: string) {
+    return this.withClient(instanceId, (client) => client.accessMeshAllSlots())
+  }
+
+  accessMeshDefaults(instanceId: string) {
+    return this.withClient(instanceId, (client) => client.accessMeshDefaults())
+  }
+
+  accessMeshMutation(instanceId: string, body: import('../api/models').AccessMeshMutationRequest) {
+    return this.withClient(instanceId, (client) => client.accessMeshMutation(body))
+  }
+
   task(instanceId: string, namespace: string, taskId: string): Promise<TaskReadModel> {
     return this.withClient(instanceId, (client) => client.task(namespace, taskId))
   }

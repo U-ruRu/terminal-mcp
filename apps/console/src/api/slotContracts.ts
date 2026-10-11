@@ -2,7 +2,7 @@ import { ConsoleContractError } from './contracts'
 import type {
   AccessMeshDefaultsReadModel, AccessMeshPolicyReadModel, AccessMeshSlotReadModel,
   JsonRecord, ManagedSlotPolicyReadModel, ManagedSlotStatusReadModel,
-  ManagedWorkWindowReadModel, PersistentMutationResult,
+  ManagedWorkWindowReadModel, PersistentMutationResult, SlotPolicyInheritanceReadModel,
 } from './models'
 
 /** Keep diagnostics to stable public codes; never use server response bodies as messages. */
@@ -47,9 +47,36 @@ function success(value: unknown): JsonRecord {
   return root
 }
 
+function choice<T extends string>(value: unknown, allowed: readonly T[], path: string): T {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) throw new ConsoleContractError(path, 'unsupported value')
+  return value as T
+}
+
+export function decodePolicyInheritance(value: unknown, path = '$.inheritance'): SlotPolicyInheritanceReadModel | undefined {
+  if (value === undefined) return undefined
+  const item = record(value, path)
+  const parent = item.parent === null ? null : record(item.parent, path + '.parent')
+  return {
+    mode: choice(item.mode, ['stored', 'override', 'inherit'] as const, path + '.mode'),
+    source: choice(item.source, ['slot', 'mesh', 'standalone'] as const, path + '.source'),
+    resetSupported: flag(item.reset_supported, path + '.reset_supported'),
+    appliesTo: choice(item.applies_to, ['next_window', 'current_schedule'] as const, path + '.applies_to'),
+    pending: flag(item.pending, path + '.pending'),
+    parent: parent === null ? null : {
+      source: choice(parent.source, ['mesh', 'standalone'] as const, path + '.parent.source'),
+      id: text(parent.id, path + '.parent.id', true),
+      revision: parent.revision === null ? null : integer(parent.revision, path + '.parent.revision', 1),
+      version: text(parent.version, path + '.parent.version', true),
+      freshness: choice(parent.freshness, ['authoritative', 'last_known'] as const, path + '.parent.freshness'),
+      convergence: choice(parent.convergence, ['converged', 'pending', 'unknown'] as const, path + '.parent.convergence'),
+    },
+  }
+}
+
 function managedPolicy(value: unknown, path: string): ManagedSlotPolicyReadModel {
   const item = record(value, path)
   const policy = {
+    inheritance: decodePolicyInheritance(item.inheritance, path + '.inheritance'),
     defaultDurationSeconds: integer(item.default_duration_seconds, path + '.default_duration_seconds', 1),
     warningBeforeExpirySeconds: integer(item.warning_before_expiry_seconds, path + '.warning_before_expiry_seconds'),
     drainingBeforeExpirySeconds: integer(item.draining_before_expiry_seconds, path + '.draining_before_expiry_seconds'),
@@ -93,7 +120,7 @@ export function decodeManagedSlotStatus(value: unknown): ManagedSlotStatusReadMo
       workSessionId: text(rawSession.work_session_id, '$.session.work_session_id', true),
       sessionEpoch: integer(rawSession.session_epoch, '$.session.session_epoch', 1),
       role: text(rawSession.role, '$.session.role', true),
-      contractVersion: text(rawSession.contract_version, '$.session.contract_version', true),
+      contractVersion: integer(rawSession.contract_version, '$.session.contract_version', 1),
       state: text(rawSession.state, '$.session.state', true),
       startedAt: text(rawSession.started_at, '$.session.started_at', true),
       endedAt: nullableText(rawSession.ended_at, '$.session.ended_at'),
@@ -121,6 +148,13 @@ function accessSlot(value: unknown, path: string): AccessMeshSlotReadModel {
   if (item.mode !== 'legacy' && item.mode !== 'persistent') throw new ConsoleContractError(path + '.mode', 'unsupported mode')
   const cycle = record(item.session_lifecycle, path + '.session_lifecycle')
   return {
+    inheritance: decodePolicyInheritance(item.inheritance, path + '.inheritance'),
+    codeGeneration: item.code_generation === undefined ? undefined : integer(item.code_generation, path + '.code_generation', 1),
+    codeExpiresAt: item.code_expires_at === undefined ? undefined : nullableText(item.code_expires_at, path + '.code_expires_at'),
+    createdAt: item.created_at === undefined ? undefined : text(item.created_at, path + '.created_at'),
+    updatedAt: item.updated_at === undefined ? undefined : text(item.updated_at, path + '.updated_at'),
+    windowPolicy: item.window_policy === undefined ? undefined : accessPolicy(item.window_policy, path + '.window_policy'),
+    policyEffectiveAt: item.policy_effective_at === undefined ? undefined : nullableText(item.policy_effective_at, path + '.policy_effective_at'),
     issuerNodeId: text(item.issuer_node_id, path + '.issuer_node_id', true),
     slotId: text(item.slot_id, path + '.slot_id', true),
     logicalAgentId: text(item.logical_agent_id, path + '.logical_agent_id', true),
@@ -153,6 +187,8 @@ export function decodeAccessMeshSlots(value: unknown): { slots: AccessMeshSlotRe
 export function decodeAccessMeshDefaults(value: unknown): AccessMeshDefaultsReadModel {
   const root = success(value)
   return {
+    inheritance: decodePolicyInheritance(root.inheritance),
+    writeTarget: root.write_target === undefined ? undefined : choice(root.write_target, ['fleet_control', 'access_defaults'] as const, '$.write_target'),
     revision: integer(root.revision, '$.revision', 1),
     policy: accessPolicy(root.policy, '$.policy'),
     legacyEnabled: flag(root.legacy_enabled, '$.legacy_enabled'),

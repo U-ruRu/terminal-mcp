@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ConsoleClient, ConsoleHttpError } from './client'
-import { ConsoleContractError } from './contracts'
-import { ConsoleOperationError, decodeAccessMeshDefaults, decodeAccessMeshSlot, decodeAccessMeshSlots, decodeManagedSlotStatus, decodeSlotMutation } from './slotContracts'
+import { ConsoleContractError, persistentProjection } from './contracts'
+import { ConsoleOperationError, decodeAccessMeshDefaults, decodeAccessMeshSlot, decodeAccessMeshSlots, decodeManagedSlotStatus, decodeSlotMutation, decodePolicyInheritance } from './slotContracts'
 
 export function managedFixture() {
   return {
@@ -115,5 +115,45 @@ describe('slot API transport', () => {
     expect(String(fetcher.mock.calls[1][0])).toContain('cursor=opaque%2Btoken')
     const repeated = new ConsoleClient('https://test.example', () => 'test-token', async () => response({ ok: true, slots: [slot], next_cursor: 'same' }))
     await expect(repeated.accessMeshAllSlots()).rejects.toThrow(ConsoleContractError)
+  })
+})
+
+
+describe('native snapshot bridge and inheritance metadata', () => {
+  const nativeSlot = {
+    slot: { logical_agent_id: 'la_native', display_name: 'Synthetic native', state: 'armed', authority_node_id: 'local', authority_epoch: 1, slot_revision: 1, selector_generation: 1, auth_generation: 1, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z' },
+    selector: null,
+    access: { issuer_node_id: 'issuer', logical_agent_id: 'la_native', public_name: 'Synthetic-1', slot_kind: 'persistent', authority_node_id: 'local', status: 'active' },
+    server_now: '2026-10-01T00:00:00Z', work_session: null, rearm: null,
+  }
+  it('keeps a native slot without inventing a legacy selector or access generation', () => {
+    const result = persistentProjection({ enabled: true, available: true, policy: {}, slots: [nativeSlot] }, '$.persistent')
+    expect(result?.slots).toHaveLength(1)
+    expect(result?.slots[0]).toMatchObject({ backend: 'access_mesh', issuerNodeId: 'issuer', selector: '', logicalAgentId: 'la_native' })
+    expect(result?.slots[0].access?.accessGeneration).toBeUndefined()
+  })
+  it('rejects an ordinary slot without selector instead of masking malformed data', () => {
+    expect(() => persistentProjection({ enabled: true, available: true, policy: {}, slots: [{ ...nativeSlot, access: null }] }, '$.persistent')).toThrow(ConsoleContractError)
+  })
+  it('does not turn a partial persistent response into an empty list', () => {
+    expect(() => persistentProjection({ enabled: true, available: true, policy: {} }, '$.persistent')).toThrow(ConsoleContractError)
+  })
+  it('decodes a real managed active session contract version as a positive integer', () => {
+    const fixture = { ...managedFixture(), session: { work_session_id: 'ws_synthetic', session_epoch: 2, role: 'executor', contract_version: 1, state: 'active', started_at: '2026-10-01T00:00:00Z', ended_at: null, end_reason: null } }
+    expect(decodeManagedSlotStatus(fixture).session?.contractVersion).toBe(1)
+    expect(() => decodeManagedSlotStatus({ ...fixture, session: { ...fixture.session, contract_version: '1' } })).toThrow(ConsoleContractError)
+  })
+  it('keeps offline last-known parent evidence distinct from authoritative convergence', () => {
+    const value = { mode: 'inherit', source: 'mesh', parent: { source: 'mesh', id: 'mesh_synthetic', revision: 7, version: 'mesh:7', freshness: 'last_known', convergence: 'pending' }, reset_supported: true, applies_to: 'next_window', pending: true }
+    expect(decodePolicyInheritance(value)).toMatchObject({ mode: 'inherit', resetSupported: true, appliesTo: 'next_window', parent: { freshness: 'last_known', convergence: 'pending', revision: 7 } })
+    expect(decodePolicyInheritance(undefined)).toBeUndefined()
+    expect(() => decodePolicyInheritance({ ...value, parent: undefined })).toThrow(ConsoleContractError)
+  })
+  it('never treats a policy revision as a code generation', () => {
+    const fixture = accessFixture()
+    const result = decodeAccessMeshSlot({ ...fixture, slot: { ...fixture.slot, revision: 9, code_generation: 2, code_expires_at: null } })
+    expect(result.revision).toBe(9)
+    expect(result.codeGeneration).toBe(2)
+    expect(result.codeExpiresAt).toBeNull()
   })
 })

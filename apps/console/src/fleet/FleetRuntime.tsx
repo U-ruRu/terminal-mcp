@@ -417,6 +417,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
           }
           return directAuthority.task(instanceId, namespace, taskId)
         }}
+        loadManagedSlotStatus={(instanceId, logicalAgentId) => directAuthority.managedSlotStatus(instanceId, logicalAgentId)}
         loadFleetControl={(instanceId) => directAuthority.fleetControl(instanceId)}
         mutateFleetControl={async (instanceId, path, body) => {
           const result = await directAuthority.fleetControlMutation(instanceId, path, body)

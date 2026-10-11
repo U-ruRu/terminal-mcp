@@ -203,11 +203,14 @@ export type PersistentWorkSessionReadModel = {
 
 export type PersistentAccessReadModel = {
   publicName: string
-  accessGeneration: number
+  accessGeneration?: number
   status: string
 }
 
 export type PersistentSlotReadModel = {
+  /** Native Access Mesh has no legacy selector and uses its own policy/slot API. */
+  backend?: 'managed' | 'access_mesh'
+  issuerNodeId?: string
   logicalAgentId: string
   displayName: string
   state: string
@@ -429,6 +432,7 @@ export type ManagedFleetMutationResult = {
 
 /** Managed WorkWindow policy: thresholds are BEFORE expiry, unlike fleet policy. */
 export type ManagedSlotPolicyReadModel = {
+  inheritance?: SlotPolicyInheritanceReadModel
   defaultDurationSeconds: number
   warningBeforeExpirySeconds: number
   drainingBeforeExpirySeconds: number
@@ -464,7 +468,7 @@ export type ManagedSlotStatusReadModel = {
     workSessionId: string
     sessionEpoch: number
     role: string
-    contractVersion: string
+    contractVersion: number
     state: string
     startedAt: string
     endedAt: string | null
@@ -503,6 +507,13 @@ export type AccessMeshPolicyReadModel = {
 }
 
 export type AccessMeshSlotReadModel = {
+  inheritance?: SlotPolicyInheritanceReadModel
+  codeGeneration?: number
+  codeExpiresAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+  windowPolicy?: AccessMeshPolicyReadModel
+  policyEffectiveAt?: string | null
   issuerNodeId: string
   slotId: string
   logicalAgentId: string
@@ -521,6 +532,8 @@ export type AccessMeshSlotReadModel = {
 }
 
 export type AccessMeshDefaultsReadModel = {
+  inheritance?: SlotPolicyInheritanceReadModel
+  writeTarget?: 'fleet_control' | 'access_defaults'
   revision: number
   policy: AccessMeshPolicyReadModel
   legacyEnabled: boolean
@@ -538,7 +551,28 @@ export type AccessMeshPolicyPatch = {
 export type AccessMeshMutationRequest = { idempotency_key: string } & (
   | { action: 'create'; mode: 'legacy' | 'persistent'; policy?: AccessMeshPolicyPatch }
   | { action: 'defaults'; expected_revision: number; policy?: AccessMeshPolicyPatch; legacy_enabled?: boolean }
-  | { action: 'policy'; slot_id: string; expected_revision: number; policy: AccessMeshPolicyPatch }
+  | { action: 'policy'; slot_id: string; expected_revision: number; policy: AccessMeshPolicyPatch; expected_parent_version?: string }
+  | { action: 'reset_policy'; slot_id: string; expected_revision: number; expected_parent_version: string }
   | { action: 'deadline'; slot_id: string; expected_revision: number; deadline_at: string }
   | { action: 'suspend' | 'resume' | 'delete' | 'rotate' | 'end'; slot_id: string; expected_revision: number }
 )
+
+
+/** Authority identity and local convergence are separate from global freshness. */
+export type SlotPolicyParentReadModel = {
+  source: 'mesh' | 'standalone'
+  id: string
+  revision: number | null
+  version: string
+  freshness: 'authoritative' | 'last_known'
+  convergence: 'converged' | 'pending' | 'unknown'
+}
+
+export type SlotPolicyInheritanceReadModel = {
+  mode: 'stored' | 'override' | 'inherit'
+  source: 'slot' | 'mesh' | 'standalone'
+  parent: SlotPolicyParentReadModel | null
+  resetSupported: boolean
+  appliesTo: 'next_window' | 'current_schedule'
+  pending: boolean
+}

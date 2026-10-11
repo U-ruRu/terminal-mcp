@@ -387,15 +387,21 @@ export function decodeContexts(value: unknown, path = '$'): ContextCollectionRea
 function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
   const item = record(value, path)
   const slot = record(item.slot, path + '.slot')
-  const selector = record(item.selector, path + '.selector')
   const rawAccess = item.access
+  const accessRecord = rawAccess == null ? undefined : record(rawAccess, path + '.access')
+  const nativeIssuer = accessRecord?.issuer_node_id
+  const native = typeof nativeIssuer === 'string' && nativeIssuer.length > 0
+  // Base 0.25 Access Mesh bridges into logical_agents without a legacy selector.
+  // Only a positively identified native slot may omit it. Never turn corruption
+  // of an ordinary persistent slot into an apparently valid empty selector.
+  const selector = native && item.selector === null ? null : record(item.selector, path + '.selector')
   const access = rawAccess === undefined || rawAccess === null
     ? undefined
     : (() => {
         const value = record(rawAccess, path + '.access')
         return {
           publicName: string(value.public_name, path + '.access.public_name'),
-          accessGeneration: integer(value.access_generation, path + '.access.access_generation'),
+          accessGeneration: native ? optionalInteger(value.access_generation, path + '.access.access_generation') : integer(value.access_generation, path + '.access.access_generation'),
           status: string(value.status, path + '.access.status'),
         }
       })()
@@ -426,13 +432,15 @@ function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
         }
       })()
   return {
+    backend: native ? 'access_mesh' : 'managed',
+    issuerNodeId: native ? nativeIssuer as string : undefined,
     logicalAgentId: string(slot.logical_agent_id, path + '.slot.logical_agent_id'),
     displayName: string(slot.display_name, path + '.slot.display_name'),
     state: string(slot.state, path + '.slot.state'),
     authorityNodeId: string(slot.authority_node_id, path + '.slot.authority_node_id'),
     authorityEpoch: integer(slot.authority_epoch, path + '.slot.authority_epoch'),
     slotRevision: integer(slot.slot_revision, path + '.slot.slot_revision'),
-    selector: string(selector.selector, path + '.selector.selector'),
+    selector: selector === null ? '' : string(selector.selector, path + '.selector.selector'),
     selectorGeneration: integer(slot.selector_generation, path + '.slot.selector_generation'),
     authGeneration: integer(slot.auth_generation, path + '.slot.auth_generation'),
     access,
@@ -477,7 +485,7 @@ function persistentSlot(value: unknown, path: string): PersistentSlotReadModel {
   }
 }
 
-function persistentProjection(value: unknown, path: string): PersistentConsoleReadModel | undefined {
+export function persistentProjection(value: unknown, path: string): PersistentConsoleReadModel | undefined {
   if (value === undefined || value === null) return undefined
   const item = record(value, path)
   const policy = record(item.policy ?? {}, path + '.policy')
@@ -496,7 +504,7 @@ function persistentProjection(value: unknown, path: string): PersistentConsoleRe
       legacyAdmissionEnabled: boolean(policy.legacy_admission_enabled ?? true, path + '.policy.legacy_admission_enabled'),
       policyControlSupported: boolean(policy.policy_control_supported ?? false, path + '.policy.policy_control_supported'),
     },
-    slots: array(item.slots ?? [], path + '.slots').map((raw, index) => persistentSlot(raw, `${path}.slots[${index}]`)),
+    slots: array(item.slots, path + '.slots').map((raw, index) => persistentSlot(raw, `${path}.slots[${index}]`)),
   }
 }
 
