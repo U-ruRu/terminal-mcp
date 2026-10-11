@@ -7,6 +7,7 @@ import logging
 import re
 import secrets
 from datetime import UTC, datetime
+from html.parser import HTMLParser
 
 _LOG = logging.getLogger("uvicorn.error")
 _MCP_PATHS = (
@@ -79,6 +80,57 @@ _RESPONSE_ERROR_CODES = frozenset(
 )
 
 
+# Exact generic page wording only: this is not attribution of the rejecting service.
+_HTML_MARKERS = {
+    "enable javascript and cookies to continue": "browser_challenge",
+    "checking your browser": "browser_challenge",
+    "sorry, you have been blocked": "block_page",
+    "access denied": "access_denied",
+    "403 forbidden": "access_denied",
+    "internal server error": "error_page",
+    "bad gateway": "error_page",
+    "service unavailable": "error_page",
+}
+_HTML_MARKER_CATEGORIES = ("browser_challenge", "block_page", "access_denied", "error_page")
+
+
+class _HTMLMarkerParser(HTMLParser):
+    """Match text nodes; never inspect attributes, comments, or executable text."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.markers: set[str] = set()
+        self.ignored: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "template"}:
+            self.ignored.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        # HTML ignores self-closing slashes on non-void tags; fail closed on malformed input.
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if self.ignored and tag == self.ignored[-1]:
+            self.ignored.pop()
+
+    def handle_data(self, data):
+        if not self.ignored:
+            marker = _HTML_MARKERS.get(" ".join(data.lower().split()).rstrip(".!"))
+            if marker:
+                self.markers.add(marker)
+
+
+def _classify_html_marker(body: bytes) -> str:
+    parser = _HTMLMarkerParser()
+    try:
+        parser.feed(body.decode("utf-8", errors="replace"))
+        parser.close()
+    except (ValueError, AssertionError, RecursionError):
+        return "unknown"
+    return next((kind for kind in _HTML_MARKER_CATEGORIES if kind in parser.markers), "unknown")
+
+
 def safe_callback_response_metadata(details: dict) -> dict:
     """Second allowlist at the logging boundary; never truncate arbitrary strings."""
     safe = {}
@@ -86,6 +138,7 @@ def safe_callback_response_metadata(details: dict) -> dict:
         "response_content_type": _RESPONSE_CONTENT_TYPES | {"other", "missing"},
         "response_body_kind": {"json", "html", "empty", "other"},
         "response_error_code": _RESPONSE_ERROR_CODES,
+        "response_html_marker": set(_HTML_MARKER_CATEGORIES) | {"unknown"},
     }.items():
         value = details.get(key)
         if isinstance(value, str) and value in allowed:
@@ -112,6 +165,7 @@ def classify_callback_response(body: bytes, getheader=None) -> dict:
         except (ValueError, TypeError, RecursionError):
             if body.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html")):
                 details["response_body_kind"] = "html"
+                details["response_html_marker"] = _classify_html_marker(body)
         else:
             details["response_body_kind"] = "json"
             if isinstance(parsed, dict):

@@ -36,6 +36,7 @@ def test_response_allowlist_and_redaction(caplog):
     )
     assert details == {
         "response_body_kind": "html",
+        "response_html_marker": "unknown",
         "response_content_type": "text/html",
         "response_cf_challenge": True,
         "response_cf_ray_present": True,
@@ -58,6 +59,7 @@ def test_untrusted_identifier_values_are_dropped(value, caplog):
         "response_request_id": value,
         "response_cf_ray": value,
         "response_error_code": value,
+        "response_html_marker": value,
         "callback_explicit_default_port": value,
     }
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
@@ -65,6 +67,7 @@ def test_untrusted_identifier_values_are_dropped(value, caplog):
     assert "response_request_id" not in caplog.text
     assert "response_cf_ray" not in caplog.text
     assert "response_error_code" not in caplog.text
+    assert "response_html_marker" not in caplog.text
     assert "callback_explicit_default_port" not in caplog.text
 
 
@@ -111,7 +114,9 @@ def install_fake_https(monkeypatch, response):
 async def test_full_rejected_callback_metadata(monkeypatch, authority, explicit, caplog):
     response = Mock(status=403)
     response.getheader.side_effect = {"content-type": "text/html", "x-request-id": REQUEST_ID}.get
-    response.read.return_value = b"<!doctype html><html>private response</html>"
+    response.read.return_value = (
+        b"<!doctype html><html><h1>Sorry, you have been blocked</h1>private response</html>"
+    )
     connection = install_fake_https(monkeypatch, response)
     recorded = []
 
@@ -128,7 +133,9 @@ async def test_full_rejected_callback_metadata(monkeypatch, authority, explicit,
     assert "response_request_id" not in recorded[0]
     assert recorded[0]["callback_explicit_default_port"] is explicit
     assert recorded[0]["response_body_kind"] == "html"
+    assert recorded[0]["response_html_marker"] == "block_page"
     assert recorded[0]["http_status"] == 403
+    assert recorded[0]["result"] == "http_rejected"
     for private in [authority, "/private", "private response", SECRET, "sub_private"]:
         assert private not in caplog.text
     connection.close.assert_called_once()
