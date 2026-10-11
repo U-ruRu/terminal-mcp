@@ -33,6 +33,7 @@ from terminal_mcp.storage.access_mesh_messages import (
     AccessMeshMessageStore,
     MeshMessagingError,
     canonical,
+    unexpired,
 )
 
 MAX_WIRE_BYTES = 64 * 1024
@@ -212,20 +213,36 @@ class AccessMeshMessaging:
             "task_id": None,
             "reply_to": None,
         }
-        if await asyncio.to_thread(self.store.wire, message_hash) is None:
-            await asyncio.to_thread(
-                self.store.accept,
-                wire,
-                [
-                    {
-                        "logical_agent_id": identity["logical_agent_id"],
-                        "public_name": identity["public_name"],
-                    }
-                ],
+        # Retention also expires the alert obligation. Never renew an old
+        # cycle's timestamp or recreate a message already outside that window.
+        if not unexpired(wire, self.store.clock()):
+            return False
+        try:
+            if await asyncio.to_thread(self.store.wire, message_hash) is None:
+                await asyncio.to_thread(
+                    self.store.accept,
+                    wire,
+                    [
+                        {
+                            "logical_agent_id": identity["logical_agent_id"],
+                            "public_name": identity["public_name"],
+                        }
+                    ],
+                )
+            # Keep any existing wire and ACK state, including its old display
+            # target after a rename. The stable recipient identity is unchanged.
+            recipient = await asyncio.to_thread(
+                self.store.recipient, message_hash, identity["logical_agent_id"]
             )
-        recipient = await asyncio.to_thread(
-            self.store.recipient, message_hash, identity["logical_agent_id"]
-        )
+        except MeshMessagingError as exc:
+            # The retention boundary can pass between the separate reads,
+            # acceptance transaction and recipient lookup. Only that expired
+            # obligation is harmless; young storage/conflict failures still fail.
+            if exc.code in {"message_not_found", "idempotency_conflict"} and not unexpired(
+                wire, self.store.clock()
+            ):
+                return False
+            raise
         return recipient["read_at"] is None
 
     async def _local_recipients(self):

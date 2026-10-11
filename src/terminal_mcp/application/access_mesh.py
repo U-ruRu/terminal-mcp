@@ -70,6 +70,7 @@ class AccessMeshApplication:
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._scan_after = ""
+        self._scan_error: str | None = None
         self.last_error: str | None = None
 
     @staticmethod
@@ -386,24 +387,33 @@ class AccessMeshApplication:
                 await asyncio.to_thread(self.store.finish_cleanup, job["job_id"], error=error)
 
     async def tick(self) -> None:
-        slots = await asyncio.to_thread(self.store.local_slots, after=self._scan_after)
-        for attached_slot in slots:
-            try:
-                # A Mesh collision can make an already attached local alias
-                # point to a newer remote-issued LogicalAgent. Reconcile the
-                # *effective* slot, otherwise the old owner's WorkSession is
-                # rearmed while its winning identity has no local inbox.
-                slot = await asyncio.to_thread(self.store.canonical_slot, attached_slot)
-                identity = await asyncio.to_thread(
-                    self.store.local_identity, slot, now=self.clock()
-                )
-                if self.messages is not None:
-                    await self.messages.ensure_session_alert(slot, identity)
-            except Exception as exc:
-                self.last_error = getattr(exc, "code", type(exc).__name__)
-                _LOG.warning("Access Mesh cycle reconciliation failed: %s", self.last_error)
+        # A tick visits at most 50 slots. Keep failures until a whole scan,
+        # including cleanup, has succeeded rather than clearing on a good page.
+        if not self._scan_after:
+            self._scan_error = None
+        try:
+            slots = await asyncio.to_thread(self.store.local_slots, after=self._scan_after)
+            for attached_slot in slots:
+                try:
+                    # A Mesh collision can make an already attached local alias
+                    # point to a newer remote-issued LogicalAgent. Reconcile the
+                    # effective slot, not the old owner's WorkSession.
+                    slot = await asyncio.to_thread(self.store.canonical_slot, attached_slot)
+                    identity = await asyncio.to_thread(
+                        self.store.local_identity, slot, now=self.clock()
+                    )
+                    if self.messages is not None:
+                        await self.messages.ensure_session_alert(slot, identity)
+                except Exception as exc:
+                    self._scan_error = self.last_error = getattr(exc, "code", type(exc).__name__)
+                    _LOG.warning("Access Mesh cycle reconciliation failed: %s", self.last_error)
+            await self.cleanup()
+        except Exception as exc:
+            self._scan_error = self.last_error = getattr(exc, "code", type(exc).__name__)
+            raise
         self._scan_after = slots[-1].logical_agent_id if len(slots) == 50 else ""
-        await self.cleanup()
+        if not self._scan_after:
+            self.last_error = self._scan_error
 
     async def health_components(self) -> dict:
         pending = await asyncio.to_thread(self.store.pending_cleanup, limit=1)
