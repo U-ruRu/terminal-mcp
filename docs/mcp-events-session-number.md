@@ -113,6 +113,9 @@ Only a hold's owning subscription node can advance its authenticated Mesh
 snapshot. Revisioned release tombstones reject delayed older snapshots; callbacks,
 secrets, credentials and message bodies are never part of this hold transport.
 Known replicated holds survive peer outage and reject local number reuse.
+They also preserve message-only addressability on peers with an already existing
+exact local attachment. A replicated grant without a local attachment does not
+create message presence on a new node.
 
 Allocation retains its existing partition-availability contract: after the
 bounded negotiation window, it may issue without every peer confirming. A hold
