@@ -256,6 +256,15 @@ class AccessMeshMessaging:
                     "logical_agent_id": identity["logical_agent_id"],
                     "server_id": self.node_id,
                     "public_name": identity["public_name"],
+                    "_name_aliases": list(dict.fromkeys([
+                        identity["public_name"],
+                        self.mesh.store.human_name(effective, short=True),
+                        self.mesh.store.human_name(slot),
+                        self.mesh.store.human_name(slot, short=True),
+                        _public_name(effective),
+                        _public_name(slot),
+                        *((previous or {}).get("_name_aliases") or []),
+                    ])),
                     "session_state": "active",
                     "session_started_at": lifecycle.get("started_at"),
                     "hard_expires_at": identity.get("hard_expires_at"),
@@ -290,7 +299,16 @@ class AccessMeshMessaging:
             owners = {item.get("owner_id") or item["agent_id"] for item in claims}
             recipients = [item for item in recipients if item["logical_agent_id"] in owners]
         if wire["target"] != "broadcast":
-            recipients = [item for item in recipients if item["public_name"] == wire["target"]]
+            target = str(wire["target"]).casefold()
+            recipients = [
+                item for item in recipients
+                if target in {
+                    str(name).casefold()
+                    for name in item.get("_name_aliases", [item["public_name"]])
+                }
+            ]
+            if len({item["logical_agent_id"] for item in recipients}) > 1:
+                raise MeshMessagingError("ambiguous_agent_name")
         return [item for item in recipients if item["logical_agent_id"] != wire["sender_id"]]
 
     async def recipients(self, identity, *, scope, limit, cursor):
@@ -376,7 +394,7 @@ class AccessMeshMessaging:
         if not isinstance(agent_id, str) or len(agent_id) > 160:
             raise MeshMessagingError("message_unavailable")
         slot = self.mesh.store.slot_for_agent(agent_id)
-        if slot is None or item.get("public_name") != _public_name(slot):
+        if slot is None or item.get("public_name") != self.mesh.store.human_name(slot):
             raise MeshMessagingError("message_unavailable")
 
     async def handle_locations_peer(self, peer_id, payload):
@@ -427,7 +445,16 @@ class AccessMeshMessaging:
         while True:
             slots = await asyncio.to_thread(self.mesh.store.local_slots, after=cursor, limit=100)
             for slot in slots:
-                if _public_name(slot).casefold() == target.casefold():
+                names = {_public_name(slot).casefold()}
+                try:
+                    names.update({
+                        self.mesh.store.human_name(slot).casefold(),
+                        self.mesh.store.human_name(slot, short=True).casefold(),
+                    })
+                except Exception:
+                    # Missing presentation metadata never creates another routing alias.
+                    pass
+                if target.casefold() in names:
                     canonicalize = getattr(self.mesh.store, "canonical_slot", None)
                     effective = (
                         await asyncio.to_thread(canonicalize, slot)
@@ -461,7 +488,14 @@ class AccessMeshMessaging:
             await asyncio.to_thread(self.store.recipient, reply_to, identity["logical_agent_id"])
             # An intentional second reply is another message. Each accepted
             # reply has a unique hash; inbound retry dedup uses that hash.
-            target, scope, namespace, task_id = parent["sender_name"], "local", None, None
+            # A historic name may have been reused by another slot. Replies use
+            # the retained sender ID, never a current name lookup for old text.
+            original = await asyncio.to_thread(
+                self.mesh.store.slot_for_agent, parent["sender_id"]
+            )
+            if original is None:
+                raise MeshMessagingError("message_unavailable")
+            target, scope, namespace, task_id = _public_name(original), "local", None, None
         if isinstance(target, str) and target.casefold() == "broadcast":
             target = "broadcast"
         issue = _route_issue(namespace, task_id, target)
@@ -509,6 +543,10 @@ class AccessMeshMessaging:
             raise MeshMessagingError(
                 "no_active_recipients" if wire["target"] == "broadcast" else "recipient_not_found"
             )
+        if wire["target"] != "broadcast" and wire["namespace"] is None:
+            # Persist the display label that was resolved for this delivery.
+            # Alias input and immutable reply routing must not leak opaque names.
+            wire["target"] = recipients[0]["public_name"]
         # The accepted transaction is the commit point. Network or readback errors
         # afterwards can only change delivery status, never the mutation outcome.
         receipt = await asyncio.to_thread(

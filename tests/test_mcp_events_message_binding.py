@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
 from terminal_mcp.config import Settings
+from terminal_mcp.core.human_names import number_agent_name
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.mcp.message_binding import provider_metadata_from_events
 from terminal_mcp.storage.access_mesh import public_name
@@ -313,8 +314,8 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
             "private message to B only",
         ]
         assert message_events[0]["eventId"] != message_events[1]["eventId"]
-        assert message_events[0]["data"]["recipient"] == "Reused name"
-        assert message_events[1]["data"]["recipient"] == "Reused name"
+        assert message_events[0]["data"]["recipient"] == number_agent_name(a_number)
+        assert message_events[1]["data"]["recipient"] == number_agent_name(b_number)
         with sqlite3.connect(app.state.settings.database_path) as db:
             assert db.execute(
                 "SELECT COUNT(DISTINCT recipient_agent_id) "

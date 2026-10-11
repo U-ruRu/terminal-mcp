@@ -141,6 +141,8 @@ class AccessSlotEvent:
     code_tag: str | None = None
     effective_at: datetime | None = None
     deadline_at: datetime | None = None
+    agent_name: str | None = None
+    display_suffix: str | None = None
 
     def __post_init__(self) -> None:
         for value in (self.issuer_id, self.slot_id, self.logical_agent_id, self.event_id):
@@ -160,6 +162,19 @@ class AccessSlotEvent:
                 or _utc(self.deadline_at) <= _utc(self.effective_at)
             ):
                 raise AccessMeshError("access_mesh_invalid_time")
+        if self.agent_name is not None:
+            from terminal_mcp.core.human_names import valid_agent_name
+
+            if not valid_agent_name(self.agent_name):
+                raise AccessMeshError("access_mesh_invalid_agent_name")
+        if self.display_suffix is not None and (
+            not isinstance(self.display_suffix, str) or len(self.display_suffix) > 80
+        ):
+            raise AccessMeshError("access_mesh_invalid_display_suffix")
+        if self.kind != "SlotIssued" and (
+            self.agent_name is not None or self.display_suffix is not None
+        ):
+            raise AccessMeshError("access_mesh_invalid_name_update")
         if self.kind == "SlotIssued" and (self.policy is None or self.code_tag is None):
             raise AccessMeshError("access_mesh_incomplete_issue")
         if self.kind == "SlotPolicyChanged" and self.policy is None:
@@ -183,6 +198,8 @@ class AccessSlotEvent:
             "code_tag": self.code_tag,
             "effective_at": _text(self.effective_at) if self.effective_at else None,
             **({"deadline_at": _text(self.deadline_at)} if self.deadline_at else {}),
+            **({"agent_name": self.agent_name} if self.agent_name is not None else {}),
+            **({"display_suffix": self.display_suffix} if self.display_suffix is not None else {}),
         }
 
     @classmethod
@@ -198,7 +215,8 @@ class AccessSlotEvent:
             "code_tag",
             "effective_at",
         }
-        if not isinstance(data, dict) or set(data) not in (allowed, allowed | {"deadline_at"}):
+        optional = {"deadline_at", "agent_name", "display_suffix"}
+        if not isinstance(data, dict) or not allowed <= set(data) or set(data) - allowed - optional:
             raise AccessMeshError("access_mesh_invalid_wire_event")
         try:
             raw_policy = data["policy"]
@@ -223,6 +241,8 @@ class AccessSlotEvent:
                 deadline_at=datetime.fromisoformat(raw_deadline)
                 if raw_deadline is not None
                 else None,
+                agent_name=data.get("agent_name"),
+                display_suffix=data.get("display_suffix"),
             )
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise AccessMeshError("access_mesh_invalid_wire_event") from exc
@@ -255,6 +275,8 @@ class SlotSnapshot:
     code_tag: str
     deadline_at: datetime | None = None
     fence_revision: int = 1
+    agent_name: str | None = None
+    display_suffix: str | None = None
 
     def writable_at(self, now: datetime) -> bool:
         return self.state == "active" and self.policy.active_at(self.anchor, now, self.deadline_at)
@@ -359,6 +381,9 @@ class LocalAccessMesh:
             """)
 
             columns = {row[1] for row in db.execute("PRAGMA table_info(access_mesh_slot_replicas)")}
+            for column in ("agent_name", "display_suffix"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE access_mesh_slot_replicas ADD COLUMN {column} TEXT")
             if "deadline_at" not in columns:
                 db.execute("ALTER TABLE access_mesh_slot_replicas ADD COLUMN deadline_at TEXT")
             if "fence_revision" not in columns:
@@ -399,6 +424,8 @@ class LocalAccessMesh:
             code_tag=row["code_tag"],
             deadline_at=_parse(row["deadline_at"]) if "deadline_at" in row.keys() else None,
             fence_revision=row["fence_revision"] if "fence_revision" in row.keys() else 1,
+            agent_name=row["agent_name"] if "agent_name" in row.keys() else None,
+            display_suffix=row["display_suffix"] if "display_suffix" in row.keys() else None,
         )
 
     def slot(self, issuer_id: str, slot_id: str) -> SlotSnapshot | None:
@@ -547,8 +574,8 @@ class LocalAccessMesh:
                 db.execute(
                     """INSERT INTO access_mesh_slot_replicas
                        (issuer_id,slot_id,logical_agent_id,kind,state,revision,
-                        event_id,policy_json,code_tag,anchor)
-                       VALUES(?,?,?,?,'active',?,?,?,?,?)""",
+                        event_id,policy_json,code_tag,anchor,agent_name,display_suffix)
+                       VALUES(?,?,?,?,'active',?,?,?,?,?,?,?)""",
                     (
                         event.issuer_id,
                         event.slot_id,
@@ -559,6 +586,8 @@ class LocalAccessMesh:
                         json.dumps(asdict(event.policy), sort_keys=True),
                         event.code_tag,
                         _text(event.effective_at) if event.effective_at else None,
+                        event.agent_name,
+                        event.display_suffix,
                     ),
                 )
                 self._queue_event(db, event, issued_kind, recipients)

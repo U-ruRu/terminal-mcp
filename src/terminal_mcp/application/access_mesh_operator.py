@@ -10,7 +10,7 @@ from datetime import datetime
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, SlotPolicy
 from terminal_mcp.core.read_contract import bounded_page, decode_cursor, encode_cursor
-from terminal_mcp.storage.access_mesh import local_cycle, public_name
+from terminal_mcp.storage.access_mesh import local_cycle
 
 
 class AccessMeshOperator:
@@ -32,7 +32,7 @@ class AccessMeshOperator:
             "issuer_node_id": slot.issuer_id,
             "slot_id": slot.slot_id,
             "logical_agent_id": slot.logical_agent_id,
-            "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+            "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "state": slot.state,
             "revision": slot.revision,

@@ -12,36 +12,10 @@ from terminal_mcp.auth.foundation import (
     AuthNotFoundError,
     _utc_now,
 )
+from terminal_mcp.core.nato_names import nato_name
 
 _ACCESS_DIGITS = "0123456789"
-_NATO = (
-    "Alpha",
-    "Bravo",
-    "Charlie",
-    "Delta",
-    "Echo",
-    "Foxtrot",
-    "Golf",
-    "Hotel",
-    "India",
-    "Juliett",
-    "Kilo",
-    "Lima",
-    "Mike",
-    "November",
-    "Oscar",
-    "Papa",
-    "Quebec",
-    "Romeo",
-    "Sierra",
-    "Tango",
-    "Uniform",
-    "Victor",
-    "Whiskey",
-    "X-ray",
-    "Yankee",
-    "Zulu",
-)
+
 
 
 def normalize_access_code(value: str) -> str:
@@ -80,11 +54,7 @@ class AccessCodeAuthority:
 
     @staticmethod
     def _public_name(ordinal: int) -> str:
-        if ordinal < 1:
-            raise ValueError("ordinal must be positive")
-        word = _NATO[(ordinal - 1) % len(_NATO)]
-        cycle = (ordinal - 1) // len(_NATO) + 1
-        return word if cycle == 1 else f"{word}-{cycle}"
+        return nato_name(ordinal)
 
     async def initialize(self, db) -> None:
         await db.executescript(

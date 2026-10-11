@@ -375,12 +375,10 @@ class MCPEventStore:
                         message = await (
                             await db.execute(
                                 "SELECT m.message_hash,m.text,m.created_at,"
-                                "m.task_namespace,a.display_name AS recipient_name,"
-                                "w.wire_json "
+                                "m.task_namespace,w.wire_json,w.receipt_json "
                                 "FROM coordination_messages m "
                                 "JOIN coordination_message_recipients r "
                                 "ON r.message_hash=m.message_hash "
-                                "JOIN logical_agents a ON a.logical_agent_id=r.recipient_agent_id "
                                 "JOIN access_mesh_messages w ON w.message_hash=m.message_hash "
                                 "WHERE m.message_hash=? AND r.recipient_agent_id=? "
                                 "AND substr(m.message_hash,1,?)=?",
@@ -413,6 +411,16 @@ class MCPEventStore:
                             ).fetchone()
                             if allowed:
                                 wire = json.loads(message["wire_json"])
+                                deliveries = json.loads(message["receipt_json"]).get(
+                                    "deliveries", []
+                                )
+                                recipient_name = next((
+                                    delivery.get("public_name") for delivery in deliveries
+                                    if delivery.get("logical_agent_id") == recipient
+                                ), None)
+                                if not recipient_name:
+                                    # Never attribute old deliveries to a newly renamed slot.
+                                    continue
                                 await self._insert_event(
                                     db,
                                     source_key=(
@@ -424,7 +432,7 @@ class MCPEventStore:
                                     data={
                                         "server": self.node_id,
                                         "sender": str(wire.get("sender_name") or "")[:120],
-                                        "recipient": message["recipient_name"],
+                                        "recipient": recipient_name,
                                         "message_id": message["message_hash"],
                                         "text": message["text"],
                                         "timestamp": message["created_at"],

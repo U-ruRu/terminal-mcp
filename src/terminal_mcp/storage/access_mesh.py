@@ -28,6 +28,7 @@ from terminal_mcp.core.access_mesh_grants import (
     _text,
     _utc,
 )
+from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 
 _mutation_receipt: ContextVar[dict | None] = ContextVar("mesh_issuer_receipt", default=None)
 _mutation_number: ContextVar[dict | None] = ContextVar("mesh_session_number", default=None)
@@ -181,6 +182,15 @@ class AccessMeshStore(LocalAccessMesh):
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS access_mesh_live_code_unique
                 ON access_mesh_slot_replicas(issuer_id,code_tag) WHERE state!='deleted'""")
 
+    def human_name(self, slot: SlotSnapshot, *, short=False) -> str:
+        name = slot.agent_name
+        if not name:
+            number = self.numbers.number_for_slot(slot.issuer_id, slot.slot_id)
+            if number is None:
+                raise AccessMeshError("agent_name_unavailable")
+            name = number_agent_name(number)
+        return name if short else full_agent_name(name, slot.display_suffix)
+
     @staticmethod
     def _release_at_end(slot: SlotSnapshot) -> bool:
         return slot.kind == "legacy" or slot.policy.release_on_end is True
@@ -218,7 +228,8 @@ class AccessMeshStore(LocalAccessMesh):
             VALUES(?,?,'armed',?,1,1,1,1,?,?) ON CONFLICT(logical_agent_id) DO NOTHING""",
             (
                 slot.logical_agent_id,
-                public_name(slot.issuer_id, slot.logical_agent_id),
+                full_agent_name(slot.agent_name, slot.display_suffix)
+                if slot.agent_name else "Agent name unavailable",
                 self.local_node_id,
                 stamp,
                 stamp,
@@ -770,9 +781,8 @@ class AccessMeshStore(LocalAccessMesh):
                 result.append(
                     {
                         "logical_agent_id": slot.logical_agent_id,
-                        "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
-                        "display_name": row["display_name"]
-                        or public_name(slot.issuer_id, slot.logical_agent_id),
+                        "public_name": self.human_name(slot),
+                        "display_name": self.human_name(slot),
                         "last_server": self.local_node_id,
                         "session_duration": max(
                             0, int((_parse(expiry) - _parse(started)).total_seconds())
@@ -918,7 +928,7 @@ class AccessMeshStore(LocalAccessMesh):
             "slot_id": slot.slot_id,
             "logical_agent_id": slot.logical_agent_id,
             "authority_node_id": self.local_node_id,
-            "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+            "public_name": self.human_name(slot),
             "mode": slot.kind,
             "slot_kind": slot.kind,
             "slot_state": slot.state,
@@ -985,7 +995,7 @@ class AccessMeshStore(LocalAccessMesh):
                 "slot_id": slot.slot_id,
                 "logical_agent_id": slot.logical_agent_id,
                 "authority_node_id": self.local_node_id,
-                "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+                "public_name": self.human_name(slot),
                 "mode": slot.kind,
                 "slot_kind": slot.kind,
                 "slot_state": slot.state,
@@ -1224,13 +1234,14 @@ class AccessMeshStore(LocalAccessMesh):
             "code_tag",
             "anchor",
         }
-        if not isinstance(raw, dict) or set(raw) not in (
-            fields,
-            fields | {"deadline_at", "fence_revision"},
-        ):
+        optional = {"deadline_at", "fence_revision", "agent_name", "display_suffix"}
+        if not isinstance(raw, dict) or not fields <= set(raw) or set(raw) - fields - optional:
             raise AccessMeshError("access_mesh_invalid_snapshot")
-        raw = {"deadline_at": None, "fence_revision": raw["revision"], **raw}
-        fields |= {"deadline_at", "fence_revision"}
+        raw = {
+            "deadline_at": None, "fence_revision": raw["revision"],
+            "agent_name": None, "display_suffix": None, **raw,
+        }
+        fields |= optional
         if (
             authenticated_peer_id != raw["issuer_id"]
             or authenticated_peer_id not in self.trusted_issuers
@@ -1260,6 +1271,8 @@ class AccessMeshStore(LocalAccessMesh):
                 policy=policy,
                 code_tag=raw["code_tag"],
                 effective_at=_parse(raw["anchor"]),
+                agent_name=raw["agent_name"],
+                display_suffix=raw["display_suffix"],
             )
             if raw["state"] not in {"active", "suspended", "deleted"} or raw["kind"] not in {
                 "legacy",

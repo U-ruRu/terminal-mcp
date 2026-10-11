@@ -8,6 +8,7 @@ import pytest
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.core import read_contract
+from terminal_mcp.core.human_names import number_agent_name
 from terminal_mcp.mcp.access_contracts import MeshAgentObserve
 from terminal_mcp.storage.access_mesh import AccessMeshStore
 
@@ -55,6 +56,10 @@ def overview_fixture(tmp_path, monkeypatch):
             logical_agent_id=row["logical_agent_id"],
             issuer_id=row["issuer_id"],
             slot_id=row["slot_id"],
+            agent_name=number_agent_name(
+                f"{int(row['logical_agent_id'].rsplit('_', 1)[1]):04d}"
+            ),
+            display_suffix=row["display_name"],
         ),
     )
     monkeypatch.setattr(
@@ -232,7 +237,7 @@ async def test_loser_only_attachment_projects_winner_session_intent_and_lookup(o
     assert len(result["agents"]) == 1
     record = result["agents"][0]
     assert record["logical_agent_id"] == agents[1]
-    assert record["display_name"] == "Fixture agent 1"
+    assert record["display_name"] == "Bravo-1 - Fixture agent 1"
     assert record["work_session_id"] == "session-1"
     assert record["current_intent"] == "canonical intent"
     assert record["last_activity"] == latest
