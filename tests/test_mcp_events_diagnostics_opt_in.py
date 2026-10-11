@@ -233,3 +233,41 @@ def test_broken_diagnostic_sinks_do_not_raise(monkeypatch):
         "ev_0123456789abcdef", {"result": "verified"}, enabled=True
     )
     event_diagnostics.emit_failure("events/worker", "poll", "internal_error", "ev_0123456789abcdef")
+
+
+@pytest.mark.asyncio
+async def test_stale_dispatch_gate_keeps_retry_state_and_never_calls_callback(caplog):
+    item = {"event_id": "PRIVATE_EVENT", "subscription_id": "PRIVATE_SUBSCRIPTION"}
+    attempts, callbacks, checks = [], [], []
+
+    async def due_deliveries():
+        return [item]
+
+    async def finish_attempt(event, subscription, *, status):
+        attempts.append((event, subscription, status))
+
+    async def checker(delivery):
+        return True
+
+    async def dispatch_is_current(delivery):
+        checks.append(delivery)
+        return False
+
+    async def sender(*args):
+        callbacks.append(args)
+        return 200, b""
+
+    store = SimpleNamespace(
+        due_deliveries=due_deliveries,
+        finish_attempt=finish_attempt,
+        dispatch_is_current=dispatch_is_current,
+    )
+    adapter = MCPEventsAdapter(None, store, sender=sender, access_checker=checker)
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        await adapter.deliver_due()
+        await adapter.deliver_due()
+    assert checks == [item, item]
+    assert callbacks == []
+    assert attempts == [("PRIVATE_EVENT", "PRIVATE_SUBSCRIPTION", None)] * 2
+    assert "tmcp_events_diag" not in caplog.text
+    assert "tmcp_events_error" not in caplog.text
