@@ -104,3 +104,31 @@ its checkpoint already has the original JSON type. `TaskCoordinator` previously
 converted it to text (and extracted a dict's text field), losing structure.
 The wire oracle exercises the stored value through the public snapshot adapter.
 The database row and event history must compare equal before and after reading.
+
+## Oracle v2/v3 correction and extensions
+
+The earlier two raw-application `_meta` cases did not represent the actual intent
+injection boundary. They are superseded: the combined implementation observes
+intent in the outer role activity wrapper, then adds response metadata and a
+separate TextContent after the successful compact projection. The replacement
+fixtures exercise that wrapper with an isolated fake mesh. They are explicitly
+SKIP/NOTTESTED when the standalone candidate lacks the separately coordinated
+intent feature. Their old red-control failures are not implementation blockers.
+
+The v2 control (45 cases) is 8 PASS, 35 FAIL, 2 SKIP, exit 1 on the unchanged
+canonical production source. Added positive controls cover invalid arguments
+and a real isolated SQLite revision conflict without claim/task mutation.
+The deterministic nonwait oracle forbids a status-poll sleep with an in-memory
+scheduler. Strict-schema tests first validate the new valid shape, then require
+rejection of each removed field; an old schema cannot pass by rejecting both.
+
+The extended oracle has 54 cases, adding all read states, stdout/stderr line
+preservation, continuation, meaningful retention/truncation flags and zero
+byte counts, required incoming messages, plus the implementer's published
+field choice for command body/error (`command.cmd` / `command.error`).
+
+Existing baseline invariant suite independently passed 29 tests (exit 0):
+`test_task_history_cursor_stability.py`, `test_task_checkpoint_append_boundary.py`,
+and `test_task_revision_side_effects.py`. Cursor is present at task.next_cursor.
+Same-stream changes explicitly invalidate its snapshot-bound offset; a restart
+recovers the complete stream. This is not evidence of a broken continuation.

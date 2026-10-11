@@ -6,14 +6,17 @@ not from production projection helpers. Run against an exact candidate checkout.
 """
 
 import json
+from contextlib import asynccontextmanager, nullcontext
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.persistent_backend import PersistentBackend
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.mcp import roles
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -129,12 +132,12 @@ def _message(mode="notify", *, text="incoming", msg_id="acceptance:msg:one"):
     }
 
 
-def _server(monkeypatch, role, **responses):
+def _server(monkeypatch, role, *, mesh=None, **responses):
     async def touch_provider(*_args, **_kwargs):
         return None
 
     app = SimpleNamespace(
-        service=SimpleNamespace(persistent=None),
+        service=SimpleNamespace(persistent=None, access_mesh=mesh),
         session_gate=SimpleNamespace(touch_provider=touch_provider),
     )
     for operation, response in responses.items():
@@ -263,16 +266,40 @@ async def test_claim_keeps_nonempty_required_messages_and_warnings(monkeypatch):
     assert "task" not in data and "action" not in data and "session_lifecycle" not in data
 
 
+class _IntentBoundaryFixture:
+    """Supplies intent state at its actual outer role boundary, without sessions."""
+
+    def __init__(self):
+        self.calls = 0
+        self.store = SimpleNamespace(attached_slot=lambda _key: None)
+
+    def connection_key(self, _actor):
+        return "isolated-binding"
+
+    async def observe_intent_call(self, _actor, *, require_intent):
+        assert require_intent is True
+        self.calls += 1
+        return {
+            "state": "stale",
+            "warn": self.calls == 1,
+            "blocked": self.calls > 1,
+            "refresh_due_at": NOW,
+        }
+
+    def intent_call_context(self, _status):
+        return nullcontext()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["command_run", "task_claim"])
-async def test_compaction_preserves_intent_warning_metadata(monkeypatch, operation):
+async def test_actual_intent_boundary_warns_on_minimal_success_then_blocks(monkeypatch, operation):
+    if "intent" not in roles.AttachInput.model_fields:
+        pytest.skip("Requires the separately coordinated intent integration candidate")
     raw = (
         _run()
         if operation == "command_run"
         else {"ok": True, "action": "claim", "task": _task(snapshot=True), "warnings": []}
     )
-    warning = "Intent is stale; next write will be blocked until refreshed."
-    raw["_meta"] = {"intent_warning": warning}
     service_method = "cmd" if operation == "command_run" else "task"
     arguments = (
         {"command": "printf fixture"}
@@ -284,11 +311,17 @@ async def test_compaction_preserves_intent_warning_metadata(monkeypatch, operati
             "claim_intent": "review",
         }
     )
-    data, response = await _call(
-        _server(monkeypatch, "executor", **{service_method: raw}), operation, arguments
+    server = _server(
+        monkeypatch, "executor", mesh=_IntentBoundaryFixture(), **{service_method: raw}
     )
+    data, response = await _call(server, operation, arguments)
     assert data["ok"] is True
-    assert (response.meta or {}).get("intent_warning") == warning
+    assert "next write will be blocked" in (response.meta or {}).get("intent_warning", "")
+    assert any("next write will be blocked" in item.text for item in response.content[1:])
+    blocked, _ = await _call(server, operation, arguments)
+    assert blocked["ok"] is False
+    assert blocked["error"]["code"] == "intent_stale"
+    assert blocked["error"]["outcome"] == "not_committed"
 
 
 @pytest.mark.asyncio
@@ -537,3 +570,292 @@ async def test_stored_checkpoint_snapshot_preserves_original_type(monkeypatch, t
     assert "text" not in checkpoint and "revision" not in checkpoint
     assert await store.get_task("acceptance", "ONE") == stored_before
     assert await store.list_events("acceptance", "ONE") == events_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("command_run", {"command": 42}),
+        ("task_claim", {"action": "claim", "namespace": "acceptance", "task_id": "ONE"}),
+        ("command_read", {}),
+    ],
+)
+async def test_invalid_requests_are_small_actionable_failures(monkeypatch, name, arguments):
+    data, _ = await _call(_server(monkeypatch, "executor"), name, arguments)
+    assert data["ok"] is False
+    error = data["error"]
+    assert all(error.get(key) for key in ("code", "message", "outcome", "retry"))
+    assert error.get("details")
+    encoded = json.dumps(data)
+    assert len(encoded) < 8192
+    assert '"$defs"' not in encoded and '"oneOf"' not in encoded
+
+
+@pytest.mark.asyncio
+async def test_claim_revision_conflict_keeps_repair_and_does_not_claim(monkeypatch, tmp_path):
+    path = tmp_path / "claim-revision.sqlite3"
+    await SqliteRepository(path, tmp_path / "output.sqlite3").initialize()
+    store = TaskStore(path)
+    coordinator = TaskCoordinator(store)
+    created = await coordinator.mutate(
+        PUBLIC_NAME,
+        action="create",
+        namespace="acceptance",
+        task_id="ONE",
+        title="CAS",
+        isolation_hint="none",
+    )
+    assert created["ok"] is True
+    before = await store.get_task("acceptance", "ONE")
+    claims_before = await store.active_claims("acceptance", "ONE")
+    failed = await coordinator.mutate(
+        PUBLIC_NAME,
+        action="claim",
+        namespace="acceptance",
+        task_id="ONE",
+        claim_intent="review",
+        expected_revision=before["revision"] + 1,
+    )
+    assert failed["ok"] is False
+    data, _ = await _call(
+        _server(monkeypatch, "executor", task=failed),
+        "task_claim",
+        {
+            "action": "claim",
+            "namespace": "acceptance",
+            "task_id": "ONE",
+            "claim_intent": "review",
+            "expected_revision": before["revision"] + 1,
+        },
+    )
+    assert data["ok"] is False
+    assert data["error"]["details"]["current_revision"] == before["revision"]
+    assert data["error"]["outcome"] == "not_committed"
+    assert data["error"]["retry"]
+    assert await store.get_task("acceptance", "ONE") == before
+    assert await store.active_claims("acceptance", "ONE") == claims_before
+
+
+def test_run_strict_schema_validates_new_shape_and_rejects_removed_fields(monkeypatch):
+    server = _server(monkeypatch, "executor")
+    model = server._tool_manager.get_tool("command_run").fn_metadata.output_model
+    valid = {"ok": True, "remaining_seconds": 0, "cmd_hash": "aabbccdd", "status": "queued"}
+    model.model_validate(valid)
+    for key, value in {
+        "action": "run",
+        "command": {},
+        "identity": {},
+        "coordination": {},
+        "session_lifecycle": {},
+        "lines": [],
+        "exit_code": 0,
+        "execution_started": False,
+        "queue_position": 0,
+    }.items():
+        with pytest.raises(ValidationError):
+            model.model_validate({**valid, key: value})
+
+
+class _RunFixtureRepo:
+    def __init__(self):
+        self.record = None
+
+    async def create(self, cmd, *, cmd_hash, status, queue_id, **_kwargs):
+        self.record = SimpleNamespace(
+            cmd=cmd,
+            cmd_hash=cmd_hash,
+            status=status,
+            queue_id=queue_id,
+            exit_code=None,
+            claimed_at=None,
+            started_at=None,
+            finished_at=None,
+        )
+        return self.record
+
+    async def get(self, _cmd_hash):
+        return self.record
+
+    async def queue_position(self, _cmd_hash):
+        return 1
+
+    async def queue_snapshot(self, _workers):
+        return [{"queue_id": 1, "running": None, "queued": 1}]
+
+
+class _RunFixtureLifecycle:
+    @asynccontextmanager
+    async def operation_guard(self, _logical_agent_id):
+        yield
+
+
+class _RunFixtureBackend(PersistentBackend):
+    async def _execution_authority(self, *_args, **_kwargs):
+        return SimpleNamespace(hard_expires_at=NOW, authority_node_id="fixture"), None
+
+    async def _task_refs(self, _agent):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_run_never_polls_or_sleeps_to_obtain_a_later_status(monkeypatch):
+    import asyncio
+
+    import terminal_mcp.core.persistent_backend as backend_module
+
+    repo = _RunFixtureRepo()
+
+    async def submit(_record):
+        return None
+
+    async def forbidden_wait(_delay):
+        raise AssertionError("command acceptance must not wait for a later status")
+
+    terminal = SimpleNamespace(queue_workers=1, submit=submit)
+    service = SimpleNamespace(
+        repo=repo,
+        terminal=terminal,
+        task_coordinator=None,
+        task_store=None,
+        agent_policy=SimpleNamespace(command_preview_chars=80),
+    )
+    backend = _RunFixtureBackend(service, _RunFixtureLifecycle())
+    monkeypatch.setattr(
+        backend_module,
+        "asyncio",
+        SimpleNamespace(get_running_loop=asyncio.get_running_loop, sleep=forbidden_wait),
+    )
+    result = await backend.run(
+        "fixture command",
+        logical_agent_id="fixture-agent",
+        work_session_id="fixture-session",
+        session_epoch=1,
+        queue_id=1,
+        task_scope="none",
+    )
+    assert result["ok"] is True, result
+    assert result["status"] == "queued"
+    assert "postcommit_warning" not in result, result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,exit_code",
+    [
+        ("queued", None),
+        ("running", None),
+        ("completed", 0),
+        ("failed", 7),
+        ("cancelled", 130),
+    ],
+)
+async def test_read_preserves_output_and_known_exit_after_finish_or_cancel(
+    monkeypatch, status, exit_code
+):
+    raw = {
+        "ok": True,
+        "cmd_hash": "aabbccdd",
+        "status": status,
+        "exit_code": exit_code,
+        "queue_id": 3,
+        "lines": ["stdout: fixture", "stderr: fixture"],
+        "overall_lines_count": 4,
+        "displayed_lines_count": 2,
+        "has_more": True,
+        "next_cursor": "fixture-cursor",
+        "output_truncated": False,
+        "output_retained": True,
+        "output_bytes": 0,
+    }
+    data, _ = await _call(
+        _server(monkeypatch, "executor", cmd=raw),
+        "command_read",
+        {"cmd_hash": "aabbccdd", "limit": 2},
+    )
+    assert data["ok"] is True, data
+    command = data.get("command") if isinstance(data.get("command"), dict) else data
+    assert command["status"] == status
+    if exit_code is not None:
+        assert command["exit_code"] == exit_code
+        assert type(command["exit_code"]) is int
+    assert data["lines"] == raw["lines"]
+    assert data["has_more"] is True
+    assert data["next_cursor"] == raw["next_cursor"]
+    assert data["output_retained"] is True and data["output_truncated"] is False
+    assert data["output_bytes"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retained,truncated", [(False, False), (True, True)])
+async def test_read_retention_and_truncation_are_meaningful_booleans(
+    monkeypatch, retained, truncated
+):
+    raw = {
+        "ok": True,
+        "cmd_hash": "aabbccdd",
+        "status": "completed",
+        "exit_code": 0,
+        "lines": [],
+        "overall_lines_count": 0,
+        "displayed_lines_count": 0,
+        "has_more": False,
+        "output_truncated": truncated,
+        "output_retained": retained,
+        "output_bytes": 0,
+    }
+    data, _ = await _call(
+        _server(monkeypatch, "executor", cmd=raw), "command_read", {"cmd_hash": "aabbccdd"}
+    )
+    assert data["ok"] is True, data
+    assert data["has_more"] is False
+    assert data["output_retained"] is retained and data["output_truncated"] is truncated
+    assert data["output_bytes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_read_surfaces_required_incoming_message_without_duplication(monkeypatch):
+    msg = _message("ack")
+    raw = {
+        "ok": True,
+        "cmd_hash": "aabbccdd",
+        "status": "running",
+        "lines": [],
+        "messages": [msg],
+        "pending_messages": [deepcopy(msg)],
+    }
+    data, _ = await _call(
+        _server(monkeypatch, "executor", cmd=raw), "command_read", {"cmd_hash": "aabbccdd"}
+    )
+    assert data["ok"] is True, data
+    assert data.get("messages") == [
+        {
+            "id": msg["message_hash"],
+            "sender": PUBLIC_NAME,
+            "text": "incoming",
+            "requirements": "ack",
+        }
+    ]
+    assert "coordination" not in data and "pending_messages" not in data
+
+
+@pytest.mark.asyncio
+async def test_read_includes_original_command_body_and_execution_error(monkeypatch):
+    body = "printf '%s\\n' 'original body'; printf '%s\\n' 'stderr' >&2; exit 7"
+    raw = {
+        "ok": True,
+        "cmd_hash": "aabbccdd",
+        "cmd": body,
+        "status": "failed",
+        "exit_code": 7,
+        "error": "fixture execution error",
+        "lines": ["original body", "stderr"],
+    }
+    data, _ = await _call(
+        _server(monkeypatch, "executor", cmd=raw), "command_read", {"cmd_hash": "aabbccdd"}
+    )
+    assert data["ok"] is True, data
+    assert data["command"]["cmd"] == body
+    assert data["command"]["error"] == raw["error"]
+    assert data["command"]["exit_code"] == 7
+    assert data["lines"] == raw["lines"]
