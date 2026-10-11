@@ -294,7 +294,7 @@ def test_installer_builds_sqlite_before_runtime_import_check():
     build_call = 'build_sqlite_runtime "$STAGED_RELEASE"'
     import_check = "from mcp.server.transport_security import TransportSecuritySettings"
     assert script.index(build_call) < script.index(import_check)
-    assert 'runtime_python "$STAGED_RELEASE" -c' in script
+    assert 'validate_staged_runtime "$STAGED_RELEASE"' in script
 
 
 def test_update_stages_fixed_sqlite_before_backup_and_activation():

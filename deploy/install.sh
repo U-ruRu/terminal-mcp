@@ -584,18 +584,53 @@ stage(){
     rm -rf "$STAGED_RELEASE"
     return 1
   fi
-  if ! runtime_python "$STAGED_RELEASE" -c \
-    'from mcp.server.transport_security import TransportSecuritySettings; import terminal_mcp.app' \
-    >&2; then
-    echo "Staged release runtime import check failed" >&2
+  if ! validate_staged_runtime "$STAGED_RELEASE"; then
     rm -rf "$STAGED_RELEASE"
     return 1
   fi
-  if ! "$STAGED_RELEASE/bin/terminal-mcp" --help >/dev/null; then
-    echo "Staged Terminal MCP launcher check failed" >&2
-    rm -rf "$STAGED_RELEASE"
-    return 1
-  fi
+}
+# Importing app constructs stores synchronously. Validation must never inherit
+# the running service's environment or discover its dotenv/config/store files.
+staged_validation_command(){
+  local validation=$1
+  shift
+  (
+    cd "$validation" || exit 1
+    env -i PATH=/usr/bin:/bin HOME="$validation/home" TMPDIR="$validation/tmp" \
+      LC_ALL=C.UTF-8 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
+      TERMINAL_MCP_CWD="$validation" \
+      TERMINAL_MCP_DATABASE_PATH="$validation/runtime.sqlite3" \
+      TERMINAL_MCP_AUTH_DATABASE_PATH="$validation/auth.sqlite3" \
+      TERMINAL_MCP_OUTPUT_CACHE_PATH="$validation/output.sqlite3" \
+      TERMINAL_MCP_FLEET_NODE_META_PATH="$validation/fleet-node-meta.sqlite3" \
+      TERMINAL_MCP_FLEET_CONTROL_PATH="$validation/fleet-control.sqlite3" \
+      TERMINAL_MCP_FLEET_PROJECTION_PATH="$validation/fleet-projection.sqlite3" \
+      TERMINAL_MCP_ENV_FILE_PATH="$validation/terminal-mcp.env" \
+      TERMINAL_MCP_RUNTIME_CONFIG_PATH="$validation/runtime.env" \
+      TERMINAL_MCP_LOG_PATH="$validation/terminal-mcp.log" \
+      "$@"
+  )
+}
+validate_staged_runtime(){
+  (
+    local release=$1 validation loader
+    validation=$(mktemp -d "$release/.runtime-validation.XXXXXX") || return 1
+    trap 'rm -rf -- "$validation"' EXIT
+    mkdir -p "$validation/home" "$validation/tmp" || return 1
+    loader=$(cat "$release/lib/terminal-mcp-native/loader.path") || return 1
+    if ! staged_validation_command "$validation" "$loader" \
+      --library-path "$release/lib/terminal-mcp-native" "$release/bin/python" -c \
+      'from mcp.server.transport_security import TransportSecuritySettings; import terminal_mcp.app' \
+      >&2; then
+      echo "Staged release runtime import check failed" >&2
+      return 1
+    fi
+    if ! staged_validation_command "$validation" \
+      "$release/bin/terminal-mcp" --help >/dev/null; then
+      echo "Staged Terminal MCP launcher check failed" >&2
+      return 1
+    fi
+  )
 }
 release_version(){
   release=$1
