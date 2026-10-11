@@ -479,7 +479,7 @@ async def test_real_persistent_presence_and_session_expiry_per_local_node(contex
         )
     await events.pump()
     assert [r["data"] for r in _records(path, "session.ended")] == [
-        {"agent_name": "Persistent Agent", "server": NODE}
+        {"agent_name": "Persistent Agent", "server": NODE, "reason": "expired"}
     ]
     await events.pump()
     assert len(_records(path, "session.ended")) == 1
@@ -498,7 +498,7 @@ async def test_real_limited_work_session_explicit_end_delivers_once(context):
         )
     await events.pump()
     assert [r["data"] for r in _records(path, "session.ended")] == [
-        {"agent_name": "Persistent Agent", "server": NODE}
+        {"agent_name": "Persistent Agent", "server": NODE, "reason": "manual"}
     ]
     await events.pump()
     assert len(_records(path, "session.ended")) == 1

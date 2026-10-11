@@ -52,3 +52,22 @@ The new issuance metadata changes the Mesh wire event shape. All active peers
 must run the compatible parser before new issuance metadata is exchanged;
 mixed-version rollout is not supported by this change. Source server fields,
 credentials, grants, provider bindings, and access generation remain unchanged.
+
+## Session termination reason
+
+session.ended data retains agent_name and server and now requires reason.
+An explicit Access end is manual; a timer ending the actual persisted
+WorkSession deadline is expired. A manually ended cycle that resumes before
+its original deadline emits a separate expired event when that resumed
+WorkSession reaches the same deadline. This does not extend the original window.
+
+The reason is captured with the committed state transition and persisted in the
+event payload. Event IDs, timestamps and per-WorkSession/epoch deduplication
+remain unchanged; later cleanup metadata and retry materialization cannot rewrite
+the original event cause.
+
+Other existing causes are preserved rather than reported as a manual action or
+timer: SlotSuspended, SlotDeleted, replicated_cycle_fence,
+snapshot_catchup, and session_interrupt are examples. A local cycle change is
+expired only when its stored hard deadline actually elapsed; otherwise its
+original cause remains. Historical rows without a recorded cause use unknown.

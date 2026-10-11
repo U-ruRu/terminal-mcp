@@ -14,6 +14,7 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
+from terminal_mcp.core.session_end_reasons import session_end_reason
 from terminal_mcp.fleet.event_mesh import initialize_mesh_storage, queue_lifecycle_events
 from terminal_mcp.fleet.message_event_mesh import queue_message_events, remote_message_interest
 from terminal_mcp.storage.permissions import secure_database_path
@@ -33,6 +34,21 @@ def event_catalog():
         },
         "required": ["agent_name", "server"],
         "additionalProperties": False,
+    }
+    ended_data = {
+        **data,
+        "properties": {
+            **data["properties"],
+            "reason": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "manual for an explicit end, expired for timer expiry; "
+                    "other committed causes retain their stored reason."
+                ),
+            },
+        },
+        "required": [*data["required"], "reason"],
     }
     private_message = {
         "type": "object",
@@ -84,7 +100,11 @@ def event_catalog():
                     ),
                     "additionalProperties": False,
                 },
-                "payloadSchema": private_message if name == "message.received" else data,
+                "payloadSchema": (
+                    private_message if name == "message.received"
+                    else ended_data if name == "session.ended"
+                    else data
+                ),
             }
             for name in EVENT_NAMES
         ]
@@ -499,6 +519,11 @@ class MCPEventStore:
                                     data={
                                         "agent_name": (local or presences[0])["display_name"],
                                         "server": self.node_id,
+                                        "reason": session_end_reason(
+                                            source.get("end_reason"),
+                                            ended_at=source.get("ended_at") or item["created_at"],
+                                            hard_expires_at=source.get("hard_expires_at"),
+                                        ),
                                     },
                                 )
                 expired = utc_text(current - timedelta(hours=24))
