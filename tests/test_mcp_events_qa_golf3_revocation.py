@@ -334,7 +334,7 @@ def test_native_access_attach_message_and_signed_callback_independent(tmp_path):
         sent_content = sent["result"].get("structuredContent") or json.loads(
             sent["result"]["content"][0]["text"]
         )
-        assert sent_content["ok"] and sent_content["message_hash"], sent_content
+        assert sent_content["ok"] and sent_content["message"]["message_hash"], sent_content
         client.portal.call(app.state.mcp_events.store.pump)
         client.portal.call(app.state.access_events.deliver_due)
         events = [p for p in sink.calls if p.get("name") == "message.received"]

@@ -156,7 +156,7 @@ def test_shared_number_fanout_exact_recipient_refresh_and_selective_unsubscribe(
              )["public_name"], "text": "only A gets this"},
             evidence=coord_b,
         )
-        assert sent["ok"] and sent["message_hash"], sent
+        assert sent["ok"] and sent["message"]["message_hash"], sent
         client.portal.call(app.state.mcp_events.store.pump)
         client.portal.call(app.state.mcp_events.deliver_due)
         events = [(url, data) for url, data, _ in sink.requests
@@ -341,7 +341,7 @@ def test_revoked_number_binding_or_credentials_stop_pending_delivery(tmp_path, r
              )["public_name"], "text": "pending fixture"},
             evidence=sender,
         )
-        assert sent["ok"] and sent["message_hash"], sent
+        assert sent["ok"] and sent["message"]["message_hash"], sent
         client.portal.call(app.state.mcp_events.store.pump)
         if revocation == "credential":
             app.state.settings.bearer_tokens = "test-bearer-b"
