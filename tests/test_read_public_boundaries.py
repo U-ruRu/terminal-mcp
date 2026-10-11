@@ -118,11 +118,19 @@ def test_final_mcp_budget_compacts_large_coordination_metadata():
 
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
     assert result.structuredContent["ok"] is True
-    pending = result.structuredContent["coordination"]["pending_messages"]
-    assert len(pending) == 1
-    assert pending[0]["message_hash"] == "message-1"
-    assert pending[0]["truncated"] is True
-    assert len(pending[0]["text"]) < READ_RESPONSE_BUDGET_BYTES
+    data = result.structuredContent
+    assert "coordination" not in data and "pending_messages" not in data
+    assert data["command"]["cmd_hash"] == "command-1"
+    assert data["command"]["status"] == "completed"
+    assert data["command"]["exit_code"] == 0
+    assert data["lines"] == []
+    assert len(data["messages"]) == 1
+    assert set(data["messages"][0]) == {"id", "sender", "text"}
+    assert data["messages"][0]["id"] == "message-1"
+    assert data["messages"][0]["sender"] == "Alpha"
+    assert len(data["messages"][0]["text"]) < READ_RESPONSE_BUDGET_BYTES
+    assert "messages_remaining" not in data
+    assert [warning["code"] for warning in data["warnings"]] == ["incoming_messages_truncated"]
 
 
 class _LargeCmdService:
