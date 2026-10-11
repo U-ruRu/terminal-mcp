@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from terminal_mcp.core.public_errors import MAX_COORDINATION_MESSAGES
+from terminal_mcp.core.read_contract import summary_message
 from terminal_mcp.core.task_projections import (
     TaskDependency,
     TaskEvent,
@@ -32,6 +34,12 @@ class IncomingMessage(_Strict):
 
 
 class OperationNotices(_Strict):
+    messages_remaining: int | None = Field(
+        default=None,
+        gt=0,
+        description="Incoming entries omitted from this bounded operation preview; "
+        "read message history with its continuation cursor. Not an ACK/delivery counter.",
+    )
     messages: list[IncomingMessage] | None = Field(default=None, min_length=1)
     warnings: list[WorkflowWarning] | None = Field(default=None, min_length=1)
     postcommit_warning: str | None = None
@@ -162,10 +170,38 @@ def operation_notices(raw: dict) -> dict:
     result = {}
     if isinstance(raw.get("_meta"), dict) and raw["_meta"]:
         result["_meta"] = dict(raw["_meta"])
-    messages = incoming_messages(raw)
+    incoming = incoming_messages(raw)
+    visible = incoming[:MAX_COORDINATION_MESSAGES]
+    messages = []
+    truncated = False
+    for item in visible:
+        preview = summary_message(item)
+        messages.append({**item, "text": preview["text"]})
+        truncated = truncated or preview["truncated"]
     if messages:
         result["messages"] = messages
-    for key in ("warnings", "postcommit_warning", "intent_warning"):
+    remaining = len(incoming) - len(messages)
+    if remaining:
+        result["messages_remaining"] = remaining
+    if raw.get("warnings"):
+        result["warnings"] = list(raw["warnings"])
+    if truncated or remaining:
+        count_note = (
+            f" {remaining} additional incoming entries are not displayed." if remaining else ""
+        )
+        result.setdefault("warnings", []).append(
+            {
+                "code": "incoming_messages_truncated",
+                "severity": "warning",
+                "message": "Incoming messages are shown as bounded previews."
+                + count_note
+                + " Use message(action='history', detail='full') and its next_cursor to read "
+                "messages and remaining IDs. Oversized full-text items can still return "
+                "output_item_too_large under the existing read limit; text-chunk reading is not "
+                "available yet. Pending ACK/reply obligations are unchanged.",
+            }
+        )
+    for key in ("postcommit_warning", "intent_warning"):
         if raw.get(key):
             result[key] = raw[key]
     lifecycle = raw.get("session_lifecycle") or {}

@@ -1191,6 +1191,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -1475,6 +1489,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -2436,6 +2464,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -2567,6 +2609,20 @@
               },
               "title": "Messages",
               "type": "array"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -2803,6 +2859,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -3297,6 +3367,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -3401,6 +3485,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -5619,6 +5717,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -5707,6 +5819,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -5794,6 +5920,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -8837,6 +8977,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -8921,6 +9075,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -9004,6 +9172,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -9115,6 +9297,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -9358,6 +9554,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -9631,6 +9841,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -9800,6 +10024,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -10043,6 +10281,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -10202,6 +10454,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -11865,6 +12131,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -13682,6 +13962,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -13851,6 +14145,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -14094,6 +14402,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -14253,6 +14575,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -15843,6 +16179,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -16942,6 +17292,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -17073,6 +17437,20 @@
               },
               "title": "Messages",
               "type": "array"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -17309,6 +17687,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "next_cursor": {
               "anyOf": [
@@ -17803,6 +18195,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -17907,6 +18313,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -19576,6 +19996,20 @@
               "default": null,
               "title": "Messages"
             },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
             "ok": {
               "const": true,
               "title": "Ok",
@@ -20283,6 +20717,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,
@@ -21711,6 +22159,20 @@
               ],
               "default": null,
               "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
             },
             "ok": {
               "const": true,

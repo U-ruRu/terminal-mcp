@@ -38,6 +38,23 @@ status. Public operation responses combine structured obligations by message ID:
 
 Normal notifications omit `requirements`. ACK-only obligations use `ack`;
 required textual replies use `reply`. Existing system-alert ACK rules remain.
+The operation preview uses the existing four-message / 512-character text limits.
+A real truncation produces `warnings` with code `incoming_messages_truncated`.
+When entries are omitted, positive `messages_remaining` counts only entries not
+displayed in this operation preview; it is not an ACK or delivery-state counter.
+No unbounded identifier array is added. Displayed IDs/senders/requirements remain
+intact. Continue with the specialized `message(action="history", detail="full")`
+operation and its existing `next_cursor`. Stored text and pending obligations
+remain unchanged. The command receipt survives even a large incoming batch.
+
+**Existing full-read limit:** a single maximum-length Unicode message can itself
+exceed the full-history item/transport budget. Full history then returns
+`output_item_too_large`; using `limit=1` does not solve that case. The specialized
+message API currently has no text-chunk continuation. This is a separately
+confirmed acceptance blocker, not a claim that the preview offers complete
+recovery for every accepted message. The preview warning states this limitation;
+it must not encourage rerunning an already accepted command.
+
 The projection performs no receipt mutation. Backend delivery/seen/ACK/reply
 rules are unchanged. Ordinary `task_claim` succeeds with exactly `{"ok":true}`;
 real incoming obligations and warnings are retained when present. Empty warnings

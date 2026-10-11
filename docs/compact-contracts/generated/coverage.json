@@ -56,11 +56,11 @@
     "output_fallback": "strict-contracts.json:coordinator.health.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "0928fc09008ae2479878707588815993de7102c401f402e78872022130d3982c",
-    "published_output_sha256": "038edb00f70e82dff2298da29d3781b949089c0af0a2200486c40096e70cae33",
+    "published_output_sha256": "6754e0de49e1931b688856319ecc6678ae30ede080a485af93c19c6143b062c2",
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
-    "strict_output_sha256": "c46349112f21ee1e318708a4651ad341f748c566201f224221f53be4fa4f35d7"
+    "strict_output_sha256": "2978c4de7646519f64adfa471cad23e5df89553dd3d74e21a111f9c16ddd9814"
   },
   "coordinator.message": {
     "action_models": {},
@@ -89,7 +89,7 @@
     "output_fallback": "strict-contracts.json:coordinator.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
-    "published_output_sha256": "124cf72d5bb1b78a32c1032cfb8c6c47508d3918341d2c52b01f6852ea162911",
+    "published_output_sha256": "3555c67d18791cb075555b13cd93d7435decd841d00c0f41a331638eeb63bcf1",
     "required_fields": [
       "action"
     ],
@@ -116,7 +116,7 @@
       }
     ],
     "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
-    "strict_output_sha256": "ca6b47cf685769cd4635e72d90d0004bb5a6c8585c516d3dabe627ad92158033"
+    "strict_output_sha256": "6df2386f386b04cd583b0be20e82fdd3efc8cd3c455ef8b1f5c7c220d2188a4b"
   },
   "coordinator.session": {
     "action_models": {},
@@ -166,7 +166,7 @@
     "output_fallback": "strict-contracts.json:coordinator.task_get.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "605af92bdbf8b105543a36938079ac604c65c8ae3613f3c94b34114e9dce9b9a",
-    "published_output_sha256": "38fd07dcc424a10ea8aeb65e934381185143824d5c6bd55bfbc2b339f8925838",
+    "published_output_sha256": "5ec8dee60eed40c2a9232f7113ab33290dc8de9525b32c04ce4a7de7cec7a7da",
     "required_fields": [
       "namespace",
       "task_id"
@@ -179,7 +179,7 @@
       }
     ],
     "strict_input_sha256": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
-    "strict_output_sha256": "8d81813510fd05eadfbdb871307e79f65304b7be73d04924ad90df722cd0c0bd"
+    "strict_output_sha256": "30d7b4be31a5e6f69c7966e3426df55dace2749b317f5198e2a5e7a4c51a38b8"
   },
   "coordinator.task_graph": {
     "action_models": {},
@@ -727,7 +727,7 @@
     "output_fallback": "strict-contracts.json:coordinator.task_manage.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "2d47b8aeda9c7f9bee9da4fb68c42337c0119627b05eb0af7079f078cdf54ac7",
-    "published_output_sha256": "ac6c1cba831f8229d4079fc176a3133ae838000a726f8e710cac7abc89803ee1",
+    "published_output_sha256": "9f94d5f6e3d7d68173a7ed97e9a27ea4b43617ccd934a2824fff8dd1b577ace3",
     "required_fields": [
       "action",
       "namespace"
@@ -799,7 +799,7 @@
       }
     ],
     "strict_input_sha256": "dac0417375adab7c6951517317975ac95efb2bbad9f309957b9cad399408ff8d",
-    "strict_output_sha256": "adbb11b92632bc8a2e32ee9ef956e916cfd1d18d63bb4b66b05eabd753c7aa39"
+    "strict_output_sha256": "a70413bf9d89bdffc24eb1c8c524aebeb46d782b39630adc21af9f5e9f27f4ae"
   },
   "executor.command_cancel": {
     "action_models": {},
@@ -814,13 +814,13 @@
     "output_fallback": "strict-contracts.json:executor.command_cancel.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "34a48eb2758bb7387da73c356dc49183ef0ba33845021d00bf255a26a169e048",
-    "published_output_sha256": "ac86265edd35ca6619a97f8e67592a6557dfc7694fc1b456e9a9dad8d49a6fd2",
+    "published_output_sha256": "e8ea27c7170ad8933224d06c775bb015a1856a5e9265448c46b97efa7aba12c3",
     "required_fields": [
       "cmd_hash"
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
-    "strict_output_sha256": "3f8745c95e7fc6a8551a5244dd8ef59aea79b9fed49ae1fafe5fe419b01a6f75"
+    "strict_output_sha256": "6da59d575f48697d88081bda273ba3ad491449efbf8934ab0596d523d78f5908"
   },
   "executor.command_read": {
     "action_models": {},
@@ -837,11 +837,11 @@
     "output_fallback": "strict-contracts.json:executor.command_read.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "ae048e876f9c082f9dc752b6463ed7942a7da5e0aba77ef90b66d1426311545c",
-    "published_output_sha256": "0d92eb0cc677cdee459bcef45ece58c6fed510e1fee6f7b7a1a7e78f81374e13",
+    "published_output_sha256": "fb55474e1f8a911e62f6b21733f01d712b56164e863175f3609d8f4bc8a1c433",
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "6caae35abafd494d83e6ac8491a7018504df059cad5539697582a8f95c236693",
-    "strict_output_sha256": "0842cf97cecab79839611949fb1374113705f9f9d0b7f63594193aa0dc5d2277"
+    "strict_output_sha256": "d87276bb12e6d8419bcf99a58af19ffb8911fac99e4f76123a1b3e504f9b9b9f"
   },
   "executor.command_recovery": {
     "action_models": {},
@@ -856,13 +856,13 @@
     "output_fallback": "strict-contracts.json:executor.command_recovery.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "45798bd91f1e34c6141a2cc9193bfc7e34380bfea74214c9c6a90d440e2f9815",
-    "published_output_sha256": "ac86265edd35ca6619a97f8e67592a6557dfc7694fc1b456e9a9dad8d49a6fd2",
+    "published_output_sha256": "e8ea27c7170ad8933224d06c775bb015a1856a5e9265448c46b97efa7aba12c3",
     "required_fields": [
       "command"
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
-    "strict_output_sha256": "3f8745c95e7fc6a8551a5244dd8ef59aea79b9fed49ae1fafe5fe419b01a6f75"
+    "strict_output_sha256": "6da59d575f48697d88081bda273ba3ad491449efbf8934ab0596d523d78f5908"
   },
   "executor.command_run": {
     "action_models": {},
@@ -879,7 +879,7 @@
     "output_fallback": "strict-contracts.json:executor.command_run.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "9d07ca55a0b1b63c3a49f0761d4aaacf2ff47c2e11bf99470d8971195cf02ab4",
-    "published_output_sha256": "0ffec438a44a45268e3ce702306615508815f966fc706a939fb6b9ae206e389e",
+    "published_output_sha256": "a7d037fe670e10e13101c3175e85450d4b7575646593287d71b9c073927f7963",
     "required_fields": [
       "command"
     ],
@@ -891,7 +891,7 @@
       }
     ],
     "strict_input_sha256": "390368c4b1e019241027cc9e6f81be36a7d8bc0f1a681d91a9a148ac2a917f34",
-    "strict_output_sha256": "f1012508672f49c607d1021af5ddab810c3af27a4143e2070402be9dc5e5933e"
+    "strict_output_sha256": "5c95354af8c161ef72be1d4887cce26fe2d8bfac1e36b9a87f6b578e3a07fb01"
   },
   "executor.message": {
     "action_models": {},
@@ -920,7 +920,7 @@
     "output_fallback": "strict-contracts.json:executor.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
-    "published_output_sha256": "124cf72d5bb1b78a32c1032cfb8c6c47508d3918341d2c52b01f6852ea162911",
+    "published_output_sha256": "3555c67d18791cb075555b13cd93d7435decd841d00c0f41a331638eeb63bcf1",
     "required_fields": [
       "action"
     ],
@@ -947,7 +947,7 @@
       }
     ],
     "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
-    "strict_output_sha256": "ca6b47cf685769cd4635e72d90d0004bb5a6c8585c516d3dabe627ad92158033"
+    "strict_output_sha256": "6df2386f386b04cd583b0be20e82fdd3efc8cd3c455ef8b1f5c7c220d2188a4b"
   },
   "executor.session": {
     "action_models": {},
@@ -1041,7 +1041,7 @@
     "output_fallback": "strict-contracts.json:executor.task_claim.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "831b7a74af5fa0b8fc7db4885ee29d88d2b867e613085ae8f90e9a98e3522826",
-    "published_output_sha256": "f36247f798837f431b471eba6edb1352a63113ea62465f078d79df21cebac720",
+    "published_output_sha256": "5e83ec995ca20984f35dda4feedf243c02afeeac24a32d14a0a699002a166ddd",
     "required_fields": [
       "action",
       "namespace",
@@ -1062,7 +1062,7 @@
       }
     ],
     "strict_input_sha256": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
-    "strict_output_sha256": "006013889ababc6464f5cad5ebc37f33abbb019878ca235555fe17d3620ce2e1"
+    "strict_output_sha256": "34c9c80fa38be044f5078c513c9aeb94f3a3235232837b88b4cbb6fda1220831"
   },
   "executor.task_comment": {
     "action_models": {
@@ -1123,7 +1123,7 @@
     "output_fallback": "strict-contracts.json:executor.task_comment.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "bf3f4057c881a2268ee65fa2c86440ada5ce24959a586b77d6f375a21c6e1d17",
-    "published_output_sha256": "f36247f798837f431b471eba6edb1352a63113ea62465f078d79df21cebac720",
+    "published_output_sha256": "5e83ec995ca20984f35dda4feedf243c02afeeac24a32d14a0a699002a166ddd",
     "required_fields": [
       "namespace",
       "task_id"
@@ -1136,7 +1136,7 @@
       }
     ],
     "strict_input_sha256": "947fa128f5f553c22321bd7d86845b374dac515d1dcd97a0146c4652493e9039",
-    "strict_output_sha256": "31720495f1bbcd8dabea290d479e627f04329a17461ea1693276c315af984eb7"
+    "strict_output_sha256": "a4b999fa158ff630ba00f51e2d01283f709eab4327b6a6bdc93e2379d0c668be"
   },
   "executor.task_list": {
     "action_models": {},
@@ -1183,7 +1183,7 @@
     "output_fallback": "strict-contracts.json:executor.task_state.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "bd7c30645e2b874a12fbb8ebae4c9709a33320e99bdf0a932834fd3bf912a804",
-    "published_output_sha256": "f36247f798837f431b471eba6edb1352a63113ea62465f078d79df21cebac720",
+    "published_output_sha256": "5e83ec995ca20984f35dda4feedf243c02afeeac24a32d14a0a699002a166ddd",
     "required_fields": [
       "namespace",
       "state",
@@ -1197,6 +1197,6 @@
       }
     ],
     "strict_input_sha256": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",
-    "strict_output_sha256": "8ac573376757f9d7f0a8d997a8a2c25d1a5a63126d02cc80c9a7ad5a8ceab2b0"
+    "strict_output_sha256": "ad4ecbe42429c66b6ee34b2c967fc18774a69ae6a4b96811d52efc3e2eeaff57"
   }
 }

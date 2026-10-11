@@ -176,7 +176,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Accept a command without waiting for start, completion or output. Return ok, remaining_seconds, cmd_hash, observed status and queue_id when applicable. Use command_read for body, output and exit code. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): command:string(1..32768); queue_id?:int (>=1; <=65535)? (default=null); task_scope?:string(1..256) (default=\"none\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: a command run executes a shell command in the current managed work session; no implicit idempotency guarantee.\nReturns: CmdRunResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,remaining_seconds?:union,cmd_hash:CommandId,status:CommandStatus,queue_id?:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Accept a command without waiting for start, completion or output. Return ok, remaining_seconds, cmd_hash, observed status and queue_id when applicable. Use command_read for body, output and exit code. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): command:string(1..32768); queue_id?:int (>=1; <=65535)? (default=null); task_scope?:string(1..256) (default=\"none\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: a command run executes a shell command in the current managed work session; no implicit idempotency guarantee.\nReturns: CmdRunResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,remaining_seconds?:union,cmd_hash:CommandId,status:CommandStatus,queue_id?:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -220,6 +220,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -291,7 +297,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal. Access Code and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): cmd_hash?:string(1..128)? (default=null); limit?:int (>=1; <=100; default=100); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdReadResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CommandJournal{ok:true,action:\"journal\",node_id:string,commands:array,next_cursor:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read any local command by cmd_hash, or omit cmd_hash for the local command journal. Access Code and active work cycle are unnecessary. Use the returned opaque cursor for the next bounded page.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): cmd_hash?:string(1..128)? (default=null); limit?:int (>=1; <=100; default=100); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdReadResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CommandJournal{ok:true,action:\"journal\",node_id:string,commands:array,next_cursor:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -381,6 +387,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -488,7 +500,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Cancel a command owned by the current LogicalAgent. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): cmd_hash:string(1..128).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdRunResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,remaining_seconds?:union,cmd_hash:CommandId,status:CommandStatus,queue_id?:union} | CmdReadResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CmdCancelResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"cancel\",command:CommandView,coordination?:union,identity?:union} | CmdRecoveryResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"recovery\",command:CommandView,lines?:array,overall_lines_count?:union,displayed_lines_count?:union,duration_ms?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,coordination?:union,identity?:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Cancel a command owned by the current LogicalAgent. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): cmd_hash:string(1..128).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdRunResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,remaining_seconds?:union,cmd_hash:CommandId,status:CommandStatus,queue_id?:union} | CmdReadResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CmdCancelResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"cancel\",command:CommandView,coordination?:union,identity?:union} | CmdRecoveryResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"recovery\",command:CommandView,lines?:array,overall_lines_count?:union,displayed_lines_count?:union,duration_ms?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,coordination?:union,identity?:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -575,6 +587,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -694,7 +712,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Run a recovery command under the current managed session. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): command:string(1..32768).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdRunResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,remaining_seconds?:union,cmd_hash:CommandId,status:CommandStatus,queue_id?:union} | CmdReadResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CmdCancelResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"cancel\",command:CommandView,coordination?:union,identity?:union} | CmdRecoveryResult{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"recovery\",command:CommandView,lines?:array,overall_lines_count?:union,displayed_lines_count?:union,duration_ms?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,coordination?:union,identity?:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Run a recovery command under the current managed session. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): command:string(1..32768).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: CmdRunResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,remaining_seconds?:union,cmd_hash:CommandId,status:CommandStatus,queue_id?:union} | CmdReadResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"read\",command:CommandView,lines:array,next_offset?:union,overall_lines_count?:union,displayed_lines_count?:union,next_cursor?:union,has_more?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,line_truncated?:union,coordination?:union,identity?:union} | CmdCancelResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"cancel\",command:CommandView,coordination?:union,identity?:union} | CmdRecoveryResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:\"recovery\",command:CommandView,lines?:array,overall_lines_count?:union,displayed_lines_count?:union,duration_ms?:union,output_truncated?:union,output_retained?:union,output_pruned_at?:union,output_bytes?:union,coordination?:union,identity?:union} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -781,6 +799,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -900,7 +924,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Ordinary success is only ok:true; actual incoming messages and warnings remain. Read task details with task_get. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"claim\"|\"release\"; namespace:string(1..120); task_id:string(1..120); expected_revision?:int (>=1; <=9223372036854775807)? (default=null); claim_intent?:string(1..160)? (default=null); release_reason?:string(1..4000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nServer action field policy: claim: allowed fields [action, claim_intent, expected_revision, namespace, task_id]; required non-null [action, claim_intent, namespace, task_id]; all other named inputs rejected as extra_forbidden; release: allowed fields [action, expected_revision, namespace, release_reason, task_id]; required non-null [action, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nConditions: ALL_OF(IF action==\"claim\" => requires(claim_intent)).\nRuntime rules: action=claim: claim requires non-null claim_intent string(1..160) containing non-whitespace characters; runtime trims and rejects whitespace-only intent. claim forbids release_reason; release forbids claim_intent; canonical action-specific field lists apply.; action=release: release_reason is optional even when an existing live claim is released: omitted/null uses released_by_owner. A supplied release_reason must be non-whitespace after trimming when a live claim is released; idempotent unclaimed release bypasses reason validation..\nReturns: TaskClaimSuccess{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Ordinary success is only ok:true; actual incoming messages and warnings remain. Read task details with task_get. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"claim\"|\"release\"; namespace:string(1..120); task_id:string(1..120); expected_revision?:int (>=1; <=9223372036854775807)? (default=null); claim_intent?:string(1..160)? (default=null); release_reason?:string(1..4000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nServer action field policy: claim: allowed fields [action, claim_intent, expected_revision, namespace, task_id]; required non-null [action, claim_intent, namespace, task_id]; all other named inputs rejected as extra_forbidden; release: allowed fields [action, expected_revision, namespace, release_reason, task_id]; required non-null [action, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nConditions: ALL_OF(IF action==\"claim\" => requires(claim_intent)).\nRuntime rules: action=claim: claim requires non-null claim_intent string(1..160) containing non-whitespace characters; runtime trims and rejects whitespace-only intent. claim forbids release_reason; release forbids claim_intent; canonical action-specific field lists apply.; action=release: release_reason is optional even when an existing live claim is released: omitted/null uses released_by_owner. A supplied release_reason must be non-whitespace after trimming when a live claim is released; idempotent unclaimed release bypasses reason validation..\nReturns: TaskClaimSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -954,6 +978,12 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -1007,7 +1037,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Set a valid task state as any admitted agent, including on a task claimed by someone else. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); state:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\".\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: any admitted agent may set valid workflow state, including on a task claimed by someone else. expected_revision does not guard state writes via content CAS; content revision is unchanged, live claims persist, and repeated state assignment emits no event..\nReturns: TaskStateSuccess{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Set a valid task state as any admitted agent, including on a task claimed by someone else. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); state:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\".\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: any admitted agent may set valid workflow state, including on a task claimed by someone else. expected_revision does not guard state writes via content CAS; content revision is unchanged, live claims persist, and repeated state assignment emits no event..\nReturns: TaskStateSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -1051,6 +1081,12 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -1104,7 +1140,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Append comment_text with action='comment' (the default), or save checkpoint with action='checkpoint' and a checkpoint payload. Checkpoint updates preserve task state and history. Writes require this connector's attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:\"comment\"|\"checkpoint\" (default=\"comment\"); namespace:string(1..120); task_id:string(1..120); comment_text?:string(1..4000)? (default=null); checkpoint?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":16384,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":32768}? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nServer action field policy: comment: allowed fields [action, comment_text, namespace, task_id]; required non-null [comment_text, namespace, task_id]; all other named inputs rejected as extra_forbidden; checkpoint: allowed fields [action, checkpoint, namespace, task_id]; required non-null [action, checkpoint, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nRuntime rules: comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision..\nReturns: TaskCommentSuccess{messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Append comment_text with action='comment' (the default), or save checkpoint with action='checkpoint' and a checkpoint payload. Checkpoint updates preserve task state and history. Writes require this connector's attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:\"comment\"|\"checkpoint\" (default=\"comment\"); namespace:string(1..120); task_id:string(1..120); comment_text?:string(1..4000)? (default=null); checkpoint?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":16384,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":32768}? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nServer action field policy: comment: allowed fields [action, comment_text, namespace, task_id]; required non-null [comment_text, namespace, task_id]; all other named inputs rejected as extra_forbidden; checkpoint: allowed fields [action, checkpoint, namespace, task_id]; required non-null [action, checkpoint, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nRuntime rules: comment (default action) requires non-null, non-whitespace comment_text and rejects checkpoint; checkpoint requires non-null checkpoint and rejects comment_text. Unknown fields are forbidden; checkpoint does not accept expected_revision..\nReturns: TaskCommentSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages?:union,ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -1154,6 +1190,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -1302,6 +1344,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },

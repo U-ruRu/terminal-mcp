@@ -257,6 +257,12 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -422,6 +428,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -616,6 +628,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -825,6 +843,12 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "next_cursor": {
             "type": [
               "null",
@@ -1008,6 +1032,12 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -1127,6 +1157,12 @@
               "null"
             ]
           },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -1241,6 +1277,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -1425,6 +1467,12 @@
           "messages": {
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
               "null"
             ]
           },
