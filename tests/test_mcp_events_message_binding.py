@@ -183,7 +183,7 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
             client,
             "coordinator",
             "session",
-            {"session_number": a_number},
+            {"session_number": a_number, "intent": "Receive fixture message"},
             evidence=a_coord,
             request_id=12,
         )["ok"]
@@ -215,7 +215,7 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
             client,
             "coordinator",
             "session",
-            {"session_number": b_number},
+            {"session_number": b_number, "intent": "Send fixture message"},
             evidence=b_coord,
             request_id=22,
         )
