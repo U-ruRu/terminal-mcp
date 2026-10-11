@@ -466,6 +466,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     mcp_events = MCPEventsAdapter(
         mcp.streamable_http_app(),
         mcp_event_store,
+        detailed_logging=lambda: runtime.current.detailed_logging,
         reconcile=service.reconcile_agent_sessions,
         access_checker=checked_subscription_access,
         message_resolver=message_subscriber_resolver,
@@ -474,6 +475,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     executor_events = MCPEventsAdapter(
         executor_mcp.streamable_http_app(),
         mcp_event_store,
+        detailed_logging=lambda: runtime.current.detailed_logging,
         access_checker=checked_subscription_access,
         endpoint_role="executor",
         events_enabled=False,
@@ -481,6 +483,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     coordinator_events = MCPEventsAdapter(
         coordinator_mcp.streamable_http_app(),
         mcp_event_store,
+        detailed_logging=lambda: runtime.current.detailed_logging,
         access_checker=checked_subscription_access,
         endpoint_role="coordinator",
         events_enabled=False,
@@ -489,6 +492,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         MCPEventsAdapter(
             access_mcp.streamable_http_app(),
             mcp_event_store,
+            detailed_logging=lambda: runtime.current.detailed_logging,
             access_checker=checked_subscription_access,
             message_resolver=message_subscriber_resolver,
             endpoint_role="access",
@@ -784,8 +788,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TraceMiddleware, events=events)
     app.add_middleware(BrowserSecurityMiddleware, settings=settings)
-    # Outermost probe records Events ingress even if authentication rejects it.
-    app.add_middleware(MCPEventIngressProbe)
+    # Opt-in probe records Events ingress even if authentication rejects it.
+    app.add_middleware(MCPEventIngressProbe, enabled=lambda: runtime.current.detailed_logging)
     return app
 
 

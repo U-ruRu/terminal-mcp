@@ -158,12 +158,13 @@ async def verify_callback(url, secret, subscription_id, *, sender=None, observer
     challenge = secrets.token_urlsafe(36)
     verification_id = "msg_verification_" + secrets.token_hex(16)
     started = time.monotonic()
-    response_metadata = {}
-    try:
-        parsed, _ = validate_callback_url(url)
-        response_metadata["callback_explicit_default_port"] = parsed.port == 443
-    except CallbackEndpointError:
-        pass
+    response_metadata = {} if observer is not None else None
+    if response_metadata is not None:
+        try:
+            parsed, _ = validate_callback_url(url)
+            response_metadata["callback_explicit_default_port"] = parsed.port == 443
+        except CallbackEndpointError:
+            pass
 
     def observe(
         result,
@@ -187,7 +188,7 @@ async def verify_callback(url, secret, subscription_id, *, sender=None, observer
             "challenge_is_string": is_string,
             "challenge_matches": matches,
         }
-        details.update(response_metadata)
+        details.update(response_metadata or {})
         try:
             if isinstance(body, bytes):
                 details.update(classify_callback_response(body))

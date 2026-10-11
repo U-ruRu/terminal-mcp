@@ -47,7 +47,7 @@ async def test_callback_verification_observations_are_safe(variant, expected, ca
 
     def safe_observation(observation):
         recorded.append(observation)
-        emit_callback_probe("ev_0123456789abcdef", observation)
+        emit_callback_probe("ev_0123456789abcdef", observation, enabled=True)
 
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         if variant == "success":
@@ -104,7 +104,7 @@ async def test_transport_error_reports_safe_category_and_preserves_failure(caplo
                 sender=sender,
                 observer=lambda data: (
                     recorded.append(data),
-                    emit_callback_probe("ev_0123456789abcdef", data),
+                    emit_callback_probe("ev_0123456789abcdef", data, enabled=True),
                 ),
             )
     assert exc.value.reason == "transport_error"
