@@ -3,6 +3,7 @@
 import base64
 import json
 import sqlite3
+import time
 
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
@@ -137,8 +138,16 @@ def test_issuer_replay_sealed_receipt_and_attached_shell_reads(tmp_path):
             request_id=43,
         )
         assert ran["ok"] is True, ran
-        cmd_hash = ran["command"]["cmd_hash"]
-        read = call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)
+        cmd_hash = ran["cmd_hash"]
+        assert "lines" not in ran and "command" not in ran
+        # Run acknowledges admission; wait only through the separate read operation.
+        deadline = time.monotonic() + 5
+        while True:
+            read = call(client, "executor", "command_read", {"cmd_hash": cmd_hash}, meta=False)
+            if read.get("command", {}).get("status") in {"completed", "failed", "cancelled"}:
+                break
+            assert time.monotonic() < deadline, read
+            time.sleep(0.01)
         assert read["ok"] is True, read
         assert "mesh-runtime-ok" in "\n".join(read["lines"])
         journal = call(client, "executor", "command_read", {}, meta=False)
@@ -333,7 +342,8 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
         assert recipients["recipients"][0]["public_name"] == recipient_name
         assert recipients["recipients"][0]["last_active_at"]
         health = call(client, "coordinator", "health", {}, meta=False)
-        assert health["status"] == "healthy", health
+        assert health["ok"] is True and health["healthy"] is True, health
+        assert "status" not in health
 
 
 def test_message_projection_does_not_hide_queued_remote_delivery():
@@ -456,11 +466,13 @@ def test_executor_checkpoint_shares_coordinator_history_and_preserves_state(tmp_
             {"action": "release", **key, "release_reason": "checkpoint handed over"},
             request_id=15,
         )
-        assert released["ok"] and released["task"]["state"] == "in_progress", released
+        assert released == {"ok": True}, released
+        released_snapshot = call(client, "coordinator", "task_get", key)["task"]
+        assert released_snapshot["state"] == "in_progress"
         after_release = client.portal.call(
             app.state.service.task_store.get_task, key["namespace"], key["task_id"]
         )
-        assert released["task"]["revision"] == after_release["revision"]
+        assert released_snapshot["revision"] == after_release["revision"]
         assert after_release["checkpoint"] == stored["checkpoint"]
         unowned = call(
             client,

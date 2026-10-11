@@ -62,12 +62,12 @@ def test_manual_start_resumes_original_window_then_allocates_next_window(tmp_pat
         assert declared["ok"], declared
         after = call(client, "executor", "command_run", {"command": "true"}, request_id=108)
         if not after["ok"] and after["error"]["code"] == "coordination_alert":
-            assert after["required_action"] == "ack"
+            assert after["messages"][0]["requirements"] == "ack"
             confirmed = call(
                 client,
                 "executor",
                 "message",
-                {"action": "ack", "message_hash": after["message_hash"]},
+                {"action": "ack", "message_hash": after["messages"][0]["id"]},
                 request_id=109,
             )
             assert confirmed["ok"], confirmed

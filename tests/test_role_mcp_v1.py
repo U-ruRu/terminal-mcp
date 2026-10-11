@@ -51,7 +51,15 @@ def test_role_catalogs_are_exact_and_identity_free():
             assert "required" not in (tool.description or "").lower()
 
 
-def test_task_claim_output_accepts_session_lifecycle_and_nullable_checkpoint():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["claim", "release"])
+async def test_task_claim_output_accepts_session_lifecycle_and_nullable_checkpoint(
+    monkeypatch, action
+):
+    from terminal_mcp.application.api import TerminalApplication
+    from terminal_mcp.core.task_projections import TaskSnapshot
+    from terminal_mcp.mcp.output_contracts import SessionLifecycleInfo
+
     lifecycle = {
         "state": "active",
         "remaining_seconds": 1200,
@@ -75,32 +83,37 @@ def test_task_claim_output_accepts_session_lifecycle_and_nullable_checkpoint():
         "recent_comments": [],
         "recent_checkpoints": [],
     }
-    claimed = TaskClaimOutput.model_validate(
-        {
+    # The internal nullable snapshot and lifecycle remain valid. They no longer
+    # belong to a successful public claim/release receipt.
+    snapshot = TaskSnapshot.model_validate(
+        {key: value for key, value in claim_task.items() if key in TaskSnapshot.model_fields}
+    )
+    assert snapshot.latest_checkpoint is None
+    assert SessionLifecycleInfo.model_validate(lifecycle).remaining_seconds == 1200
+
+    async def succeed(*args, **kwargs):
+        return {
             "ok": True,
-            "action": "claim",
+            "action": action,
             "task": claim_task,
             "warnings": [],
             "session_lifecycle": lifecycle,
         }
-    )
-    assert claimed.root.task.latest_checkpoint is None
-    released = TaskClaimOutput.model_validate(
+
+    monkeypatch.setattr(TerminalApplication, "task", succeed)
+    result = await _tool_map("executor")["task_claim"].run(
         {
-            "ok": True,
-            "action": "release",
-            "task": {
-                "namespace": "live",
-                "task_id": "T-1",
-                "revision": 1,
-                "state": "ready",
-                "operational_status": "ready",
-            },
-            "warnings": [],
-            "session_lifecycle": lifecycle,
-        }
+            "action": action,
+            "namespace": "live",
+            "task_id": "T-1",
+            **({"claim_intent": "review"} if action == "claim" else {}),
+        },
+        convert_result=True,
     )
-    assert released.root.session_lifecycle.remaining_seconds == 1200
+    assert result.isError is False
+    assert result.structuredContent == {"ok": True}
+    claimed = TaskClaimOutput.model_validate(result.structuredContent)
+    assert claimed.root.ok is True
 
 
 def test_role_tools_publish_output_schemas():
@@ -174,13 +187,20 @@ def test_compact_health_matches_closed_role_output_contract():
 
     compact = _compact_health(raw)
 
-    assert compact["workflow"] == {
+    assert compact == {
         "ok": True,
-        "active_claims": 2,
-        "unreleased_claims": 1,
-        "stale_claims": 0,
+        "healthy": True,
+        "application": "terminal-mcp",
+        "agent_name": None,
+        "version": "0.13.1",
+        "storage": "ok",
     }
     RoleHealthOutput.model_validate(compact)
+    extended = _compact_health(raw, extended=True)
+    assert extended["workflow"] == raw["workflow"]
+    assert extended["terminal"] == raw["terminal"]
+    assert extended["components"] == raw["components"]
+    RoleHealthOutput.model_validate(extended)
 
 
 def test_application_role_authorization_sets():
@@ -223,8 +243,7 @@ def test_planning_schema_accepts_invalid_values_for_runtime_validation():
             else:
                 validator.validate({})
                 validator.validate(
-                    {key: {"malformed": [None, 12]}
-                     for key in tool.parameters["properties"]}
+                    {key: {"malformed": [None, 12]} for key in tool.parameters["properties"]}
                 )
                 validator.validate({"unexpected_field": "runtime owns validation"})
     assert "isolation_hint" in _tool_map("coordinator")["task_manage"].description
@@ -340,7 +359,7 @@ async def test_health_identity_failure_preserves_diagnostic_access():
     assert "private-host" not in json.dumps(result)
 
 
-def test_extended_role_health_omits_host_privilege_details():
+def test_short_role_health_omits_host_details_and_extended_keeps_diagnostics():
     from terminal_mcp.mcp.roles import _compact_health
 
     raw = {
@@ -348,9 +367,16 @@ def test_extended_role_health_omits_host_privilege_details():
         "terminal": {"ok": True, "uid": 0, "cwd": "/private", "shell": "/bin/bash"},
         "custom_command": {"command": "private command"},
     }
+    raw["auth_mode"] = "private-auth"
+    raw["identity"] = {"provider": "private-identity"}
     public = _compact_health(raw)
-    assert public["terminal"] == {"ok": True}
+    assert "terminal" not in public
     assert "private" not in json.dumps(public)
+    extended = _compact_health(raw, extended=True)
+    assert extended["terminal"] == raw["terminal"]
+    assert "auth_mode" not in extended and "identity" not in extended
+    assert "custom_command" not in extended
+    RoleHealthOutput.model_validate(extended)
 
 
 @pytest.mark.asyncio
@@ -408,7 +434,19 @@ def test_unhealthy_components_are_a_successful_diagnostic_result():
     )
     assert result.structuredContent["ok"] is True
     assert result.structuredContent["healthy"] is False
-    assert result.structuredContent["status"] == "failed"
+    assert "status" not in result.structuredContent
+    assert "components" not in result.structuredContent
+    extended = projected_result(
+        _compact_health(raw, extended=True),
+        RoleHealthOutput,
+        tool="health",
+        variant="coordinator",
+    )
+    assert extended.isError is False
+    assert extended.structuredContent["ok"] is True
+    assert extended.structuredContent["healthy"] is False
+    assert extended.structuredContent["components"] == raw["components"]
+    assert extended.structuredContent["terminal"] == raw["terminal"]
 
 
 @pytest.mark.asyncio
@@ -479,3 +517,29 @@ async def test_role_contract_rejection_is_structured_and_preserves_identity_fing
     assert payload["error"]["outcome"] == "not_committed"
     assert len(payload["provider_identity"]["binding_key"]) == 64
     assert "private-" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("component_status", "terminal_ok", "workflow_ok", "healthy"),
+    [
+        ("healthy", True, True, True),
+        ("failed", True, True, False),
+        ("degraded", True, True, False),
+        ("healthy", False, True, False),
+        ("healthy", True, False, False),
+    ],
+)
+def test_short_health_aggregates_diagnostics_hidden_from_the_public_body(
+    component_status, terminal_ok, workflow_ok, healthy
+):
+    raw = {
+        "ok": True,
+        "components": [{"id": "mandatory-worker", "status": component_status}],
+        "terminal": {"ok": terminal_ok},
+        "workflow": {"ok": workflow_ok},
+    }
+    public = _compact_health(raw)
+    assert public["ok"] is True
+    assert public["healthy"] is healthy
+    assert {"components", "terminal", "workflow", "status"}.isdisjoint(public)
+    RoleHealthOutput.model_validate(public)

@@ -12,7 +12,6 @@ from terminal_mcp.application.projections import (
 from terminal_mcp.application.requests import CmdRequest
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.read_contract import (
-    DEFAULT_CMD_READ_LINES,
     InvalidCursor,
     bounded_page,
     decode_cursor,
@@ -30,14 +29,10 @@ class CommandApplication(ApplicationCapability):
             return _read_error("capability_not_allowed", "Local mesh journal is disabled")
         if actor.provider_metadata and getattr(self.gate, "command_state", None):
             try:
-                resolution = await self.gate.resolve(
-                    actor, None, ManagedOperation.MESSAGE_READ
-                )
+                resolution = await self.gate.resolve(actor, None, ManagedOperation.MESSAGE_READ)
                 identity = resolution.identity
                 if identity and identity.get("work_session_id"):
-                    _state, pending = await self.gate.command_state(
-                        actor, identity, "read"
-                    )
+                    _state, pending = await self.gate.command_state(actor, identity, "read")
                     if pending is not None:
                         return pending
             except Exception:
@@ -77,15 +72,16 @@ class CommandApplication(ApplicationCapability):
 
     @application_operation("commands")
     async def cmd(self, actor: ActorContext, request: CmdRequest) -> dict:
-        if request.action == "read" and actor.provider_metadata and (
-            getattr(self.gate, "command_state", None)
+        read_message_state = {}
+        if (
+            request.action == "read"
+            and actor.provider_metadata
+            and (getattr(self.gate, "command_state", None))
         ):
             try:
-                attached = await self.gate.resolve(
-                    actor, None, ManagedOperation.MESSAGE_READ
-                )
+                attached = await self.gate.resolve(actor, None, ManagedOperation.MESSAGE_READ)
                 if attached.identity and attached.identity.get("work_session_id"):
-                    _state, pending = await self.gate.command_state(
+                    read_message_state, pending = await self.gate.command_state(
                         actor, attached.identity, "read"
                     )
                     if pending is not None:
@@ -117,6 +113,7 @@ class CommandApplication(ApplicationCapability):
                 offset=start,
                 agent_id=None,
             )
+            result.update(read_message_state or {})
             return _finish_cmd_read_page(result, start=start, scope=scope)
         if request.action == "read" and request.code is None and actor.provider_metadata:
             resolution = await self.gate.provider_identity(actor, ManagedOperation.COMMAND_READ)
@@ -129,7 +126,7 @@ class CommandApplication(ApplicationCapability):
             return failure
         backend = self.backend
         if request.action == "read" and request.code is None and actor.provider_metadata:
-            message_state = {}
+            message_state = read_message_state or {}
         else:
             message_state, failure = await self.gate.command_state(actor, identity, request.action)
             if failure is not None:
@@ -165,43 +162,6 @@ class CommandApplication(ApplicationCapability):
             )
         if request.action == "run":
             result = await self._launch(actor, identity, request)
-            if result.get("ok") and result.get("status") in {"completed", "failed"}:
-                scope = {
-                    "kind": "cmd.read",
-                    "cmd_hash": result["cmd_hash"],
-                    "authorization": "anonymous"
-                    if getattr(self.gate, "access_mesh", None) is not None
-                    else identity["logical_agent_id"],
-                }
-                if getattr(self.gate, "access_mesh", None) is not None:
-                    scope["node_id"] = getattr(self.gate, "access_mesh", None).store.local_node_id
-                try:
-                    output = await self.service.read(
-                        cmd_hash=result["cmd_hash"],
-                        lines_count=DEFAULT_CMD_READ_LINES,
-                        offset=0,
-                        agent_id=None,
-                    )
-                    output = _finish_cmd_read_page(output, start=0, scope=scope)
-                except Exception as exc:
-                    # Inline stdout is optional enrichment of a committed run.
-                    # Keep its receipt so command_read can recover the output later.
-                    output = {}
-                    result["postcommit_warning"] = type(exc).__name__
-                for key in (
-                    "lines",
-                    "overall_lines_count",
-                    "displayed_lines_count",
-                    "next_cursor",
-                    "has_more",
-                    "output_truncated",
-                    "output_retained",
-                    "output_pruned_at",
-                    "output_bytes",
-                    "line_truncated",
-                ):
-                    if key in output:
-                        result[key] = output[key]
             result.update(message_state)
             return _with_session_lifecycle(result, identity)
         if request.action == "cancel":

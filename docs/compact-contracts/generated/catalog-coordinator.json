@@ -7,7 +7,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Attach this connector once using session_number. Use action='attach' with session_number and optional initial intent. Repeated attach preserves existing intent and its timer. Before any domain write, set intent here with action='intent', intent=...; refresh uses the existing binding and never needs session_number. Refresh intent every 180 seconds. The first due call warns; the next write is blocked until refresh. Reads, cancel, recovery, release and message ACK/reply remain available under their existing policy. Access only issues the number. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:\"attach\"|\"intent\" (default=\"attach\"); session_number?:string (pattern=\"^[0-9]{4}$\")? (default=null); intent?:string(1..1000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle.\nReturns: MeshAttachReceipt{ok:true} | MeshIntentReceipt{ok:true,intent_updated_at:string,refresh_due_at:string} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Attach this connector once using session_number. Use action='attach' with session_number and optional initial intent. Repeated attach preserves existing intent and its timer. Before any domain write, set intent here with action='intent', intent=...; refresh uses the existing binding and never needs session_number. Refresh intent every 180 seconds. The first due call warns; the next write is blocked until refresh. Reads, cancel, recovery, release and message ACK/reply remain available under their existing policy. Access only issues the number. The local binding survives restart and automatic work-cycle rearm. Manage issuance and end the shared access cycle through Access MCP. Contract updated for Terminal MCP 0.14.1.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action?:\"attach\"|\"intent\" (default=\"attach\"); session_number?:string (pattern=\"^[0-9]{4}$\")? (default=null); intent?:string(1..1000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle.\nReturns: MeshAttachReceipt{ok:true} | MeshIntentReceipt{ok:true,intent_updated_at:string,refresh_due_at:string} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -37,20 +37,44 @@
       "name": "session",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
           "intent_updated_at": {
             "type": "string"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -61,22 +85,16 @@
           "refresh_due_at": {
             "type": "string"
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -93,7 +111,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read one canonical task as snapshot, detail, or history. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); detail?:\"snapshot\"|\"detail\"|\"history\" (default=\"snapshot\"); history_kind?:\"comments\"|\"events\"|\"reviews\"|\"output_states\" (default=\"events\"); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: detail chooses snapshot, detail or history; history_kind and cursor apply to history.\nReturns: inline:ONE_OF(TaskGetSnapshotSuccess,TaskGetDetailSuccess,TaskGetHistorySuccess) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read one task inside task without detail/kind response wrappers. Snapshot includes native latest_checkpoint.checkpoint; events omit internal actor IDs and preserve payload. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); detail?:\"snapshot\"|\"detail\"|\"history\" (default=\"snapshot\"); history_kind?:\"comments\"|\"events\"|\"reviews\"|\"output_states\" (default=\"events\"); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: detail chooses snapshot, detail or history; history_kind and cursor apply to history.\nReturns: TaskGetSnapshotSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,task:PublicTaskSnapshot} | TaskGetDetailSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,task:PublicTaskDetail} | TaskGetHistorySuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,task:PublicTaskHistory} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -119,31 +137,46 @@
       "name": "task_get",
       "outputSchema": {
         "properties": {
-          "detail": {
-            "type": "string"
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -155,10 +188,10 @@
           "task": {
             "type": "object"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -175,7 +208,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read a bounded page of canonical TaskListItem records. Default excludes done and archived. state='done' includes only non-archived done tasks. namespace=None spans namespaces; state/lane/tags are filters. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace?:string(1..120)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination.\nReturns: TaskListSuccess{ok:true,tasks:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read a bounded page of canonical TaskListItem records. Default excludes done and archived. state='done' includes only non-archived done tasks. namespace=None spans namespaces; state/lane/tags are filters. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace?:string(1..120)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: read is summary-only, excludes archived tasks; state=done includes done tasks; next_cursor continues pagination.\nReturns: TaskListSuccess{ok:true,tasks:array,next_cursor?:union} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -201,13 +234,31 @@
       "name": "task_list",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -219,16 +270,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -240,10 +291,10 @@
           "tasks": {
             "type": "array"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -260,7 +311,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. checkpoint needs checkpoint; state needs state; comment needs comment_text; review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; archive needs either non-null archive_note or non-null note. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"create\"|\"update\"|\"checkpoint\"|\"archive\"|\"review\"|\"relate\"|\"unrelate\"|\"state\"|\"comment\"; namespace:string(1..120); task_id?:string(1..120)? (default=null); expected_revision?:int (>=1; <=9223372036854775807)? (default=null); isolation_hint?:string(1..160)? (default=null); request_id?:string(1..128) (pattern=\"^[A-Za-z0-9._:-]+$\")? (default=null); title?:string(1..200)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); priority?:\"P0\"|\"P1\"|\"P2\"|\"P3\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); description?:string(0..8000)? (default=null); next_action?:string(0..2000)? (default=null); resource_context?:{  } (SCHEMA_FALLBACK {\"x-maxSerializedBytes\":8192})? (default=null); cooperative?:boolean? (default=null); checkpoint?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":4000,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":16384}? (default=null); candidate_ref?:string(0..200)? (default=null); input_refs?:string(1..512)[] (items<=64)? (default=null); output_refs?:string(1..512)[] (items<=64)? (default=null); result?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":16384,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":32768}? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); dependencies?:TaskDependency[] (items<=100)? (default=null); blocker_reason?:string(1..4000)? (default=null); relation_kind?:string(1..64)? (default=null); related_namespace?:string(1..120)? (default=null); related_task_id?:string(1..120)? (default=null); archive_note?:string(1..4000)? (default=null); note?:string(1..2000)? (default=null); dimensions?:SCHEMA_FALLBACK {\"anyOf\":[{\"items\":{\"enum\":[\"A\",\"C\",\"R\"],\"type\":\"string\"},\"maxItems\":3,\"minItems\":1,\"type\":\"array\"},{\"type\":\"null\"}],\"default\":null,\"uniqueItems\":true}; verdict?:\"NON_BLOCKING\"|\"BLOCKING\"? (default=null); evidence?:{  } (SCHEMA_FALLBACK {\"x-maxSerializedBytes\":16384})? (default=null); comment_text?:string(1..4000)? (default=null); force?:boolean (default=false); force_reason?:string(1..2000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReferenced input types: TaskDependency={ task_id:string(1..120); namespace?:string(1..120)? (default=null); additional_fields: forbidden }.\nServer action field policy: create: allowed fields [action, candidate_ref, checkpoint, cooperative, dependencies, description, force, force_reason, input_refs, isolation_hint, lane, namespace, next_action, output_refs, priority, request_id, resource_context, result, state, tags, task_id, title]; required non-null [action, isolation_hint, namespace]; all other named inputs rejected as extra_forbidden; update: allowed fields [action, blocker_reason, candidate_ref, cooperative, dependencies, description, expected_revision, force, force_reason, input_refs, lane, namespace, next_action, output_refs, priority, resource_context, result, tags, task_id, title]; required non-null [action, expected_revision, namespace, task_id]; all other named inputs rejected as extra_forbidden; checkpoint: allowed fields [action, checkpoint, namespace, task_id]; required non-null [action, checkpoint, namespace, task_id]; all other named inputs rejected as extra_forbidden; archive: allowed fields [action, archive_note, expected_revision, namespace, note, task_id]; required non-null [action, namespace, task_id]; all other named inputs rejected as extra_forbidden; review: allowed fields [action, dimensions, evidence, expected_revision, namespace, task_id, verdict]; required non-null [action, dimensions, namespace, task_id, verdict]; all other named inputs rejected as extra_forbidden; relate: allowed fields [action, expected_revision, namespace, related_namespace, related_task_id, relation_kind, task_id]; required non-null [action, namespace, related_task_id, relation_kind, task_id]; all other named inputs rejected as extra_forbidden; unrelate: allowed fields [action, expected_revision, namespace, related_namespace, related_task_id, relation_kind, task_id]; required non-null [action, namespace, related_task_id, relation_kind, task_id]; all other named inputs rejected as extra_forbidden; state: allowed fields [action, namespace, state, task_id]; required non-null [action, namespace, state, task_id]; all other named inputs rejected as extra_forbidden; comment: allowed fields [action, comment_text, namespace, task_id]; required non-null [action, comment_text, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nConditions: ALL_OF(IF action==\"create\" => requires(isolation_hint) | IF action in [\"update\",\"checkpoint\",\"archive\",\"review\",\"relate\",\"unrelate\",\"state\",\"comment\"] => requires(task_id) | IF action==\"checkpoint\" => requires(checkpoint) | IF action in [\"relate\",\"unrelate\"] => requires(relation_kind,related_task_id) | IF action==\"state\" => requires(state) | IF action==\"review\" => requires(dimensions,verdict) | IF action==\"comment\" => requires(comment_text) | IF action==\"archive\" => require_at_least_one(archive_note,note)).\nRuntime rules: create requires non-null isolation_hint. update requires non-null expected_revision (minimum 1) and task_id. For every action the accepted field whitelist, required fields and extra_forbidden policy are compiled from _TASK_MANAGE_MODELS, not from the permissive union.; checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text with at least one non-whitespace character; relate/unrelate require non-null relation_kind and related_task_id.; archive requires either non-null archive_note or non-null note at canonical model level. Runtime selects raw archive_note if truthy, else note; it then strips and requires non-whitespace text. archive_note=\"   \" masks valid note fallback and fails; supply one meaningful field. create with state=done requires non-null result.; The handler serializes with exclude_none=True and exclude_unset=True; update description:null is omitted/no change, while tags:[] explicitly replaces the stored list with an empty list. Other explicit non-null collection values replace, not append.; relation_kind is an open string(1..64), not an enum. For relation_kind=review_of on relate: source lane must be review; parent candidate_ref must be nonempty; no different review_of parent; source candidate_ref if set must match parent, otherwise it is bound from parent. Possible errors review_task_required, missing_parent_candidate, ambiguous_review_parent, candidate_conflict.; Canonical update/mutation state transitions and task revision checks remain enforced by the existing server; an omitted optional field may mean no mutation.; request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id.; action=update: With a live claim, nonowner update permits only safe participant fields title, description, next_action, tags; workflow fields or non-null dependencies require live owner (owner_required). expected_revision is required.; action=update: update rejects non-null state and checkpoint; use dedicated state/checkpoint actions.; action=update: Non-null update candidate_ref returns candidate_ref_frozen when task is done or has incoming review_of, even for unchanged value; null is omitted.; action=state: Admitted nonowners may set workflow state despite a live claim; no content revision CAS check/increment, existing claim unaffected.; When any claim is live, archive, relate and unrelate require the live owner; nonowners get owner_required. Without a live claim this owner gate does not apply..\nReturns: inline:ONE_OF(TaskMutationResult,TaskClaimMutationResult) | TaskCreateCompact{ok:true,task_id:string} | TaskUpdateCompact{ok:true,revision:integer} | TaskAppendCompact{ok:true} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. checkpoint needs checkpoint; state needs state; comment needs comment_text; review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; archive needs either non-null archive_note or non-null note. Attach this connector once; writes use its local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"create\"|\"update\"|\"checkpoint\"|\"archive\"|\"review\"|\"relate\"|\"unrelate\"|\"state\"|\"comment\"; namespace:string(1..120); task_id?:string(1..120)? (default=null); expected_revision?:int (>=1; <=9223372036854775807)? (default=null); isolation_hint?:string(1..160)? (default=null); request_id?:string(1..128) (pattern=\"^[A-Za-z0-9._:-]+$\")? (default=null); title?:string(1..200)? (default=null); lane?:\"implementation\"|\"review\"|\"release\"|\"integration\"|\"general\"? (default=null); priority?:\"P0\"|\"P1\"|\"P2\"|\"P3\"? (default=null); state?:\"ready\"|\"in_progress\"|\"qa\"|\"blocked\"|\"deferred\"|\"done\"? (default=null); description?:string(0..8000)? (default=null); next_action?:string(0..2000)? (default=null); resource_context?:{  } (SCHEMA_FALLBACK {\"x-maxSerializedBytes\":8192})? (default=null); cooperative?:boolean? (default=null); checkpoint?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":4000,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":16384}? (default=null); candidate_ref?:string(0..200)? (default=null); input_refs?:string(1..512)[] (items<=64)? (default=null); output_refs?:string(1..512)[] (items<=64)? (default=null); result?:SCHEMA_FALLBACK {\"oneOf\":[{\"maxLength\":16384,\"type\":\"string\"},{\"type\":\"object\"},{\"type\":\"array\"}],\"x-maxSerializedBytes\":32768}? (default=null); tags?:string(1..64)[] (items<=50)? (default=null); dependencies?:TaskDependency[] (items<=100)? (default=null); blocker_reason?:string(1..4000)? (default=null); relation_kind?:string(1..64)? (default=null); related_namespace?:string(1..120)? (default=null); related_task_id?:string(1..120)? (default=null); archive_note?:string(1..4000)? (default=null); note?:string(1..2000)? (default=null); dimensions?:SCHEMA_FALLBACK {\"anyOf\":[{\"items\":{\"enum\":[\"A\",\"C\",\"R\"],\"type\":\"string\"},\"maxItems\":3,\"minItems\":1,\"type\":\"array\"},{\"type\":\"null\"}],\"default\":null,\"uniqueItems\":true}; verdict?:\"NON_BLOCKING\"|\"BLOCKING\"? (default=null); evidence?:{  } (SCHEMA_FALLBACK {\"x-maxSerializedBytes\":16384})? (default=null); comment_text?:string(1..4000)? (default=null); force?:boolean (default=false); force_reason?:string(1..2000)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReferenced input types: TaskDependency={ task_id:string(1..120); namespace?:string(1..120)? (default=null); additional_fields: forbidden }.\nServer action field policy: create: allowed fields [action, candidate_ref, checkpoint, cooperative, dependencies, description, force, force_reason, input_refs, isolation_hint, lane, namespace, next_action, output_refs, priority, request_id, resource_context, result, state, tags, task_id, title]; required non-null [action, isolation_hint, namespace]; all other named inputs rejected as extra_forbidden; update: allowed fields [action, blocker_reason, candidate_ref, cooperative, dependencies, description, expected_revision, force, force_reason, input_refs, lane, namespace, next_action, output_refs, priority, resource_context, result, tags, task_id, title]; required non-null [action, expected_revision, namespace, task_id]; all other named inputs rejected as extra_forbidden; checkpoint: allowed fields [action, checkpoint, namespace, task_id]; required non-null [action, checkpoint, namespace, task_id]; all other named inputs rejected as extra_forbidden; archive: allowed fields [action, archive_note, expected_revision, namespace, note, task_id]; required non-null [action, namespace, task_id]; all other named inputs rejected as extra_forbidden; review: allowed fields [action, dimensions, evidence, expected_revision, namespace, task_id, verdict]; required non-null [action, dimensions, namespace, task_id, verdict]; all other named inputs rejected as extra_forbidden; relate: allowed fields [action, expected_revision, namespace, related_namespace, related_task_id, relation_kind, task_id]; required non-null [action, namespace, related_task_id, relation_kind, task_id]; all other named inputs rejected as extra_forbidden; unrelate: allowed fields [action, expected_revision, namespace, related_namespace, related_task_id, relation_kind, task_id]; required non-null [action, namespace, related_task_id, relation_kind, task_id]; all other named inputs rejected as extra_forbidden; state: allowed fields [action, namespace, state, task_id]; required non-null [action, namespace, state, task_id]; all other named inputs rejected as extra_forbidden; comment: allowed fields [action, comment_text, namespace, task_id]; required non-null [action, comment_text, namespace, task_id]; all other named inputs rejected as extra_forbidden.\nConditions: ALL_OF(IF action==\"create\" => requires(isolation_hint) | IF action in [\"update\",\"checkpoint\",\"archive\",\"review\",\"relate\",\"unrelate\",\"state\",\"comment\"] => requires(task_id) | IF action==\"checkpoint\" => requires(checkpoint) | IF action in [\"relate\",\"unrelate\"] => requires(relation_kind,related_task_id) | IF action==\"state\" => requires(state) | IF action==\"review\" => requires(dimensions,verdict) | IF action==\"comment\" => requires(comment_text) | IF action==\"archive\" => require_at_least_one(archive_note,note)).\nRuntime rules: create requires non-null isolation_hint. update requires non-null expected_revision (minimum 1) and task_id. For every action the accepted field whitelist, required fields and extra_forbidden policy are compiled from _TASK_MANAGE_MODELS, not from the permissive union.; checkpoint requires non-null checkpoint; state requires non-null state; review requires non-null dimensions (1..3 distinct A/C/R) and verdict; comment requires non-null comment_text with at least one non-whitespace character; relate/unrelate require non-null relation_kind and related_task_id.; archive requires either non-null archive_note or non-null note at canonical model level. Runtime selects raw archive_note if truthy, else note; it then strips and requires non-whitespace text. archive_note=\"   \" masks valid note fallback and fails; supply one meaningful field. create with state=done requires non-null result.; The handler serializes with exclude_none=True and exclude_unset=True; update description:null is omitted/no change, while tags:[] explicitly replaces the stored list with an empty list. Other explicit non-null collection values replace, not append.; relation_kind is an open string(1..64), not an enum. For relation_kind=review_of on relate: source lane must be review; parent candidate_ref must be nonempty; no different review_of parent; source candidate_ref if set must match parent, otherwise it is bound from parent. Possible errors review_task_required, missing_parent_candidate, ambiguous_review_parent, candidate_conflict.; Canonical update/mutation state transitions and task revision checks remain enforced by the existing server; an omitted optional field may mean no mutation.; request_id on create is the stable operation identity; reuse only on transport retries of the same create; independent creates need a fresh request_id.; action=update: With a live claim, nonowner update permits only safe participant fields title, description, next_action, tags; workflow fields or non-null dependencies require live owner (owner_required). expected_revision is required.; action=update: update rejects non-null state and checkpoint; use dedicated state/checkpoint actions.; action=update: Non-null update candidate_ref returns candidate_ref_frozen when task is done or has incoming review_of, even for unchanged value; null is omitted.; action=state: Admitted nonowners may set workflow state despite a live claim; no content revision CAS check/increment, existing claim unaffected.; When any claim is live, archive, relate and unrelate require the live owner; nonowners get owner_required. Without a live claim this owner gate does not apply..\nReturns: TaskMutationResult{messages_remaining?:union,messages?:union,warnings?:array,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,session_lifecycle?:union,ok:true,action:string,task:TaskReceipt} | TaskClaimMutationResult{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | TaskCreateCompact{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,task_id:string} | TaskUpdateCompact{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,revision:integer} | TaskAppendCompact{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -379,28 +430,46 @@
           "action": {
             "type": "string"
           },
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -424,14 +493,11 @@
           "task_id": {
             "type": "string"
           },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "warnings": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -447,7 +513,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read a bounded dependency/relation graph rooted at one task. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); direction?:\"both\"|\"incoming\"|\"outgoing\" (default=\"both\"); kinds?:string(1..64)[] (items<=32)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: TaskGraphSuccess{ok:true,nodes:array,edges:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read a bounded dependency/relation graph rooted at one task. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): namespace:string(1..120); task_id:string(1..120); direction?:\"both\"|\"incoming\"|\"outgoing\" (default=\"both\"); kinds?:string(1..64)[] (items<=32)? (default=null); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: TaskGraphSuccess{ok:true,nodes:array,edges:array,next_cursor?:union} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -473,16 +539,34 @@
       "name": "task_graph",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "edges": {
             "type": "array"
           },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -497,16 +581,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -515,10 +599,10 @@
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -535,7 +619,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List the bounded local agent overview with stable logical_agent_id, real display_name/public_name, server, current intent and timestamps. Default includes live sessions; include_inactive adds ended/expired latest sessions. Filter logical_agent_id to resolve an Events agent ID. Continue next_cursor. Intent staleness, activity staleness and session expiry are separate states. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): (none).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: MeshAgentObserve{ok:true,scope:\"local\",server_id:string,agents:array,next_cursor?:union} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "List the bounded local agent overview with stable logical_agent_id, real display_name/public_name, server, current intent and timestamps. Default includes live sessions; include_inactive adds ended/expired latest sessions. Filter logical_agent_id to resolve an Events agent ID. Continue next_cursor. Intent staleness, activity staleness and session expiry are separate states. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): (none).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: MeshAgentObserve{ok:true,scope:\"local\",server_id:string,agents:array,next_cursor?:union} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -557,13 +641,31 @@
           "agents": {
             "type": "array"
           },
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -575,16 +677,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -599,10 +701,10 @@
           "server_id": {
             "type": "string"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -619,7 +721,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"send\"|\"read\"|\"ack\"|\"reply\"|\"history\"|\"recipients\"; text?:string(0..16384)? (default=null); target?:string(1..120)? (default=null); message_hash?:string(1..128)? (default=null); mode?:\"notify\"|\"ack\"|\"alert\"? (default=null); require_reply?:boolean (default=false); alert?:boolean (default=false); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null); detail?:\"summary\"|\"full\" (default=\"summary\"); namespace?:string(1..120)? (default=null); task_id?:string(1..120)? (default=null); scope?:\"local\"|\"fleet\" (default=\"local\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nConditions: ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text)).\nRuntime rules: send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden).; Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours.; For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack. Send mode defaults to notify. mode=notify marks read_at automatically on first recipient display, so acknowledged=true means read/handled and does not prove an explicit ACK. mode=ack requires action=ack to set read_at. mode=alert requires a reply to release its reply obligation; action=ack alone does not satisfy it. Either alert=true or require_reply=true promotes notify/ack to alert. first_seen_at records first display; read_at records notify auto-read or explicit ACK; replied_at records actual reply. Repeated ACK is idempotent and creates no new message.; Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given..\nReturns: inline:ONE_OF(MessageListResult,MessageSendResult,MessageAcknowledgeResult,MessageReplyResult,MessageRecipientsResult) | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read inbox, history, and recipients; send, acknowledge, or reply on this server only. Message recipients require a current local attachment; message transport never uses Mesh peers. Legacy scope='fleet' requests return feature_disabled. Messages expire 24 hours after created_at. Writes use an attached local work cycle.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"send\"|\"read\"|\"ack\"|\"reply\"|\"history\"|\"recipients\"; text?:string(0..16384)? (default=null); target?:string(1..120)? (default=null); message_hash?:string(1..128)? (default=null); text_offset?:int (>=0; <=2147483647)? (default=null); text_limit?:int (>=1; <=2048)? (default=null); mode?:\"notify\"|\"ack\"|\"alert\"? (default=null); require_reply?:boolean (default=false); alert?:boolean (default=false); limit?:int (>=1; <=100; default=20); cursor?:string(0..512)? (default=null); detail?:\"summary\"|\"full\" (default=\"summary\"); namespace?:string(1..120)? (default=null); task_id?:string(1..120)? (default=null); scope?:\"local\"|\"fleet\" (default=\"local\").\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nConditions: ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text)).\nRuntime rules: send requires non-null text; message_hash must be absent or null. ack requires non-null message_hash; text must be absent or null. reply requires both text and message_hash non-null. read/history/recipients require both text and message_hash absent or null; explicit null is accepted (non-null values forbidden).; Mesh scope defaults to local; scope=fleet is accepted as transport input but returns feature_disabled; recipients are resolved in the local attachment and messages expire after 24 hours.; For send/reply, nullable mode defaults to notify; mode=alert sets alert and require_reply. Either alert=true or require_reply=true forces final mode=alert even when mode=notify or mode=ack. mode=ack is a delivery mode, distinct from action=ack. Send mode defaults to notify. mode=notify marks read_at automatically on first recipient display, so acknowledged=true means read/handled and does not prove an explicit ACK. mode=ack requires action=ack to set read_at. mode=alert requires a reply to release its reply obligation; action=ack alone does not satisfy it. Either alert=true or require_reply=true promotes notify/ack to alert. first_seen_at records first display; read_at records notify auto-read or explicit ACK; replied_at records actual reply. Repeated ACK is idempotent and creates no new message.; Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given..\nReturns: inline:ONE_OF(MessageListResult,MessageSendResult,MessageAcknowledgeResult,MessageReplyResult,MessageRecipientsResult) | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -636,7 +738,9 @@
           "scope": {},
           "target": {},
           "task_id": {},
-          "text": {}
+          "text": {},
+          "text_limit": {},
+          "text_offset": {}
         },
         "type": "object",
         "x-terminal-mcp-action-matrix": {
@@ -690,8 +794,20 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "message": {
             "type": "object"
@@ -703,7 +819,16 @@
             ]
           },
           "messages": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "next_cursor": {
             "type": [
@@ -714,6 +839,12 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
@@ -722,12 +853,6 @@
           },
           "recipients": {
             "type": "array"
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "return_to_chat": {
             "type": [
@@ -750,14 +875,14 @@
           "state": {
             "type": "string"
           },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "unavailable_peers": {
             "type": "array"
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -773,7 +898,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): extended?:boolean (default=false).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: ExtendedHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow,auth_mode?:union,identity:HealthIdentityDiagnostic} | CompactHealthSuccess{ok:boolean,healthy?:union,application?:union,agent_name?:union,version?:union,storage?:union,status?:union,components?:array,terminal?:CompactHealthTerminal,workflow?:CompactHealthWorkflow} | RoleFailure{ok:false,provider_identity?:union,error:RoleErrorBody,required_action?:union,message_hash?:union,text?:union,return_to_chat?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Read ok, healthy, application, agent_name, version and storage. extended=true adds complete components, terminal and workflow. Hidden mandatory components still contribute to healthy; auth/identity diagnostics are excluded. Available without an active work cycle or Access Code.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): extended?:boolean (default=false).\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nReturns: ExtendedHealthSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,healthy:boolean,application:union,agent_name:union,version:union,storage:union,components:array,terminal:object,workflow:object} | CompactHealthSuccess{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:true,healthy:boolean,application:union,agent_name:union,version:union,storage:union} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
       "inputSchema": {
         "additionalProperties": true,
         "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
@@ -806,7 +931,7 @@
               "string"
             ]
           },
-          "auth_mode": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
@@ -819,22 +944,34 @@
             "type": "object"
           },
           "healthy": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
           },
-          "identity": {
-            "type": "object"
-          },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -842,22 +979,10 @@
               "object"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
-            ]
-          },
-          "status": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "storage": {
@@ -869,16 +994,16 @@
           "terminal": {
             "type": "object"
           },
-          "text": {
+          "version": {
             "type": [
               "null",
               "string"
             ]
           },
-          "version": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           },
           "workflow": {

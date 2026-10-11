@@ -48,9 +48,7 @@ from terminal_mcp.core.read_contract import (
 from terminal_mcp.core.task_projections import (
     TaskHistory,
     TaskRecord,
-    TaskSnapshot,
     project_task_detail,
-    project_task_working_set,
 )
 from terminal_mcp.mcp.access_contracts import (
     AttachInput,
@@ -72,6 +70,7 @@ from terminal_mcp.mcp.output_contracts import (
     session_result,
     task_result,
 )
+from terminal_mcp.mcp.public_responses import operation_notices, public_task, resolve_task_names
 from terminal_mcp.mcp.role_contracts import (
     ROLE_TOOL_DESCRIPTIONS,
     ROLE_TOOL_MODELS,
@@ -101,6 +100,16 @@ from terminal_mcp.mcp.role_outputs import (
     install_role_output_contract,
     role_error_result,
 )
+
+
+async def _public_task_result(application, raw, task, detail, history_kind="events"):
+    task = await resolve_task_names(application, task, detail, history_kind)
+    return {
+        "ok": True,
+        "task": public_task(task, detail, history_kind=history_kind),
+        **operation_notices(raw),
+    }
+
 
 RoleName = Literal["executor", "coordinator"]
 EXECUTOR_TOOLS = (
@@ -197,7 +206,10 @@ def _actor(service, role: RoleName):
 
 def _structured(result):
     structured = getattr(result, "structuredContent", None)
-    return structured if isinstance(structured, dict) else {}
+    if not isinstance(structured, dict):
+        return {}
+    meta = getattr(result, "meta", None)
+    return {**structured, **({"_meta": meta} if meta else {})}
 
 
 def _validate(boundary: RuntimeBoundary, role: RoleName, tool_name: str):
@@ -264,6 +276,17 @@ async def _message(application, actor, request: MessageInput) -> dict:
             return public_error("identity_not_bound").as_dict()
 
     history = request.action == "history"
+    chunk = request.action == "read" and request.message_hash is not None
+    message_hash = None if chunk else request.message_hash
+    text_options = (
+        {
+            "read_message_hash": request.message_hash,
+            "text_offset": request.text_offset,
+            "text_limit": request.text_limit,
+        }
+        if chunk
+        else {}
+    )
     mesh_messages = getattr(application.service, "access_mesh_messages", None)
     if mesh_messages is not None:
 
@@ -274,7 +297,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
                     sender=sender,
                     text=request.text,
                     target=request.target,
-                    message_hash=request.message_hash,
+                    message_hash=message_hash,
                     mode=request.mode,
                     require_reply=request.require_reply,
                     alert=request.alert,
@@ -292,7 +315,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
                 actor,
                 text=request.text,
                 target=request.target,
-                message_hash=request.message_hash,
+                message_hash=message_hash,
                 mode=request.mode,
                 require_reply=request.require_reply,
                 alert=request.alert,
@@ -305,17 +328,29 @@ async def _message(application, actor, request: MessageInput) -> dict:
                 namespace=request.namespace,
                 task_id=request.task_id,
                 response_preflight=preflight,
+                **text_options,
             )
         if raw.get("ok"):
             await application.session_gate.touch_provider(actor)
         return project(raw)
+    if chunk:
+        from terminal_mcp.mcp.server import _preflight_message_inbox_result
+
+        text_options["response_preflight"] = lambda preview: _preflight_message_inbox_result(
+            preview,
+            sender=sender,
+            target=None,
+            mode=None,
+            require_reply=False,
+            alert=False,
+        )
     raw = await application.message(
         resolution.actor,
         sender=sender,
         code=None,
         text=request.text,
         target=request.target,
-        message_hash=request.message_hash,
+        message_hash=message_hash,
         mode=request.mode,
         require_reply=request.require_reply,
         alert=request.alert,
@@ -326,6 +361,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
         namespace=request.namespace,
         task_id=request.task_id,
         recipients=request.action == "recipients",
+        **text_options,
     )
     if request.action == "recipients":
         return raw
@@ -335,7 +371,7 @@ async def _message(application, actor, request: MessageInput) -> dict:
             sender=sender,
             text=request.text,
             target=request.target,
-            message_hash=request.message_hash,
+            message_hash=message_hash,
             mode=request.mode,
             require_reply=request.require_reply,
             alert=request.alert,
@@ -376,7 +412,7 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
             observe_result(raw, "tasks", detail="summary", task_id=request.task_id)
         )
         task = projected.get("task")
-        return {"ok": True, "detail": "snapshot", "task": task}
+        return await _public_task_result(application, raw, task, "snapshot")
 
     raw = await application.observe(
         actor,
@@ -398,7 +434,8 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
 
     if request.detail == "detail":
         try:
-            detail = project_task_detail(record).model_dump(mode="json", exclude_none=True)
+            detail = project_task_detail(record).model_dump(mode="json")
+            detail = public_task(detail, "detail")
             bounded_page(
                 [detail],
                 limit=1,
@@ -411,7 +448,7 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
             )
         except (ValidationError, OutputItemTooLarge):
             return public_error("output_item_too_large").as_dict()
-        return {"ok": True, "detail": "detail", "task": detail}
+        return await _public_task_result(application, raw, detail, "detail")
 
     scope = {
         "kind": "task.history",
@@ -450,11 +487,13 @@ async def _task_get(application, actor, request: TaskGetInput) -> dict:
             "next_cursor": next_cursor,
         }
     ).root
-    return {
-        "ok": True,
-        "detail": "history",
-        "task": history.model_dump(mode="json", exclude_none=True),
-    }
+    return await _public_task_result(
+        application,
+        raw,
+        history.model_dump(mode="json", exclude_none=True),
+        "history",
+        request.history_kind,
+    )
 
 
 async def _task_graph(application, actor, request: TaskGraphInput) -> dict:
@@ -529,29 +568,25 @@ async def _task_graph(application, actor, request: TaskGraphInput) -> dict:
     return {"ok": True, "nodes": nodes, "edges": page, "next_cursor": next_cursor}
 
 
-def _compact_health(raw: dict) -> dict:
+def _compact_health(raw: dict, *, extended: bool = False) -> dict:
     terminal = raw.get("terminal") if isinstance(raw.get("terminal"), dict) else {}
     workflow = raw.get("workflow") if isinstance(raw.get("workflow"), dict) else {}
-    return {
+    components = raw.get("components") or []
+    healthy = (
+        bool(raw.get("ok"))
+        and all(item.get("status", "healthy") == "healthy" for item in components)
+        and terminal.get("ok", True)
+        and workflow.get("ok", True)
+    )
+    result = {
         "ok": True,
-        "healthy": bool(raw.get("ok")),
-        "application": raw.get("application"),
-        "agent_name": raw.get("agent_name"),
-        "version": raw.get("version"),
-        "storage": raw.get("storage"),
-        "status": raw.get("status"),
-        "components": raw.get("components") or [],
-        "terminal": {
-            key: terminal.get(key)
-            for key in ("ok", "scheduler", "parallelism", "queue_size", "degraded")
-            if key in terminal
-        },
-        "workflow": {
-            key: workflow.get(key)
-            for key in ("ok", "active_claims", "unreleased_claims", "stale_claims")
-            if key in workflow
-        },
+        "healthy": bool(healthy),
+        **{key: raw.get(key) for key in ("application", "agent_name", "version", "storage")},
+        **operation_notices(raw),
     }
+    if extended:
+        result.update(components=components, terminal=terminal, workflow=workflow)
+    return result
 
 
 async def _health_identity(application, actor) -> dict:
@@ -815,17 +850,9 @@ def build_role_mcp(
             if failure is not None:
                 return failure
             raw = await application.task(_actor(application, role), canonical)
-            structured = _structured(task_result(raw, request.action))
-            if (
-                request.action == "claim"
-                and structured.get("ok")
-                and isinstance(structured.get("task"), dict)
-            ):
-                snapshot = TaskSnapshot.model_validate(structured["task"])
-                structured["task"] = project_task_working_set(snapshot).model_dump(
-                    mode="json", exclude_none=True
-                )
-            return structured
+            if raw.get("ok"):
+                return {"ok": True, **operation_notices(raw)}
+            return _structured(task_result(raw, request.action))
 
         @mcp.tool(
             name="task_state",
@@ -856,7 +883,11 @@ def build_role_mcp(
             raw, started = await traced_task_mutation(
                 application, _actor(application, role), canonical, role=role, tool="task_state"
             )
-            response = {"ok": True} if raw.get("ok") else _structured(task_result(raw, "state"))
+            response = (
+                {"ok": True, **operation_notices(raw)}
+                if raw.get("ok")
+                else _structured(task_result(raw, "state"))
+            )
             return traced_task_response(
                 application, canonical, raw, response, started, role=role, tool="task_state"
             )
@@ -875,7 +906,7 @@ def build_role_mcp(
                 canonical = request.to_request()
                 raw = await application.task(_actor(application, role), canonical)
                 if raw.get("ok"):
-                    return {"ok": True}
+                    return {"ok": True, **operation_notices(raw)}
                 return _structured(task_result(raw, canonical.action))
             request = TaskCommentInput.model_validate(request)
             canonical = TaskCommentRequest(
@@ -887,7 +918,7 @@ def build_role_mcp(
             )
             raw = await application.task(_actor(application, role), canonical)
             if raw.get("ok"):
-                return {"ok": True}
+                return {"ok": True, **operation_notices(raw)}
             return _structured(task_result(raw, "comment"))
 
     else:
@@ -924,11 +955,15 @@ def build_role_mcp(
                 application, _actor(application, role), canonical, role=role, tool="task_manage"
             )
             if raw.get("ok") and request.action == "create":
-                response = {"ok": True, "task_id": raw["task"]["task_id"]}
+                response = {"ok": True, "task_id": raw["task"]["task_id"], **operation_notices(raw)}
             elif raw.get("ok") and request.action == "update":
-                response = {"ok": True, "revision": raw["task"]["revision"]}
+                response = {
+                    "ok": True,
+                    "revision": raw["task"]["revision"],
+                    **operation_notices(raw),
+                }
             elif raw.get("ok") and request.action in {"comment", "checkpoint"}:
-                response = {"ok": True}
+                response = {"ok": True, **operation_notices(raw)}
             else:
                 response = _structured(task_result(raw, request.action))
             return traced_task_response(
@@ -978,10 +1013,8 @@ def build_role_mcp(
             if not raw.get("ok") and "status" not in raw:
                 return raw
             identity = await _health_identity(application, actor)
-            result = _compact_health(raw)
+            result = _compact_health(raw, extended=request.extended)
             result["agent_name"] = identity.get("public_name")
-            if request.extended:
-                result.update(auth_mode=raw.get("auth_mode"), identity=identity)
             return result
 
     install_role_input_contract(mcp, role, overrides=input_overrides)

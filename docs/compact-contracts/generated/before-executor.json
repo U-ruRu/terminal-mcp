@@ -83,20 +83,44 @@
       "name": "session",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
           "intent_updated_at": {
             "type": "string"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -107,22 +131,16 @@
           "refresh_due_at": {
             "type": "string"
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -181,13 +199,31 @@
       "name": "task_list",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -199,16 +235,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -220,10 +256,10 @@
           "tasks": {
             "type": "array"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -240,7 +276,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Run a command; fast completion may include the first bounded output page. Attach this connector once; writes use its local work cycle.",
+      "description": "Accept a command without waiting for start, completion or output. Return ok, remaining_seconds, cmd_hash, observed status and queue_id when applicable. Use command_read for body, output and exit code. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "properties": {
           "command": {
@@ -269,70 +305,28 @@
       "name": "command_run",
       "outputSchema": {
         "properties": {
-          "action": {
-            "type": "string"
-          },
-          "command": {
-            "type": "object"
-          },
-          "coordination": {
+          "cmd_hash": {
             "type": [
               "null",
-              "object"
-            ]
-          },
-          "displayed_lines_count": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "duration_ms": {
-            "type": [
-              "integer",
-              "null"
+              "string"
             ]
           },
           "error": {
             "type": "object"
           },
-          "has_more": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "identity": {
+          "intent_warning": {
             "type": [
               "null",
-              "object"
+              "string"
             ]
           },
-          "line_truncated": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "lines": {
+          "messages": {
             "type": [
               "array",
               "null"
             ]
           },
-          "message_hash": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "next_cursor": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "next_offset": {
+          "messages_remaining": {
             "type": [
               "integer",
               "null"
@@ -341,34 +335,10 @@
           "ok": {
             "type": "boolean"
           },
-          "output_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "output_pruned_at": {
+          "postcommit_warning": {
             "type": [
               "null",
               "string"
-            ]
-          },
-          "output_retained": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "output_truncated": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "overall_lines_count": {
-            "type": [
-              "integer",
-              "null"
             ]
           },
           "provider_identity": {
@@ -377,10 +347,16 @@
               "object"
             ]
           },
-          "required_action": {
+          "queue_id": {
             "type": [
-              "null",
-              "string"
+              "integer",
+              "null"
+            ]
+          },
+          "remaining_seconds": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "return_to_chat": {
@@ -389,28 +365,13 @@
               "null"
             ]
           },
-          "session_lifecycle": {
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
             "type": [
-              "null",
-              "object"
-            ]
-          },
-          "task_scope": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "task_scope_options": {
-            "type": "array"
-          },
-          "task_targets": {
-            "type": "array"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -467,6 +428,12 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "command": {
             "type": "object"
           },
@@ -500,6 +467,12 @@
               "object"
             ]
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "line_truncated": {
             "type": [
               "boolean",
@@ -509,10 +482,16 @@
           "lines": {
             "type": "array"
           },
-          "message_hash": {
+          "messages": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -563,16 +542,16 @@
               "null"
             ]
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -587,10 +566,10 @@
               "object"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -631,6 +610,12 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "command": {
             "type": "object"
           },
@@ -667,6 +652,12 @@
               "object"
             ]
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "line_truncated": {
             "type": [
               "boolean",
@@ -674,15 +665,18 @@
             ]
           },
           "lines": {
+            "type": "array"
+          },
+          "messages": {
             "type": [
               "array",
               "null"
             ]
           },
-          "message_hash": {
+          "messages_remaining": {
             "type": [
-              "null",
-              "string"
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -730,16 +724,28 @@
               "null"
             ]
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
             ]
           },
-          "required_action": {
+          "queue_id": {
             "type": [
-              "null",
-              "string"
+              "integer",
+              "null"
+            ]
+          },
+          "remaining_seconds": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "return_to_chat": {
@@ -754,22 +760,13 @@
               "object"
             ]
           },
-          "task_scope": {
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
             "type": [
-              "null",
-              "string"
-            ]
-          },
-          "task_scope_options": {
-            "type": "array"
-          },
-          "task_targets": {
-            "type": "array"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -810,6 +807,12 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "command": {
             "type": "object"
           },
@@ -846,6 +849,12 @@
               "object"
             ]
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "line_truncated": {
             "type": [
               "boolean",
@@ -853,15 +862,18 @@
             ]
           },
           "lines": {
+            "type": "array"
+          },
+          "messages": {
             "type": [
               "array",
               "null"
             ]
           },
-          "message_hash": {
+          "messages_remaining": {
             "type": [
-              "null",
-              "string"
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -909,16 +921,28 @@
               "null"
             ]
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
             ]
           },
-          "required_action": {
+          "queue_id": {
             "type": [
-              "null",
-              "string"
+              "integer",
+              "null"
+            ]
+          },
+          "remaining_seconds": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "return_to_chat": {
@@ -933,22 +957,13 @@
               "object"
             ]
           },
-          "task_scope": {
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
             "type": [
-              "null",
-              "string"
-            ]
-          },
-          "task_scope_options": {
-            "type": "array"
-          },
-          "task_targets": {
-            "type": "array"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -965,7 +980,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Attach this connector once; writes use its local work cycle.",
+      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Ordinary success is only ok:true; actual incoming messages and warnings remain. Read task details with task_get. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "properties": {
           "action": {
@@ -1011,31 +1026,46 @@
       "name": "task_claim",
       "outputSchema": {
         "properties": {
-          "action": {
-            "type": "string"
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -1044,23 +1074,11 @@
               "null"
             ]
           },
-          "session_lifecycle": {
-            "type": [
-              "null",
-              "object"
-            ]
-          },
-          "task": {
-            "type": "object"
-          },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "warnings": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1121,28 +1139,46 @@
       "name": "task_state",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -1151,10 +1187,10 @@
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -1214,28 +1250,46 @@
       "name": "task_comment",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -1244,10 +1298,10 @@
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -1317,6 +1371,14 @@
           "text": {
             "default": null,
             "description": "string"
+          },
+          "text_limit": {
+            "default": null,
+            "description": "integer"
+          },
+          "text_offset": {
+            "default": null,
+            "description": "integer"
           }
         },
         "type": "object",
@@ -1371,8 +1433,20 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "message": {
             "type": "object"
@@ -1384,7 +1458,16 @@
             ]
           },
           "messages": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "next_cursor": {
             "type": [
@@ -1395,6 +1478,12 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
@@ -1403,12 +1492,6 @@
           },
           "recipients": {
             "type": "array"
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "return_to_chat": {
             "type": [
@@ -1431,14 +1514,14 @@
           "state": {
             "type": "string"
           },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "unavailable_peers": {
             "type": "array"
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [

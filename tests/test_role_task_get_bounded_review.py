@@ -65,7 +65,8 @@ async def test_coordinator_large_task_history_is_paginated_before_wire_budget():
         ),
     )
     assert history["ok"] is True, history
-    assert history["task"]["kind"] == "events"
+    assert "kind" not in history["task"]
+    assert "detail" not in history
     assert len(history["task"]["items"]) == 1
     assert history["task"]["next_cursor"] is not None
 

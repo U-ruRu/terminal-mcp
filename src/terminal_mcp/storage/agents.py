@@ -825,9 +825,14 @@ class AgentStore:
             result.append(item)
         return result
 
-    async def message_journal(self, agent_id, cutoff=None, limit=100, offset=0):
+    async def message_journal(
+        self, agent_id, cutoff=None, limit=100, offset=0, *, message_hash=None
+    ):
         condition = "r.recipient_agent_id=?"
         params = [agent_id]
+        if message_hash is not None:
+            condition += " AND m.message_hash=?"
+            params.append(message_hash)
         if cutoff:
             condition += " AND m.created_at>=?"
             params.append(cutoff)

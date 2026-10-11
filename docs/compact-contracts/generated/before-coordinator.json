@@ -83,20 +83,44 @@
       "name": "session",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
           },
           "intent_updated_at": {
             "type": "string"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -107,22 +131,16 @@
           "refresh_due_at": {
             "type": "string"
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -139,7 +157,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read one canonical task as snapshot, detail, or history. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.",
+      "description": "Read one task inside task without detail/kind response wrappers. Snapshot includes native latest_checkpoint.checkpoint; events omit internal actor IDs and preserve payload. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "cursor": {
@@ -179,31 +197,46 @@
       "name": "task_get",
       "outputSchema": {
         "properties": {
-          "detail": {
-            "type": "string"
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -215,10 +248,10 @@
           "task": {
             "type": "object"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -277,13 +310,31 @@
       "name": "task_list",
       "outputSchema": {
         "properties": {
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -295,16 +346,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -316,10 +367,10 @@
           "tasks": {
             "type": "array"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -2752,28 +2803,46 @@
           "action": {
             "type": "string"
           },
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -2797,14 +2866,11 @@
           "task_id": {
             "type": "string"
           },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "warnings": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2860,16 +2926,34 @@
       "name": "task_graph",
       "outputSchema": {
         "properties": {
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "edges": {
             "type": "array"
           },
           "error": {
             "type": "object"
           },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -2884,16 +2968,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -2902,10 +2986,10 @@
               "null"
             ]
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -2959,13 +3043,31 @@
           "agents": {
             "type": "array"
           },
-          "error": {
-            "type": "object"
-          },
-          "message_hash": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "error": {
+            "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "next_cursor": {
@@ -2977,16 +3079,16 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
-            ]
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "return_to_chat": {
@@ -3001,10 +3103,10 @@
           "server_id": {
             "type": "string"
           },
-          "text": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           }
         },
@@ -3074,6 +3176,14 @@
           "text": {
             "default": null,
             "description": "string"
+          },
+          "text_limit": {
+            "default": null,
+            "description": "integer"
+          },
+          "text_offset": {
+            "default": null,
+            "description": "integer"
           }
         },
         "type": "object",
@@ -3128,8 +3238,20 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "error": {
             "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "message": {
             "type": "object"
@@ -3141,7 +3263,16 @@
             ]
           },
           "messages": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "next_cursor": {
             "type": [
@@ -3152,6 +3283,12 @@
           "ok": {
             "type": "boolean"
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
@@ -3160,12 +3297,6 @@
           },
           "recipients": {
             "type": "array"
-          },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "return_to_chat": {
             "type": [
@@ -3188,14 +3319,14 @@
           "state": {
             "type": "string"
           },
-          "text": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "unavailable_peers": {
             "type": "array"
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3211,7 +3342,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.",
+      "description": "Read ok, healthy, application, agent_name, version and storage. extended=true adds complete components, terminal and workflow. Hidden mandatory components still contribute to healthy; auth/identity diagnostics are excluded. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "extended": {
@@ -3245,7 +3376,7 @@
               "string"
             ]
           },
-          "auth_mode": {
+          "cmd_hash": {
             "type": [
               "null",
               "string"
@@ -3258,22 +3389,34 @@
             "type": "object"
           },
           "healthy": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
           },
-          "identity": {
-            "type": "object"
-          },
-          "message_hash": {
+          "intent_warning": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "messages_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -3281,22 +3424,10 @@
               "object"
             ]
           },
-          "required_action": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "return_to_chat": {
             "type": [
               "boolean",
               "null"
-            ]
-          },
-          "status": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "storage": {
@@ -3308,16 +3439,16 @@
           "terminal": {
             "type": "object"
           },
-          "text": {
+          "version": {
             "type": [
               "null",
               "string"
             ]
           },
-          "version": {
+          "warnings": {
             "type": [
-              "null",
-              "string"
+              "array",
+              "null"
             ]
           },
           "workflow": {

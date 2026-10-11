@@ -12,7 +12,7 @@
     "output_fallback": "strict-contracts.json:access.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "ba680c57cde45fd915c82f4ebed9dcdddac49219194774eadddfcf7d1c98be00",
-    "published_output_sha256": "d2fa8cde0c81b4a85725a1ab806212f0076b35779d3a923ff50615c0dcb757db",
+    "published_output_sha256": "ddcf13dcb2c7f18e4d10bb69becc39f40e641c4dfa6aedbad23d09a3d2061ef0",
     "required_fields": [
       "action"
     ],
@@ -24,7 +24,7 @@
       }
     ],
     "strict_input_sha256": "ad65cbe81e04672c5b25d30bc67d46d42967016c971c82a158bf9be6b3f5da18",
-    "strict_output_sha256": "e60e257ccb14147ccc2b0d22f90c1905c6bd6a8d05c3c80d58e7cdb6d5a18bd5"
+    "strict_output_sha256": "ec79c4e8556d4094b82bda7352b3cfcb1e01cdbf021a5bca749e616ebc82631f"
   },
   "coordinator.agent_observe": {
     "action_models": {},
@@ -37,11 +37,11 @@
     "output_fallback": "strict-contracts.json:coordinator.agent_observe.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "5a7142eb5ec1c1341dc74f8874b7cde5a471dc3869832cd74e94cb469e8f69fa",
-    "published_output_sha256": "6ae3f0be3a4e3f371b5755563b6e5f8731fadf57684a566faa72dbbcfb97117c",
+    "published_output_sha256": "41382eeb3de5468a98369d9f8e231094e64b603349f61323c080e2c4e9fe6602",
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "41dc81747c3dfa176ce41b5c5cd017b5d5db98c3155163e16256eaa1012f6732",
-    "strict_output_sha256": "2b06cfaf52fd7b64f2795d9b2bdeb4508572910c827a2cef225af4e8771acf18"
+    "strict_output_sha256": "6a3cb769c545d240d5c795b5b8d456fdd657e8c060b8a53e9c3238a51fc872f1"
   },
   "coordinator.health": {
     "action_models": {},
@@ -56,17 +56,17 @@
     "output_fallback": "strict-contracts.json:coordinator.health.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "0928fc09008ae2479878707588815993de7102c401f402e78872022130d3982c",
-    "published_output_sha256": "e28db2011fe3ad7967daafcb90c4b79c51dbfe29557a66d1bfccea364ab7cbc5",
+    "published_output_sha256": "d60f6c310d5528091c47523a538db929d7ebdfd5e9f6c548acca6a16802642c2",
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
-    "strict_output_sha256": "ee20ebe65cb858d5fd37c50e357ad27363e8b3dfcaaf01d65af07735c3dd62aa"
+    "strict_output_sha256": "462b1448033d01c891a1f005f92cb464d494c16c16207104d2d9e8397ba341d1"
   },
   "coordinator.message": {
     "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [
-      "ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
+      "ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
     "exact_input_fallbacks": [],
     "input_fields": [
@@ -74,6 +74,8 @@
       "text",
       "target",
       "message_hash",
+      "text_offset",
+      "text_limit",
       "mode",
       "require_reply",
       "alert",
@@ -88,8 +90,8 @@
     "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
     "output_fallback": "strict-contracts.json:coordinator.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
-    "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
-    "published_output_sha256": "be75f47f00504d4a616ec5dfff148be398ce2bd82ec7995423fd6024f6eb9eee",
+    "published_input_sha256": "a59385b95c8f8d1c9bc9e1d87a1f128ddfb01d06d6459a01d4c574a36b6c91ce",
+    "published_output_sha256": "58ab582fea53605713f2b9907b294149fed911a721563149a06903e6d0fdfedd",
     "required_fields": [
       "action"
     ],
@@ -115,8 +117,8 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
-    "strict_output_sha256": "51d14303a76bde83c51c6af4aa161751ef5187612e42012310627fd8d7992ff7"
+    "strict_input_sha256": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+    "strict_output_sha256": "1e1b14426211889570de080e21e8a27a10343102ce15e2bff6bfede43c5efa7d"
   },
   "coordinator.session": {
     "action_models": {},
@@ -133,7 +135,7 @@
     "output_fallback": "strict-contracts.json:coordinator.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "1b98066f7dd5d967b7dd0e608e934ccca06c5eb8fce9ff65979bb2e2e22566ee",
-    "published_output_sha256": "eb74b3bff2c963f8d1597bb3f8cbba4da6d8b532f3e41ffdca9ccdeea97d6653",
+    "published_output_sha256": "72bff24f9a86e3691e07bf6de8c0f06164271a5f5ac99ddae92056972cb1f09a",
     "required_fields": [],
     "runtime_annotations": [
       {
@@ -143,7 +145,7 @@
       }
     ],
     "strict_input_sha256": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
-    "strict_output_sha256": "b9a309f29dac23ac59024636be0780e173c88b0522b08a33eade9910565f38ee"
+    "strict_output_sha256": "edd0426df98a8c6bf21fb50c908170405417268439b77af2bc1f2b6502616280"
   },
   "coordinator.task_get": {
     "action_models": {},
@@ -163,7 +165,7 @@
     "output_fallback": "strict-contracts.json:coordinator.task_get.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "605af92bdbf8b105543a36938079ac604c65c8ae3613f3c94b34114e9dce9b9a",
-    "published_output_sha256": "f9d407b35a2df5e5d44aee953699da04ab2875e740826970da3eae0d89e81758",
+    "published_output_sha256": "c6da14dde5355b41c42d1f7fdd9bd987f22b04f2fc1138e4bb39aab1dbcc4f27",
     "required_fields": [
       "namespace",
       "task_id"
@@ -176,7 +178,7 @@
       }
     ],
     "strict_input_sha256": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
-    "strict_output_sha256": "b5ead5b6978dd5b369f4dcf8a20f60bf68e8f4c4b2b2716b0ce68d9fe0bfc44c"
+    "strict_output_sha256": "f3a6d02b0aef7f23ea37874f00c24d28cb0897b8fb70c4dc76fd524e844e8b09"
   },
   "coordinator.task_graph": {
     "action_models": {},
@@ -196,14 +198,14 @@
     "output_fallback": "strict-contracts.json:coordinator.task_graph.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "827fd9e723f652668a3ab767db895ed1bd68f005713c13ffa21e34647b76849e",
-    "published_output_sha256": "29a8bc5289a78db90dac34fd5a5541790299b8366afde56041e44a3952756401",
+    "published_output_sha256": "70f6b94bcb9118afd5b1436c926591b58bd2874015ac6ca69b0f75a0a6fc9d8a",
     "required_fields": [
       "namespace",
       "task_id"
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "809e8474ffcd4d62a05127feb7e46a4150668886bd382cd9a68ac6171c511fb6",
-    "strict_output_sha256": "aadecb7f6ef6b3050621836ec8f7ddaa549d7574e3419d507a33d34f4b250eb1"
+    "strict_output_sha256": "91b1fe8dce1857174619a1ee3adea5a5af479caa2cb81f8169018b186372b26d"
   },
   "coordinator.task_list": {
     "action_models": {},
@@ -223,7 +225,7 @@
     "output_fallback": "strict-contracts.json:coordinator.task_list.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "089be66501818cbc3961f3acd088a54e780289ba1d86f29c4d70da105217200e",
-    "published_output_sha256": "4a3dcb3a38c724e0963c51e182a53d58c3c873f9e5feb4c33d77964bf4dcc228",
+    "published_output_sha256": "95fa090a1a35b28311958f022e0aa661485c24c974c22bd364643136ca61d125",
     "required_fields": [],
     "runtime_annotations": [
       {
@@ -233,7 +235,7 @@
       }
     ],
     "strict_input_sha256": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
-    "strict_output_sha256": "9e1147987d039b8954f8acea3709b928fce8e3492ca0eef2640a25b404843537"
+    "strict_output_sha256": "fc59556f6fc194bab42bebbe779aa88dad6a2d4483e32d11f65465fad9089d01"
   },
   "coordinator.task_manage": {
     "action_models": {
@@ -724,7 +726,7 @@
     "output_fallback": "strict-contracts.json:coordinator.task_manage.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "2d47b8aeda9c7f9bee9da4fb68c42337c0119627b05eb0af7079f078cdf54ac7",
-    "published_output_sha256": "919a129625ef6ed837a5969d44faf36a95bc9e571be9422e6a0e5f0a6df5d70b",
+    "published_output_sha256": "c45cfc2bf3a5435540184bc17c78f0b68c427fcfde653b1f3afa83010127cddb",
     "required_fields": [
       "action",
       "namespace"
@@ -796,7 +798,7 @@
       }
     ],
     "strict_input_sha256": "dac0417375adab7c6951517317975ac95efb2bbad9f309957b9cad399408ff8d",
-    "strict_output_sha256": "7f0fe70f08af4caba47a01386d3a8361cd4d7f19455f6ff35500c477100520c0"
+    "strict_output_sha256": "cffa2514e9bc79635881a77ae7e9a509fccdd1d7e55d87d586e4a405ff7f46fc"
   },
   "executor.command_cancel": {
     "action_models": {},
@@ -811,13 +813,13 @@
     "output_fallback": "strict-contracts.json:executor.command_cancel.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "34a48eb2758bb7387da73c356dc49183ef0ba33845021d00bf255a26a169e048",
-    "published_output_sha256": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
+    "published_output_sha256": "14e1accfd3e8def5899108ddf8aa8964330c9d84d3f2c5cd338a4f99c8dea984",
     "required_fields": [
       "cmd_hash"
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
-    "strict_output_sha256": "29d5885337c5fd75bd6731ae68e97c387c5ff73523fd5e6e129a72894b8da3ff"
+    "strict_output_sha256": "4a4db133bfe9fe65d00635f55c9ca15f6443521e776b33ac7a846d20bfc3cdd7"
   },
   "executor.command_read": {
     "action_models": {},
@@ -834,11 +836,11 @@
     "output_fallback": "strict-contracts.json:executor.command_read.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "ae048e876f9c082f9dc752b6463ed7942a7da5e0aba77ef90b66d1426311545c",
-    "published_output_sha256": "41b4302fee5cc10a7e3eb51bd2f39bdfd47472c55bd0f949239b97cb10da416b",
+    "published_output_sha256": "7c6255895dc4e29f197f9a7afff1169b8ec828a35680909a69925ebdc21ee45a",
     "required_fields": [],
     "runtime_annotations": [],
     "strict_input_sha256": "6caae35abafd494d83e6ac8491a7018504df059cad5539697582a8f95c236693",
-    "strict_output_sha256": "74f3fc4e0fe00ad1f18539fe8090cdea8731ea3e7c9b8983951f88e1a6812733"
+    "strict_output_sha256": "34beb9db269ebb1b4e473f7a97a58f8cd145fd79073a5a648ed73a3c38091ab2"
   },
   "executor.command_recovery": {
     "action_models": {},
@@ -853,13 +855,13 @@
     "output_fallback": "strict-contracts.json:executor.command_recovery.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "45798bd91f1e34c6141a2cc9193bfc7e34380bfea74214c9c6a90d440e2f9815",
-    "published_output_sha256": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
+    "published_output_sha256": "14e1accfd3e8def5899108ddf8aa8964330c9d84d3f2c5cd338a4f99c8dea984",
     "required_fields": [
       "command"
     ],
     "runtime_annotations": [],
     "strict_input_sha256": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
-    "strict_output_sha256": "29d5885337c5fd75bd6731ae68e97c387c5ff73523fd5e6e129a72894b8da3ff"
+    "strict_output_sha256": "4a4db133bfe9fe65d00635f55c9ca15f6443521e776b33ac7a846d20bfc3cdd7"
   },
   "executor.command_run": {
     "action_models": {},
@@ -876,7 +878,7 @@
     "output_fallback": "strict-contracts.json:executor.command_run.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "9d07ca55a0b1b63c3a49f0761d4aaacf2ff47c2e11bf99470d8971195cf02ab4",
-    "published_output_sha256": "975ecde1ad1528fefedcf220163d41670eddb6c2ac3377250b41d362f73af718",
+    "published_output_sha256": "e782295e7c1a16d5be72ed02153d2628a4dde398b981e3c1f2050ff9b8eef017",
     "required_fields": [
       "command"
     ],
@@ -888,13 +890,13 @@
       }
     ],
     "strict_input_sha256": "390368c4b1e019241027cc9e6f81be36a7d8bc0f1a681d91a9a148ac2a917f34",
-    "strict_output_sha256": "29d5885337c5fd75bd6731ae68e97c387c5ff73523fd5e6e129a72894b8da3ff"
+    "strict_output_sha256": "8d3ac2cbaeeddcdf681fc845c527ff682d6e066ba48c373ff385b3228b47bad6"
   },
   "executor.message": {
     "action_models": {},
     "baseline_description_preserved": true,
     "conditions": [
-      "ALL_OF(IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
+      "ALL_OF(IF ANY_OF({text_offset:int} | {text_limit:int}) => {action?:\"read\"; message_hash:string} | IF {action:\"read\"; message_hash:string} => {text?:null; target?:null; cursor?:null; namespace?:null; task_id?:null; mode?:null; require_reply?:false; alert?:false} | IF action==\"send\" => requires(text) | IF action==\"ack\" => requires(message_hash) | IF action==\"reply\" => requires(message_hash,text))"
     ],
     "exact_input_fallbacks": [],
     "input_fields": [
@@ -902,6 +904,8 @@
       "text",
       "target",
       "message_hash",
+      "text_offset",
+      "text_limit",
       "mode",
       "require_reply",
       "alert",
@@ -916,8 +920,8 @@
     "model": "terminal_mcp.mcp.access_contracts.MeshMessageInput",
     "output_fallback": "strict-contracts.json:executor.message.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
-    "published_input_sha256": "2f21e48c090ee269e9b6ae78f6d6f83c02cfd01c415c6e6a35f4b427e2aa26aa",
-    "published_output_sha256": "be75f47f00504d4a616ec5dfff148be398ce2bd82ec7995423fd6024f6eb9eee",
+    "published_input_sha256": "a59385b95c8f8d1c9bc9e1d87a1f128ddfb01d06d6459a01d4c574a36b6c91ce",
+    "published_output_sha256": "58ab582fea53605713f2b9907b294149fed911a721563149a06903e6d0fdfedd",
     "required_fields": [
       "action"
     ],
@@ -943,8 +947,8 @@
         "text": "Local send routes are exclusive: use target=<local public_name> with namespace/task_id absent, OR namespace + task_id together for the task’s current local owners, with target absent/null or broadcast. A partial task pair or a named target combined with a task pair fails input_validation_failed with path/reason/repair hint and outcome=not_committed (no message created). If neither route is specified, the send is a local broadcast (may fail no_active_recipients). reply uses the parent sender and ignores supplied target. For send, missing/null target means local broadcast when no task pair is given."
       }
     ],
-    "strict_input_sha256": "b32b6aeebda2ea30d76a19a6a4027d28658243d80b151ab1a99b2f426630aee4",
-    "strict_output_sha256": "51d14303a76bde83c51c6af4aa161751ef5187612e42012310627fd8d7992ff7"
+    "strict_input_sha256": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+    "strict_output_sha256": "1e1b14426211889570de080e21e8a27a10343102ce15e2bff6bfede43c5efa7d"
   },
   "executor.session": {
     "action_models": {},
@@ -961,7 +965,7 @@
     "output_fallback": "strict-contracts.json:executor.session.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "1b98066f7dd5d967b7dd0e608e934ccca06c5eb8fce9ff65979bb2e2e22566ee",
-    "published_output_sha256": "eb74b3bff2c963f8d1597bb3f8cbba4da6d8b532f3e41ffdca9ccdeea97d6653",
+    "published_output_sha256": "72bff24f9a86e3691e07bf6de8c0f06164271a5f5ac99ddae92056972cb1f09a",
     "required_fields": [],
     "runtime_annotations": [
       {
@@ -971,7 +975,7 @@
       }
     ],
     "strict_input_sha256": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
-    "strict_output_sha256": "b9a309f29dac23ac59024636be0780e173c88b0522b08a33eade9910565f38ee"
+    "strict_output_sha256": "edd0426df98a8c6bf21fb50c908170405417268439b77af2bc1f2b6502616280"
   },
   "executor.task_claim": {
     "action_models": {
@@ -1035,7 +1039,7 @@
     "output_fallback": "strict-contracts.json:executor.task_claim.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "831b7a74af5fa0b8fc7db4885ee29d88d2b867e613085ae8f90e9a98e3522826",
-    "published_output_sha256": "f2abd1f73ab1ae6bad029a2aee3d6439b55c44ac83ef4a338e8d7a4b510a207e",
+    "published_output_sha256": "af06eb03357906661fe6657f58dfbec1482d170a30ed765460fb8629cb9f0b7e",
     "required_fields": [
       "action",
       "namespace",
@@ -1056,7 +1060,7 @@
       }
     ],
     "strict_input_sha256": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
-    "strict_output_sha256": "df31418185ed3920b889e90249d20ae4e1e6cb643d1a6cbc99d1ea6ddd32c717"
+    "strict_output_sha256": "60f7dcde70dfeb8664cd741b1ecd7b3020aa8001ef086c28c40c86b98bf69a4f"
   },
   "executor.task_comment": {
     "action_models": {
@@ -1117,7 +1121,7 @@
     "output_fallback": "strict-contracts.json:executor.task_comment.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "bf3f4057c881a2268ee65fa2c86440ada5ce24959a586b77d6f375a21c6e1d17",
-    "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
+    "published_output_sha256": "af06eb03357906661fe6657f58dfbec1482d170a30ed765460fb8629cb9f0b7e",
     "required_fields": [
       "namespace",
       "task_id"
@@ -1130,7 +1134,7 @@
       }
     ],
     "strict_input_sha256": "947fa128f5f553c22321bd7d86845b374dac515d1dcd97a0146c4652493e9039",
-    "strict_output_sha256": "2c5b603519f7f78eaf52713629ca5a15bfcbc6172dc2f6506656cfba0b541526"
+    "strict_output_sha256": "3adf2db115ce86c0ede2a40b3d7790d3e1cfd7aacd35d28381326084a477e05d"
   },
   "executor.task_list": {
     "action_models": {},
@@ -1150,7 +1154,7 @@
     "output_fallback": "strict-contracts.json:executor.task_list.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "089be66501818cbc3961f3acd088a54e780289ba1d86f29c4d70da105217200e",
-    "published_output_sha256": "4a3dcb3a38c724e0963c51e182a53d58c3c873f9e5feb4c33d77964bf4dcc228",
+    "published_output_sha256": "95fa090a1a35b28311958f022e0aa661485c24c974c22bd364643136ca61d125",
     "required_fields": [],
     "runtime_annotations": [
       {
@@ -1160,7 +1164,7 @@
       }
     ],
     "strict_input_sha256": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
-    "strict_output_sha256": "9e1147987d039b8954f8acea3709b928fce8e3492ca0eef2640a25b404843537"
+    "strict_output_sha256": "fc59556f6fc194bab42bebbe779aa88dad6a2d4483e32d11f65465fad9089d01"
   },
   "executor.task_state": {
     "action_models": {},
@@ -1177,7 +1181,7 @@
     "output_fallback": "strict-contracts.json:executor.task_state.outputSchema",
     "public_validation_boundary": "object-only / all named & unknown argument values forwarded",
     "published_input_sha256": "bd7c30645e2b874a12fbb8ebae4c9709a33320e99bdf0a932834fd3bf912a804",
-    "published_output_sha256": "db67355ac2da4db1644b5123a17c5985f3da973e11c468f10c0c5c4a12ca5c02",
+    "published_output_sha256": "af06eb03357906661fe6657f58dfbec1482d170a30ed765460fb8629cb9f0b7e",
     "required_fields": [
       "namespace",
       "state",
@@ -1191,6 +1195,6 @@
       }
     ],
     "strict_input_sha256": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",
-    "strict_output_sha256": "784766b97bac0cf5b68ed1d309f6f2505530037f32f15dc1528893a14bb8c6fc"
+    "strict_output_sha256": "23ae73e72309be88c9c62c1781a92853111ec132bf24d5a1f42f9cdef4c0c17d"
   }
 }

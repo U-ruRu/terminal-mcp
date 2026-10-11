@@ -368,7 +368,11 @@ def _text_json(result):
 
 @pytest.mark.asyncio
 async def test_mcp_code_free_read_paths_use_canonical_tools():
-    mcp = build_mcp(FakeService())
+    from unittest.mock import AsyncMock
+
+    service = FakeService()
+    service.read = AsyncMock(wraps=service.read)
+    mcp = build_mcp(service)
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
 
     health = _text_json(await tools["health"].run({}, convert_result=True))
@@ -383,9 +387,11 @@ async def test_mcp_code_free_read_paths_use_canonical_tools():
         )
     )
     assert read["ok"] is True
-    assert read["status"] == "completed"
-    assert read["cmd_hash"] == "1234abcd"
-    assert read["agent_name"] == "anonymous"
+    assert read["command"]["status"] == "completed"
+    assert read["command"]["cmd_hash"] == "1234abcd"
+    assert read["command"]["exit_code"] == 0
+    # Anonymous access remains verified at the application boundary, not a removed label.
+    assert service.read.await_args.kwargs["agent_id"] is None
 
     context = _text_json(
         await tools["context"].run(

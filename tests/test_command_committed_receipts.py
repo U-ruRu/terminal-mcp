@@ -59,10 +59,12 @@ async def _backend(tmp_path, monkeypatch):
         agent_policy=SimpleNamespace(command_preview_chars=160),
     )
     backend = PersistentBackend(service, _Lifecycle())
-    backend._execution_authority = AsyncMock(return_value=(
-        SimpleNamespace(hard_expires_at="2099-01-01T00:00:00Z", authority_node_id="node-a"),
-        None,
-    ))
+    backend._execution_authority = AsyncMock(
+        return_value=(
+            SimpleNamespace(hard_expires_at="2099-01-01T00:00:00Z", authority_node_id="node-a"),
+            None,
+        )
+    )
     backend._task_refs = AsyncMock(return_value=[])
     service.persistent = backend
     monkeypatch.setattr(backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 0)
@@ -104,7 +106,7 @@ async def test_run_preserves_committed_hash_on_followup_failure(
     backend.terminal.submit.assert_awaited_once()
     wire = cmd_result(result, "run")
     assert wire.structuredContent["ok"] is True
-    assert wire.structuredContent["command"]["cmd_hash"] == stored.cmd_hash
+    assert wire.structuredContent["cmd_hash"] == stored.cmd_hash
 
 
 @pytest.mark.asyncio
@@ -126,8 +128,12 @@ async def test_run_precommit_failure_has_no_command(tmp_path, monkeypatch, bound
 async def _attributed_command(backend, status="running", **identity):
     identity = {**IDENTITY, **identity}
     return await backend.repo.create(
-        "printf cancel-receipt", status=status, queue_id=1,
-        agent_id=identity["logical_agent_id"], command_type="persistent_run", **identity,
+        "printf cancel-receipt",
+        status=status,
+        queue_id=1,
+        agent_id=identity["logical_agent_id"],
+        command_type="persistent_run",
+        **identity,
     )
 
 
@@ -163,7 +169,8 @@ async def test_cancel_preserves_durable_intent_on_followup_failure(
 async def test_cancel_rejects_before_accepting_intent(tmp_path, monkeypatch, scenario):
     backend = await _backend(tmp_path, monkeypatch)
     command = await _attributed_command(
-        backend, status="completed" if scenario == "finished" else "running",
+        backend,
+        status="completed" if scenario == "finished" else "running",
         logical_agent_id="another-agent" if scenario == "foreign" else IDENTITY["logical_agent_id"],
     )
     if scenario == "authority":
@@ -171,10 +178,15 @@ async def test_cancel_rejects_before_accepting_intent(tmp_path, monkeypatch, sce
     target = "missing" if scenario == "missing" else command.cmd_hash
     result = await backend.cancel(target, **IDENTITY)
     assert result["ok"] is False
-    assert result["code"] == {
-        "missing": "command_not_found", "foreign": "command_not_owned",
-        "finished": "command_already_finished", "authority": "session_expired",
-    }[scenario]
+    assert (
+        result["code"]
+        == {
+            "missing": "command_not_found",
+            "foreign": "command_not_owned",
+            "finished": "command_already_finished",
+            "authority": "session_expired",
+        }[scenario]
+    )
     with sqlite3.connect(backend.repo.path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM command_cancel_intents").fetchone()[0] == 0
     backend.terminal.enqueue_cancel.assert_not_called()
@@ -196,7 +208,8 @@ async def test_application_keeps_receipt_when_inline_stdout_read_fails(
     backend.service.read = AsyncMock(side_effect=RuntimeError("output cache unavailable"))
     app = CommandApplication(backend.service, _Gate())
     result = await app.cmd(
-        ActorContext(), CmdRunRequest(action="run", code="1234", command="printf done"),
+        ActorContext(),
+        CmdRunRequest(action="run", code="1234", command="printf done"),
     )
     assert result["ok"] is True, result
     assert result["status"] == status
@@ -206,7 +219,7 @@ async def test_application_keeps_receipt_when_inline_stdout_read_fails(
     assert (await backend.repo.get(result["cmd_hash"])).status == status
     backend.terminal.submit.assert_awaited_once()
     wire = cmd_result(result, "run")
-    assert wire.structuredContent["command"]["cmd_hash"] == result["cmd_hash"]
+    assert wire.structuredContent["cmd_hash"] == result["cmd_hash"]
 
 
 @pytest.mark.asyncio
@@ -221,10 +234,9 @@ async def test_request_cancellation_still_propagates_after_commit(tmp_path, monk
 @pytest.mark.asyncio
 async def test_concurrent_identical_runs_keep_distinct_durable_receipts(tmp_path, monkeypatch):
     backend = await _backend(tmp_path, monkeypatch)
-    results = await asyncio.gather(*(
-        backend.run("printf same", **IDENTITY, queue_id=1, task_scope="none")
-        for _ in range(8)
-    ))
+    results = await asyncio.gather(
+        *(backend.run("printf same", **IDENTITY, queue_id=1, task_scope="none") for _ in range(8))
+    )
     assert all(result["ok"] for result in results)
     assert len({result["cmd_hash"] for result in results}) == 8
     with sqlite3.connect(backend.repo.path) as connection:
@@ -239,9 +251,9 @@ async def test_concurrent_identical_runs_keep_distinct_durable_receipts(tmp_path
 async def test_concurrent_cancel_retries_keep_one_durable_intent(tmp_path, monkeypatch):
     backend = await _backend(tmp_path, monkeypatch)
     command = await _attributed_command(backend)
-    results = await asyncio.gather(*(
-        backend.cancel(command.cmd_hash, **IDENTITY) for _ in range(8)
-    ))
+    results = await asyncio.gather(
+        *(backend.cancel(command.cmd_hash, **IDENTITY) for _ in range(8))
+    )
     assert all(result["ok"] for result in results)
     with sqlite3.connect(backend.repo.path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM command_cancel_intents").fetchone() == (1,)
@@ -255,7 +267,11 @@ async def test_reconciler_recovers_cancel_after_immediate_wakeup_failure(tmp_pat
     backend = await _backend(tmp_path, monkeypatch)
     command = await _attributed_command(backend)
     scheduler = LinuxTerminalAdapter(
-        backend.repo, "/bin/bash", tmp_path, 0.02, queue_reconcile_sec=0.01,
+        backend.repo,
+        "/bin/bash",
+        tmp_path,
+        0.02,
+        queue_reconcile_sec=0.01,
     )
     backend.terminal = scheduler
     with monkeypatch.context() as patch:

@@ -141,6 +141,48 @@ class MessageInput(StrictRoleInput):
         json_schema_extra={
             "allOf": [
                 {
+                    "if": {
+                        "anyOf": [
+                            {
+                                "properties": {"text_offset": {"type": "integer"}},
+                                "required": ["text_offset"],
+                            },
+                            {
+                                "properties": {"text_limit": {"type": "integer"}},
+                                "required": ["text_limit"],
+                            },
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "action": {"const": "read"},
+                            "message_hash": {"type": "string"},
+                        },
+                        "required": ["message_hash"],
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "action": {"const": "read"},
+                            "message_hash": {"type": "string"},
+                        },
+                        "required": ["action", "message_hash"],
+                    },
+                    "then": {
+                        "properties": {
+                            "text": {"type": "null"},
+                            "target": {"type": "null"},
+                            "cursor": {"type": "null"},
+                            "namespace": {"type": "null"},
+                            "task_id": {"type": "null"},
+                            "mode": {"type": "null"},
+                            "require_reply": {"const": False},
+                            "alert": {"const": False},
+                        }
+                    },
+                },
+                {
                     "if": {"properties": {"action": {"const": "send"}}, "required": ["action"]},
                     "then": {"required": ["text"]},
                 },
@@ -160,6 +202,8 @@ class MessageInput(StrictRoleInput):
     text: Annotated[str | None, Field(max_length=MAX_MESSAGE_TEXT_CHARS)] = None
     target: Identifier | None = None
     message_hash: Hash | None = None
+    text_offset: Annotated[int | None, Field(ge=0, le=2147483647)] = None
+    text_limit: Annotated[int | None, Field(ge=1, le=2048)] = None
     mode: Literal["notify", "ack", "alert"] | None = None
     require_reply: bool = False
     alert: bool = False
@@ -171,16 +215,33 @@ class MessageInput(StrictRoleInput):
 
     @model_validator(mode="after")
     def validate_mode(self):
+        chunk = self.action == "read" and self.message_hash is not None
+        if (self.text_offset is not None or self.text_limit is not None) and not chunk:
+            raise ValueError("text_offset/text_limit require action=read and message_hash")
+        if chunk and any(
+            (
+                self.text is not None,
+                self.target is not None,
+                self.cursor is not None,
+                self.namespace is not None,
+                self.task_id is not None,
+                self.mode is not None,
+                self.require_reply,
+                self.alert,
+            )
+        ):
+            raise ValueError("by-ID text read cannot be combined with send flags or page filters")
         if self.action == "send":
             if self.text is None:
                 raise ValueError("text is required for action=send")
             if self.message_hash is not None:
                 raise ValueError("message_hash is not allowed for action=send")
-        elif self.action in {"read", "history", "recipients"}:
+        elif self.action == "read":
+            if self.text is not None:
+                raise ValueError("text is not allowed for action=read")
+        elif self.action in {"history", "recipients"}:
             if self.text is not None or self.message_hash is not None:
-                raise ValueError(
-                    "text and message_hash are not allowed for read/history/recipients"
-                )
+                raise ValueError("text and message_hash are not allowed for history/recipients")
         elif self.action == "ack":
             if self.message_hash is None:
                 raise ValueError("message_hash is required for action=ack")
@@ -395,66 +456,82 @@ ROLE_TOOL_MODELS: dict[tuple[str, str], type[StrictRoleInput]] = {
 
 
 ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
-    (
-        "executor",
-        "session",
-    ): "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent.",
-    (
-        "executor",
-        "task_list",
-    ): "Read bounded TaskListItem records for work orientation. By default excludes "
-    "done and archived; state='done' includes only non-archived done tasks. "
-    "namespace=None spans namespaces; state/lane/tags filter the results.",
-    (
-        "executor",
-        "command_run",
-    ): "Run a command; fast completion may include the first bounded output page.",
-    (
-        "executor",
-        "command_read",
-    ): "Read bounded command status/output using opaque cursor pagination.",
-    ("executor", "command_cancel"): "Cancel a command owned by the current LogicalAgent.",
-    ("executor", "command_recovery"): "Run a recovery command under the current managed session.",
-    (
-        "executor",
-        "task_claim",
-    ): "Claim/release a task. claim uses claim_intent; release may use release_reason.",
-    (
-        "executor",
-        "task_state",
-    ): "Set a valid task state as any admitted agent, including on a task claimed by someone else.",
-    ("executor", "task_comment"): "Append a comment/checkpoint note to canonical task history.",
-    (
-        "executor",
-        "message",
-    ): "Managed inbox: send needs text; ack needs message_hash; reply needs both.",
-    (
-        "coordinator",
-        "session",
-    ): "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent.",
-    ("coordinator", "task_get"): "Read one canonical task as snapshot, detail, or history. "
-    "History cursors bind to the selected stream snapshot; after history changes "
-    "an old cursor returns invalid_cursor and reading must restart.",
-    ("coordinator", "task_list"): "Read a bounded page of canonical TaskListItem records. "
-    "Default excludes done and archived. state='done' includes only non-archived "
-    "done tasks. namespace=None spans namespaces; state/lane/tags are filters.",
-    (
-        "coordinator",
-        "task_manage",
-    ): "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. "
-    "checkpoint needs checkpoint; state needs state; comment needs comment_text; "
-    "review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; "
-    "archive needs either non-null archive_note or non-null note.",
-    ("coordinator", "task_graph"): "Read a bounded dependency/relation graph rooted at one task.",
-    (
-        "coordinator",
-        "agent_observe",
-    ): "Read compact current LogicalAgent, WorkWindow, and WorkSession state.",
-    (
-        "coordinator",
-        "message",
-    ): "Managed inbox: send needs text; ack needs message_hash; reply needs both.",
-    ("coordinator", "health"): "Read compact health; set extended=true for canonical diagnostics.",
+    ("executor", "session"): (
+        "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
+    ),
+    ("executor", "task_list"): (
+        "Read bounded TaskListItem records for work orientation. By default excludes "
+        "done and archived; state='done' includes only non-archived done tasks. "
+        "namespace=None spans namespaces; state/lane/tags filter the results."
+    ),
+    ("executor", "command_run"): (
+        "Accept a command without waiting for start, completion or output. Return ok, "
+        "remaining_seconds, cmd_hash, observed status and queue_id when applicable. Use"
+        " command_read for body, output and exit code."
+    ),
+    ("executor", "command_read"): (
+        "Read command.cmd, current status, known exit_code/error and retained output "
+        "lines. Continue with the opaque cursor; failed/cancelled commands remain "
+        "readable."
+    ),
+    ("executor", "command_cancel"): ("Cancel a command owned by the current LogicalAgent."),
+    ("executor", "command_recovery"): ("Run a recovery command under the current managed session."),
+    ("executor", "task_claim"): (
+        "Claim/release a task. claim uses claim_intent; release may use release_reason."
+        " Ordinary success is only ok:true; actual incoming messages and warnings "
+        "remain. Read task details with task_get."
+    ),
+    ("executor", "task_state"): (
+        "Set a valid task state as any admitted agent, including on a task claimed by someone else."
+    ),
+    ("executor", "task_comment"): ("Append a comment/checkpoint note to canonical task history."),
+    ("executor", "message"): (
+        "Managed inbox: send needs text; ack needs message_hash; reply needs both. Read"
+        " full text by action=read with message_hash, text_offset (default0), "
+        "text_limit (1..2048, default2048). Offsets count Unicode code points; "
+        "concatenate text chunks and follow next_text_offset until absent. text_length "
+        "is total code points. Find other IDs using summary history and its cursor; "
+        "reading does not satisfy ACK/reply."
+    ),
+    ("coordinator", "session"): (
+        "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
+    ),
+    ("coordinator", "task_get"): (
+        "Read one task inside task without detail/kind response wrappers. Snapshot "
+        "includes native latest_checkpoint.checkpoint; events omit internal actor IDs "
+        "and preserve payload. History cursors bind to the selected stream snapshot; "
+        "after history changes an old cursor returns invalid_cursor and reading must "
+        "restart."
+    ),
+    ("coordinator", "task_list"): (
+        "Read a bounded page of canonical TaskListItem records. Default excludes done "
+        "and archived. state='done' includes only non-archived done tasks. "
+        "namespace=None spans namespaces; state/lane/tags are filters."
+    ),
+    ("coordinator", "task_manage"): (
+        "Apply a task mutation. create needs isolation_hint; existing tasks need "
+        "task_id. checkpoint needs checkpoint; state needs state; comment needs "
+        "comment_text; review needs dimensions/verdict; relate/unrelate need "
+        "relation_kind/related_task_id; archive needs either non-null archive_note or "
+        "non-null note."
+    ),
+    ("coordinator", "task_graph"): ("Read a bounded dependency/relation graph rooted at one task."),
+    ("coordinator", "agent_observe"): (
+        "Read compact current LogicalAgent, WorkWindow, and WorkSession state."
+    ),
+    ("coordinator", "message"): (
+        "Managed inbox: send needs text; ack needs message_hash; reply needs both. Read"
+        " full text by action=read with message_hash, text_offset (default0), "
+        "text_limit (1..2048, default2048). Offsets count Unicode code points; "
+        "concatenate text chunks and follow next_text_offset until absent. text_length "
+        "is total code points. Find other IDs using summary history and its cursor; "
+        "reading does not satisfy ACK/reply."
+    ),
+    ("coordinator", "health"): (
+        "Read ok, healthy, application, agent_name, version and storage. extended=true "
+        "adds complete components, terminal and workflow. Hidden mandatory components "
+        "still contribute to healthy; auth/identity diagnostics are excluded."
+    ),
 }
 
 

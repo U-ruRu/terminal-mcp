@@ -124,7 +124,9 @@ class PersistentBackend:
             # sink fails afterwards.
             try:
                 await self._audit(
-                    logical_agent_id, operation, payload={"request": request},
+                    logical_agent_id,
+                    operation,
+                    payload={"request": request},
                 )
             except Exception:
                 # Never lose the committed receipt due to a failed secondary
@@ -133,8 +135,11 @@ class PersistentBackend:
                     events = getattr(getattr(self, "service", None), "events", None)
                     if events is not None:
                         events.emit(
-                            "postcommit_audit_failed", level="ERROR", outcome="error",
-                            logical_agent_id=logical_agent_id, operation=operation,
+                            "postcommit_audit_failed",
+                            level="ERROR",
+                            outcome="error",
+                            logical_agent_id=logical_agent_id,
+                            operation=operation,
                         )
                 except Exception:
                     pass
@@ -534,6 +539,7 @@ class PersistentBackend:
         namespace: str | None = None,
         task_id: str | None = None,
         _resolved_identity: dict | None = None,
+        read_message_hash: str | None = None,
     ) -> dict:
         normalized_mode = "notify"
         if mode is not None:
@@ -568,6 +574,11 @@ class PersistentBackend:
                 namespace=namespace,
                 task_id=task_id,
                 sender_identity=_resolved_identity,
+                **(
+                    {"read_message_hash": read_message_hash}
+                    if read_message_hash is not None
+                    else {}
+                ),
             )
         sender = (
             _resolved_identity
@@ -597,6 +608,11 @@ class PersistentBackend:
                 surface_limit=surface_limit,
                 namespace=namespace,
                 task_id=task_id,
+                **(
+                    {"read_message_hash": read_message_hash}
+                    if read_message_hash is not None
+                    else {}
+                ),
             )
         return await self._fleet_access_message(
             sender,
@@ -612,6 +628,7 @@ class PersistentBackend:
             surface_limit=surface_limit,
             namespace=namespace,
             task_id=task_id,
+            **({"read_message_hash": read_message_hash} if read_message_hash is not None else {}),
         )
 
     async def _persistent_message_entry(self, item: dict) -> dict:
@@ -784,10 +801,13 @@ class PersistentBackend:
                 "messages": messages,
                 "pending_messages": messages,
                 "ack_required_pending": any(
-                    item.get("delivery_mode") == "ack" and item["read_at"] is None
+                    item.get("delivery_mode") == "ack"
+                    and item["read_at"] is None
                     or (
-                        item.get("delivery_mode") == "legacy" and item["require_reply"]
-                        and not item["alert"] and item["read_at"] is None
+                        item.get("delivery_mode") == "legacy"
+                        and item["require_reply"]
+                        and not item["alert"]
+                        and item["read_at"] is None
                     )
                     for item in refreshed
                 ),
@@ -847,6 +867,7 @@ class PersistentBackend:
         surface_limit: int | None,
         namespace: str | None,
         task_id: str | None,
+        read_message_hash: str | None = None,
     ) -> dict:
         sender_id = str(sender["logical_agent_id"])
         sender_name = str(sender["public_name"])
@@ -946,6 +967,38 @@ class PersistentBackend:
 
         if text is None:
             try:
+                if read_message_hash is not None:
+                    # Scan only the authority's existing caller-filtered history. No ACK,
+                    # direct database access or changed cross-node protocol is introduced.
+                    found = []
+                    scan_offset = 0
+                    while True:
+                        batch = await self.fleet_bridge.message_inbox(
+                            sender_id,
+                            work_session_id=work_session_id,
+                            session_epoch=session_epoch,
+                            show_all=True,
+                            recent_seconds=300,
+                            limit=500,
+                            offset=scan_offset,
+                        )
+                        found = [
+                            item for item in batch if item.get("message_ref") == read_message_hash
+                        ]
+                        if found or len(batch) < 500:
+                            break
+                        scan_offset += len(batch)
+                    if not found:
+                        return await self._access_message_legacy(
+                            sender_name,
+                            sender_identity=sender,
+                            read_message_hash=read_message_hash,
+                            show_all=True,
+                            surface_limit=0,
+                            limit=1,
+                        )
+                    visible = [await self._persistent_message_entry(item) for item in found[:1]]
+                    return {"ok": True, "sender": sender_name, "messages": visible}
                 rows = await self.fleet_bridge.message_inbox(
                     sender_id,
                     work_session_id=work_session_id,
@@ -1119,6 +1172,7 @@ class PersistentBackend:
         surface_limit: int | None = None,
         namespace: str | None = None,
         task_id: str | None = None,
+        read_message_hash: str | None = None,
     ) -> dict:
         sender = sender_identity or await self.access_sender_identity(sender_public_name)
         if not sender.get("ok"):
@@ -1171,11 +1225,14 @@ class PersistentBackend:
         if not text:
             page_limit = max(1, min(int(limit), 500))
             page_offset = max(0, int(offset))
-            if show_all:
+            if show_all or read_message_hash is not None:
                 rows = await coordinator.store.message_journal(
                     sender_id,
                     limit=page_limit,
                     offset=page_offset,
+                    **(
+                        {"message_hash": read_message_hash} if read_message_hash is not None else {}
+                    ),
                 )
             else:
                 open_hashes = {
@@ -1864,13 +1921,13 @@ class PersistentBackend:
         queue_id: int | None,
         task_scope: str,
     ):
-        loop = asyncio.get_running_loop()
-        inline_deadline = loop.time() + COMMAND_RUN_INLINE_BUDGET_SECONDS
         command = None
         if not cmd:
             return {
-                "ok": False, "code": "input_validation_failed",
-                "error": "command is required", "path": "command",
+                "ok": False,
+                "code": "input_validation_failed",
+                "error": "command is required",
+                "path": "command",
             }
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
@@ -1951,32 +2008,6 @@ class PersistentBackend:
                     )
             current = await self.repo.get(command.cmd_hash)
             queue_position = await self.repo.queue_position(command.cmd_hash)
-            backlogged = False
-            if current is not None and current.status == "queued":
-                snapshot = await self.repo.queue_snapshot(self.terminal.queue_workers)
-                queue_state = next(
-                    (item for item in snapshot if item.get("queue_id") == command.queue_id),
-                    None,
-                )
-                running_hash = queue_state.get("running") if queue_state is not None else None
-                backlogged = bool(
-                    (running_hash is not None and running_hash != command.cmd_hash)
-                    or (queue_position is not None and queue_position > 1)
-                )
-
-            while (
-                not backlogged
-                and current is not None
-                and current.status not in COMMAND_RUN_TERMINAL_STATES
-                and loop.time() < inline_deadline
-            ):
-                remaining = inline_deadline - loop.time()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(min(COMMAND_RUN_INLINE_POLL_SECONDS, remaining))
-                current = await self.repo.get(command.cmd_hash)
-                queue_position = await self.repo.queue_position(command.cmd_hash)
-
             current = current or command
             return {
                 "ok": True,
@@ -2010,8 +2041,10 @@ class PersistentBackend:
                 # failures in submission, task audit or inline readback cannot
                 # be reported as an uncommitted command.
                 return {
-                    "ok": True, "cmd_hash": command.cmd_hash,
-                    "status": command.status, "queue_id": command.queue_id,
+                    "ok": True,
+                    "cmd_hash": command.cmd_hash,
+                    "status": command.status,
+                    "queue_id": command.queue_id,
                     "execution_started": bool(command.claimed_at or command.started_at),
                     "postcommit_warning": type(exc).__name__,
                 }
@@ -2030,8 +2063,10 @@ class PersistentBackend:
     ):
         if not cmd:
             return {
-                "ok": False, "code": "input_validation_failed",
-                "error": "command is required", "path": "command",
+                "ok": False,
+                "code": "input_validation_failed",
+                "error": "command is required",
+                "path": "command",
             }
         command = None
         try:
@@ -2132,12 +2167,14 @@ class PersistentBackend:
                 command, outcome = await self.repo.accept_cancel_intent(cmd_hash)
                 if command is None:
                     return {
-                        "ok": False, "code": "command_not_found",
+                        "ok": False,
+                        "code": "command_not_found",
                         "error": "command_not_found",
                     }
                 if outcome == "command_already_finished":
                     return {
-                        "ok": False, "code": "command_already_finished",
+                        "ok": False,
+                        "code": "command_already_finished",
                         "error": f"command is already {command.status}",
                     }
                 execution_started = bool(command.claimed_at or command.started_at)
@@ -2149,7 +2186,8 @@ class PersistentBackend:
                     and not execution_started
                 )
                 accepted_receipt = {
-                    "ok": True, "cmd_hash": cmd_hash,
+                    "ok": True,
+                    "cmd_hash": cmd_hash,
                     "status": "cancelled" if outcome == "queued" else command.status,
                     "cancel_requested": True,
                     "cancelled_from": "queued" if cancelled_before_start else "running",
@@ -2227,9 +2265,7 @@ class PersistentBackend:
                     actual_task = result.get("task") if isinstance(result, dict) else None
                     # Returning an already committed create receipt must not
                     # append a second persistent audit event.
-                    replayed_create = (
-                        action == "create" and getattr(result, "replayed", False)
-                    )
+                    replayed_create = action == "create" and getattr(result, "replayed", False)
                     if result.get("ok") and actual_task and not replayed_create:
                         try:
                             await self.task_store.add_event(

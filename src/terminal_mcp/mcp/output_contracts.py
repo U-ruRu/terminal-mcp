@@ -12,9 +12,7 @@ from terminal_mcp.core.public_errors import (
     MAX_ERROR_MESSAGE,
     MAX_ERROR_PATH,
     ErrorOutcome,
-    ErrorRepair,
     RecoveryAction,
-    normalize_public_error,
     public_error,
 )
 from terminal_mcp.core.read_contract import (
@@ -91,6 +89,13 @@ from terminal_mcp.core.task_projections import (
     WorkflowWarning as WorkflowWarning,
 )
 from terminal_mcp.core.task_projections import project_task_receipt
+from terminal_mcp.mcp.public_responses import (
+    OperationNotices,
+    ResponseErrorRepair,
+    error_response,
+    operation_notices,
+    remaining_seconds,
+)
 
 
 class _Strict(BaseModel):
@@ -132,7 +137,7 @@ class SessionLifecycleInfo(_Strict):
     return_to_chat: bool = False
 
 
-class _SessionAware(_Strict):
+class _SessionAware(OperationNotices):
     session_lifecycle: SessionLifecycleInfo | None = None
 
 
@@ -161,12 +166,13 @@ class MessageState(StrEnum):
     replied = "replied"
 
 
-class AccessError(_Strict):
+class AccessError(OperationNotices):
+    cmd_hash: str | None = Field(default=None, min_length=1, max_length=128)
     ok: Literal[False]
     code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     message: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
     error: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE)
-    details: ErrorRepair | None = None
+    details: ResponseErrorRepair | None = None
     outcome: ErrorOutcome
     retry: RecoveryAction
     reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
@@ -309,6 +315,9 @@ class MessageRecipientReceipt(_Strict):
 
 
 class MessageRecord(_Strict):
+    text_offset: int | None = Field(default=None, ge=0)
+    text_length: int | None = Field(default=None, ge=0)
+    next_text_offset: int | None = Field(default=None, gt=0)
     message_hash: MessageId | None = None
     message_id: MessageId | None = None
     sender: str | None = None
@@ -421,27 +430,24 @@ class TaskMutationResult(_SessionAware):
     warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
-class TaskClaimMutationResult(_SessionAware):
+class TaskClaimMutationResult(OperationNotices):
     ok: Literal[True]
-    action: Literal["claim"]
-    task: TaskSnapshot
-    warnings: list[WorkflowWarning] = Field(default_factory=list)
 
 
-TaskSuccess = Annotated[TaskMutationResult | TaskClaimMutationResult, Field(discriminator="action")]
+TaskSuccess = TaskMutationResult | TaskClaimMutationResult
 
 
-class TaskCreateCompact(_Strict):
+class TaskCreateCompact(OperationNotices):
     ok: Literal[True]
     task_id: str
 
 
-class TaskUpdateCompact(_Strict):
+class TaskUpdateCompact(OperationNotices):
     ok: Literal[True]
     revision: int
 
 
-class TaskAppendCompact(_Strict):
+class TaskAppendCompact(OperationNotices):
     ok: Literal[True]
 
 
@@ -457,6 +463,8 @@ class TaskOutput(RootModel[TaskManageSuccess | AccessError]):
 
 
 class CommandView(_Strict):
+    cmd: str | None = None
+    error: str | None = None
     cmd_hash: CommandId
     status: CommandStatus
     queue_id: int | None = None
@@ -489,25 +497,12 @@ class ExecutionIdentity(_Strict):
     node_attachment_id: str | None = None
 
 
-class CmdRunResult(_SessionAware):
+class CmdRunResult(OperationNotices):
     ok: Literal[True]
-    action: Literal["run"]
-    command: CommandView
-    task_scope: str | None = None
-    task_targets: list[str] = Field(default_factory=list)
-    task_scope_options: list[str] = Field(default_factory=list)
-    lines: list[str] | None = None
-    overall_lines_count: int | None = None
-    displayed_lines_count: int | None = None
-    next_cursor: Cursor | None = None
-    has_more: bool | None = None
-    output_truncated: bool | None = None
-    output_retained: bool | None = None
-    output_pruned_at: str | None = None
-    output_bytes: int | None = None
-    line_truncated: bool | None = None
-    coordination: CoordinationState | None = None
-    identity: ExecutionIdentity | None = None
+    remaining_seconds: int | None = Field(default=None, ge=0)
+    cmd_hash: CommandId
+    status: CommandStatus
+    queue_id: int | None = Field(default=None, ge=1)
 
 
 class CmdReadResult(_SessionAware):
@@ -553,10 +548,15 @@ class CmdRecoveryResult(_SessionAware):
     identity: ExecutionIdentity | None = None
 
 
-CmdSuccess = Annotated[
-    CmdRunResult | CmdReadResult | CmdCancelResult | CmdRecoveryResult,
-    Field(discriminator="action"),
-]
+CmdSuccess = CmdRunResult | CmdReadResult | CmdCancelResult | CmdRecoveryResult
+
+
+class CmdRunOutput(RootModel[CmdRunResult | AccessError]):
+    __success_type__: ClassVar[Any] = CmdRunResult
+
+    @classmethod
+    def success_schema(cls) -> dict[str, Any]:
+        return _success_schema(cls.__success_type__)
 
 
 class CmdOutput(RootModel[CmdSuccess | AccessError]):
@@ -745,7 +745,7 @@ def _task_output_state(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _task_event(raw: dict[str, Any]) -> dict[str, Any]:
     item = {name: raw[name] for name in TaskEvent.model_fields if name in raw and name != "payload"}
-    item["payload"] = _json_payload(raw.get("payload") or {})
+    item["payload"] = _json_payload(raw.get("payload", {}))
     return TaskEvent.model_validate(item).model_dump(mode="json", exclude_unset=True)
 
 
@@ -772,7 +772,9 @@ def _workflow_warning(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _error_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    return normalize_public_error(raw).as_dict()
+    response = error_response(raw)
+    response.pop("_meta", None)  # MCP envelope metadata is attached by _result.
+    return response
 
 
 def serialized_call_tool_result_size(result: CallToolResult) -> int:
@@ -841,8 +843,16 @@ def _result(
     compact_success_text: bool = False,
     success_content: dict[str, Any] | None = None,
 ) -> CallToolResult:
+    notice_meta = {**(raw.get("_meta") or {}), **(structured.get("_meta") or {})}
+    structured = {key: value for key, value in structured.items() if key != "_meta"}
+    if success_content is not None:
+        success_content = {key: value for key, value in success_content.items() if key != "_meta"}
     is_error = raw.get("ok") is False
-    if not is_error and isinstance(raw.get("session_lifecycle"), dict):
+    if (
+        not is_error
+        and isinstance(raw.get("session_lifecycle"), dict)
+        and not (tool == "cmd" and variant == "run" or tool == "task" and variant == "claim")
+    ):
         structured = {**structured, "session_lifecycle": raw["session_lifecycle"]}
     candidate = _error_payload(raw) if is_error else structured
     try:
@@ -872,6 +882,8 @@ def _result(
                 if key in content_data:
                     content_data[key] = coordination.get(key, [])
     result = _call_tool_result(data, content_data=content_data, is_error=is_error)
+    if notice_meta:
+        result.meta = notice_meta
     serialized_bytes = serialized_call_tool_result_size(result)
     if serialized_bytes <= CALL_TOOL_RESULT_BUDGET_BYTES:
         return result
@@ -879,7 +891,27 @@ def _result(
     # Fail closed at the final public serialization boundary. Normal paginated
     # reads should stay below this via their lower page-data budget; this guard
     # also covers unexpectedly large coordination/error metadata.
-    bounded_error = public_error("output_item_too_large").as_dict()
+    receipt = raw.get("cmd_hash") or (raw.get("command") or {}).get("cmd_hash")
+    accepted_command = (
+        bool(receipt)
+        and tool in {"cmd", "command_run", "command_recovery", "command_cancel"}
+        and variant != "read"
+    )
+    bounded_error = public_error(
+        "output_item_too_large", outcome="committed" if accepted_command else None
+    ).as_dict()
+    if isinstance(receipt, str) and receipt:
+        bounded_error["cmd_hash"] = receipt
+    # Mandatory inbound actions must remain reachable even when body/output is too large.
+    bounded_error.update(
+        operation_notices(
+            {
+                key: raw[key]
+                for key in ("messages", "pending_messages", "coordination", "intent_warning")
+                if key in raw
+            }
+        )
+    )
     try:
         error_validated = output_model.model_validate(bounded_error)
     except ValidationError as exc:
@@ -1197,9 +1229,11 @@ def message_result(
 def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
     if not raw.get("ok"):
         return _result("task", action, TaskOutput, raw, {})
-    warnings = [_workflow_warning(item) for item in raw.get("warnings", [])]
+    notices = operation_notices(raw)
     if action == "claim":
-        task = _task_snapshot(raw.get("task") or {})
+        return _result(
+            "task", action, TaskOutput, raw, {"ok": True, **notices}, compact_success_text=True
+        )
     else:
         record = TaskRecord.model_validate(_task_record(raw.get("task") or {}))
         task = project_task_receipt(
@@ -1212,7 +1246,7 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
         "ok": True,
         "action": action,
         "task": task,
-        "warnings": warnings,
+        **notices,
     }
     content_task = {
         key: task[key]
@@ -1225,7 +1259,7 @@ def task_result(raw: dict[str, Any], action: str) -> CallToolResult:
         TaskOutput,
         raw,
         structured,
-        success_content={"ok": True, "action": action, "task": content_task},
+        success_content={"ok": True, "action": action, "task": content_task, **notices},
     )
 
 
@@ -1310,68 +1344,44 @@ def _command(raw: dict[str, Any], *, action: str) -> dict[str, Any]:
 def cmd_result(raw: dict[str, Any], action: str) -> CallToolResult:
     if not raw.get("ok"):
         return _result("cmd", action, CmdOutput, raw, {})
-    structured: dict[str, Any] = {
-        "ok": True,
-        "action": action,
-        "command": _command(raw, action=action),
-    }
-    coord = _coordination(raw)
-    ident = _identity(raw)
-    if coord is not None:
-        structured["coordination"] = coord
-    if ident is not None:
-        structured["identity"] = ident
+    notices = operation_notices(raw)
     if action == "run":
+        structured = {
+            "ok": True,
+            "cmd_hash": raw.get("cmd_hash"),
+            "status": raw.get("status"),
+            **notices,
+        }
+        remaining = remaining_seconds(raw)
+        if remaining is not None:
+            structured["remaining_seconds"] = remaining
+        if raw.get("queue_id") is not None:
+            structured["queue_id"] = raw["queue_id"]
+        return _result("cmd", action, CmdOutput, raw, structured, compact_success_text=True)
+    command = _command(raw, action=action)
+    for key in ("cmd", "error"):
+        if raw.get(key) is not None:
+            command[key] = raw[key]
+    command = {key: value for key, value in command.items() if value is not None}
+    structured = {"ok": True, "action": action, "command": command, **notices}
+    if action in {"read", "recovery"}:
+        structured["lines"] = raw.get("lines") or []
         for key in (
-            "task_scope",
-            "task_targets",
-            "task_scope_options",
-            "lines",
             "overall_lines_count",
             "displayed_lines_count",
-            "next_cursor",
             "has_more",
             "output_truncated",
             "output_retained",
             "output_pruned_at",
             "output_bytes",
             "line_truncated",
+            "duration_ms",
         ):
             if key in raw and raw[key] is not None:
                 structured[key] = raw[key]
-    elif action == "read":
-        structured["lines"] = raw.get("lines") or []
-        for key in (
-            "next_offset",
-            "overall_lines_count",
-            "displayed_lines_count",
-            "has_more",
-            "output_truncated",
-            "output_retained",
-            "output_pruned_at",
-            "output_bytes",
-            "line_truncated",
-        ):
-            if key in raw:
-                structured[key] = raw[key]
-        if "next_cursor" in raw:
-            structured["next_cursor"] = (
-                None if raw["next_cursor"] is None else str(raw["next_cursor"])
-            )
-    elif action == "recovery":
-        structured["lines"] = raw.get("lines") or []
-        for key in (
-            "overall_lines_count",
-            "displayed_lines_count",
-            "duration_ms",
-            "output_truncated",
-            "output_retained",
-            "output_pruned_at",
-            "output_bytes",
-        ):
-            if key in raw:
-                structured[key] = raw[key]
-    return _result("cmd", action, CmdOutput, raw, structured)
+        if raw.get("next_cursor"):
+            structured["next_cursor"] = str(raw["next_cursor"])
+    return _result("cmd", action, CmdOutput, raw, structured, compact_success_text=True)
 
 
 def context_result(raw: dict[str, Any], action: str) -> CallToolResult:

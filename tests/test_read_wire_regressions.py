@@ -119,22 +119,23 @@ def test_cmd_read_compacts_repeated_long_coordination_inbox_within_wire_budget()
 
     assert result.isError is False
     assert result.structuredContent["ok"] is True
-    coordination = result.structuredContent["coordination"]
-    assert len(coordination["messages"]) == 4
-    assert [item["message_hash"] for item in coordination["pending_messages"]] == [
-        "message-04",
-        "message-05",
-        "message-06",
-        "message-07",
+    data = result.structuredContent
+    assert "coordination" not in data and "pending_messages" not in data
+    assert [item["id"] for item in data["messages"]] == [
+        "message-00",
+        "message-01",
+        "message-02",
+        "message-03",
     ]
-    assert all(item["truncated"] is True for item in coordination["messages"])
-    assert all(len(item["text"]) == MESSAGE_PREVIEW_CHARS + 1 for item in coordination["messages"])
-
-    legacy = json.loads(result.content[0].text)
-    assert legacy["status"] == "completed"
-    assert "coordination" not in legacy
-    assert legacy["messages"] == coordination["messages"]
-    assert legacy["pending_messages"] == coordination["pending_messages"]
+    assert len({item["id"] for item in data["messages"]}) == 4
+    assert data["messages_remaining"] == 8  # Aliases do not double the inbox count.
+    assert all(set(item) == {"id", "sender", "text"} for item in data["messages"])
+    assert all(item["sender"] == "Peer" for item in data["messages"])
+    assert all(len(item["text"]) == MESSAGE_PREVIEW_CHARS + 1 for item in data["messages"])
+    assert [warning["code"] for warning in data["warnings"]] == ["incoming_messages_truncated"]
+    assert data["command"]["status"] == "completed"
+    assert data["lines"] == ["ok"]
+    assert json.loads(result.content[0].text) == data
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
 
 
@@ -167,17 +168,39 @@ def test_cmd_read_preserves_pending_messages_not_emitted_from_messages_cap():
         "read",
     )
 
-    coordination = result.structuredContent["coordination"]
-    assert [item["message_hash"] for item in coordination["messages"]] == [
-        "m-0",
-        "m-1",
-        "m-2",
-        "m-3",
-    ]
-    assert [item["message_hash"] for item in coordination["pending_messages"]] == [
-        "m-8",
-        "m-9",
-        "m-10",
-        "m-11",
-    ]
+    data = result.structuredContent
+    assert "coordination" not in data and "pending_messages" not in data
+    assert [item["id"] for item in data["messages"]] == ["m-0", "m-1", "m-2", "m-3"]
+    assert data["messages_remaining"] == 8  # m-8..m-11 are counted once, not lost.
+    assert data["command"]["cmd_hash"] == "deadbeef"
+    assert data["command"]["status"] == "completed"
+    assert data["lines"] == ["ok"]
     assert serialized_call_tool_result_size(result) <= CALL_TOOL_RESULT_BUDGET_BYTES
+
+    assert all(item["state"] == "delivered" and item["text"] == "x" * 8000 for item in messages)
+
+    # A pending-only source still surfaces all four incoming obligations, with their
+    # actual action. The outer preview cap cannot erase or acknowledge stored entries.
+    for index, item in enumerate(pending):
+        item["mode"] = "ack" if index % 2 == 0 else "alert"
+    pending_result = cmd_result(
+        {
+            "ok": True,
+            "cmd_hash": "deadbeef",
+            "status": "completed",
+            "lines": ["ok"],
+            "pending_messages": pending,
+        },
+        "read",
+    )
+    pending_data = pending_result.structuredContent
+    assert [item["id"] for item in pending_data["messages"]] == ["m-8", "m-9", "m-10", "m-11"]
+    assert [item["requirements"] for item in pending_data["messages"]] == [
+        "ack",
+        "reply",
+        "ack",
+        "reply",
+    ]
+    assert "messages_remaining" not in pending_data
+    assert all(len(item["text"]) <= MESSAGE_PREVIEW_CHARS + 1 for item in pending_data["messages"])
+    assert serialized_call_tool_result_size(pending_result) <= CALL_TOOL_RESULT_BUDGET_BYTES
