@@ -180,12 +180,24 @@ async def test_default_minimal_failure_logs_preserve_retry_status(status, caplog
             raise RuntimeError("PRIVATE_EXCEPTION_WITH_CREDENTIALS")
         return status, b"PRIVATE_RESPONSE"
 
-    store = SimpleNamespace(due_deliveries=due_deliveries, finish_attempt=finish_attempt)
+    dispatch_checks = []
+
+    async def dispatch_is_current(delivery):
+        # This retry fixture models a current subscription lease on both attempts.
+        dispatch_checks.append(delivery["event_id"])
+        return True
+
+    store = SimpleNamespace(
+        due_deliveries=due_deliveries,
+        finish_attempt=finish_attempt,
+        dispatch_is_current=dispatch_is_current,
+    )
     adapter = MCPEventsAdapter(None, store, sender=sender, access_checker=checker)
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         await adapter.deliver_due()
         await adapter.deliver_due()
     assert attempts == [status, status]
+    assert dispatch_checks == ["PRIVATE_EVENT", "PRIVATE_EVENT"]
     assert caplog.text.count("tmcp_events_error") == 1
     assert '"code":"delivery_failed"' in caplog.text
     assert "tmcp_events_diag" not in caplog.text
