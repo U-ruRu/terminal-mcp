@@ -1316,7 +1316,12 @@ def cmd_result(raw: dict[str, Any], action: str) -> CallToolResult:
         return _result("cmd", action, CmdOutput, raw, {})
     notices = operation_notices(raw)
     if action == "run":
-        structured = {"ok": True, "cmd_hash": raw["cmd_hash"], "status": raw["status"], **notices}
+        structured = {
+            "ok": True,
+            "cmd_hash": raw.get("cmd_hash"),
+            "status": raw.get("status"),
+            **notices,
+        }
         remaining = remaining_seconds(raw)
         if remaining is not None:
             structured["remaining_seconds"] = remaining

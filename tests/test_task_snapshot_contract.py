@@ -27,7 +27,7 @@ SNAPSHOT = {
 }
 
 
-def test_single_task_summary_and_claim_share_snapshot_contract():
+def test_claim_receipt_is_minimal_and_snapshot_stays_in_observe():
     observed = observe_result(
         {"ok": True, "task": SNAPSHOT, "tasks": [], "next_cursor": None},
         "tasks",
@@ -35,19 +35,25 @@ def test_single_task_summary_and_claim_share_snapshot_contract():
         task_id="T-1",
     )
     claimed = task_result({"ok": True, "task": SNAPSHOT, "warnings": []}, "claim")
-    assert observed.structuredContent["task"] == claimed.structuredContent["task"]
-    assert set(claimed.structuredContent["task"]) == set(SNAPSHOT)
+    assert claimed.structuredContent == {"ok": True}
+    assert observed.structuredContent["task"] == SNAPSHOT
     ObserveOutput.model_validate(observed.structuredContent)
     TaskOutput.model_validate(claimed.structuredContent)
 
 
 def test_checkpoint_text_contract_is_bounded_to_4000_characters():
     TaskCheckpointRequest(
-        action="checkpoint", code="1234", namespace="project", task_id="T-1",
+        action="checkpoint",
+        code="1234",
+        namespace="project",
+        task_id="T-1",
         checkpoint="x" * 4000,
     )
     with pytest.raises(ValidationError):
         TaskCheckpointRequest(
-            action="checkpoint", code="1234", namespace="project", task_id="T-1",
+            action="checkpoint",
+            code="1234",
+            namespace="project",
+            task_id="T-1",
             checkpoint="x" * 4001,
         )

@@ -142,23 +142,25 @@ async def test_default_queue_prefers_idle_then_deterministic_tie(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fast_run_returns_completed_or_failed_without_followup_read(monkeypatch):
+async def test_fast_run_does_not_wait_for_completed_or_failed(monkeypatch):
     monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 1.0)
 
     terminal, backend = _fake_backend("completed")
     completed = await backend.run("printf 'fast\\n'", **_run_kwargs(queue_id=4))
-    assert completed["status"] == "completed"
-    assert completed["exit_code"] == 0
+    assert completed["status"] == "running"
+    assert completed["exit_code"] is None
     assert completed["execution_started"] is True
     assert completed["queue_id"] == 4
     await terminal.close()
+    assert (await backend.repo.get(completed["cmd_hash"])).exit_code == 0
 
     terminal, backend = _fake_backend("failed")
     failed = await backend.run("printf 'bad\\n'; exit 7", **_run_kwargs(queue_id=4))
-    assert failed["status"] == "failed"
-    assert failed["exit_code"] == 7
+    assert failed["status"] == "running"
+    assert failed["exit_code"] is None
     assert failed["execution_started"] is True
     await terminal.close()
+    assert (await backend.repo.get(failed["cmd_hash"])).exit_code == 7
 
 
 @pytest.mark.asyncio
@@ -175,7 +177,7 @@ async def test_backlogged_run_returns_queued_promptly(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_slow_started_run_returns_running_at_inline_deadline(monkeypatch):
+async def test_slow_started_run_returns_running_without_inline_wait(monkeypatch):
     monkeypatch.setattr(persistent_backend_module, "COMMAND_RUN_INLINE_BUDGET_SECONDS", 0.15)
     _terminal, backend = _fake_backend("running")
     started = time.monotonic()
@@ -183,7 +185,7 @@ async def test_slow_started_run_returns_running_at_inline_deadline(monkeypatch):
     elapsed = time.monotonic() - started
     assert result["status"] == "running"
     assert result["execution_started"] is True
-    assert 0.1 <= elapsed < 0.5
+    assert elapsed < 0.2
 
 
 @pytest.mark.asyncio
@@ -249,22 +251,23 @@ class _CompletedService:
 
 
 @pytest.mark.asyncio
-async def test_command_application_adds_canonical_first_page_to_fast_run():
-    app = CommandApplication(_CompletedService(), _Gate())
+async def test_command_application_never_reads_output_during_run():
+    from unittest.mock import AsyncMock
+
+    service = _CompletedService()
+    service.read = AsyncMock(side_effect=AssertionError("run must not read output"))
+    app = CommandApplication(service, _Gate())
     result = await app.cmd(
         ActorContext(),
         CmdRunRequest(action="run", code="1234", command="printf fast", task_scope="none"),
     )
     assert result["status"] == "completed"
-    assert result["lines"] == ["first", "second"]
-    assert result["displayed_lines_count"] == 2
-    assert result["has_more"] is False
-    assert result["next_cursor"] is None
-
-    wire = cmd_result(result, "run")
-    assert wire.structuredContent["command"]["status"] == "completed"
-    assert wire.structuredContent["lines"] == ["first", "second"]
-    assert wire.structuredContent["displayed_lines_count"] == 2
+    assert "lines" not in result
+    service.read.assert_not_awaited()
+    wire = cmd_result(result, "run").structuredContent
+    assert wire["status"] == "completed"
+    assert wire["cmd_hash"] == "deadbeef"
+    assert not {"command", "lines", "exit_code", "displayed_lines_count"} & wire.keys()
 
 
 @pytest.mark.asyncio

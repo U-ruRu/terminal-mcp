@@ -37,7 +37,7 @@
     "src/terminal_mcp/mcp/access_contracts.py": "c5c02d9ba0a6e830baeca34d1399fbe5c354f6083378e26b416583941ee94f31",
     "src/terminal_mcp/mcp/compact_annotations.json": "e9678b867ecbe42eafdb3762387bc28a019d7ba70bd7cf917cf5fe4996a09d6b",
     "src/terminal_mcp/mcp/compact_contracts.py": "d4eee01603a7d371d14c817d6fd4e7917d9dbdb16e87cb7ef98ebde47bdc2c6f",
-    "src/terminal_mcp/mcp/output_contracts.py": "2739e8a26b9f5314592d8ca3b84f8e98f30c5d717ed020a8d106d76c5003dd40",
+    "src/terminal_mcp/mcp/output_contracts.py": "68418710deaeb781b5d3db5fbdaa9f3316f37eecf50467b2dca0ad9c12789386",
     "src/terminal_mcp/mcp/output_planning.py": "36c0985dac32fdcba90b51ac00c8e27fd9caf07dfef478be38ea042c2619feb5",
     "src/terminal_mcp/mcp/role_contracts.py": "f5f6193c029bc0c9f03253b1a6ee467b834444adce42f30361286b26edf63661",
     "src/terminal_mcp/mcp/role_outputs.py": "3dc45ea0b6329405dd6354df65231edc0a5aab45f31b980f26d52fd47dafb2eb",
