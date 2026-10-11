@@ -13,6 +13,7 @@ import aiosqlite
 from mcp.types import RequestParams
 
 from terminal_mcp.application.actor import ActorContext
+from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import VerifiedAdmissionContext
 from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
@@ -153,11 +154,101 @@ class MeshMessageSubscriberResolver:
             role=endpoint_role,
         )
 
+    def _number_slot(self, number: str, *, require_live: bool):
+        # The number is a public routing selector inside the existing authorized
+        # server space. Never attach, materialize, or infer a caller's agent.
+        winner = self.mesh.store.numbers.winner(number)
+        if winner is None:
+            return None
+        slot = self.mesh.store.code_slot(winner["issuer_id"], number)
+        if (
+            slot is None
+            or slot.state != "active"
+            or slot.slot_id != winner["slot_id"]
+            or slot.logical_agent_id != winner["logical_agent_id"]
+        ):
+            return None
+        if require_live:
+            cycle = self.mesh.store.merged_cycle(slot, self.mesh.clock())
+            if cycle["state"] not in {"active", "warning", "draining"}:
+                return None
+        return slot
+
+    async def resolve_number(
+        self, admission: VerifiedAdmissionContext | None, number: str, endpoint_role: str
+    ) -> MessageSubscriber | None:
+        if (
+            admission is None
+            or admission.transport != "mcp"
+            or "terminal:read" not in admission.scopes
+            or endpoint_role != "access"
+        ):
+            return None
+        try:
+            slot = await asyncio.to_thread(self._number_slot, number, require_live=True)
+        except AccessMeshError:
+            return None
+        if slot is None:
+            return None
+        return MessageSubscriber(
+            recipient_agent_id=slot.logical_agent_id,
+            work_session_id="",
+            session_epoch=0,
+            connection_key="session-number:" + number,
+            issuer_id=slot.issuer_id,
+            slot_id=slot.slot_id,
+            role="session_number",
+        )
+
+    async def number_reassigned(self, delivery: dict) -> bool:
+        """Keep an old recipient association visible to an explicit refresh."""
+        key = delivery.get("recipient_connection_key") or ""
+        if (
+            delivery.get("recipient_role") != "session_number"
+            or delivery.get("recipient_node_id") != self.mesh.store.local_node_id
+            or not key.startswith("session-number:")
+        ):
+            return False
+        winner = await asyncio.to_thread(
+            self.mesh.store.numbers.winner, key.removeprefix("session-number:")
+        )
+        return bool(
+            winner
+            and (
+                winner["logical_agent_id"],
+                winner["issuer_id"],
+                winner["slot_id"],
+            ) != (
+                delivery.get("recipient_agent_id"),
+                delivery.get("recipient_issuer_id"),
+                delivery.get("recipient_slot_id"),
+            )
+        )
+
     async def still_bound(self, delivery: dict) -> bool:
         key = delivery.get("recipient_connection_key")
         if not key or delivery.get("recipient_node_id") != self.mesh.store.local_node_id:
             return False
         role = delivery.get("recipient_role")
+        if role == "session_number":
+            if not key.startswith("session-number:"):
+                return False
+            try:
+                slot = await asyncio.to_thread(
+                    self._number_slot,
+                    key.removeprefix("session-number:"),
+                    require_live=bool(delivery.get("recipient_require_live")),
+                )
+            except AccessMeshError:
+                return False
+            # Ordinary end/start changes WorkSession epochs, not this recipient.
+            # Number release/reuse never redirects an existing callback.
+            return bool(
+                slot
+                and slot.logical_agent_id == delivery.get("recipient_agent_id")
+                and slot.issuer_id == delivery.get("recipient_issuer_id")
+                and slot.slot_id == delivery.get("recipient_slot_id")
+            )
         if role == "access":
             slot = await asyncio.to_thread(self.mesh.store.issuer_bound_slot, key)
             return bool(

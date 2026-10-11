@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 
 from starlette.responses import JSONResponse, Response
@@ -15,6 +16,7 @@ from terminal_mcp.mcp.event_diagnostics import correlation_id, emit, emit_callba
 from terminal_mcp.mcp.event_store import (
     EVENT_NAMES,
     MCPEventStore,
+    RecipientBindingChangedError,
     SubscriptionAuthorizationError,
     event_catalog,
 )
@@ -104,6 +106,24 @@ class MCPEventsAdapter:
                 )
                 continue
             if not valid:
+                try:
+                    reassigned = (
+                        item.get("recipient_role") == "session_number"
+                        and self.message_resolver is not None
+                        and await self.message_resolver.number_reassigned(item)
+                    )
+                except Exception:
+                    await self.store.finish_attempt(
+                        item["event_id"], item["subscription_id"], status=None
+                    )
+                    continue
+                if reassigned:
+                    # Keep the pinned association until TTL/explicit unsubscribe;
+                    # otherwise an automatic refresh could follow number reuse.
+                    await self.store.finish_attempt(
+                        item["event_id"], item["subscription_id"], status=410
+                    )
+                    continue
                 # Revoked credentials invalidate the durable subscription as well.
                 await self.store.unsubscribe(
                     item["subscription_id"],
@@ -224,7 +244,15 @@ class MCPEventsAdapter:
         name = params.get("name")
         arguments = params.get("arguments")
         delivery = params.get("delivery")
-        if name not in EVENT_NAMES or arguments != {} or not isinstance(delivery, dict):
+        number = arguments.get("session_number") if isinstance(arguments, dict) else None
+        valid_arguments = arguments == {} or (
+            name == "message.received"
+            and isinstance(arguments, dict)
+            and set(arguments) == {"session_number"}
+            and isinstance(number, str)
+            and re.fullmatch(r"[0-9]{4}", number) is not None
+        )
+        if name not in EVENT_NAMES or not valid_arguments or not isinstance(delivery, dict):
             return reject(
                 "validation", "invalid_subscription", -32602, "Invalid event subscription"
             )
@@ -249,14 +277,14 @@ class MCPEventsAdapter:
                 return reject(
                     "validation", "unsubscribe_invalid", -32602, "Invalid unsubscribe delivery"
                 )
-            await self.store.unsubscribe_matching(principal, name, callback)
+            await self.store.unsubscribe_matching(principal, name, callback, arguments)
             emit(method, "persistence", "unsubscribed", cid)
             return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         binding = None
         if name == "message.received":
             admission = current_admission_context()
             provider_meta = provider_metadata_from_events(params)
-            if provider_meta is None:
+            if number is None and provider_meta is None:
                 return reject(
                     "authorization",
                     "identity_metadata_missing",
@@ -271,11 +299,16 @@ class MCPEventsAdapter:
                     "Recipient binding unavailable",
                 )
             try:
-                binding = await self.message_resolver.resolve(
-                    admission,
-                    provider_meta,
-                    self.endpoint_role,
-                )
+                if number is not None:
+                    binding = await self.message_resolver.resolve_number(
+                        admission, number, self.endpoint_role
+                    )
+                else:
+                    binding = await self.message_resolver.resolve(
+                        admission,
+                        provider_meta,
+                        self.endpoint_role,
+                    )
             except Exception:
                 return reject(
                     "authorization",
@@ -352,6 +385,15 @@ class MCPEventsAdapter:
                 callback_verified_fresh=callback_verified_fresh,
                 message_binding=binding,
                 authorization_checker=self.access_checker,
+                arguments=arguments,
+            )
+        except RecipientBindingChangedError:
+            return reject(
+                "authorization",
+                "recipient_binding_changed",
+                -32001,
+                "Session number recipient changed; unsubscribe before selecting it again",
+                {"reason": "recipient_binding_changed"},
             )
         except SubscriptionAuthorizationError:
             return reject(
