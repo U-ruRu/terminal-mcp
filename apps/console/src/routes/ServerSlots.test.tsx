@@ -807,7 +807,7 @@ test.each([
   expect(timer.closest('.slot-card-secondary')).toBeInTheDocument()
 })
 
-test('global All keeps healthy owner Slots visible when another context is unavailable', async () => {
+test('global All keeps healthy and last-observed slots visible while distinguishing an unavailable owner', async () => {
   const alphaSlot = slot(); alphaSlot.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
   const alpha = instance('live', alphaSlot)
   const betaSlot = { ...slot(), logicalAgentId: 'la_beta', displayName: 'Beta Slot', authorityNodeId: 'beta', access: { publicName: 'Beta', accessGeneration: 1, status: 'active' } }
@@ -823,7 +823,7 @@ test('global All keeps healthy owner Slots visible when another context is unava
   </Routes></MemoryRouter></I18nProvider>)
 
   expect(await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: /Beta.*Beta Slot/ })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /Beta.*Beta Slot/ })).toBeInTheDocument()
   await waitFor(() => expect(screen.getAllByText('Beta').length).toBeGreaterThan(0))
   expect(screen.getByText(/beta_down/)).toBeInTheDocument()
 })
@@ -845,7 +845,7 @@ test('each global Slot timer cue uses its owner policy, not the selected setting
 
   const alphaCard = (await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })).closest('.slot-card')
   const betaCard = screen.getByRole('link', { name: /Beta.*Beta Slot/ }).closest('.slot-card')
-  expect(alphaCard).toHaveClass('slot-cue-warning')
+  await waitFor(() => expect(alphaCard).toHaveClass('slot-cue-warning'))
   expect(betaCard).toHaveClass('slot-cue-normal')
   expect(await screen.findByRole('combobox', { name: 'Applies to' })).toHaveValue('server:alpha')
 })
@@ -1045,4 +1045,47 @@ test('Save and Reset share one explicit horizontal policy action row', () => {
   const reset = screen.getByRole('button', { name: 'Reset' })
   expect(save.parentElement).toBe(reset.parentElement)
   expect(save.parentElement).toHaveClass('policy-actions')
+})
+
+test('a control-plane read failure keeps observed slots visible without inventing Standalone ownership', async () => {
+  const item = slot()
+  item.access = { publicName: 'Alpha', accessGeneration: 1, status: 'active' }
+  const loadControl = vi.fn(async () => { throw new Error('control_unavailable') })
+  render(<I18nProvider><MemoryRouter initialEntries={['/slots']}><Routes>
+    <Route path="/slots" element={<ServerSlots instances={[instance('live', item)]} loadFleetControl={loadControl} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+  expect(await screen.findByRole('link', { name: /Alpha.*Alpha Slot/ })).toBeInTheDocument()
+  const filter = screen.getByRole('combobox', { name: 'Filter' })
+  expect(within(filter).getByRole('option', { name: /Alpha.*Unknown/ })).toHaveValue('unresolved:alpha')
+  expect(within(filter).queryByRole('option', { name: 'Alpha' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.getByText(/control_unavailable/)).toBeInTheDocument())
+})
+
+test('a failed slots read retains observed rows and never claims that the list is empty', () => {
+  const target = instance('live', slot())
+  target.runtime.realtime!.snapshot!.persistent!.available = false
+  target.runtime.realtime!.snapshot!.persistent!.error = 'permission_denied'
+  renderSlots([target])
+  expect(screen.getByRole('link', { name: 'Details' })).toBeInTheDocument()
+  expect(screen.getByText('permission_denied')).toBeInTheDocument()
+  expect(screen.queryByText('No slots.')).not.toBeInTheDocument()
+})
+
+test('an absent persistent payload is an unknown capability state, not an empty list', () => {
+  const target = instance('live', slot())
+  target.runtime.realtime!.snapshot!.persistent = undefined
+  renderSlots([target])
+  expect(screen.getByText(/snapshot does not include slot support information/)).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Create slot' })).not.toBeInTheDocument()
+  expect(screen.queryByText('No slots.')).not.toBeInTheDocument()
+})
+
+test('a missing detail-route target never falls back to another slot or the create form', () => {
+  render(<I18nProvider><MemoryRouter initialEntries={['/servers/alpha/slots/la_missing']}><Routes>
+    <Route path="/servers/:instanceId/slots/:logicalAgentId" element={<ServerSlots instances={[instance('live', slot())]} />} />
+  </Routes></MemoryRouter></I18nProvider>)
+  expect(screen.getByText('Slot details are unavailable.')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Create slot' })).not.toBeInTheDocument()
+  expect(document.querySelector('.slot-card')).toBeNull()
 })
