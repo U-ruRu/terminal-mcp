@@ -4,7 +4,7 @@
       "delivery": [
         "webhook"
       ],
-      "description": "Agent acquired active local presence on this server.",
+      "description": "Agent acquired active local presence on a trusted fleet source server.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},
@@ -35,7 +35,7 @@
       "delivery": [
         "webhook"
       ],
-      "description": "Agent has been inactive on this server for over 180 seconds.",
+      "description": "Agent has been inactive on its trusted fleet source server for over 180 seconds.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},
@@ -66,7 +66,7 @@
       "delivery": [
         "webhook"
       ],
-      "description": "A limited agent work session has ended on this server.",
+      "description": "A limited agent work session has ended on a trusted fleet source server.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},

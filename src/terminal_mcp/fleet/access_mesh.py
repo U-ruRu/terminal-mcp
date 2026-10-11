@@ -50,6 +50,7 @@ class AccessMeshReplication:
         self.store = mesh.store
         self.config = config
         self._bootstrap_config = config
+        self.lifecycle_events = None
         self.client = client
         self._owned_client = False
         self._stop = asyncio.Event()
@@ -533,6 +534,8 @@ class AccessMeshReplication:
 
     async def tick(self) -> None:
         await asyncio.gather(*(self.sync_peer(peer) for peer in self.peers))
+        if self.lifecycle_events is not None:
+            await asyncio.gather(*(self.lifecycle_events.sync_peer(peer) for peer in self.peers))
 
     def _on_committed_event(self) -> None:
         loop = self._notify_loop
@@ -591,6 +594,9 @@ class AccessMeshReplication:
                 )
             else:
                 delay = ANTI_ENTROPY_SECONDS
+            if self.lifecycle_events is not None:
+                # One bounded shared transport loop, independent of callback count.
+                delay = min(delay, 5.0)
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)
             except TimeoutError:

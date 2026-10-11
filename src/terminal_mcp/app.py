@@ -50,6 +50,8 @@ from terminal_mcp.fleet.access_mesh import (
 from terminal_mcp.fleet.config import build_fleet_config
 from terminal_mcp.fleet.control_plane import ManagedFleetControl
 from terminal_mcp.fleet.control_storage import FleetControlStore
+from terminal_mcp.fleet.event_mesh import LifecycleEventMesh, build_lifecycle_event_router
+from terminal_mcp.fleet.message_event_mesh import build_message_event_router
 from terminal_mcp.fleet.projection import FleetProjectionService
 from terminal_mcp.fleet.projection_storage import FleetProjectionStore
 from terminal_mcp.fleet.protocol import AUTHORITY_CAPABILITIES, SOURCE_CAPABILITIES
@@ -445,6 +447,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         managed_authority_node_id,
         auth_database_path=settings.auth_database_path,
     )
+    lifecycle_event_mesh = None
+    if access_mesh_replication is not None:
+        lifecycle_event_mesh = LifecycleEventMesh(
+            mcp_event_store, access_mesh_replication.request,
+            authorization_checker=checked_subscription_access,
+        )
+        access_mesh_replication.lifecycle_events = lifecycle_event_mesh
     # Connect the real managed-session operation path to the one-shot idle clock.
     managed_sessions.activity_notifier = mcp_event_store.note_managed_activity
     managed_sessions.attach_notifier = mcp_event_store.note_local_attach
@@ -551,8 +560,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await access_mesh.start()
         if access_mesh_messages:
             await access_mesh_messages.start()
-        if access_mesh_replication:
-            await access_mesh_replication.start()
         try:
             async with contextlib.AsyncExitStack() as stack:
                 await stack.enter_async_context(mcp.session_manager.run())
@@ -561,6 +568,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if access_mcp:
                     await stack.enter_async_context(access_mcp.session_manager.run())
                 await mcp_events.start()
+                if access_mesh_replication:
+                    # Start only after one source/outbox initialization pass.
+                    await access_mesh_replication.start()
                 try:
                     yield
                 finally:
@@ -636,6 +646,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # authentication MUST use that same pinned trust/token material.
         mesh_peer_auth = PinnedAccessMeshPeerAuth(fleet_config)
         app.include_router(build_access_mesh_router(access_mesh, mesh_peer_auth))
+        if lifecycle_event_mesh is not None:
+            app.include_router(build_lifecycle_event_router(
+                lifecycle_event_mesh, mesh_peer_auth, access_mesh.store.trusted_issuers,
+            ))
+        if lifecycle_event_mesh is not None:
+            app.include_router(build_message_event_router(
+                lifecycle_event_mesh.message_events, mesh_peer_auth,
+                access_mesh.store.trusted_issuers,
+            ))
         app.include_router(build_access_mesh_message_router(access_mesh_messages, mesh_peer_auth))
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:

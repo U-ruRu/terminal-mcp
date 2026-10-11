@@ -14,6 +14,8 @@ from terminal_mcp.core.orchestration import (
     utc_now,
     utc_text,
 )
+from terminal_mcp.fleet.event_mesh import initialize_mesh_storage, queue_lifecycle_events
+from terminal_mcp.fleet.message_event_mesh import queue_message_events, remote_message_interest
 from terminal_mcp.storage.permissions import secure_database_path
 
 EVENT_NAMES = ("agent.attached", "agent.inactive", "session.ended", "message.received")
@@ -57,11 +59,16 @@ def event_catalog():
             {
                 "name": name,
                 "description": {
-                    "agent.attached": "Agent acquired active local presence on this server.",
-                    "agent.inactive": (
-                        "Agent has been inactive on this server for over 180 seconds."
+                    "agent.attached": (
+                        "Agent acquired active local presence on a trusted fleet source server."
                     ),
-                    "session.ended": "A limited agent work session has ended on this server.",
+                    "agent.inactive": (
+                        "Agent has been inactive on its trusted fleet source server "
+                        "for over 180 seconds."
+                    ),
+                    "session.ended": (
+                        "A limited agent work session has ended on a trusted fleet source server."
+                    ),
                     "message.received": "A new local message for the selected session number.",
                 }[name],
                 "delivery": ["webhook"],
@@ -212,6 +219,7 @@ class MCPEventStore:
                     );
                 END;
             """)
+            await initialize_mesh_storage(db)
             record_columns = {
                 row[1]
                 for row in await (
@@ -409,7 +417,10 @@ class MCPEventStore:
                                     ),
                                 )
                             ).fetchone()
-                            if allowed:
+                            remote_allowed = await remote_message_interest(
+                                db, recipient, message["created_at"], stamp,
+                            )
+                            if allowed or remote_allowed:
                                 wire = json.loads(message["wire_json"])
                                 deliveries = json.loads(message["receipt_json"]).get(
                                     "deliveries", []
@@ -605,6 +616,8 @@ class MCPEventStore:
                     "AND s.expires_at>?",
                     (stamp, self.node_id, stamp),
                 )
+                await queue_lifecycle_events(db, stamp)
+                await queue_message_events(db, stamp)
                 await db.commit()
             except BaseException:
                 await db.rollback()
