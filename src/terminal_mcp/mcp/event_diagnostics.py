@@ -60,7 +60,7 @@ _CALLBACK_RESULTS = frozenset(
 )
 
 
-# Only recognized response categories and tightly shaped support identifiers are retained.
+# Only recognized response categories and header-presence booleans are retained.
 _RESPONSE_CONTENT_TYPES = frozenset(
     {"application/json", "application/problem+json", "text/html", "text/plain"}
 )
@@ -77,13 +77,6 @@ _RESPONSE_ERROR_CODES = frozenset(
         "invalid_challenge",
     }
 )
-_RESPONSE_ID_PATTERNS = {
-    "response_request_id": (
-        r"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-"
-        r"[a-fA-F0-9]{4}-[a-fA-F0-9]{12}|[a-fA-F0-9]{32}"
-    ),
-    "response_cf_ray": r"[a-fA-F0-9]{16}-[A-Z]{3}",
-}
 
 
 def safe_callback_response_metadata(details: dict) -> dict:
@@ -97,18 +90,21 @@ def safe_callback_response_metadata(details: dict) -> dict:
         value = details.get(key)
         if isinstance(value, str) and value in allowed:
             safe[key] = value
-    for key in ("callback_explicit_default_port", "response_cf_challenge"):
+    for key in (
+        "callback_explicit_default_port",
+        "response_cf_challenge",
+        "response_request_id_present",
+        "response_cf_ray_present",
+    ):
         if type(details.get(key)) is bool:
             safe[key] = details[key]
-    for key, pattern in _RESPONSE_ID_PATTERNS.items():
-        value = details.get(key)
-        if isinstance(value, str) and len(value) <= 64 and re.fullmatch(pattern, value):
-            safe[key] = value
     return safe
 
 
 def classify_callback_response(body: bytes, getheader=None) -> dict:
     """Classify bounded bytes locally, emitting neither body text nor arbitrary headers."""
+    if not isinstance(body, bytes) or len(body) > 65536:
+        return {}
     details = {"response_body_kind": "empty" if not body else "other"}
     if body:
         try:
@@ -130,8 +126,8 @@ def classify_callback_response(body: bytes, getheader=None) -> dict:
             media_type if media_type in _RESPONSE_CONTENT_TYPES | {"missing"} else "other"
         )
         details["response_cf_challenge"] = getheader("cf-mitigated") == "challenge"
-        details["response_request_id"] = getheader("x-request-id")
-        details["response_cf_ray"] = getheader("cf-ray")
+        details["response_request_id_present"] = bool(getheader("x-request-id"))
+        details["response_cf_ray_present"] = bool(getheader("cf-ray"))
     return safe_callback_response_metadata(details)
 
 
@@ -139,7 +135,7 @@ def emit_callback_probe(cid: str, details: dict) -> None:
     """Emit ONLY bounded, non-identifying callback verification metadata.
 
     Never persist the destination URL, challenge, response body, arbitrary headers or key.
-    Only allowlisted response categories and shaped support request IDs are retained.
+    Only allowlisted response categories and header-presence booleans are retained.
     These fields correlate server diagnosis with the pre-existing Events CID.
     """
     status = details.get("http_status")

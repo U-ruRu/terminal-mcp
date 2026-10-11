@@ -38,14 +38,15 @@ def test_response_allowlist_and_redaction(caplog):
         "response_body_kind": "html",
         "response_content_type": "text/html",
         "response_cf_challenge": True,
-        "response_cf_ray": "1234567890abcdef-SJC",
-        "response_request_id": REQUEST_ID,
+        "response_cf_ray_present": True,
+        "response_request_id_present": True,
     }
     details.update({"result": "http_rejected", "http_status": 403, "raw": private})
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         emit_callback_probe("ev_0123456789abcdef", details)
     assert private not in caplog.text
-    assert REQUEST_ID in caplog.text
+    assert REQUEST_ID not in caplog.text
+    assert "1234567890abcdef-SJC" not in caplog.text
     assert "set-cookie" not in caplog.text
 
 
@@ -123,7 +124,8 @@ async def test_full_rejected_callback_metadata(monkeypatch, authority, explicit,
             await webhooks.verify_callback(
                 "https://" + authority + "/private", SECRET, "sub_private", observer=observe
             )
-    assert recorded[0]["response_request_id"] == REQUEST_ID
+    assert recorded[0]["response_request_id_present"] is True
+    assert "response_request_id" not in recorded[0]
     assert recorded[0]["callback_explicit_default_port"] is explicit
     assert recorded[0]["response_body_kind"] == "html"
     assert recorded[0]["http_status"] == 403
@@ -187,3 +189,20 @@ async def test_signing_demo_raw_bytes_vector(monkeypatch, payload):
     assert await webhooks.post_signed(
         "https://fixture.invalid", SECRET, "sub_demo", "evt_demo_001", payload, sender=receiver
     ) == (200, b"{}")
+
+
+@pytest.mark.parametrize("body", [b"x" * 65537, "not bytes", None])
+def test_classifier_rejects_unbounded_or_nonbyte_input(body):
+    assert classify_callback_response(body) == {}
+
+
+def test_id_shaped_secret_not_retained(caplog):
+    secret_like = "0123456789abcdef0123456789abcdef"
+    details = classify_callback_response(
+        b"{}", {"x-request-id": secret_like, "cf-ray": "0123456789abcdef-SJC"}.get
+    )
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        emit_callback_probe("ev_0123456789abcdef", details)
+    assert secret_like not in caplog.text
+    assert "0123456789abcdef-SJC" not in caplog.text
+    assert details["response_request_id_present"] is True
