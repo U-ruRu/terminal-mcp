@@ -25,3 +25,30 @@ Unsubscribe uses the authenticated callback owner's exact event name, arguments,
 Run scripts/build_event_catalog.py to regenerate docs/contracts/mcp-events-list.json and run it with --check to verify it. This native Events schema is separate from tools/list compact catalogs. Callback challenge verification, signing, secret rotation, retry limits, and OAuth revocation checks use the existing implementation unchanged.
 
 All new behavior is covered by isolated fixture tests. This candidate does not configure live callbacks or modify a deployed server.
+
+## Human agent names
+
+Mesh presentation uses the existing NATO alphabet and cycle arithmetic. The
+negotiated public four-digit number maps to ordinal int(number) + 1; the short
+name always includes its cycle, including -1. For example, 0000 is Alpha-1 and
+0026 is Alpha-2. Leading zeros remain unchanged in session-number routing.
+
+Issuance retains the short name and any existing slot label as display metadata.
+A present label is appended with the separator " - "; no label is invented.
+The same full name appears in event agent_name, agent overview display_name and
+public_name, and message recipient records. Both the short and full names resolve
+to the same immutable recipient. Internal issuer-qualified routing aliases remain
+accepted, while successful message records retain the resolved human label.
+An ambiguous human target is rejected rather than sent to an arbitrary slot.
+
+Ordinary end/start retains the assigned name and logical identity. Reused numbers
+can repeat a human name, so callback binding and message replies continue using
+immutable identities. Lifecycle events preserve the attachment name snapshot;
+message events preserve delivery-time sender and recipient labels. A slot with
+neither recorded name metadata nor a retained public-number mapping reports
+agent_name_unavailable instead of presenting a hash as a human name.
+
+The new issuance metadata changes the Mesh wire event shape. All active peers
+must run the compatible parser before new issuance metadata is exchanged;
+mixed-version rollout is not supported by this change. Source server fields,
+credentials, grants, provider bindings, and access generation remain unchanged.

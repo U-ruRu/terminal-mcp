@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
+from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import (
     FINALIZATION_OPERATIONS,
     READ_OPERATIONS,
@@ -22,7 +23,7 @@ from terminal_mcp.core.managed_sessions import (
 from terminal_mcp.core.persistent_admission import PersistentAdmissionError
 from terminal_mcp.core.persistent_agents import ClaimOwner
 from terminal_mcp.core.provider_identity import ProviderIdentityError, ProviderIdentityRegistry
-from terminal_mcp.storage.access_mesh import AccessMeshStore, local_cycle, public_name
+from terminal_mcp.storage.access_mesh import AccessMeshStore, local_cycle
 
 _LOG = logging.getLogger(__name__)
 _INTENT_CALL: ContextVar[dict | None] = ContextVar("mesh_intent_call", default=None)
@@ -461,15 +462,14 @@ class AccessMeshApplication:
         ).hexdigest()
         return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
 
-    @staticmethod
-    def _slot_receipt(slot, action, *, revision=None, code=None):
+    def _slot_receipt(self, slot, action, *, revision=None, code=None):
         return {
             "ok": True,
             "action": action,
             "issuer_node_id": slot.issuer_id,
             "slot_id": slot.slot_id,
             "logical_agent_id": slot.logical_agent_id,
-            "public_name": public_name(slot.issuer_id, slot.logical_agent_id),
+            "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "revision": revision or slot.revision,
             **({"access_code": code} if code is not None else {}),
@@ -483,6 +483,7 @@ class AccessMeshApplication:
         policy: SlotPolicy | None = None,
         start: bool = True,
         code: str | None = None,
+        display_name: str | None = None,
         receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
@@ -530,6 +531,8 @@ class AccessMeshApplication:
                     policy=policy or self.defaults,
                     code_tag=self.store.code_tag(self.store.local_node_id, allocated),
                     effective_at=self.clock() if start else None,
+                    agent_name=number_agent_name(allocated),
+                    display_suffix=(display_name or "").strip() or None,
                 )
                 result = {
                     "ok": True,
@@ -539,7 +542,7 @@ class AccessMeshApplication:
                     "logical_agent_id": agent_id,
                     "mode": kind,
                     "revision": 1,
-                    "public_name": public_name(event.issuer_id, agent_id),
+                    "public_name": full_agent_name(event.agent_name, event.display_suffix),
                     "access_code": allocated,
                 }
                 receipt = (

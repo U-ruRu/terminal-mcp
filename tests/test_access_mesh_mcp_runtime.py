@@ -197,12 +197,9 @@ def test_role_messages_share_durable_obligations_across_metadata(tmp_path):
             request_id=200,
             conversation="receiver-access",
         )
-        from terminal_mcp.storage.access_mesh import public_name
+        from terminal_mcp.core.human_names import number_agent_name
 
-        recipient_slot = app.state.access_mesh.store.numbers.winner(receiver["session_number"])
-        recipient_name = public_name(
-            recipient_slot["issuer_id"], recipient_slot["logical_agent_id"]
-        )
+        recipient_name = number_agent_name(receiver["session_number"])
         for role, conversation, slot in (
             ("executor", "sender-exec", sender),
             ("executor", "receiver-exec", receiver),

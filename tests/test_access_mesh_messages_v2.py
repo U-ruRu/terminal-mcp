@@ -43,6 +43,11 @@ class LocalSlots:
         # Production AccessMeshStore implements this alias-resolution method.
         return slot
 
+    def human_name(self, slot, *, short=False):
+        # This transport fixture has no labels. Naming itself is covered by
+        # test_mesh_human_names using the production issuance and serializers.
+        return _public_name(slot)
+
     def slot_for_agent(self, agent_id):
         return self.slots.get(agent_id)
 

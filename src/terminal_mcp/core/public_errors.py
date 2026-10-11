@@ -85,7 +85,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             owner_required claim_conflict task_claim_conflict wip_limit_exceeded
             archived_task command_not_owned command_not_persistent command_not_running
             review_requirements_unsatisfied coordination_alert coordination_ack_required
-            session_already_active session_already_started cannot_message_self
+            session_already_active session_already_started cannot_message_self ambiguous_agent_name
             policy_in_use dependency_open
         """,
         ),
@@ -105,6 +105,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             """
             not_found resource_not_found task_not_found command_not_found message_not_found
             slot_not_found recipient_not_active no_active_recipients unknown_source
+            agent_name_unavailable
         """,
         ),
         (

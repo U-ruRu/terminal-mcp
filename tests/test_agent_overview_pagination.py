@@ -8,6 +8,7 @@ import pytest
 
 from terminal_mcp.application.access_mesh import AccessMeshApplication
 from terminal_mcp.core import read_contract
+from terminal_mcp.core.human_names import number_agent_name
 from terminal_mcp.mcp.access_contracts import MeshAgentObserve
 from terminal_mcp.storage.access_mesh import AccessMeshStore
 
@@ -32,6 +33,9 @@ def overview_fixture(tmp_path, monkeypatch):
                 work_session_id TEXT,state TEXT,started_at TEXT,hard_expires_at TEXT);
             CREATE TABLE logical_agents(logical_agent_id TEXT,display_name TEXT);
             CREATE TABLE access_mesh_activity(connection_key TEXT,last_active_at TEXT);
+            CREATE TABLE access_mesh_number_claims(
+                issuer_id TEXT,slot_id TEXT,number TEXT,logical_agent_id TEXT,
+                started_at TEXT,hard_expires_at TEXT);
         """)
     skipped = set()
     queries = []
@@ -52,6 +56,10 @@ def overview_fixture(tmp_path, monkeypatch):
             logical_agent_id=row["logical_agent_id"],
             issuer_id=row["issuer_id"],
             slot_id=row["slot_id"],
+            agent_name=number_agent_name(
+                f"{int(row['logical_agent_id'].rsplit('_', 1)[1]):04d}"
+            ),
+            display_suffix=row["display_name"],
         ),
     )
     monkeypatch.setattr(
@@ -194,3 +202,106 @@ async def test_cursor_remains_bound_to_filters(overview_fixture):
     result = await f.app.observe(ACTOR, limit=1)
     with pytest.raises(read_contract.InvalidCursor):
         await f.app.observe(ACTOR, limit=1, cursor=result["next_cursor"], include_inactive=True)
+
+
+def claim(fixture, index, start_minutes, end_minutes, *, number="1000"):
+    with fixture.store._connect() as db:
+        db.execute(
+            "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?)",
+            (
+                "server-a", f"slot-{index}", number, f"la_fixture_{index:03d}",
+                (T0 + timedelta(minutes=start_minutes)).isoformat(),
+                (T0 + timedelta(minutes=end_minutes)).isoformat(),
+            ),
+        )
+
+
+async def test_loser_only_attachment_projects_winner_session_intent_and_lookup(overview_fixture):
+    f = overview_fixture
+    agents = f.populate(2)
+    claim(f, 0, 0, 20)
+    claim(f, 1, 1, 20)
+    latest = (T0 + timedelta(seconds=12)).isoformat()
+    with f.store._connect() as db:
+        db.execute("DELETE FROM access_mesh_attachments WHERE slot_id='slot-1'")
+        db.execute(
+            "UPDATE access_mesh_local_sessions SET current_intent='canonical intent' "
+            "WHERE slot_id='slot-1'"
+        )
+        db.execute(
+            "UPDATE access_mesh_activity SET last_active_at=? WHERE connection_key='conn-0'",
+            (latest,),
+        )
+    result = await f.app.observe(ACTOR, logical_agent_id=agents[1])
+    MeshAgentObserve.model_validate(result)
+    assert len(result["agents"]) == 1
+    record = result["agents"][0]
+    assert record["logical_agent_id"] == agents[1]
+    assert record["display_name"] == "Bravo-1 - Fixture agent 1"
+    assert record["work_session_id"] == "session-1"
+    assert record["current_intent"] == "canonical intent"
+    assert record["last_activity"] == latest
+    assert (await f.app.observe(ACTOR, logical_agent_id=agents[0]))["agents"] == []
+
+
+async def test_aliases_collapse_before_one_item_pages_and_aggregate_activity(overview_fixture):
+    f = overview_fixture
+    agents = f.populate(4)
+    for index in range(3):
+        claim(f, index, index, 20)
+    latest = (T0 + timedelta(seconds=15)).isoformat()
+    with f.store._connect() as db:
+        db.execute(
+            "UPDATE access_mesh_activity SET last_active_at=? WHERE connection_key='conn-0'",
+            (latest,),
+        )
+        db.execute(
+            "UPDATE access_mesh_local_sessions SET current_intent=NULL,intent_updated_at=NULL "
+            "WHERE slot_id='slot-2'"
+        )
+    records, pages = await collect(f.app, limit=1)
+    assert [record["logical_agent_id"] for record in records] == agents[2:]
+    assert len(pages) == 2
+    assert records[0]["last_activity"] == latest
+    assert records[0]["current_intent"] is None
+    assert records[0]["intent_state"] == "missing"
+
+
+@pytest.mark.parametrize(
+    ("intervals", "expected"),
+    [
+        ([(0, 10), (9, 20), (19, 30)], [2]),
+        ([(0, 10), (10, 20), (20, 30)], [2]),
+        ([(0, 10), (9, 20), (21, 30)], [1, 2]),
+        ([(0, 30), (0, 30), (0, 30)], [2]),
+    ],
+    ids=["transitive", "touching", "recycled", "slot-tie-break"],
+)
+async def test_number_groups_match_historical_overlap_and_tie_break(
+    overview_fixture, intervals, expected
+):
+    f = overview_fixture
+    agents = f.populate(3)
+    for index, (start, end) in enumerate(intervals):
+        claim(f, index, start, end)
+    records, _ = await collect(f.app, limit=1)
+    assert [record["logical_agent_id"] for record in records] == [agents[i] for i in expected]
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["inactive-winner", "missing-winner"])
+async def test_unavailable_winner_preserves_original_alias(overview_fixture, missing):
+    f = overview_fixture
+    agents = f.populate(2)
+    claim(f, 0, 0, 20)
+    claim(f, 1, 1, 20)
+    with f.store._connect() as db:
+        db.execute("DELETE FROM access_mesh_attachments WHERE slot_id='slot-1'")
+        if missing:
+            db.execute("DELETE FROM access_mesh_slot_replicas WHERE slot_id='slot-1'")
+        else:
+            db.execute(
+                "UPDATE access_mesh_slot_replicas SET state='suspended' WHERE slot_id='slot-1'"
+            )
+    records, _ = await collect(f.app, limit=1)
+    assert [record["logical_agent_id"] for record in records] == agents[:1]
+    assert records[0]["work_session_id"] == "session-0"
