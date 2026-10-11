@@ -91,6 +91,9 @@ SQLite repositories · grant/event outbox · ExecutionPort
 
 MCP/Actions поддерживают `none`, `bearer`, `oauth` согласно конфигурации. OAuth metadata: `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`. Диагностика и контракты: `/health/live`, `/openapi.json`; Console: `/admin`; privacy: `/privacy`.
 
+Events transport diagnostics are off by default. Enable or disable the existing hot-reloaded
+`TERMINAL_MCP_DETAILED_LOGGING` flag in `runtime.env`; see [Events diagnostics](docs/events-diagnostics.md).
+
 ## Deployment и development
 
 Подготовку peer authentication, proof key, резервных копий, staging и шестиконнекторную приёмку выполняй по [Access Mesh deployment](docs/access-mesh-deployment.md). Installer `deploy/install.sh update` сам выполняет staging, compatibility checks, backup и activation; `stage` не является отдельной публичной командой installer.

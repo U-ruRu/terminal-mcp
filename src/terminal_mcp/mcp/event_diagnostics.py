@@ -1,4 +1,4 @@
-"""Secret-free ingress diagnostics for the Events JSON-RPC transport."""
+"""Opt-in, secret-free Events transport diagnostics and minimal operational failures."""
 
 from __future__ import annotations
 
@@ -30,8 +30,18 @@ def correlation_id() -> str:
     return "ev_" + secrets.token_hex(8)
 
 
-def emit(method: str, stage: str, code: str, cid: str) -> None:
-    """Log only protocol-level enums and a server-generated correlation ID."""
+def diagnostics_enabled(setting) -> bool:
+    """Read the existing runtime flag, failing closed if its provider is unavailable."""
+    try:
+        return (setting() if callable(setting) else setting) is True
+    except Exception:
+        return False
+
+
+def emit(method: str, stage: str, code: str, cid: str, *, enabled=False) -> None:
+    """Log only protocol-level enums and a server-generated correlation ID, when opted in."""
+    if not diagnostics_enabled(enabled):
+        return
     values = {
         "utc": datetime.now(UTC).isoformat(timespec="milliseconds"),
         "correlation_id": cid if re.fullmatch(r"ev_[a-f0-9]{16}", cid) else "unknown",
@@ -39,7 +49,11 @@ def emit(method: str, stage: str, code: str, cid: str) -> None:
         "stage": stage if re.fullmatch(r"[a-z_]{1,48}", stage) else "unknown",
         "code": code if re.fullmatch(r"[a-z_0-9]{1,64}", code) else "unclassified",
     }
-    _LOG.info("tmcp_events_diag %s", json.dumps(values, separators=(",", ":")))
+    try:
+        _LOG.info("tmcp_events_diag %s", json.dumps(values, separators=(",", ":")))
+    except Exception:
+        # Diagnostic sinks must never alter protocol or delivery outcomes.
+        pass
 
 
 _CALLBACK_RESULTS = frozenset(
@@ -185,13 +199,15 @@ def classify_callback_response(body: bytes, getheader=None) -> dict:
     return safe_callback_response_metadata(details)
 
 
-def emit_callback_probe(cid: str, details: dict) -> None:
+def emit_callback_probe(cid: str, details: dict, *, enabled=False) -> None:
     """Emit ONLY bounded, non-identifying callback verification metadata.
 
     Never persist the destination URL, challenge, response body, arbitrary headers or key.
     Only allowlisted response categories and header-presence booleans are retained.
     These fields correlate server diagnosis with the pre-existing Events CID.
     """
+    if not diagnostics_enabled(enabled):
+        return
     status = details.get("http_status")
     elapsed = details.get("elapsed_ms")
     body_size = details.get("body_size")
@@ -216,7 +232,36 @@ def emit_callback_probe(cid: str, details: dict) -> None:
         else None,
     }
     values.update(safe_callback_response_metadata(details))
-    _LOG.info("tmcp_events_callback %s", json.dumps(values, separators=(",", ":")))
+    try:
+        _LOG.info("tmcp_events_callback %s", json.dumps(values, separators=(",", ":")))
+    except Exception:
+        pass
+
+
+_FAILURE_CODES = frozenset(
+    {
+        "internal_error",
+        "callback_verification_failed",
+        "delivery_failed",
+        "authorization_unavailable",
+    }
+)
+
+
+def emit_failure(method: str, stage: str, code: str, cid: str, *, status=None) -> None:
+    """Minimal operational evidence; never log exception text or private delivery identifiers."""
+    values = {
+        "correlation_id": cid if re.fullmatch(r"ev_[a-f0-9]{16}", cid) else "unknown",
+        "method": method if method in _METHODS or method == "events/worker" else "unknown",
+        "stage": stage if stage in {"poll", "rpc", "callback", "delivery"} else "unknown",
+        "code": code if code in _FAILURE_CODES else "internal_error",
+    }
+    if type(status) is int and 100 <= status <= 599:
+        values["http_status"] = status
+    try:
+        _LOG.warning("tmcp_events_error %s", json.dumps(values, separators=(",", ":")))
+    except Exception:
+        pass
 
 
 class MCPEventIngressProbe:
@@ -226,10 +271,14 @@ class MCPEventIngressProbe:
     the existing ASGI stack, preserving signatures, authorization and tool traffic.
     """
 
-    def __init__(self, app):
+    def __init__(self, app, *, enabled=False):
         self.app = app
+        self.enabled = enabled
 
     async def __call__(self, scope, receive, send):
+        if not diagnostics_enabled(self.enabled):
+            await self.app(scope, receive, send)
+            return
         path = scope.get("path", "")
         if (
             scope["type"] != "http"
@@ -285,15 +334,21 @@ class MCPEventIngressProbe:
             return
         cid = correlation_id()
         scope["mcp_events_cid"] = cid
-        emit(method, "ingress", "received", cid)
+        emit(method, "ingress", "received", cid, enabled=self.enabled)
 
         async def response_send(message):
             if message["type"] == "http.response.start":
-                emit(method, "http_response", f"http_{int(message['status'])}", cid)
+                emit(
+                    method,
+                    "http_response",
+                    f"http_{int(message['status'])}",
+                    cid,
+                    enabled=self.enabled,
+                )
             await send(message)
 
         try:
             await self.app(scope, replay_receive, response_send)
         except Exception:
-            emit(method, "http_response", "unhandled_exception", cid)
+            emit(method, "http_response", "unhandled_exception", cid, enabled=self.enabled)
             raise

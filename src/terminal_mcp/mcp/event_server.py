@@ -12,7 +12,13 @@ from starlette.responses import JSONResponse, Response
 
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.core.persistent_admission import current_admission_context
-from terminal_mcp.mcp.event_diagnostics import correlation_id, emit, emit_callback_probe
+from terminal_mcp.mcp.event_diagnostics import (
+    correlation_id,
+    diagnostics_enabled,
+    emit,
+    emit_callback_probe,
+    emit_failure,
+)
 from terminal_mcp.mcp.event_store import (
     EVENT_NAMES,
     MCPEventStore,
@@ -42,6 +48,7 @@ class MCPEventsAdapter:
         message_resolver=None,
         endpoint_role="legacy",
         events_enabled=True,
+        detailed_logging=False,
     ):
         self.wrapped = wrapped
         self.store = store
@@ -51,9 +58,21 @@ class MCPEventsAdapter:
         self.message_resolver = message_resolver
         self.endpoint_role = endpoint_role
         self.events_enabled = events_enabled
+        self.detailed_logging = detailed_logging
         self._task = None
         self._stop = asyncio.Event()
-        self._last_worker_error = 0.0
+        self._last_errors = {}
+
+    def _emit(self, method, stage, code, cid):
+        emit(method, stage, code, cid, enabled=self.detailed_logging)
+
+    def _failure(self, method, stage, code, cid, *, status=None):
+        # Per-category throttling keeps minimal operational logs bounded during an outage.
+        key = (stage, code)
+        now = time.monotonic()
+        if now - self._last_errors.get(key, float("-inf")) >= 60:
+            emit_failure(method, stage, code, cid, status=status)
+            self._last_errors[key] = now
 
     async def start(self):
         await self.store.initialize()
@@ -84,9 +103,7 @@ class MCPEventsAdapter:
             except Exception:
                 # Log only the failure class, never callback or private payload.
                 # Rate-limited to avoid flooding the service journal.
-                if time.monotonic() - self._last_worker_error >= 60:
-                    emit("events/worker", "poll", "internal_error", correlation_id())
-                    self._last_worker_error = time.monotonic()
+                self._failure("events/worker", "poll", "internal_error", correlation_id())
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=5)
             except TimeoutError:
@@ -99,6 +116,9 @@ class MCPEventsAdapter:
                 valid = self.access_checker is not None and await self.access_checker(item)
             except Exception:
                 # Temporary checker failure is retryable; it must never send.
+                self._failure(
+                    "events/worker", "delivery", "authorization_unavailable", correlation_id()
+                )
                 await self.store.finish_attempt(
                     item["event_id"],
                     item["subscription_id"],
@@ -158,6 +178,10 @@ class MCPEventsAdapter:
             except Exception:
                 # Every transport failure consumes a bounded retry attempt.
                 pass
+            if status is None or not 200 <= status < 300:
+                self._failure(
+                    "events/worker", "delivery", "delivery_failed", correlation_id(), status=status
+                )
             await self.store.finish_attempt(
                 item["event_id"],
                 item["subscription_id"],
@@ -203,7 +227,7 @@ class MCPEventsAdapter:
         cid = cid or correlation_id()
 
         def reject(stage, reason, code, message, data=None):
-            emit(method, stage, reason, cid)
+            self._emit(method, stage, reason, cid)
             return self._error(request.get("id"), code, message, data)
 
         request_id = request.get("id")
@@ -238,7 +262,7 @@ class MCPEventsAdapter:
                 -32001,
                 "Authenticated principal required",
             )
-        emit(method, "authorization", "accepted", cid)
+        self._emit(method, "authorization", "accepted", cid)
         if not isinstance(params, dict):
             return reject("validation", "invalid_parameters", -32602, "Invalid parameters")
         name = params.get("name")
@@ -267,7 +291,7 @@ class MCPEventsAdapter:
             return reject(
                 "validation", "callback_url_invalid", -32602, "Invalid HTTPS callback URL"
             )
-        emit(method, "validation", "accepted", cid)
+        self._emit(method, "validation", "accepted", cid)
         # Unsubscribe is authorized by the authenticated subscription owner,
         # including after a message recipient's Access/attach binding expires.
         # This cannot mint or rebind a recipient: it only removes the owner's
@@ -278,7 +302,7 @@ class MCPEventsAdapter:
                     "validation", "unsubscribe_invalid", -32602, "Invalid unsubscribe delivery"
                 )
             await self.store.unsubscribe_matching(principal, name, callback, arguments)
-            emit(method, "persistence", "unsubscribed", cid)
+            self._emit(method, "persistence", "unsubscribed", cid)
             return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         binding = None
         if name == "message.received":
@@ -323,7 +347,7 @@ class MCPEventsAdapter:
                     -32001,
                     "Recipient binding unavailable",
                 )
-            emit(method, "authorization", "recipient_bound", cid)
+            self._emit(method, "authorization", "recipient_bound", cid)
         sub_id = self._id(principal, name, arguments, callback, binding=binding)
         if method != "events/subscribe":
             return reject("validation", "method_unknown", -32601, "Method not found")
@@ -337,7 +361,7 @@ class MCPEventsAdapter:
         ttl_ms = params.get("ttlMs")
         if ttl_ms is not None and (type(ttl_ms) is not int or ttl_ms < 1000):
             return reject("validation", "ttl_invalid", -32602, "Invalid ttlMs")
-        emit(method, "callback", "challenge_started", cid)
+        self._emit(method, "callback", "challenge_started", cid)
         callback_verified_fresh = False
         try:
             if not await self.store.verified_recently(principal, callback):
@@ -346,12 +370,19 @@ class MCPEventsAdapter:
                     secret,
                     sub_id,
                     sender=self.sender,
-                    observer=lambda details: emit_callback_probe(cid, details),
+                    observer=(
+                        lambda details: emit_callback_probe(
+                            cid, details, enabled=self.detailed_logging
+                        )
+                    )
+                    if diagnostics_enabled(self.detailed_logging)
+                    else None,
                 )
                 callback_verified_fresh = True
             else:
-                emit(method, "callback", "verification_cache_hit", cid)
+                self._emit(method, "callback", "verification_cache_hit", cid)
         except CallbackEndpointError as exc:
+            self._failure(method, "callback", "callback_verification_failed", cid)
             return reject(
                 "callback",
                 exc.reason,
@@ -359,7 +390,7 @@ class MCPEventsAdapter:
                 "CallbackEndpointError",
                 {"reason": exc.reason},
             )
-        emit(method, "callback", "verified", cid)
+        self._emit(method, "callback", "verified", cid)
         admission = current_admission_context()
         if (
             admission is None
@@ -402,7 +433,7 @@ class MCPEventsAdapter:
                 -32001,
                 "Subscription authorization expired",
             )
-        emit(method, "persistence", "stored", cid)
+        self._emit(method, "persistence", "stored", cid)
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -476,13 +507,13 @@ class MCPEventsAdapter:
             )
         ):
             cid = scope.get("mcp_events_cid") or correlation_id()
-            emit(request["method"], "rpc", "received", cid)
+            self._emit(request["method"], "rpc", "received", cid)
             try:
                 result = await self.handle(request, cid=cid)
             except Exception:
-                emit(request["method"], "rpc", "internal_error", cid)
+                self._failure(request["method"], "rpc", "internal_error", cid)
                 raise
-            emit(
+            self._emit(
                 request["method"],
                 "rpc",
                 "ok" if "result" in result else "rpc_error",

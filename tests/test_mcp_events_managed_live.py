@@ -211,6 +211,7 @@ def _settings(tmp_path):
 
 
 def test_actual_asgi_subscribe_no_auth_reports_stage_and_no_secrets(tmp_path, caplog):
+    (tmp_path / "runtime.env").write_text("TERMINAL_MCP_DETAILED_LOGGING=true\n")
     app = create_app(_settings(tmp_path))
     caplog.set_level(logging.INFO, logger="uvicorn.error")
     private = "whsec_EXAMPLE_PRIVATE_MATERIAL_NEVER_LOG"

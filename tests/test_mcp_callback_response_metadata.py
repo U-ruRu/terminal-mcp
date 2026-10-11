@@ -44,7 +44,7 @@ def test_response_allowlist_and_redaction(caplog):
     }
     details.update({"result": "http_rejected", "http_status": 403, "raw": private})
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-        emit_callback_probe("ev_0123456789abcdef", details)
+        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
     assert private not in caplog.text
     assert REQUEST_ID not in caplog.text
     assert "1234567890abcdef-SJC" not in caplog.text
@@ -63,7 +63,7 @@ def test_untrusted_identifier_values_are_dropped(value, caplog):
         "callback_explicit_default_port": value,
     }
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-        emit_callback_probe("ev_0123456789abcdef", details)
+        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
     assert "response_request_id" not in caplog.text
     assert "response_cf_ray" not in caplog.text
     assert "response_error_code" not in caplog.text
@@ -122,7 +122,7 @@ async def test_full_rejected_callback_metadata(monkeypatch, authority, explicit,
 
     def observe(details):
         recorded.append(details)
-        emit_callback_probe("ev_0123456789abcdef", details)
+        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
 
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         with pytest.raises(webhooks.CallbackEndpointError, match="challenge_failed"):
@@ -209,7 +209,7 @@ def test_id_shaped_secret_not_retained(caplog):
         b"{}", {"x-request-id": secret_like, "cf-ray": "0123456789abcdef-SJC"}.get
     )
     with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-        emit_callback_probe("ev_0123456789abcdef", details)
+        emit_callback_probe("ev_0123456789abcdef", details, enabled=True)
     assert secret_like not in caplog.text
     assert "0123456789abcdef-SJC" not in caplog.text
     assert details["response_request_id_present"] is True
