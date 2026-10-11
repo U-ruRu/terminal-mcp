@@ -213,7 +213,7 @@ def test_pagination_filter_scope_and_long_command_reads_do_not_refresh_intent(tm
         running = invoke(
             client, "executor", "command_run", {"command": "sleep 2"}, 88, conversation="executor-0"
         )["structuredContent"]
-        command_hash = running["command"]["cmd_hash"]
+        command_hash = running["cmd_hash"]
         advance(app.state.access_mesh, 180)
         first = invoke(
             client,
