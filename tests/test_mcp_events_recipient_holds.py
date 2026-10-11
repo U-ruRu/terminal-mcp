@@ -338,6 +338,21 @@ async def test_hold_http_anti_entropy_outage_and_withdrawal(tmp_path):
         }
         source.store.recipient_holds.merge([row], authenticated_peer_id="firstbyte")
         await replica_rep.sync_recipient_holds(replica_rep.peers[0])
+        await replica_rep.sync_numbers(replica_rep.peers[0])
+        assert replica.store.recipient_holds.local_recipients() == []
+        attached = await replica.attach(
+            actor(), issuer_node_id="firstbyte", access_code="7312"
+        )
+        assert attached["logical_agent_id"] == issued["logical_agent_id"]
+        from test_access_mesh_replication_http import T0
+
+        replica.clock = lambda: T0 + timedelta(days=1)
+        held = replica.store.recipient_holds.local_recipients()
+        assert len(held) == 1 and held[0]["recipient_agent_id"] == issued["logical_agent_id"]
+        # A replicated grant alone is not local messaging presence.
+        with replica.store._connect() as db:
+            db.execute("DELETE FROM access_mesh_attachments")
+        assert replica.store.recipient_holds.local_recipients() == []
         routes.offline.add("firstbyte")
         future = datetime.now(UTC) + timedelta(days=1)
         assert not replica.store.numbers.reserve(

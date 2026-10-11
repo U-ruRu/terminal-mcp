@@ -128,7 +128,11 @@ class MeshRecipientHolds:
                 "FROM access_mesh_recipient_holds h "
                 "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) "
                 "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
-                "WHERE h.source_node_id=? AND h.state='held' AND s.state!='deleted' "
+                "WHERE (h.source_node_id=? OR EXISTS("
+                "SELECT 1 FROM access_mesh_attachments a "
+                "WHERE a.issuer_id=h.issuer_id AND a.slot_id=h.slot_id "
+                "AND a.logical_agent_id=h.recipient_agent_id)) "
+                "AND h.state='held' AND s.state!='deleted' "
                 "AND s.logical_agent_id=h.recipient_agent_id "
                 "AND c.logical_agent_id=h.recipient_agent_id AND c.number=h.number",
                 (self.store.local_node_id,),
