@@ -367,21 +367,23 @@ class TaskCoordinator:
 
     async def _latest_checkpoint(self, namespace, task_id, task):
         event = await self.store.latest_checkpoint_event(namespace, task_id)
-        if event is not None:
-            payload = event.get("payload") or {}
-            text = self._checkpoint_text(payload.get("checkpoint"))
-            if text is not None:
-                agent_id = event.get("agent_id")
-                return {
-                    "text": text,
-                    "author": public_agent_name(agent_id) if agent_id else "system",
-                    "created_at": event["created_at"],
-                    "revision": int(payload.get("revision") or task.get("revision") or 1),
-                }
-        text = self._checkpoint_text(task.get("checkpoint"))
+        if event is not None and "checkpoint" in (event.get("payload") or {}):
+            payload = event["payload"]
+            value = payload["checkpoint"]
+            agent_id = event.get("agent_id")
+            return {
+                "checkpoint": value,
+                "text": self._checkpoint_text(value) or "",
+                "author": public_agent_name(agent_id) if agent_id else "system",
+                "created_at": event["created_at"],
+                "revision": int(payload.get("revision") or task.get("revision") or 1),
+            }
+        value = task.get("checkpoint")
+        text = self._checkpoint_text(value)
         if text is None:
             return None
         return {
+            "checkpoint": value,
             "text": text,
             "author": "unknown",
             "created_at": task.get("updated_at") or task.get("created_at") or utc_text(),

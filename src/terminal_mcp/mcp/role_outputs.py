@@ -8,7 +8,15 @@ import logging
 from typing import Annotated, Any, ClassVar, Literal
 
 from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    TypeAdapter,
+    model_serializer,
+)
 
 from terminal_mcp.adapters.mcp_identity import current_provider_evidence
 from terminal_mcp.core.provider_identity import ProviderIdentityRegistry
@@ -22,19 +30,17 @@ from terminal_mcp.core.public_errors import (
 )
 from terminal_mcp.core.task_projections import (
     Cursor,
-    TaskDetail,
     TaskEventHistory,
     TaskListItem,
     TaskOutputHistory,
     TaskReceipt,
     TaskReviewHistory,
-    TaskSnapshot,
-    TaskWorkingSet,
     WorkflowWarning,
 )
 from terminal_mcp.mcp.output_contracts import (
     AccessError,
     CmdOutput,
+    CmdRunOutput,
     MessageOutput,
     SessionEndResult,
     SessionInterruptResult,
@@ -44,6 +50,14 @@ from terminal_mcp.mcp.output_contracts import (
     projected_result,
 )
 from terminal_mcp.mcp.output_planning import flat_output_schema
+from terminal_mcp.mcp.public_responses import (
+    IncomingMessage,
+    OperationNotices,
+    PublicTaskDetail,
+    PublicTaskHistory,
+    PublicTaskSnapshot,
+    incoming_messages,
+)
 
 
 class _Strict(BaseModel):
@@ -119,12 +133,8 @@ class TaskListOutput(_RoleOutput, RootModel[TaskListWire]):
     __success_type__ = TaskListSuccess
 
 
-class TaskClaimSuccess(_Strict):
+class TaskClaimSuccess(OperationNotices):
     ok: Literal[True]
-    action: Literal["claim"]
-    task: TaskWorkingSet
-    warnings: list[WorkflowWarning] = Field(default_factory=list)
-    session_lifecycle: SessionLifecycleInfo | None = None
 
 
 class TaskReleaseSuccess(_Strict):
@@ -135,16 +145,14 @@ class TaskReleaseSuccess(_Strict):
     session_lifecycle: SessionLifecycleInfo | None = None
 
 
-TaskClaimSuccessWire = Annotated[
-    TaskClaimSuccess | TaskReleaseSuccess, Field(discriminator="action")
-]
+TaskClaimSuccessWire = TaskClaimSuccess
 
 
 class TaskClaimOutput(_RoleOutput, RootModel[TaskClaimSuccessWire | AccessError]):
     __success_type__ = TaskClaimSuccessWire
 
 
-class TaskStateSuccess(_Strict):
+class TaskStateSuccess(OperationNotices):
     ok: Literal[True]
 
 
@@ -152,7 +160,7 @@ class TaskStateOutput(_RoleOutput, RootModel[TaskStateSuccess | AccessError]):
     __success_type__ = TaskStateSuccess
 
 
-class TaskCommentSuccess(_Strict):
+class TaskCommentSuccess(OperationNotices):
     ok: Literal[True]
 
 
@@ -160,31 +168,25 @@ class TaskCommentOutput(_RoleOutput, RootModel[TaskCommentSuccess | AccessError]
     __success_type__ = TaskCommentSuccess
 
 
-class TaskGetSnapshotSuccess(_Strict):
+class TaskGetSnapshotSuccess(OperationNotices):
     ok: Literal[True]
-    detail: Literal["snapshot"]
-    task: TaskSnapshot
+    task: PublicTaskSnapshot
 
 
-class TaskGetDetailSuccess(_Strict):
+class TaskGetDetailSuccess(OperationNotices):
     ok: Literal[True]
-    detail: Literal["detail"]
-    task: TaskDetail
+    task: PublicTaskDetail
 
 
 TaskHistoryPage = TaskEventHistory | TaskReviewHistory | TaskOutputHistory
 
 
-class TaskGetHistorySuccess(_Strict):
+class TaskGetHistorySuccess(OperationNotices):
     ok: Literal[True]
-    detail: Literal["history"]
-    task: TaskHistoryPage
+    task: PublicTaskHistory
 
 
-TaskGetSuccess = Annotated[
-    TaskGetSnapshotSuccess | TaskGetDetailSuccess | TaskGetHistorySuccess,
-    Field(discriminator="detail"),
-]
+TaskGetSuccess = TaskGetSnapshotSuccess | TaskGetDetailSuccess | TaskGetHistorySuccess
 
 
 class TaskGetOutput(_RoleOutput, RootModel[TaskGetSuccess | AccessError]):
@@ -293,22 +295,19 @@ class HealthIdentityDiagnostic(_Strict):
     authority_node_id: str | None = None
 
 
-class CompactHealthSuccess(_Strict):
-    ok: bool
-    healthy: bool | None = None
-    application: str | None = None
-    agent_name: str | None = None
-    version: str | None = None
-    storage: str | None = None
-    status: Literal["healthy", "degraded", "failed"] | None = None
-    components: list[CompactHealthComponent] = Field(default_factory=list)
-    terminal: CompactHealthTerminal = Field(default_factory=CompactHealthTerminal)
-    workflow: CompactHealthWorkflow = Field(default_factory=CompactHealthWorkflow)
+class CompactHealthSuccess(OperationNotices):
+    ok: Literal[True]
+    healthy: bool
+    application: str | None
+    agent_name: str | None
+    version: str | None
+    storage: str | None
 
 
 class ExtendedHealthSuccess(CompactHealthSuccess):
-    auth_mode: str | None = None
-    identity: HealthIdentityDiagnostic
+    components: list[dict[str, JsonValue]]
+    terminal: dict[str, JsonValue]
+    workflow: dict[str, JsonValue]
 
 
 RoleHealthSuccess = ExtendedHealthSuccess | CompactHealthSuccess
@@ -321,7 +320,7 @@ class RoleHealthOutput(_RoleOutput, RootModel[RoleHealthSuccess | AccessError]):
 ROLE_OUTPUT_MODELS = {
     ("executor", "session"): RoleSessionOutput,
     ("executor", "task_list"): TaskListOutput,
-    ("executor", "command_run"): CmdOutput,
+    ("executor", "command_run"): CmdRunOutput,
     ("executor", "command_read"): CmdOutput,
     ("executor", "command_cancel"): CmdOutput,
     ("executor", "command_recovery"): CmdOutput,
@@ -355,6 +354,7 @@ class RoleErrorBody(_Strict):
 
 
 class RoleFailure(_Strict):
+    messages: list[IncomingMessage] | None = Field(default=None, min_length=1)
     ok: Literal[False]
     provider_identity: ProviderFingerprint | None = None
     error: RoleErrorBody
@@ -396,6 +396,7 @@ def role_error_result(raw: dict) -> CallToolResult:
     )
     data = RoleFailure(
         ok=False,
+        messages=incoming_messages({"pending_messages": pending}) or None,
         error=RoleErrorBody.model_validate(body),
         provider_identity=session_provider_fingerprint(),
         required_action=action if action in {"ack", "reply"} else None,
@@ -465,6 +466,8 @@ def install_role_output_contract(mcp, role: str, *, overrides=None, application=
         async def contracted(*, _raw_fn=raw_fn, _model=output_model, _name=tool_name, **kwargs):
             try:
                 raw = await _raw_fn(**kwargs)
+                notice_meta = raw.get("_meta") or {}
+                raw = {key: value for key, value in raw.items() if key != "_meta"}
                 if raw.get("ok") is False:
                     result = role_error_result(raw)
                     result.meta = await _session_envelope(application, role)
@@ -476,7 +479,11 @@ def install_role_output_contract(mcp, role: str, *, overrides=None, application=
                 result = projected_result(raw, _model, tool=_name, variant=role)
                 if result.structuredContent.get("ok") is False:
                     result = role_error_result(result.structuredContent)
-                result.meta = {**(result.meta or {}), **await _session_envelope(application, role)}
+                result.meta = {
+                    **(result.meta or {}),
+                    **notice_meta,
+                    **await _session_envelope(application, role),
+                }
                 return result
             except Exception as exc:
                 logger.exception("role_tool_failure role=%s tool=%s", role, _name)

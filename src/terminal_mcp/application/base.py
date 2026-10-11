@@ -80,6 +80,7 @@ def application_operation(capability: str):
         async def invoke(self, actor: ActorContext, *args, **kwargs):
             if not self.policy.allows(actor, capability):
                 return public_error("capability_not_allowed").as_dict()
+            message_state = {}
             if capability in {"observations", "contexts", "health"} and (
                 actor.endpoint_role in {"executor", "coordinator"}
                 and getattr(self.gate, "command_state", None) is not None
@@ -87,12 +88,10 @@ def application_operation(capability: str):
                 # Public reads remain possible without a work window. For an
                 # attached session, mandatory inbox messages take precedence.
                 try:
-                    resolved = await self.gate.resolve(
-                        actor, None, ManagedOperation.MESSAGE_READ
-                    )
+                    resolved = await self.gate.resolve(actor, None, ManagedOperation.MESSAGE_READ)
                     identity = resolved.identity
                     if identity and identity.get("work_session_id"):
-                        _state, pending = await self.gate.command_state(
+                        message_state, pending = await self.gate.command_state(
                             actor, identity, capability
                         )
                         if pending is not None:
@@ -103,6 +102,8 @@ def application_operation(capability: str):
                     pass
             with actor.bind():
                 result = await function(self, actor, *args, **kwargs)
+                if isinstance(result, dict) and result.get("ok") and message_state:
+                    result = {**result, **message_state}
                 return canonical_application_result(result)
 
         return invoke

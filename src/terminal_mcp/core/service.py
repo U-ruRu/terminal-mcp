@@ -459,6 +459,7 @@ class TerminalService:
                         result["status"] = "not_found"
                         result["overall_lines_count"] = 0
                         return result
+                    result["cmd"] = command.cmd
                     result["status"] = command.status
                     result["exit_code"] = command.exit_code
                     result["error"] = command.error

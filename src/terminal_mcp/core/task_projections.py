@@ -143,6 +143,7 @@ class TaskClaim(_Strict):
 
 
 class TaskCheckpointSnapshot(_Strict):
+    checkpoint: JsonPayload | None = None
     text: Annotated[str, Field(max_length=4000)]
     author: str
     created_at: str

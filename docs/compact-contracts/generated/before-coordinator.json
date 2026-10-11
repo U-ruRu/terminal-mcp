@@ -50,6 +50,12 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -91,7 +97,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read one canonical task as snapshot, detail, or history. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.",
+      "description": "Read one task inside task without detail/kind response wrappers. Snapshot includes native latest_checkpoint.checkpoint; events omit internal actor IDs and preserve payload. History cursors bind to the selected stream snapshot; after history changes an old cursor returns invalid_cursor and reading must restart. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "cursor": {
@@ -131,11 +137,14 @@
       "name": "task_get",
       "outputSchema": {
         "properties": {
-          "detail": {
-            "type": "string"
-          },
           "error": {
             "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "message_hash": {
             "type": [
@@ -143,8 +152,20 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -171,6 +192,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -236,6 +263,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "next_cursor": {
@@ -2707,14 +2740,32 @@
           "error": {
             "type": "object"
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "message_hash": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -2756,7 +2807,10 @@
             ]
           },
           "warnings": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2822,6 +2876,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "next_cursor": {
@@ -2901,6 +2961,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "ok": {
@@ -3054,6 +3120,12 @@
           "error": {
             "type": "object"
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "message": {
             "type": "object"
           },
@@ -3064,7 +3136,10 @@
             ]
           },
           "messages": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "next_cursor": {
             "type": [
@@ -3074,6 +3149,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -3119,6 +3200,12 @@
           },
           "unavailable_peers": {
             "type": "array"
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3134,7 +3221,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Read compact health; set extended=true for canonical diagnostics. Available without an active work cycle or Access Code.",
+      "description": "Read ok, healthy, application, agent_name, version and storage. extended=true adds complete components, terminal and workflow. Hidden mandatory components still contribute to healthy; auth/identity diagnostics are excluded. Available without an active work cycle or Access Code.",
       "inputSchema": {
         "properties": {
           "extended": {
@@ -3168,12 +3255,6 @@
               "string"
             ]
           },
-          "auth_mode": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "components": {
             "type": "array"
           },
@@ -3181,13 +3262,13 @@
             "type": "object"
           },
           "healthy": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
           },
-          "identity": {
-            "type": "object"
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "message_hash": {
             "type": [
@@ -3195,8 +3276,20 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -3214,12 +3307,6 @@
             "type": [
               "boolean",
               "null"
-            ]
-          },
-          "status": {
-            "type": [
-              "null",
-              "string"
             ]
           },
           "storage": {
@@ -3241,6 +3328,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "workflow": {

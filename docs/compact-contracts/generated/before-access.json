@@ -51,6 +51,12 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },

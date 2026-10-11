@@ -124,7 +124,9 @@ class PersistentBackend:
             # sink fails afterwards.
             try:
                 await self._audit(
-                    logical_agent_id, operation, payload={"request": request},
+                    logical_agent_id,
+                    operation,
+                    payload={"request": request},
                 )
             except Exception:
                 # Never lose the committed receipt due to a failed secondary
@@ -133,8 +135,11 @@ class PersistentBackend:
                     events = getattr(getattr(self, "service", None), "events", None)
                     if events is not None:
                         events.emit(
-                            "postcommit_audit_failed", level="ERROR", outcome="error",
-                            logical_agent_id=logical_agent_id, operation=operation,
+                            "postcommit_audit_failed",
+                            level="ERROR",
+                            outcome="error",
+                            logical_agent_id=logical_agent_id,
+                            operation=operation,
                         )
                 except Exception:
                     pass
@@ -784,10 +789,13 @@ class PersistentBackend:
                 "messages": messages,
                 "pending_messages": messages,
                 "ack_required_pending": any(
-                    item.get("delivery_mode") == "ack" and item["read_at"] is None
+                    item.get("delivery_mode") == "ack"
+                    and item["read_at"] is None
                     or (
-                        item.get("delivery_mode") == "legacy" and item["require_reply"]
-                        and not item["alert"] and item["read_at"] is None
+                        item.get("delivery_mode") == "legacy"
+                        and item["require_reply"]
+                        and not item["alert"]
+                        and item["read_at"] is None
                     )
                     for item in refreshed
                 ),
@@ -1864,13 +1872,13 @@ class PersistentBackend:
         queue_id: int | None,
         task_scope: str,
     ):
-        loop = asyncio.get_running_loop()
-        inline_deadline = loop.time() + COMMAND_RUN_INLINE_BUDGET_SECONDS
         command = None
         if not cmd:
             return {
-                "ok": False, "code": "input_validation_failed",
-                "error": "command is required", "path": "command",
+                "ok": False,
+                "code": "input_validation_failed",
+                "error": "command is required",
+                "path": "command",
             }
         try:
             async with self.lifecycle.operation_guard(logical_agent_id):
@@ -1951,32 +1959,6 @@ class PersistentBackend:
                     )
             current = await self.repo.get(command.cmd_hash)
             queue_position = await self.repo.queue_position(command.cmd_hash)
-            backlogged = False
-            if current is not None and current.status == "queued":
-                snapshot = await self.repo.queue_snapshot(self.terminal.queue_workers)
-                queue_state = next(
-                    (item for item in snapshot if item.get("queue_id") == command.queue_id),
-                    None,
-                )
-                running_hash = queue_state.get("running") if queue_state is not None else None
-                backlogged = bool(
-                    (running_hash is not None and running_hash != command.cmd_hash)
-                    or (queue_position is not None and queue_position > 1)
-                )
-
-            while (
-                not backlogged
-                and current is not None
-                and current.status not in COMMAND_RUN_TERMINAL_STATES
-                and loop.time() < inline_deadline
-            ):
-                remaining = inline_deadline - loop.time()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(min(COMMAND_RUN_INLINE_POLL_SECONDS, remaining))
-                current = await self.repo.get(command.cmd_hash)
-                queue_position = await self.repo.queue_position(command.cmd_hash)
-
             current = current or command
             return {
                 "ok": True,
@@ -2010,8 +1992,10 @@ class PersistentBackend:
                 # failures in submission, task audit or inline readback cannot
                 # be reported as an uncommitted command.
                 return {
-                    "ok": True, "cmd_hash": command.cmd_hash,
-                    "status": command.status, "queue_id": command.queue_id,
+                    "ok": True,
+                    "cmd_hash": command.cmd_hash,
+                    "status": command.status,
+                    "queue_id": command.queue_id,
                     "execution_started": bool(command.claimed_at or command.started_at),
                     "postcommit_warning": type(exc).__name__,
                 }
@@ -2030,8 +2014,10 @@ class PersistentBackend:
     ):
         if not cmd:
             return {
-                "ok": False, "code": "input_validation_failed",
-                "error": "command is required", "path": "command",
+                "ok": False,
+                "code": "input_validation_failed",
+                "error": "command is required",
+                "path": "command",
             }
         command = None
         try:
@@ -2132,12 +2118,14 @@ class PersistentBackend:
                 command, outcome = await self.repo.accept_cancel_intent(cmd_hash)
                 if command is None:
                     return {
-                        "ok": False, "code": "command_not_found",
+                        "ok": False,
+                        "code": "command_not_found",
                         "error": "command_not_found",
                     }
                 if outcome == "command_already_finished":
                     return {
-                        "ok": False, "code": "command_already_finished",
+                        "ok": False,
+                        "code": "command_already_finished",
                         "error": f"command is already {command.status}",
                     }
                 execution_started = bool(command.claimed_at or command.started_at)
@@ -2149,7 +2137,8 @@ class PersistentBackend:
                     and not execution_started
                 )
                 accepted_receipt = {
-                    "ok": True, "cmd_hash": cmd_hash,
+                    "ok": True,
+                    "cmd_hash": cmd_hash,
                     "status": "cancelled" if outcome == "queued" else command.status,
                     "cancel_requested": True,
                     "cancelled_from": "queued" if cancelled_before_start else "running",
@@ -2227,9 +2216,7 @@ class PersistentBackend:
                     actual_task = result.get("task") if isinstance(result, dict) else None
                     # Returning an already committed create receipt must not
                     # append a second persistent audit event.
-                    replayed_create = (
-                        action == "create" and getattr(result, "replayed", False)
-                    )
+                    replayed_create = action == "create" and getattr(result, "replayed", False)
                     if result.get("ok") and actual_task and not replayed_create:
                         try:
                             await self.task_store.add_event(

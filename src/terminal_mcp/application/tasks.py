@@ -20,11 +20,12 @@ class TaskApplication(ApplicationCapability):
         )
         if failure is not None:
             return failure
+        message_state = {}
         if (
             getattr(self.gate, "command_state", None) is not None
             and getattr(self.backend, "message_state", None) is not None
         ):
-            _state, message_failure = await self.gate.command_state(actor, identity, action)
+            message_state, message_failure = await self.gate.command_state(actor, identity, action)
             if message_failure is not None:
                 return _with_session_lifecycle(message_failure, identity)
         result = await self.backend.task(
@@ -49,4 +50,5 @@ class TaskApplication(ApplicationCapability):
             ),
             **backend_request,
         )
+        result.update(message_state or {})
         return _with_session_lifecycle(result, identity)

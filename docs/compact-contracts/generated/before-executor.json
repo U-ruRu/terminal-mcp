@@ -50,6 +50,12 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -142,6 +148,12 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "next_cursor": {
             "type": [
               "null",
@@ -192,7 +204,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Run a command; fast completion may include the first bounded output page. Attach this connector once; writes use its local work cycle.",
+      "description": "Accept a command without waiting for start, completion or output. Return ok, remaining_seconds, cmd_hash, observed status and queue_id when applicable. Use command_read for body, output and exit code. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "properties": {
           "command": {
@@ -221,55 +233,16 @@
       "name": "command_run",
       "outputSchema": {
         "properties": {
-          "action": {
+          "cmd_hash": {
             "type": "string"
-          },
-          "command": {
-            "type": "object"
-          },
-          "coordination": {
-            "type": [
-              "null",
-              "object"
-            ]
-          },
-          "displayed_lines_count": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "duration_ms": {
-            "type": [
-              "integer",
-              "null"
-            ]
           },
           "error": {
             "type": "object"
           },
-          "has_more": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "identity": {
+          "intent_warning": {
             "type": [
               "null",
-              "object"
-            ]
-          },
-          "line_truncated": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "lines": {
-            "type": [
-              "array",
-              "null"
+              "string"
             ]
           },
           "message_hash": {
@@ -278,55 +251,37 @@
               "string"
             ]
           },
-          "next_cursor": {
+          "messages": {
             "type": [
-              "null",
-              "string"
-            ]
-          },
-          "next_offset": {
-            "type": [
-              "integer",
+              "array",
               "null"
             ]
           },
           "ok": {
             "type": "boolean"
           },
-          "output_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "output_pruned_at": {
+          "postcommit_warning": {
             "type": [
               "null",
               "string"
-            ]
-          },
-          "output_retained": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "output_truncated": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "overall_lines_count": {
-            "type": [
-              "integer",
-              "null"
             ]
           },
           "provider_identity": {
             "type": [
               "null",
               "object"
+            ]
+          },
+          "queue_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "remaining_seconds": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "required_action": {
@@ -341,28 +296,19 @@
               "null"
             ]
           },
-          "session_lifecycle": {
-            "type": [
-              "null",
-              "object"
-            ]
-          },
-          "task_scope": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "task_scope_options": {
-            "type": "array"
-          },
-          "task_targets": {
-            "type": "array"
+          "status": {
+            "type": "string"
           },
           "text": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -452,6 +398,12 @@
               "object"
             ]
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "line_truncated": {
             "type": [
               "boolean",
@@ -465,6 +417,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "next_cursor": {
@@ -515,6 +473,12 @@
               "null"
             ]
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
@@ -543,6 +507,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -583,6 +553,9 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": "string"
+          },
           "command": {
             "type": "object"
           },
@@ -619,6 +592,12 @@
               "object"
             ]
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "line_truncated": {
             "type": [
               "boolean",
@@ -626,15 +605,18 @@
             ]
           },
           "lines": {
-            "type": [
-              "array",
-              "null"
-            ]
+            "type": "array"
           },
           "message_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "next_cursor": {
@@ -682,10 +664,28 @@
               "null"
             ]
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
+            ]
+          },
+          "queue_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "remaining_seconds": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "required_action": {
@@ -706,22 +706,19 @@
               "object"
             ]
           },
-          "task_scope": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "task_scope_options": {
-            "type": "array"
-          },
-          "task_targets": {
-            "type": "array"
+          "status": {
+            "type": "string"
           },
           "text": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -762,6 +759,9 @@
           "action": {
             "type": "string"
           },
+          "cmd_hash": {
+            "type": "string"
+          },
           "command": {
             "type": "object"
           },
@@ -798,6 +798,12 @@
               "object"
             ]
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "line_truncated": {
             "type": [
               "boolean",
@@ -805,15 +811,18 @@
             ]
           },
           "lines": {
-            "type": [
-              "array",
-              "null"
-            ]
+            "type": "array"
           },
           "message_hash": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "messages": {
+            "type": [
+              "array",
+              "null"
             ]
           },
           "next_cursor": {
@@ -861,10 +870,28 @@
               "null"
             ]
           },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "provider_identity": {
             "type": [
               "null",
               "object"
+            ]
+          },
+          "queue_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "remaining_seconds": {
+            "type": [
+              "integer",
+              "null"
             ]
           },
           "required_action": {
@@ -885,22 +912,19 @@
               "object"
             ]
           },
-          "task_scope": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "task_scope_options": {
-            "type": "array"
-          },
-          "task_targets": {
-            "type": "array"
+          "status": {
+            "type": "string"
           },
           "text": {
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -917,7 +941,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Attach this connector once; writes use its local work cycle.",
+      "description": "Claim/release a task. claim uses claim_intent; release may use release_reason. Ordinary success is only ok:true; actual incoming messages and warnings remain. Read task details with task_get. Attach this connector once; writes use its local work cycle.",
       "inputSchema": {
         "properties": {
           "action": {
@@ -963,11 +987,14 @@
       "name": "task_claim",
       "outputSchema": {
         "properties": {
-          "action": {
-            "type": "string"
-          },
           "error": {
             "type": "object"
+          },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "message_hash": {
             "type": [
@@ -975,8 +1002,20 @@
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -996,15 +1035,6 @@
               "null"
             ]
           },
-          "session_lifecycle": {
-            "type": [
-              "null",
-              "object"
-            ]
-          },
-          "task": {
-            "type": "object"
-          },
           "text": {
             "type": [
               "null",
@@ -1012,7 +1042,10 @@
             ]
           },
           "warnings": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1076,14 +1109,32 @@
           "error": {
             "type": "object"
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "message_hash": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -1107,6 +1158,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -1169,14 +1226,32 @@
           "error": {
             "type": "object"
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "message_hash": {
             "type": [
               "null",
               "string"
             ]
           },
+          "messages": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -1200,6 +1275,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -1326,6 +1407,12 @@
           "error": {
             "type": "object"
           },
+          "intent_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "message": {
             "type": "object"
           },
@@ -1336,7 +1423,10 @@
             ]
           },
           "messages": {
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "next_cursor": {
             "type": [
@@ -1346,6 +1436,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "postcommit_warning": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "provider_identity": {
             "type": [
@@ -1391,6 +1487,12 @@
           },
           "unavailable_peers": {
             "type": "array"
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [

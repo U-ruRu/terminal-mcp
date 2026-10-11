@@ -395,66 +395,72 @@ ROLE_TOOL_MODELS: dict[tuple[str, str], type[StrictRoleInput]] = {
 
 
 ROLE_TOOL_DESCRIPTIONS: dict[tuple[str, str], str] = {
-    (
-        "executor",
-        "session",
-    ): "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent.",
-    (
-        "executor",
-        "task_list",
-    ): "Read bounded TaskListItem records for work orientation. By default excludes "
-    "done and archived; state='done' includes only non-archived done tasks. "
-    "namespace=None spans namespaces; state/lane/tags filter the results.",
-    (
-        "executor",
-        "command_run",
-    ): "Run a command; fast completion may include the first bounded output page.",
-    (
-        "executor",
-        "command_read",
-    ): "Read bounded command status/output using opaque cursor pagination.",
-    ("executor", "command_cancel"): "Cancel a command owned by the current LogicalAgent.",
-    ("executor", "command_recovery"): "Run a recovery command under the current managed session.",
-    (
-        "executor",
-        "task_claim",
-    ): "Claim/release a task. claim uses claim_intent; release may use release_reason.",
-    (
-        "executor",
-        "task_state",
-    ): "Set a valid task state as any admitted agent, including on a task claimed by someone else.",
-    ("executor", "task_comment"): "Append a comment/checkpoint note to canonical task history.",
-    (
-        "executor",
-        "message",
-    ): "Managed inbox: send needs text; ack needs message_hash; reply needs both.",
-    (
-        "coordinator",
-        "session",
-    ): "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent.",
-    ("coordinator", "task_get"): "Read one canonical task as snapshot, detail, or history. "
-    "History cursors bind to the selected stream snapshot; after history changes "
-    "an old cursor returns invalid_cursor and reading must restart.",
-    ("coordinator", "task_list"): "Read a bounded page of canonical TaskListItem records. "
-    "Default excludes done and archived. state='done' includes only non-archived "
-    "done tasks. namespace=None spans namespaces; state/lane/tags are filters.",
-    (
-        "coordinator",
-        "task_manage",
-    ): "Apply a task mutation. create needs isolation_hint; existing tasks need task_id. "
-    "checkpoint needs checkpoint; state needs state; comment needs comment_text; "
-    "review needs dimensions/verdict; relate/unrelate need relation_kind/related_task_id; "
-    "archive needs either non-null archive_note or non-null note.",
-    ("coordinator", "task_graph"): "Read a bounded dependency/relation graph rooted at one task.",
-    (
-        "coordinator",
-        "agent_observe",
-    ): "Read compact current LogicalAgent, WorkWindow, and WorkSession state.",
-    (
-        "coordinator",
-        "message",
-    ): "Managed inbox: send needs text; ack needs message_hash; reply needs both.",
-    ("coordinator", "health"): "Read compact health; set extended=true for canonical diagnostics.",
+    ("executor", "session"): (
+        "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
+    ),
+    ("executor", "task_list"): (
+        "Read bounded TaskListItem records for work orientation. By default excludes "
+        "done and archived; state='done' includes only non-archived done tasks. "
+        "namespace=None spans namespaces; state/lane/tags filter the results."
+    ),
+    ("executor", "command_run"): (
+        "Accept a command without waiting for start, completion or output. Return ok, "
+        "remaining_seconds, cmd_hash, observed status and queue_id when applicable. Use"
+        " command_read for body, output and exit code."
+    ),
+    ("executor", "command_read"): (
+        "Read command.cmd, current status, known exit_code/error and retained output "
+        "lines. Continue with the opaque cursor; failed/cancelled commands remain "
+        "readable."
+    ),
+    ("executor", "command_cancel"): ("Cancel a command owned by the current LogicalAgent."),
+    ("executor", "command_recovery"): ("Run a recovery command under the current managed session."),
+    ("executor", "task_claim"): (
+        "Claim/release a task. claim uses claim_intent; release may use release_reason."
+        " Ordinary success is only ok:true; actual incoming messages and warnings "
+        "remain. Read task details with task_get."
+    ),
+    ("executor", "task_state"): (
+        "Set a valid task state as any admitted agent, including on a task claimed by someone else."
+    ),
+    ("executor", "task_comment"): ("Append a comment/checkpoint note to canonical task history."),
+    ("executor", "message"): (
+        "Managed inbox: send needs text; ack needs message_hash; reply needs both."
+    ),
+    ("coordinator", "session"): (
+        "Start, end, or interrupt the managed WorkSession for the server-resolved LogicalAgent."
+    ),
+    ("coordinator", "task_get"): (
+        "Read one task inside task without detail/kind response wrappers. Snapshot "
+        "includes native latest_checkpoint.checkpoint; events omit internal actor IDs "
+        "and preserve payload. History cursors bind to the selected stream snapshot; "
+        "after history changes an old cursor returns invalid_cursor and reading must "
+        "restart."
+    ),
+    ("coordinator", "task_list"): (
+        "Read a bounded page of canonical TaskListItem records. Default excludes done "
+        "and archived. state='done' includes only non-archived done tasks. "
+        "namespace=None spans namespaces; state/lane/tags are filters."
+    ),
+    ("coordinator", "task_manage"): (
+        "Apply a task mutation. create needs isolation_hint; existing tasks need "
+        "task_id. checkpoint needs checkpoint; state needs state; comment needs "
+        "comment_text; review needs dimensions/verdict; relate/unrelate need "
+        "relation_kind/related_task_id; archive needs either non-null archive_note or "
+        "non-null note."
+    ),
+    ("coordinator", "task_graph"): ("Read a bounded dependency/relation graph rooted at one task."),
+    ("coordinator", "agent_observe"): (
+        "Read compact current LogicalAgent, WorkWindow, and WorkSession state."
+    ),
+    ("coordinator", "message"): (
+        "Managed inbox: send needs text; ack needs message_hash; reply needs both."
+    ),
+    ("coordinator", "health"): (
+        "Read ok, healthy, application, agent_name, version and storage. extended=true "
+        "adds complete components, terminal and workflow. Hidden mandatory components "
+        "still contribute to healthy; auth/identity diagnostics are excluded."
+    ),
 }
 
 
