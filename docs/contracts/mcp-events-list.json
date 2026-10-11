@@ -79,6 +79,11 @@
           "agent_name": {
             "type": "string"
           },
+          "reason": {
+            "description": "manual for an explicit end, expired for timer expiry; other committed causes retain their stored reason.",
+            "minLength": 1,
+            "type": "string"
+          },
           "server": {
             "type": "string"
           },
@@ -88,7 +93,8 @@
         },
         "required": [
           "agent_name",
-          "server"
+          "server",
+          "reason"
         ],
         "type": "object"
       }

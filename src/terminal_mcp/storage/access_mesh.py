@@ -29,6 +29,7 @@ from terminal_mcp.core.access_mesh_grants import (
     _utc,
 )
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
+from terminal_mcp.core.session_end_reasons import session_end_reason
 
 _mutation_receipt: ContextVar[dict | None] = ContextVar("mesh_issuer_receipt", default=None)
 _mutation_number: ContextVar[dict | None] = ContextVar("mesh_session_number", default=None)
@@ -251,7 +252,9 @@ class AccessMeshStore(LocalAccessMesh):
         self, db, slot: SlotSnapshot, *, job_id: str, reason: str, stamp: str, release_claims: bool
     ) -> None:
         current = db.execute(
-            "SELECT * FROM access_mesh_local_sessions WHERE issuer_id=? AND slot_id=?",
+            "SELECT l.*,s.hard_expires_at FROM access_mesh_local_sessions l "
+            "LEFT JOIN logical_agent_work_sessions s USING(work_session_id) "
+            "WHERE l.issuer_id=? AND l.slot_id=?",
             (slot.issuer_id, slot.slot_id),
         ).fetchone()
         session_id = current["work_session_id"] if current else None
@@ -260,7 +263,13 @@ class AccessMeshStore(LocalAccessMesh):
             db.execute(
                 "UPDATE logical_agent_work_sessions SET state='ended',ended_at=?,"
                 "end_reason=? WHERE work_session_id=? AND state IN ('active','stopping')",
-                (stamp, reason, session_id),
+                (
+                    stamp,
+                    session_end_reason(
+                        reason, ended_at=stamp, hard_expires_at=current["hard_expires_at"]
+                    ),
+                    session_id,
+                ),
             )
         db.execute(
             """INSERT INTO access_mesh_cleanup_jobs

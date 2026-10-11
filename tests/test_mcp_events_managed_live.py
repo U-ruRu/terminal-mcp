@@ -121,7 +121,10 @@ async def test_managed_end_without_presence_once_even_after_metadata_retry(manag
     await events.pump()
     first = rows(path, "session.ended")
     assert len(first) == 1
-    assert first[0]["data"] == {"agent_name": "Visible Agent", "server": NODE}
+    assert first[0]["data"] == {
+        "agent_name": "Visible Agent", "server": NODE,
+        "reason": "manual" if terminal == "ended" else "expired",
+    }
     with sqlite3.connect(path) as db:
         db.execute(
             "UPDATE logical_agent_work_sessions SET end_reason='retry_cleanup' "
