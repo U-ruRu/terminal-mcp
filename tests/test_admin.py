@@ -10,7 +10,13 @@ from terminal_mcp.config import Settings
 
 def make_settings(tmp_path):
     return Settings(
+        _env_file=None,
+        _env_prefix=f"TMCP_OAUTH_TEST_{tmp_path.name.upper()}_",
         database_path=tmp_path / "db.sqlite3",
+        auth_database_path=tmp_path / "auth.sqlite3",
+        output_cache_path=tmp_path / "output.sqlite3",
+        runtime_config_path=tmp_path / "runtime.env",
+        log_path=tmp_path / "terminal-mcp.log",
         cwd="/",
         terminal_user="root",
         env_file_path=tmp_path / "terminal-mcp.env",

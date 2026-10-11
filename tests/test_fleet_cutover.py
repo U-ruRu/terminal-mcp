@@ -37,7 +37,10 @@ def test_legacy_mesh_can_retire_while_v1_and_persistent_keep_peer_auth(tmp_path)
     _, peer_public = _keypair()
     settings = Settings(
         _env_file=None,
+        _env_prefix=f"TMCP_OAUTH_TEST_{tmp_path.name.upper()}_",
         database_path=tmp_path / "runtime.sqlite3",
+        auth_database_path=tmp_path / "auth.sqlite3",
+        env_file_path=tmp_path / "terminal-mcp.env",
         output_cache_path=tmp_path / "output.sqlite3",
         runtime_config_path=tmp_path / "runtime.env",
         log_path=tmp_path / "terminal-mcp.log",
