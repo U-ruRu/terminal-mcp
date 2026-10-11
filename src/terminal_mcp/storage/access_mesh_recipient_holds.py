@@ -124,20 +124,40 @@ class MeshRecipientHolds:
     def local_recipients(self):
         with self.store._connect() as db:
             rows = db.execute(
-                "SELECT DISTINCT h.recipient_agent_id,h.issuer_id,h.slot_id,h.number "
+                "SELECT DISTINCT h.source_node_id,h.recipient_agent_id,h.issuer_id,"
+                "h.slot_id,h.number "
                 "FROM access_mesh_recipient_holds h "
                 "JOIN access_mesh_slot_replicas s USING(issuer_id,slot_id) "
                 "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
-                "WHERE (h.source_node_id=? OR EXISTS("
+                "WHERE (h.source_node_id=? OR h.source_node_id=h.issuer_id OR EXISTS("
                 "SELECT 1 FROM access_mesh_attachments a "
                 "WHERE a.issuer_id=h.issuer_id AND a.slot_id=h.slot_id "
                 "AND a.logical_agent_id=h.recipient_agent_id)) "
-                "AND h.state='held' AND s.state!='deleted' "
+                "AND h.state='held' AND s.state='active' "
                 "AND s.logical_agent_id=h.recipient_agent_id "
                 "AND c.logical_agent_id=h.recipient_agent_id AND c.number=h.number",
                 (self.store.local_node_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        recipients = []
+        for row in rows:
+            # Replicated issuer-owned subscriptions confer message-only presence,
+            # never execution authority. Recheck current trust and the immutable
+            # number winner instead of trusting historical snapshot admission.
+            if (
+                row["source_node_id"] not in self.store.trusted_issuers
+                or row["issuer_id"] not in self.store.trusted_issuers
+            ):
+                continue
+            winner = self.store.numbers.winner(row["number"])
+            if winner is None or (
+                winner["issuer_id"], winner["slot_id"], winner["logical_agent_id"]
+            ) != (row["issuer_id"], row["slot_id"], row["recipient_agent_id"]):
+                continue
+            recipients.append({
+                key: row[key]
+                for key in ("recipient_agent_id", "issuer_id", "slot_id", "number")
+            })
+        return recipients
 
     def snapshot(self, *, after="", limit=25):
         if (

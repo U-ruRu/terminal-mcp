@@ -148,3 +148,29 @@ subscription was removed before dispatch. An HTTP callback request already in
 progress cannot be recalled. At-least-once retry behavior remains unchanged.
 
 Official contract: https://developers.openai.com/plugins/build/mcp-events
+
+
+## Issuer-owned held recipients on trusted Mesh nodes
+
+A valid subscription on the original Access issuer makes its exact held
+LogicalAgent/issuer/slot/number a message-only recipient on each currently trusted
+Mesh node, even without a local executor/coordinator attachment. Discovery and
+send recheck current issuer/source trust, the active slot and current number
+winner. Withdrawn, superseded, mismatched, untrusted and suspended/deleted holds
+are excluded. Arbitrary replicated grants are still not recipients; holds created
+on a different subscriber node retain their previous local/attachment scope.
+
+This presence creates no WorkSession, attachment, execution permission or extra
+work time. New sends still require the sender's normal authenticated local work
+cycle and intent. The authenticated original issuer's hold is replicated through
+the existing transport; there is no new trust or credential mechanism.
+
+Message acceptance, inbox storage and unresolved ACK/reply obligations remain
+on the sending server. The private message.received Event can reach the
+subscription's Access server, preserving the original message ID, timestamp and
+source server. Callback delivery never implicitly ACKs or replies. Use that
+source server's normal message API under the recipient's legitimate local
+attachment to read, ACK or reply; the receiving Access server does not provide a
+global inbox or accept another server's local message ID. Last unsubscribe
+withdraws the presence without erasing already accepted source messages or their
+obligations. Existing message retention and callback/subscription rules apply.

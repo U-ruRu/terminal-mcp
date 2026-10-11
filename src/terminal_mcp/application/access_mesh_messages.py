@@ -285,7 +285,7 @@ class AccessMeshMessaging:
             after = slots[-1].logical_agent_id
             if len(slots) < 100:
                 break
-        # A local webhook binding is message-only presence. Never create a
+        # An eligible subscription hold is message-only presence. Never create a
         # WorkSession, grant, attachment, or extend the existing work deadline.
         for hold in await asyncio.to_thread(self.mesh.store.recipient_holds.local_recipients):
             if hold["recipient_agent_id"] in records:
@@ -318,7 +318,7 @@ class AccessMeshMessaging:
         return list(records.values())
 
     async def _targets(self, wire, excluded=()):
-        """Resolve recipients only from current local attachments.
+        """Resolve current local attachments and eligible subscription holds.
 
         The excluded argument remains only for older internal callers; local
         delivery never carries peer-delivery exclusion metadata.
@@ -351,8 +351,8 @@ class AccessMeshMessaging:
         # Validate before doing any peer work.
         decode_cursor(cursor, query)
         rows = {item["logical_agent_id"]: item for item in await self._local_recipients()}
-        # Each connector reports this node's locally attached recipients only.
-        # Globally replicated identities do not confer message delivery rights.
+        # Message admission includes eligible immutable subscription holds.
+        # Merely replicated identities confer no message delivery rights.
         unavailable = []
         rows.pop(identity["logical_agent_id"], None)
         if len(rows) > MAX_RECIPIENTS:
