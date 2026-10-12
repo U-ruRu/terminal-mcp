@@ -146,6 +146,7 @@ async def test_invalid_or_naive_alert_expiry_is_not_stored(mesh_pair, expiry):
 def lifecycle_app(size):
     slots = [SimpleNamespace(logical_agent_id=f"agent-{i:03}") for i in range(size)]
     store = SimpleNamespace(
+        trusted_issuers=frozenset(),
         defaults=lambda: None,
         local_slots=lambda after: [s for s in slots if s.logical_agent_id > after][:50],
         canonical_slot=lambda slot: slot,
