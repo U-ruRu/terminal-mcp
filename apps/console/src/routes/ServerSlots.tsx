@@ -88,12 +88,14 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     controls: Record<string, ManagedFleetControlReadModel | undefined>
     errors: Record<string, string | undefined>
     confirmed: Record<string, boolean | undefined>
-  }>(() => ({ targets, controls: Object.fromEntries(instances.map((item) => [item.profile.instanceId, loadCachedFleetControlForProfile(item.profile.instanceId, item.profile.origin)?.control])), errors: {}, confirmed: {} }))
-  if (controlCache.targets !== targets) setControlCache({ targets, controls: {}, errors: {}, confirmed: {} })
+    observedAt: Record<string, number | undefined>
+  }>(() => ({ targets, controls: Object.fromEntries(instances.map((item) => [item.profile.instanceId, loadCachedFleetControlForProfile(item.profile.instanceId, item.profile.origin)?.control])), errors: {}, confirmed: {}, observedAt: {} }))
+  if (controlCache.targets !== targets) setControlCache({ targets, controls: {}, errors: {}, confirmed: {}, observedAt: {} })
   const controls = controlCache.targets === targets ? controlCache.controls : {}
   const controlErrors = controlCache.targets === targets ? controlCache.errors : {}
   const controlsConfirmed = controlCache.targets === targets ? controlCache.confirmed : {}
   const controlSerial = useRef<Record<string, number>>({})
+  const controlInFlight = useRef<Record<string, number | undefined>>({})
   const mounted = useRef(true)
   const { states: reads, refresh: refreshNative } = useAccessMeshState(instances, loadAccessMeshSlots, loadAccessMeshDefaults)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
@@ -102,23 +104,35 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     if (!loadFleetControl || !currentTargets.some((item) => item.id === instanceId && item.connected)) return undefined
     const serial = (controlSerial.current[instanceId] ?? 0) + 1
     controlSerial.current[instanceId] = serial
+    controlInFlight.current[instanceId] = serial
     setControlCache((current) => current.targets === targets ? { ...current, confirmed: { ...current.confirmed, [instanceId]: false } } : current)
     try {
       const value = await loadFleetControl(instanceId)
       if (!mounted.current || serial !== controlSerial.current[instanceId]) return undefined
       saveCachedFleetControl(instanceId, value, Date.now()); propagateCachedFleetControl(value, Date.now())
-      setControlCache((current) => current.targets === targets ? { ...current, controls: { ...current.controls, [instanceId]: value }, errors: { ...current.errors, [instanceId]: undefined }, confirmed: { ...current.confirmed, [instanceId]: true } } : current)
+      setControlCache((current) => current.targets === targets ? { ...current, controls: { ...current.controls, [instanceId]: value }, errors: { ...current.errors, [instanceId]: undefined }, confirmed: { ...current.confirmed, [instanceId]: true }, observedAt: { ...current.observedAt, [instanceId]: Date.now() } } : current)
       return value
     } catch (error) {
       if (mounted.current && serial === controlSerial.current[instanceId]) setControlCache((current) => current.targets === targets ? { ...current, errors: { ...current.errors, [instanceId]: slotReadFailure(error).code }, confirmed: { ...current.confirmed, [instanceId]: false } } : current)
       return undefined
+    } finally {
+      if (controlInFlight.current[instanceId] === serial) delete controlInFlight.current[instanceId]
     }
   }, [loadFleetControl, targets])
   useEffect(() => {
     const values: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
     for (const value of values) if (value.connected) void refreshControl(value.id)
+    const poll = () => {
+      if (document.visibilityState === 'hidden') return
+      for (const value of values) if (value.connected && !controlInFlight.current[value.id]) void refreshControl(value.id)
+    }
+    const timer = window.setInterval(poll, 15_000)
+    document.addEventListener('visibilitychange', poll)
     const serials = controlSerial.current
-    return () => { for (const value of values) serials[value.id] = (serials[value.id] ?? 0) + 1 }
+    return () => {
+      window.clearInterval(timer); document.removeEventListener('visibilitychange', poll)
+      for (const value of values) serials[value.id] = (serials[value.id] ?? 0) + 1
+    }
   }, [refreshControl, targets])
 
   const contexts = contextsFromTopology(instances, controls, reads)
@@ -164,7 +178,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const [, updateOperations] = useState(0)
   const [created, setCreated] = useState<SlotReference | null>(null)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
-  const [clock, setClock] = useState(Date.now())
+  const [clock, setClock] = useState(() => Date.now())
   useEffect(() => { const id = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(id) }, [])
   useEffect(() => {
     if (!message) return
@@ -316,7 +330,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const meshPolicy = authorityControl?.policy ?? meshControl?.policy
   const meshSupported = Boolean(authorityRead?.defaults?.meshPolicySupported)
   const meshWritable = Boolean(meshSupported && mutateFleetControl && meshAuthority?.runtime.authStatus === 'connected'
-    && meshAuthority.profile.metadata.scope.split(/\s+/).includes('terminal:execute') && controlsConfirmed[authorityId]
+    && meshAuthority.profile.metadata.scope.split(/\s+/).includes('terminal:execute') && controlsConfirmed[authorityId] && clock - (controlCache.observedAt[authorityId] ?? 0) <= 30_000
     && authorityControl?.managed && authorityControl.nodeId === authorityControl.controlNodeId
     && authorityRead?.defaults && !authorityRead.defaultsPending && !authorityRead.defaultsError
     && clock - (authorityRead.defaultsObservedAt ?? 0) <= 30_000)

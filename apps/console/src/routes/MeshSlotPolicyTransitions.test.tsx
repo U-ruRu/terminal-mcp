@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -64,7 +64,7 @@ async function editThreeHours() {
   fireEvent.change(screen.getByRole('combobox', { name: 'Session duration · Unit' }), { target: { value: 'hours' } })
   return input
 }
-afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.useRealTimers(); vi.restoreAllMocks() })
 
 test('Mesh policy saves three hours through the existing control node and rereads authority and native members', async () => {
   const env = setup()
@@ -127,5 +127,23 @@ test('server settings within Mesh edit local defaults and explicitly reset an ov
   await waitFor(() => expect(env.mutateNative).toHaveBeenCalledTimes(2))
   expect(env.mutateNative.mock.calls[1][1]).toMatchObject({ action: 'defaults', expected_revision: 3, inherit_policy: true })
   expect(env.mutateNative.mock.calls[1][1]).not.toHaveProperty('policy')
+  expect(env.mutateMesh).not.toHaveBeenCalled()
+})
+
+
+test('fresh native defaults do not keep Mesh policy writable while the authority refresh is pending', async () => {
+  vi.useFakeTimers()
+  const env = setup()
+  await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+  expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  env.loadControl.mockImplementation(async (id) => id === 'alpha'
+    ? new Promise<ManagedFleetControlReadModel>(() => undefined)
+    : { ...meshControl(id), policy: env.state.policy })
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+  expect(env.loadControl.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(2)
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  // A 20-second request must not be superseded forever by a 15-second poll.
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+  expect(env.loadControl.mock.calls.filter(([id]) => id === 'alpha')).toHaveLength(2)
   expect(env.mutateMesh).not.toHaveBeenCalled()
 })

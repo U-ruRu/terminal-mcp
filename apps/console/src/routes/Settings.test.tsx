@@ -1,3 +1,4 @@
+import { APK_VERSION_LABEL } from '../appVersion'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test } from 'vitest'
@@ -28,7 +29,7 @@ afterEach(() => {
 test('applies and restores localized application preferences from Settings', async () => {
   const first = renderSettings()
   expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
-  expect(document.querySelector('.settings-version')).toHaveTextContent('APK 0.2.35 · code 37')
+  expect(document.querySelector('.settings-version')).toHaveTextContent(APK_VERSION_LABEL)
 
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Language' }), 'ru')
   expect(screen.getByRole('heading', { name: 'Настройки' })).toBeInTheDocument()
