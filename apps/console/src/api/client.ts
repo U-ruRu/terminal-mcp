@@ -37,6 +37,8 @@ export class ConsoleHttpError extends Error {
     readonly status: number,
     readonly code: string,
     message = 'Terminal MCP Console request failed',
+    readonly endpoint?: string,
+    readonly elapsedMs?: number,
   ) {
     super(message)
     this.name = 'ConsoleHttpError'
@@ -68,8 +70,10 @@ export class ConsoleClient {
     origin: string,
     private readonly accessToken: () => string,
     private readonly fetcher: FetchLike = fetch,
+    private readonly timeoutMs = 20_000,
   ) {
     this.origin = new URL(origin).origin
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('invalid_request_timeout')
   }
 
   async snapshot(): Promise<ConsoleSnapshotReadModel> {
@@ -304,25 +308,61 @@ export class ConsoleClient {
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<unknown> {
-    let response: Response
-    try {
-      response = await this.fetcher(new URL(path, this.origin), {
-        ...init,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${this.accessToken()}`,
-          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-          ...init.headers,
-        },
-      })
-    } catch {
-      throw new ConsoleHttpError(0, 'network_error')
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    // Diagnostic route templates contain neither credentials, payloads nor selected slot IDs.
+    const endpoint = new URL(path, this.origin).pathname.replace(
+      /^\/actions\/access\/slots\/[^/]+$/, '/actions/access/slots/:slot_id',
+    )
+    const failure = (code: string) => new ConsoleHttpError(
+      0, code, 'Terminal MCP Console request failed', endpoint, Date.now() - startedAt,
+    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let stop: (error: ConsoleHttpError) => void = () => undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      stop = reject
+      timer = setTimeout(() => {
+        reject(failure('request_timeout'))
+        controller.abort()
+      }, this.timeoutMs)
+    })
+    const cancelled = () => {
+      stop(failure('request_cancelled'))
+      controller.abort()
     }
+    if (init.signal?.aborted) cancelled()
+    else init.signal?.addEventListener('abort', cancelled, { once: true })
 
-    const body = await payload(response)
-    if (!response.ok) {
-      throw new ConsoleHttpError(response.status, publicErrorCode(body))
+    const perform = async () => {
+      if (controller.signal.aborted) throw failure('request_cancelled')
+      let response: Response
+      try {
+        response = await this.fetcher(new URL(path, this.origin), {
+          ...init, signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${this.accessToken()}`,
+            ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+            ...init.headers,
+          },
+        })
+      } catch {
+        throw failure('network_error')
+      }
+      const body = await payload(response)
+      if (!response.ok) {
+        throw new ConsoleHttpError(response.status, publicErrorCode(body), undefined,
+          endpoint, Date.now() - startedAt)
+      }
+      return body
     }
-    return body
+    try {
+      // Race also bounds native bridges and body streams that ignore AbortSignal.
+      // A timed-out mutation is uncertain: this transport never retries it.
+      return await Promise.race([perform(), deadline])
+    } finally {
+      clearTimeout(timer)
+      init.signal?.removeEventListener('abort', cancelled)
+    }
   }
 }
