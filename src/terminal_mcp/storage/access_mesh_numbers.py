@@ -195,10 +195,13 @@ class MeshSessionNumbers:
         hard_expires_at,
         attempt_id=None,
         now=None,
+        source_peer_id=None,
     ):
         """Merge immutable identities; later-started session wins future operations."""
         self.validate(number)
         if issuer_id not in self.store.trusted_issuers:
+            raise AccessMeshError("access_mesh_untrusted_peer")
+        if source_peer_id is not None and source_peer_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
         if (
             not isinstance(slot_id, str)
@@ -233,12 +236,40 @@ class MeshSessionNumbers:
                 "SELECT * FROM access_mesh_number_claims WHERE issuer_id=? AND slot_id=?",
                 (issuer_id, slot_id),
             ).fetchone()
-            if existing and (
-                existing["number"],
-                existing["logical_agent_id"],
-                existing["started_at"],
-            ) != (number, logical_agent_id, start):
-                raise AccessMeshError("session_identity_conflict")
+            if existing:
+                if (existing["number"], existing["logical_agent_id"]) != (
+                    number,
+                    logical_agent_id,
+                ):
+                    raise AccessMeshError("session_identity_conflict")
+                if existing["started_at"] != start:
+                    slot = db.execute(
+                        "SELECT kind FROM access_mesh_slot_replicas "
+                        "WHERE issuer_id=? AND slot_id=?",
+                        (issuer_id, slot_id),
+                    ).fetchone()
+                    # Older Persistent create sampled the issuer clock twice. Only
+                    # the authenticated issuer may correct that derived timestamp;
+                    # relays never override an issuer's own historical identity.
+                    # Legacy timestamps and number/agent changes remain immutable.
+                    if source_peer_id is None or slot is None or slot["kind"] != "persistent":
+                        raise AccessMeshError("session_identity_conflict")
+                    if issuer_id == self.store.local_node_id or source_peer_id != issuer_id:
+                        start, end = existing["started_at"], existing["hard_expires_at"]
+                    else:
+                        delta = datetime.fromisoformat(start) - datetime.fromisoformat(
+                            existing["started_at"]
+                        )
+                        end = max(
+                            end,
+                            self.stamp(datetime.fromisoformat(existing["hard_expires_at"]) + delta),
+                        )
+                        self._repair_local_cycle(db, existing, start, delta)
+                        db.execute(
+                            "UPDATE access_mesh_number_claims SET started_at=?,hard_expires_at=? "
+                            "WHERE issuer_id=? AND slot_id=?",
+                            (start, end, issuer_id, slot_id),
+                        )
             db.execute(
                 "INSERT INTO access_mesh_number_claims VALUES(?,?,?,?,?,?) ON "
                 "CONFLICT(issuer_id,slot_id) DO UPDATE SET "
@@ -278,6 +309,55 @@ class MeshSessionNumbers:
             "hard_expires_at": chosen["hard_expires_at"],
             "collisions": len(others),
         }
+
+    def _repair_local_cycle(self, db, claim, start, delta):
+        """Rebase cached dates without granting a new cycle or reviving a slot."""
+        tables = {
+            row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if {"access_mesh_local_sessions", "logical_agent_work_sessions"} <= tables:
+            rows = db.execute(
+                "SELECT s.work_session_id,s.hard_expires_at FROM access_mesh_local_sessions l "
+                "JOIN logical_agent_work_sessions s USING(work_session_id) "
+                "WHERE l.issuer_id=? AND l.slot_id=? AND l.cycle_started_at=? "
+                "AND s.started_at=?",
+                (claim["issuer_id"], claim["slot_id"], claim["started_at"], claim["started_at"]),
+            ).fetchall()
+            for row in rows:
+                db.execute(
+                    "UPDATE logical_agent_work_sessions SET started_at=?,hard_expires_at=? "
+                    "WHERE work_session_id=?",
+                    (
+                        start,
+                        self.stamp(datetime.fromisoformat(row["hard_expires_at"]) + delta),
+                        row["work_session_id"],
+                    ),
+                )
+            db.execute(
+                "UPDATE access_mesh_local_sessions SET cycle_started_at=? "
+                "WHERE issuer_id=? AND slot_id=? AND cycle_started_at=?",
+                (start, claim["issuer_id"], claim["slot_id"], claim["started_at"]),
+            )
+        if "logical_agent_work_windows" in tables:
+            for row in db.execute(
+                "SELECT work_window_id,snapshot_json FROM logical_agent_work_windows "
+                "WHERE logical_agent_id=?",
+                (claim["logical_agent_id"],),
+            ).fetchall():
+                snapshot = json.loads(row["snapshot_json"])
+                opened_at = snapshot.get("opened_at")
+                if opened_at and datetime.fromisoformat(opened_at) == datetime.fromisoformat(
+                    claim["started_at"]
+                ):
+                    snapshot["opened_at"] = start
+                    db.execute(
+                        "UPDATE logical_agent_work_windows SET snapshot_json=? "
+                        "WHERE work_window_id=?",
+                        (
+                            json.dumps(snapshot, separators=(",", ":"), sort_keys=True),
+                            row["work_window_id"],
+                        ),
+                    )
 
     @staticmethod
     def _groups(rows):

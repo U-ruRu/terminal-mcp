@@ -557,7 +557,9 @@ class AccessMeshReplication:
                     self.store.numbers.merge_reservations, result["reservations"]
                 )
             for claim in result["claims"]:
-                await asyncio.to_thread(self.store.numbers.register, **claim)
+                await asyncio.to_thread(
+                    self.store.numbers.register, **claim, source_peer_id=peer.instance_id
+                )
             cursor = result.get("next_cursor")
             if not cursor:
                 return
@@ -1011,7 +1013,9 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         if payload.get("issuer_id") != peer_id:
             raise HTTPException(400, "issuer does not match authenticated peer")
         try:
-            return await asyncio.to_thread(mesh.store.numbers.register, **payload)
+            return await asyncio.to_thread(
+                mesh.store.numbers.register, **payload, source_peer_id=peer_id
+            )
         except (AccessMeshError, TypeError, ValueError) as exc:
             return {"ok": False, "code": getattr(exc, "code", "invalid_session_registration")}
 

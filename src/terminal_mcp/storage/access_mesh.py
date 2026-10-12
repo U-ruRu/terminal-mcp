@@ -437,7 +437,7 @@ class AccessMeshStore(LocalAccessMesh):
         self._native_slot(db, slot, stamp)
         number = _mutation_number.get()
         if event.kind == "SlotIssued" and number is not None:
-            started = event.effective_at or self.clock()
+            started = number.get("started_at") or event.effective_at or self.clock()
             expires = started + timedelta(seconds=slot.policy.duration_seconds)
             if db.execute(
                 "SELECT 1 FROM access_mesh_recipient_holds WHERE number=? "

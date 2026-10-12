@@ -696,6 +696,7 @@ class AccessMeshApplication:
                 allocated = reserved_number or code or f"{secrets.randbelow(10000):04d}"
                 slot_id = "as_" + secrets.token_urlsafe(18)
                 agent_id = f"la_{self.store.local_node_id}_" + secrets.token_urlsafe(18)
+                issued_at = self.clock()
                 event = AccessSlotEvent(
                     issuer_id=self.store.local_node_id,
                     slot_id=slot_id,
@@ -706,7 +707,7 @@ class AccessMeshApplication:
                     policy=policy or self.defaults,
                     inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                     code_tag=self.store.code_tag(self.store.local_node_id, allocated),
-                    effective_at=self.clock() if start else None,
+                    effective_at=issued_at if start else None,
                     agent_name=number_agent_name(allocated),
                     display_suffix=(display_name or "").strip() or None,
                 )
@@ -739,9 +740,13 @@ class AccessMeshApplication:
                             sorted(self.store.trusted_issuers - {self.store.local_node_id})
                         ),
                         mutation_receipt=receipt,
-                        mutation_number={"number": allocated, "attempt_id": attempt_id},
+                        mutation_number={
+                            "number": allocated,
+                            "attempt_id": attempt_id,
+                            "started_at": issued_at,
+                        },
                     )
-                    started_at = event.effective_at or self.clock()
+                    started_at = issued_at
                     if self.replication is not None and announcement_deadline is not None:
                         await self.replication.announce_number(
                             number=allocated,
