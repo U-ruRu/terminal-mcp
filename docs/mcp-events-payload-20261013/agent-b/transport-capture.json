@@ -1,0 +1,94 @@
+{
+  "result": "PASS",
+  "live_delivery_proven": false,
+  "cases": [
+    "singleton",
+    "two_due_events_are_two_requests",
+    "UTF-8_object_data_exact_bytes_signature"
+  ],
+  "captures": [
+    {
+      "capture_kind": "injected_sender_boundary_not_HTTP",
+      "request": {
+        "method": "POST",
+        "callback_host": "receiver.example.test",
+        "headers": {
+          "Content-Type": "application/json",
+          "webhook-id": "evt_synthetic_1",
+          "webhook-timestamp": "1791838800",
+          "webhook-signature": "<redacted:verified>",
+          "X-MCP-Subscription-Id": "sub_synthetic"
+        },
+        "body_utf8": "{\"eventId\":\"evt_synthetic_1\",\"name\":\"message.received\",\"timestamp\":\"2026-10-12T21:00:00.000Z\",\"data\":{\"server\":\"synthetic-node\",\"sender\":\"Probe-Sender\",\"recipient\":\"Probe-Recipient\",\"message_id\":\"synthetic:message:1\",\"text\":\"Контроль 1: \\\"кавычки\\\", перенос\\nстроки, Unicode ✓\",\"timestamp\":\"2026-10-12T21:00:00.000Z\"},\"cursor\":null}",
+        "body_sha256": "c3c261be4003ff010c37a5f62525861cbd6b38b23f8cd118e4ee57a965523e46",
+        "body_bytes": 362
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "",
+        "origin": "synthetic_receiver"
+      }
+    },
+    {
+      "capture_kind": "injected_sender_boundary_not_HTTP",
+      "request": {
+        "method": "POST",
+        "callback_host": "receiver.example.test",
+        "headers": {
+          "Content-Type": "application/json",
+          "webhook-id": "evt_synthetic_2",
+          "webhook-timestamp": "1791838800",
+          "webhook-signature": "<redacted:verified>",
+          "X-MCP-Subscription-Id": "sub_synthetic"
+        },
+        "body_utf8": "{\"eventId\":\"evt_synthetic_2\",\"name\":\"message.received\",\"timestamp\":\"2026-10-12T21:00:00.000Z\",\"data\":{\"server\":\"synthetic-node\",\"sender\":\"Probe-Sender\",\"recipient\":\"Probe-Recipient\",\"message_id\":\"synthetic:message:2\",\"text\":\"Контроль 2: \\\"кавычки\\\", перенос\\nстроки, Unicode ✓\",\"timestamp\":\"2026-10-12T21:00:00.000Z\"},\"cursor\":null}",
+        "body_sha256": "405b536ca69da78ae999809ea64f716b106706d6f2c53c13f8db9d64aa3005ac",
+        "body_bytes": 362
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "",
+        "origin": "synthetic_receiver"
+      }
+    },
+    {
+      "capture_kind": "injected_sender_boundary_not_HTTP",
+      "request": {
+        "method": "POST",
+        "callback_host": "receiver.example.test",
+        "headers": {
+          "Content-Type": "application/json",
+          "webhook-id": "evt_synthetic_3",
+          "webhook-timestamp": "1791838800",
+          "webhook-signature": "<redacted:verified>",
+          "X-MCP-Subscription-Id": "sub_synthetic"
+        },
+        "body_utf8": "{\"eventId\":\"evt_synthetic_3\",\"name\":\"message.received\",\"timestamp\":\"2026-10-12T21:00:00.000Z\",\"data\":{\"server\":\"synthetic-node\",\"sender\":\"Probe-Sender\",\"recipient\":\"Probe-Recipient\",\"message_id\":\"synthetic:message:3\",\"text\":\"Контроль 3: \\\"кавычки\\\", перенос\\nстроки, Unicode ✓\",\"timestamp\":\"2026-10-12T21:00:00.000Z\"},\"cursor\":null}",
+        "body_sha256": "a7e02c68ee9fb10de12841ea100b91f94f5b3b6a4b4570d0055dbc29742a4524",
+        "body_bytes": 362
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "",
+        "origin": "synthetic_receiver"
+      }
+    }
+  ],
+  "synthetic_receipts": [
+    {
+      "eventId": "evt_synthetic_1",
+      "subscription_id": "sub_synthetic",
+      "status": 200
+    },
+    {
+      "eventId": "evt_synthetic_2",
+      "subscription_id": "sub_synthetic",
+      "status": 200
+    },
+    {
+      "eventId": "evt_synthetic_3",
+      "subscription_id": "sub_synthetic",
+      "status": 200
+    }
+  ]
+}

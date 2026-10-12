@@ -1,0 +1,80 @@
+{
+  "kind": "sanitized_transcription_of_read_only_connector_results",
+  "database_open_mode": "SQLite URI mode=ro plus PRAGMA query_only=ON",
+  "production_mutations": false,
+  "observations": [
+    {
+      "utc": "2026-10-12T21:15:42Z",
+      "command": "a0f23439",
+      "runtime_realpath": "/opt/terminal-mcp/releases/4ecb7201bcc8e2d7ce2b75fcb18d2f77690a66e4-55f033b09324"
+    },
+    {
+      "utc": "2026-10-12T21:17:36Z",
+      "command": "124b9cf0",
+      "version": "0.26.2",
+      "source_sha256": {
+        "event_server.py": "b8005124a7f18118b65cdb7abde5b8d89649bd6e91793557dbb9f58155748f7e",
+        "event_store.py": "274a3740640e5885054279c75a7587ec4c6c6d17322f27212bbb8b0ca998d78f",
+        "event_webhooks.py": "43720d32a3bbb3059c8668f727efa30130dd000ae30f31511fb90e19d2db3659"
+      }
+    },
+    {
+      "utc": "2026-10-12T21:18:11.029914+00:00",
+      "command": "1c63e92f",
+      "subscription_count": 4,
+      "event_names": [
+        "agent.attached",
+        "agent.inactive",
+        "session.ended",
+        "message.received"
+      ],
+      "message_filter_keys": [
+        "session_number"
+      ],
+      "callback_host": "connectors.api.openai.com",
+      "delivery_counts": [
+        {
+          "state": "sent",
+          "last_status": 200,
+          "count": 32
+        }
+      ],
+      "message_data_type": "object",
+      "message_data_keys": [
+        "message_id",
+        "recipient",
+        "sender",
+        "server",
+        "text",
+        "timestamp"
+      ],
+      "exact_http_request_bytes_persisted": false,
+      "exact_http_response_bytes_persisted": false
+    },
+    {
+      "utc": "2026-10-12T21:20:54.087Z",
+      "source": "dot/Romeo-5 message secondary:msg:NdWocP2DqtqPxpz5",
+      "approval": "User agreed separate temporary test; singleton only until blind result",
+      "platform_automation_id": "6acd4f27939c819186c3ea71c2970103",
+      "reported_created_utc": "2026-10-12T21:20:43Z"
+    },
+    {
+      "utc": "2026-10-12T21:21:44Z",
+      "command": "a0169a9b",
+      "test_subscription_id": "sub_3135371242a9cae4c8b0937b9229b56de003bc4f",
+      "name": "message.received",
+      "created_at": "2026-10-12T21:20:41.153Z",
+      "expires_at": "2026-10-12T22:20:41.153Z",
+      "recipient": "Uniform-156",
+      "recipient_node_id": "bacloud",
+      "recipient_role": "session_number",
+      "existing_dot_subscription_changed": false
+    }
+  ],
+  "runtime_source_matches_checkout": "All three SHA256 values match inspected 4ecb7201 checkout (Secondary command b6765f18).",
+  "limits": [
+    "sent means HTTP 2xx, not model visibility",
+    "Historical request/response body bytes and request IDs are not retained by this outbox schema",
+    "No retained HTTP signature or signing timestamp; do not reconstruct them as an observed request"
+  ]
+}
