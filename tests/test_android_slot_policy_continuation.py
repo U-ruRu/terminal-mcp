@@ -79,10 +79,15 @@ def test_http_future_policy_preserves_active_thresholds_and_survives_restart(tmp
         # Future cooldown changes must not shorten the current window's cooldown.
         set_clock(restarted, T0 + timedelta(seconds=1400))
         cooling = read_slot(client, issued["slot_id"])["session_lifecycle"]
-        assert cooling["state"] == "cooldown"
-        assert cooling["rearm_at"] == (T0 + timedelta(seconds=1560)).isoformat(
-            timespec="microseconds"
-        )
+        # Public number-backed access never creates a new authorization merely
+        # because a cooldown elapsed. Preserve the old cooldown snapshot while
+        # accurately showing that its working window has expired.
+        assert cooling["state"] == "expired"
+        stored = restarted.state.access_mesh.store.slot("firstbyte", issued["slot_id"])
+        assert stored.policy_window.rearm_at == T0 + timedelta(seconds=1560)
+        assert stored.policy_window.policy.cooldown_seconds == 180
+        set_clock(restarted, T0 + timedelta(seconds=1561))
+        assert read_slot(client, issued["slot_id"])["session_lifecycle"]["state"] == "expired"
 
 
 def test_explicit_window_extension_and_retry_leave_future_defaults_intact(tmp_path):

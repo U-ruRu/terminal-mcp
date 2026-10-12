@@ -831,6 +831,68 @@ class AccessMeshStore(LocalAccessMesh):
             ).fetchall()
         return [self._snapshot(row) for row in rows]
 
+    def capture_policy_window(self, slot: SlotSnapshot, now: datetime):
+        """Capture the same number-backed window that public MCP actually authorizes.
+
+        The stable number claim is an identity, not the rotating connection code.
+        Existing direct/non-number slots retain their original domain behavior.
+        """
+        from terminal_mcp.core.access_mesh_grants import CapturedAccessWindow
+        from terminal_mcp.core.access_policy_windows import capture_window
+
+        readable = replace(slot, state="active") if slot.state == "suspended" else slot
+        winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
+        if winner is None:
+            return capture_window(readable, now)
+        current = readable
+        if (winner["issuer_id"], winner["slot_id"]) != (slot.issuer_id, slot.slot_id):
+            current = self.slot(winner["issuer_id"], winner["slot_id"]) or readable
+        cycle = self.merged_cycle(readable, now)
+        start, end = _parse(cycle["started_at"]), _parse(cycle["hard_expires_at"])
+        if start is None or end is None:
+            return capture_window(readable, now)
+        policy = current.effective(start).policy
+        rearm = end + timedelta(seconds=policy.cooldown_seconds) if policy.rearm_enabled else None
+        ended = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
+        closed = _parse(ended["ended_at"]) if ended else None
+        if closed is not None and closed < start:
+            closed = None
+        if closed is not None and policy.rearm_enabled:
+            rearm = closed + timedelta(seconds=policy.cooldown_seconds)
+        return CapturedAccessWindow(policy, start, end, rearm, closed)
+
+    def rotated_code_slot(self, code: str):
+        """Resolve a rotated bearer tag without changing a stable recipient identity.
+
+        Only issuer-authenticated replicated slot tags with an existing number
+        claim qualify. No new grant, alias table or implicit window is created.
+        Ambiguous claims stay closed. Each issuer lookup uses its code-tag index.
+        """
+        self.numbers.validate(code)
+        found = []
+        with self._connect() as db:
+            for issuer in sorted(self.trusted_issuers):
+                rows = db.execute(
+                    "SELECT s.* FROM access_mesh_slot_replicas s "
+                    "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
+                    "WHERE s.issuer_id=? AND s.code_tag=? AND s.state='active' "
+                    "AND c.number!=? AND c.logical_agent_id=s.logical_agent_id",
+                    (issuer, self.code_tag(issuer, code), code),
+                ).fetchall()
+                found.extend(self._snapshot(row) for row in rows)
+        if len(found) > 1:
+            raise AccessMeshError("access_mesh_ambiguous_code")
+        if found:
+            selected = found[0]
+            winner = self.numbers.group_winner(selected.issuer_id, selected.slot_id)
+            if winner is None or (winner["issuer_id"], winner["slot_id"]) != (
+                selected.issuer_id,
+                selected.slot_id,
+            ):
+                raise AccessMeshError("access_mesh_identity_conflict")
+            return selected
+        return None
+
     def merged_cycle(self, slot: SlotSnapshot, now: datetime) -> dict:
         """Project explicit, shared Mesh start/end transitions for this epoch.
 

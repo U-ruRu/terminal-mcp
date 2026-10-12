@@ -4,9 +4,9 @@ export const nativeInheritanceFixtures = {
     "ok": true,
     "slot": {
       "issuer_node_id": "firstbyte",
-      "slot_id": "as_tcl21wahQCYp6NYCGVZzRv4S",
-      "logical_agent_id": "la_firstbyte_AXUykJM2Si1oMO8vML5MGLd9",
-      "public_name": "Alpha-114",
+      "slot_id": "as_XXaTlyzIKZ4Zh46ZXUVbIZ4q",
+      "logical_agent_id": "la_firstbyte_nwwc_hZ7Gokt_7tl_-Ccna4N",
+      "public_name": "Quebec-185",
       "mode": "persistent",
       "state": "active",
       "revision": 2,
@@ -23,7 +23,7 @@ export const nativeInheritanceFixtures = {
         "mode": "inherit",
         "source": "standalone",
         "parent": {
-          "source": "standalone",
+          "source": "server",
           "id": "firstbyte",
           "revision": 1,
           "version": "server:firstbyte:1",
@@ -35,6 +35,7 @@ export const nativeInheritanceFixtures = {
         "pending": false
       },
       "inheritance_supported": true,
+      "management_contract_version": 2,
       "policy_source": "server",
       "policy_override": null,
       "inherited_policy": {
@@ -112,6 +113,7 @@ export const nativeInheritanceFixtures = {
       "pending": false
     },
     "inheritance_supported": true,
+    "management_contract_version": 2,
     "mesh_policy_supported": false,
     "policy_override": {
       "cooldown_seconds": 60,
@@ -135,9 +137,9 @@ export const nativeInheritanceFixtures = {
     "ok": true,
     "slot": {
       "issuer_node_id": "firstbyte",
-      "slot_id": "as_tcl21wahQCYp6NYCGVZzRv4S",
-      "logical_agent_id": "la_firstbyte_AXUykJM2Si1oMO8vML5MGLd9",
-      "public_name": "Alpha-114",
+      "slot_id": "as_XXaTlyzIKZ4Zh46ZXUVbIZ4q",
+      "logical_agent_id": "la_firstbyte_nwwc_hZ7Gokt_7tl_-Ccna4N",
+      "public_name": "Quebec-185",
       "mode": "persistent",
       "state": "active",
       "revision": 3,
@@ -154,7 +156,7 @@ export const nativeInheritanceFixtures = {
         "mode": "inherit",
         "source": "standalone",
         "parent": {
-          "source": "standalone",
+          "source": "server",
           "id": "firstbyte",
           "revision": 2,
           "version": "server:firstbyte:2",
@@ -166,6 +168,7 @@ export const nativeInheritanceFixtures = {
         "pending": true
       },
       "inheritance_supported": true,
+      "management_contract_version": 2,
       "policy_source": "server",
       "policy_override": null,
       "inherited_policy": {
@@ -202,9 +205,9 @@ export const nativeInheritanceFixtures = {
     "ok": true,
     "slot": {
       "issuer_node_id": "firstbyte",
-      "slot_id": "as_tcl21wahQCYp6NYCGVZzRv4S",
-      "logical_agent_id": "la_firstbyte_AXUykJM2Si1oMO8vML5MGLd9",
-      "public_name": "Alpha-114",
+      "slot_id": "as_XXaTlyzIKZ4Zh46ZXUVbIZ4q",
+      "logical_agent_id": "la_firstbyte_nwwc_hZ7Gokt_7tl_-Ccna4N",
+      "public_name": "Quebec-185",
       "mode": "persistent",
       "state": "active",
       "revision": 4,
@@ -221,7 +224,7 @@ export const nativeInheritanceFixtures = {
         "mode": "override",
         "source": "slot",
         "parent": {
-          "source": "standalone",
+          "source": "server",
           "id": "firstbyte",
           "revision": 2,
           "version": "server:firstbyte:2",
@@ -233,6 +236,7 @@ export const nativeInheritanceFixtures = {
         "pending": true
       },
       "inheritance_supported": true,
+      "management_contract_version": 2,
       "policy_source": "slot",
       "policy_override": {
         "duration_seconds": 7200,
@@ -276,9 +280,9 @@ export const nativeInheritanceFixtures = {
     "ok": true,
     "slot": {
       "issuer_node_id": "firstbyte",
-      "slot_id": "as_tcl21wahQCYp6NYCGVZzRv4S",
-      "logical_agent_id": "la_firstbyte_AXUykJM2Si1oMO8vML5MGLd9",
-      "public_name": "Alpha-114",
+      "slot_id": "as_XXaTlyzIKZ4Zh46ZXUVbIZ4q",
+      "logical_agent_id": "la_firstbyte_nwwc_hZ7Gokt_7tl_-Ccna4N",
+      "public_name": "Quebec-185",
       "mode": "persistent",
       "state": "active",
       "revision": 5,
@@ -295,7 +299,7 @@ export const nativeInheritanceFixtures = {
         "mode": "inherit",
         "source": "standalone",
         "parent": {
-          "source": "standalone",
+          "source": "server",
           "id": "firstbyte",
           "revision": 2,
           "version": "server:firstbyte:2",
@@ -307,6 +311,7 @@ export const nativeInheritanceFixtures = {
         "pending": true
       },
       "inheritance_supported": true,
+      "management_contract_version": 2,
       "policy_source": "server",
       "policy_override": null,
       "inherited_policy": {
@@ -386,6 +391,7 @@ export const nativeInheritanceFixtures = {
       "pending": false
     },
     "inheritance_supported": true,
+    "management_contract_version": 2,
     "mesh_policy_supported": true,
     "policy_override": null,
     "inherited_policy": {
@@ -402,9 +408,9 @@ export const nativeInheritanceFixtures = {
     "ok": true,
     "slot": {
       "issuer_node_id": "firstbyte",
-      "slot_id": "as_fvExA1SDYblC07g8C3vgi398",
-      "logical_agent_id": "la_firstbyte_704-vkaw8x3LJSNe58Sf6xSh",
-      "public_name": "X-ray-178",
+      "slot_id": "as_-xGq38NBIESZQkUzPvgyGOOg",
+      "logical_agent_id": "la_firstbyte_cfN3jnsxyzQ58edJTI1aDjUM",
+      "public_name": "Mike-204",
       "mode": "persistent",
       "state": "active",
       "revision": 1,
@@ -421,8 +427,8 @@ export const nativeInheritanceFixtures = {
         "mode": "inherit",
         "source": "mesh",
         "parent": {
-          "source": "mesh",
-          "id": "fixture-mesh",
+          "source": "server",
+          "id": "firstbyte",
           "revision": 4,
           "version": "server:firstbyte:4",
           "freshness": "authoritative",
@@ -433,6 +439,7 @@ export const nativeInheritanceFixtures = {
         "pending": false
       },
       "inheritance_supported": true,
+      "management_contract_version": 2,
       "policy_source": "mesh",
       "policy_override": null,
       "inherited_policy": {
@@ -457,10 +464,10 @@ export const nativeInheritanceFixtures = {
       },
       "policy_applies_to": "next_session",
       "session_lifecycle": {
-        "state": "idle",
-        "started_at": null,
-        "hard_expires_at": null,
-        "remaining_seconds": 0,
+        "state": "active",
+        "started_at": "2030-01-01T00:00:00.000000+00:00",
+        "hard_expires_at": "2030-01-01T03:00:00.000000+00:00",
+        "remaining_seconds": 10800,
         "rearm_at": null
       }
     }

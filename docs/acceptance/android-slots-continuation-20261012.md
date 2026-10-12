@@ -49,3 +49,31 @@ The real HTTP window defect has RED/GREEN receipts. UI re-pairing has an indepen
 and A rerun. Generated TypeScript fixtures contain only isolated HTTP GET projections, never code
 receipts. Public MCP create/rotate/deadline/end tests are additionally required before final acceptance.
 Exact final counts and candidate SHA belong to HANDOFF.md, not this evolving implementation note.
+
+
+## Public-path bridge and management protocol 2
+
+`management_contract_version: 2` on native defaults and slot GET projections is the explicit
+mutation capability. A v1/unknown server remains read-only in the new APK: its code-generation
+receipts, rotated public connection and current-window mutation paths are not safe to assume.
+This is intentionally independent of the server release label, which may describe an unmerged
+candidate. The client also requires fresh context-scoped reads, scopes, strict metadata and CAS.
+
+Code rotation reserves a globally confirmed free code through the existing peer negotiation and
+replicates the existing hashed-code event. It never changes the immutable numeric recipient claim,
+logical agent, subscriptions, already-authorized bindings or current deadline. Public attach checks
+the rotated issuer-authenticated tag and existing claim, then uses the ordinary admission path.
+Ambiguous or partially known conflicting numeric claims are denied. Existing subscription holds
+continue to reject rotation explicitly; this guard is not removed by the APK/API repair.
+
+The operator reads the same number-backed working window as public MCP, and captures that actual
+window for next-policy edits. Explicit end records the existing replicated number-end event.
+Explicit deadline updates support extension of the merged maximum window; shortening is rejected
+rather than acknowledged without actually changing admission. Expired windows stay expired until
+an existing authorized explicit start. Cooldown metadata is not an automatic new authorization.
+
+
+A slot reset additionally requires `expected_parent_revision`, taken from the immediate server
+parent shown by the slot GET. An explicit slot override does not inherit parent revision changes;
+therefore checking only the slot revision is insufficient. A stale parent reset returns the same
+`revision_conflict` without changing the override. Defaults resets already use the defaults CAS.

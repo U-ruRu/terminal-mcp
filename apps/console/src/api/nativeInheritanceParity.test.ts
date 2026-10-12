@@ -10,6 +10,7 @@ test('real standalone HTTP keeps the new three-hour policy separate from the act
   expect(future.windowPolicy).toEqual(initial.policy)
   expect(future.sessionLifecycle.hardExpiresAt).toBe(initial.sessionLifecycle.hardExpiresAt)
   expect(future.inheritanceSupported).toBe(true)
+  expect(future.managementContractVersion).toBe(2)
   expect(future.inheritance).toMatchObject({ mode: 'inherit', source: 'standalone', appliesTo: 'next_window', pending: true })
 })
 
@@ -27,10 +28,12 @@ test('real Mesh HTTP proves capability and its existing authority rather than as
   const mesh = decodeAccessMeshDefaults(fixture.mesh_defaults)
   const local = decodeAccessMeshDefaults(fixture.standalone_defaults)
   expect(mesh.meshPolicySupported).toBe(true)
+  expect(mesh.managementContractVersion).toBe(2)
   expect(mesh.inheritance).toMatchObject({ source: 'mesh', parent: { source: 'mesh', freshness: 'authoritative' } })
   expect(local.meshPolicySupported).toBe(false)
   expect(local.inheritance?.source).toBe('standalone')
   expect(decodeAccessMeshSlot(fixture.mesh_slot).inheritance?.source).toBe('mesh')
+  expect(decodeAccessMeshSlot(fixture.mesh_slot).inheritance?.parent).toMatchObject({ source: 'server', id: 'firstbyte' })
 })
 
 test.each(['inheritance', 'inherited_policy', 'policy_override', 'current_policy', 'policy_applies_to', 'policy_source'])('a server claiming inheritance cannot omit slot %s', (field) => {
@@ -47,4 +50,12 @@ test.each(['inheritance', 'inherited_policy', 'policy_override', 'mesh_policy_su
 
 test.each(['true', 1, null, {}])('capabilities require boolean flags: %s', (value) => {
   expect(() => decodeAccessMeshDefaults({ ...fixture.mesh_defaults, mesh_policy_supported: value })).toThrow(ConsoleContractError)
+})
+
+
+test('v2 management cannot omit generation or policy-snapshot proof', () => {
+  const missingGeneration = { ...fixture.mesh_slot.slot } as Record<string, unknown>
+  delete missingGeneration.code_generation
+  expect(() => decodeAccessMeshSlot({ ok: true, slot: missingGeneration })).toThrow(ConsoleContractError)
+  expect(() => decodeAccessMeshDefaults({ ...fixture.mesh_defaults, inheritance_supported: false })).toThrow(ConsoleContractError)
 })

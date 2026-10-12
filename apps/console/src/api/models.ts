@@ -507,6 +507,7 @@ export type AccessMeshPolicyReadModel = {
 }
 
 export type AccessMeshSlotReadModel = {
+  managementContractVersion?: number
   inheritanceSupported?: boolean
   inheritedPolicy?: AccessMeshPolicyReadModel
   inheritance?: SlotPolicyInheritanceReadModel
@@ -534,6 +535,7 @@ export type AccessMeshSlotReadModel = {
 }
 
 export type AccessMeshDefaultsReadModel = {
+  managementContractVersion?: number
   inheritanceSupported?: boolean
   meshPolicySupported?: boolean
   inheritedPolicy?: AccessMeshPolicyReadModel
@@ -556,7 +558,7 @@ export type AccessMeshPolicyPatch = {
 export type AccessMeshMutationRequest = { idempotency_key: string } & (
   | { action: 'create'; mode: 'legacy' | 'persistent'; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean }
   | { action: 'defaults'; expected_revision: number; policy?: AccessMeshPolicyPatch; legacy_enabled?: boolean; inherit_policy?: boolean }
-  | { action: 'policy'; slot_id: string; expected_revision: number; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean }
+  | { action: 'policy'; slot_id: string; expected_revision: number; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean; expected_parent_revision?: number }
   | { action: 'deadline'; slot_id: string; expected_revision: number; deadline_at: string }
   | { action: 'suspend' | 'resume' | 'delete' | 'rotate' | 'end'; slot_id: string; expected_revision: number }
 )
@@ -564,7 +566,7 @@ export type AccessMeshMutationRequest = { idempotency_key: string } & (
 
 /** Authority identity and local convergence are separate from global freshness. */
 export type SlotPolicyParentReadModel = {
-  source: 'mesh' | 'standalone'
+  source: 'mesh' | 'standalone' | 'server'
   id: string
   revision: number | null
   version: string

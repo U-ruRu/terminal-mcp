@@ -14,7 +14,6 @@ from datetime import UTC, datetime, timedelta
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
-from terminal_mcp.core.access_policy_windows import capture_window
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import (
     FINALIZATION_OPERATIONS,
@@ -110,6 +109,7 @@ class AccessMeshApplication:
                 "pending": False,
             },
             "inheritance_supported": True,
+            "management_contract_version": 2,
             "mesh_policy_supported": parent["source"] == "mesh",
             "policy_override": None if current["inherit_policy"] else current["policy"],
             "inherited_policy": parent["policy"],
@@ -233,11 +233,24 @@ class AccessMeshApplication:
         self.require_write(actor)
         if session_number is not None:
             winner = await asyncio.to_thread(self.store.numbers.winner, session_number)
-            if winner is None:
+            rotated = await asyncio.to_thread(self.store.rotated_code_slot, session_number)
+            if rotated is not None and winner is not None:
+                # A missing slot replica is not proof that an unexpired numeric
+                # claim is free. Keep conflicts closed even during partial catch-up.
+                if datetime.fromisoformat(winner["hard_expires_at"]) > self.clock():
+                    raise AccessMeshError("access_mesh_ambiguous_code")
+            if winner is None and rotated is None:
                 raise AccessMeshError("invalid_session_number")
             connection = self.connection_key(actor)
             current = await asyncio.to_thread(self.store.attached_slot, connection)
-            if current is not None:
+            if rotated is not None:
+                slot = await asyncio.to_thread(
+                    self.store.attach,
+                    issuer_id=rotated.issuer_id,
+                    code=session_number,
+                    connection_key=connection,
+                )
+            elif current is not None:
                 bound_number = await asyncio.to_thread(
                     self.store.numbers.number_for_slot, current.issuer_id, current.slot_id
                 )
@@ -726,17 +739,27 @@ class AccessMeshApplication:
             if slot.revision != expected_revision:
                 raise AccessMeshError("revision_conflict")
             code = None
+            rotation_attempt = None
+            rotation_deadline = None
             if kind == "AccessCodeRotated":
-                for _ in range(100):
-                    candidate = f"{secrets.randbelow(10000):04d}"
-                    if (
-                        await asyncio.to_thread(self.store.code_slot, slot.issuer_id, candidate)
-                        is None
-                    ):
-                        code = candidate
-                        break
-                if code is None:
-                    raise AccessMeshError("access_mesh_code_capacity")
+                if self.replication is not None:
+                    (
+                        code,
+                        rotation_attempt,
+                        rotation_deadline,
+                    ) = await self.replication.negotiate_number()
+                else:
+                    rotation_attempt = "nr_" + secrets.token_urlsafe(16)
+                    reserved = await asyncio.to_thread(
+                        self.store.numbers.reserve,
+                        number=f"{secrets.randbelow(10000):04d}",
+                        attempt_id=rotation_attempt,
+                        now=self.clock(),
+                    )
+                    code = reserved.get("number") or reserved["suggested_number"]
+                if await asyncio.to_thread(self.store.code_slot, slot.issuer_id, code) is not None:
+                    await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
+                    raise AccessMeshError("access_mesh_code_in_use")
             event = AccessSlotEvent(
                 issuer_id=slot.issuer_id,
                 slot_id=slot.slot_id,
@@ -751,7 +774,9 @@ class AccessMeshApplication:
                 deadline_at=deadline_at,
                 # Future policy edits must not renew the currently granted window.
                 # Capture it on the issuer so every replica applies the same boundary.
-                policy_window=capture_window(slot, self.clock())
+                policy_window=await asyncio.to_thread(
+                    self.store.capture_policy_window, slot, self.clock()
+                )
                 if kind == "SlotPolicyChanged"
                 else None,
             )
@@ -789,8 +814,41 @@ class AccessMeshApplication:
                     mutation_end=number_end,
                     mutation_start=number_start,
                 )
-            except AccessMeshError:
+            except Exception:
+                if rotation_attempt is not None:
+                    await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
                 raise
+            if rotation_attempt is not None:
+                # Releasing a lease is cleanup, never a new outcome for a committed receipt.
+                try:
+                    await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
+                except Exception:
+                    _LOG.warning("Mesh code-rotation reservation cleanup pending")
+        if rotation_attempt is not None and self.replication is not None:
+            try:
+                await self.replication.announce_code_rotation(
+                    event_id=event.event_id,
+                    attempt_id=rotation_attempt,
+                    deadline=rotation_deadline,
+                )
+            except Exception:
+                _LOG.warning("Mesh code-rotation propagation pending")
+        if (
+            number_end is not None
+            and actor.endpoint_role == "operator"
+            and self.replication is not None
+        ):
+            try:
+                await self.replication.announce_end(
+                    number=number_end["number"],
+                    cycle_key=number_end["cycle_key"],
+                    issuer_id=event.issuer_id,
+                    slot_id=event.slot_id,
+                    event_id=event.event_id,
+                    ended_at=event.effective_at.isoformat(),
+                )
+            except Exception:
+                _LOG.warning("Mesh operator-end propagation pending")
         # Cleanup is resumable after commit. Its failures cannot turn a durable
         # issuer event into an apparent pre-commit failure or permit duplicate events.
         try:

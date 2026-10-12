@@ -82,8 +82,7 @@ class AccessMeshReplication:
             for pinned in self._bootstrap_config.peers
             # General Fleet membership never implicitly grants Access Mesh trust.
             # Only explicitly trusted Access issuers serve the signed Mesh router.
-            if pinned.instance_id in enabled
-            and pinned.instance_id in self.store.trusted_issuers
+            if pinned.instance_id in enabled and pinned.instance_id in self.store.trusted_issuers
         )
         selected_ids = {peer.instance_id for peer in selected}
         # Drop health entries for peers no longer active or trusted, otherwise
@@ -196,7 +195,7 @@ class AccessMeshReplication:
             await asyncio.to_thread(self.store.numbers.release, attempt_id)
             await self._hard_bounded_fanout(
                 (self.request(p, "numbers/release", {"attempt_id": attempt_id}) for p in peers),
-                budget=max(0, end-loop.time()),
+                budget=max(0, end - loop.time()),
             )
             raise AccessMeshError(code)
 
@@ -251,7 +250,8 @@ class AccessMeshReplication:
                             suggested = response["suggested_number"]
                             break
                         if (
-                            isinstance(response, dict) and response.get("ok") is True
+                            isinstance(response, dict)
+                            and response.get("ok") is True
                             and response.get("number") == number
                         ):
                             confirmed += 1
@@ -264,7 +264,9 @@ class AccessMeshReplication:
                         task.add_done_callback(
                             partial(
                                 self._record_late_reservation_reply,
-                                number=number, attempt_id=attempt_id, peer_id=peer_id,
+                                number=number,
+                                attempt_id=attempt_id,
+                                peer_id=peer_id,
                             )
                         )
                         task.cancel()
@@ -281,7 +283,7 @@ class AccessMeshReplication:
                     await abandon("session_number_unconfirmed")
                 return number, attempt_id, end
             if loop.time() < negotiation_end:
-                await asyncio.sleep(max(0, negotiation_end-loop.time()))
+                await asyncio.sleep(max(0, negotiation_end - loop.time()))
             await abandon("session_number_unconfirmed")
 
     async def announce_number(
@@ -361,6 +363,41 @@ class AccessMeshReplication:
             if not cursor:
                 return
 
+    async def announce_code_rotation(self, *, event_id, attempt_id, deadline):
+        """Publish the existing durable tag event; preserve immutable number identities.
+
+        A peer reservation is released only after that peer has acknowledged the
+        rotation event. Otherwise its original bounded lease remains in effect.
+        No code, claim rewrite or additional replication registry is introduced.
+        """
+        if not self.peers or deadline is None:
+            return
+
+        def unacknowledged(peer):
+            with self.store._connect() as db:
+                return (
+                    db.execute(
+                        "SELECT 1 FROM access_mesh_event_outbox "
+                        "WHERE peer_node_id=? AND event_id=? AND acked_at IS NULL",
+                        (peer.instance_id, event_id),
+                    ).fetchone()
+                    is not None
+                )
+
+        async def publish(peer):
+            while asyncio.get_running_loop().time() < deadline:
+                await self._deliver(peer)
+                if not await asyncio.to_thread(unacknowledged, peer):
+                    await self.request(peer, "numbers/release", {"attempt_id": attempt_id})
+                    return
+                # Do not busy-loop while another consumer is still catching up.
+                await asyncio.sleep(0.025)
+
+        await self._hard_bounded_fanout(
+            (publish(peer) for peer in self.peers),
+            budget=max(0.0, deadline - asyncio.get_running_loop().time()),
+        )
+
     async def announce_end(self, **event):
         # The durable local event remains authoritative when peers are offline.
         if not self.peers:
@@ -408,7 +445,8 @@ class AccessMeshReplication:
             if result.get("ok") is not True or not isinstance(result.get("holds"), list):
                 raise AccessMeshError("invalid_recipient_hold_snapshot")
             await asyncio.to_thread(
-                self.store.recipient_holds.merge, result["holds"],
+                self.store.recipient_holds.merge,
+                result["holds"],
                 authenticated_peer_id=peer.instance_id,
             )
             following = result.get("next_cursor")
@@ -757,13 +795,15 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
         try:
             rows = await asyncio.to_thread(
                 mesh.store.recipient_holds.snapshot,
-                after=payload.get("after", ""), limit=payload.get("limit", 25),
+                after=payload.get("after", ""),
+                limit=payload.get("limit", 25),
             )
         except AccessMeshError as exc:
             raise HTTPException(400, exc.code) from exc
         limit = payload.get("limit", 25)
         result = {
-            "ok": True, "holds": rows,
+            "ok": True,
+            "holds": rows,
             "next_cursor": rows[-1]["hold_id"] if len(rows) == limit else None,
         }
         bounded(result)

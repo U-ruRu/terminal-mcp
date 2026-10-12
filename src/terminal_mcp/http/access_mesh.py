@@ -37,6 +37,7 @@ class OperatorMutation(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
     slot_id: str | None = Field(default=None, min_length=1, max_length=128)
     expected_revision: int | None = Field(default=None, ge=1)
+    expected_parent_revision: int | None = Field(default=None, ge=1)
     mode: Literal["legacy", "persistent"] | None = None
     policy: PolicyPatch | None = None
     deadline_at: str | None = Field(default=None, min_length=1, max_length=64)
@@ -66,6 +67,8 @@ class OperatorMutation(BaseModel):
             self.policy is not None or self.legacy_enabled is not None
         ):
             raise ValueError("inheritance reset cannot include an override")
+        if self.action == "policy" and self.inherit_policy is True:
+            allowed |= {"expected_parent_revision"}
         if extra - allowed:
             raise ValueError("fields do not belong to the selected action")
         required = (
@@ -84,6 +87,7 @@ class OperatorMutation(BaseModel):
         )
         if self.action == "policy" and self.inherit_policy is True:
             required -= {"policy"}
+            required |= {"expected_parent_revision"}
         if any(getattr(self, key) is None for key in required):
             raise ValueError("selected action requires its fields")
         return self

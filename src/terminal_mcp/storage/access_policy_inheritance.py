@@ -12,7 +12,6 @@ import json
 import secrets
 
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
-from terminal_mcp.core.access_policy_windows import capture_window
 
 
 def _write(db, *, revision, policy, legacy_enabled, inherit_policy, parent):
@@ -61,7 +60,7 @@ def _propagate(store, db, policy):
                 kind="SlotPolicyChanged",
                 policy=resolved,
                 inherit_policy=True,
-                policy_window=capture_window(slot, now),
+                policy_window=store.capture_policy_window(slot, now),
             )
             store.apply_event(
                 event,

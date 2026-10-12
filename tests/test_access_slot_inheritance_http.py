@@ -20,6 +20,12 @@ from terminal_mcp.app import create_app
 
 
 def mutate(client, action, key, **values):
+    if (
+        action == "policy"
+        and values.get("inherit_policy") is True
+        and "expected_parent_revision" not in values
+    ):
+        values["expected_parent_revision"] = defaults(client)["revision"]
     response = client.post(
         "/actions/access/mutate",
         headers=HEADERS,
@@ -172,6 +178,9 @@ def test_real_fleet_http_policy_reaches_native_slots_and_reset(tmp_path):
         assert inherited["policy"]["duration_seconds"] == 10800
         assert inherited["policy"]["warning_seconds"] == 180
         assert inherited["inheritance"]["source"] == "mesh"
+        assert inherited["inheritance"]["parent"]["source"] == "server"
+        assert inherited["inheritance"]["parent"]["id"] == "firstbyte"
+        assert inherited["inheritance"]["parent"]["revision"] == defaults(client)["revision"]
         assert (
             inherited["session_lifecycle"]["hard_expires_at"]
             == before["session_lifecycle"]["hard_expires_at"]
@@ -396,3 +405,56 @@ def test_inherited_policy_events_preserve_window_on_access_replica(tmp_path):
             assert caught_up.inherit_policy is True
             assert caught_up.policy.duration_seconds == 10800
             assert caught_up.policy_window == slot.policy_window
+
+
+def test_reset_rejects_stale_parent_even_when_slot_override_revision_is_unchanged(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        set_clock(app, T0)
+        issued = create(client, "parent-cas-create", policy={"duration_seconds": 7200})
+        before = read_slot(client, issued["slot_id"])
+        body = {
+            "action": "policy",
+            "slot_id": issued["slot_id"],
+            "expected_revision": before["revision"],
+            "inherit_policy": True,
+            "expected_parent_revision": before["inheritance"]["parent"]["revision"],
+            "idempotency_key": "parent-cas-stale-reset",
+        }
+        change_defaults(client, "parent-cas-change", policy={"duration_seconds": 10800})
+        current = read_slot(client, issued["slot_id"])
+        assert current["revision"] == before["revision"]
+        response = client.post("/actions/access/mutate", headers=HEADERS, json=body).json()
+        assert response.get("ok") is False
+        assert response.get("code") == "revision_conflict"
+        assert read_slot(client, issued["slot_id"]) == current
+        # A fresh, deliberate reset succeeds; it is not an automatic blind retry.
+        mutate(
+            client,
+            "policy",
+            "parent-cas-fresh-reset",
+            slot_id=issued["slot_id"],
+            expected_revision=current["revision"],
+            inherit_policy=True,
+            expected_parent_revision=current["inheritance"]["parent"]["revision"],
+        )
+        assert read_slot(client, issued["slot_id"])["policy"]["duration_seconds"] == 10800
+
+
+def test_reset_request_requires_explicit_parent_revision(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        issued = create(client, "parent-required")
+        response = client.post(
+            "/actions/access/mutate",
+            headers=HEADERS,
+            json={
+                "action": "policy",
+                "slot_id": issued["slot_id"],
+                "expected_revision": 1,
+                "inherit_policy": True,
+                "idempotency_key": "missing-parent-proof",
+            },
+        )
+        assert response.status_code == 422
+        assert read_slot(client, issued["slot_id"])["revision"] == 1
