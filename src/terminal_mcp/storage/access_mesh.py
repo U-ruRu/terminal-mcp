@@ -1051,12 +1051,22 @@ class AccessMeshStore(LocalAccessMesh):
         found = []
         with self._connect() as db:
             for issuer in sorted(self.trusted_issuers):
+                # Historic LOCAL slots may have been issued before the Mesh
+                # authority key rotated. Never restore remote issuer proofs.
+                if (
+                    issuer != self.local_node_id
+                    and getattr(self, "managed_trust_required", False)
+                    and self._managed_proof_key is None
+                ):
+                    continue
+                tags = self.code_tags(issuer, code)
+                marks = ",".join("?" for _ in tags)
                 rows = db.execute(
                     "SELECT s.* FROM access_mesh_slot_replicas s "
                     "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
-                    "WHERE s.issuer_id=? AND s.code_tag=? AND s.state='active' "
+                    f"WHERE s.issuer_id=? AND s.code_tag IN ({marks}) AND s.state='active' "
                     "AND c.number!=? AND c.logical_agent_id=s.logical_agent_id",
-                    (issuer, self.code_tag(issuer, code), code),
+                    (issuer, *tags, code),
                 ).fetchall()
                 found.extend(self._snapshot(row) for row in rows)
         if len(found) > 1:

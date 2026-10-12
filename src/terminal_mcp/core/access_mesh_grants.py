@@ -983,6 +983,15 @@ class LocalAccessMesh:
         # Mesh or moves to a different Mesh/authority.
         if issuer_id not in self.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_issuer")
+        if (
+            issuer_id != self.local_node_id
+            and getattr(self, "managed_trust_required", False)
+            and self._managed_proof_key is None
+        ):
+            # A verified Mesh topology by itself does not enroll Native Access.
+            # A stale HMAC tag from an old/bootstrap key cannot authorize a
+            # foreign issuer while its Mesh authority proof is still pending.
+            raise AccessMeshError("access_mesh_proof_enrollment_pending")
         tags = self.code_tags(issuer_id, code)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")

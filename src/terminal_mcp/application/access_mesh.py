@@ -201,7 +201,17 @@ class AccessMeshApplication:
             current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
             self.defaults = SlotPolicy(**current["policy"])
             self.legacy_enabled = current["legacy_enabled"]
+            # The previous authority's proof is never valid for a newly
+            # selected authority or Mesh. Archived local proofs remain valid
+            # only for this node's own historical grants.
+            new_scope = (managed_mesh_id, authority) if managed_mesh_id else None
+            old_scope = getattr(self.store, "_managed_proof_scope", None)
+            if old_scope is not None and old_scope != new_scope:
+                self.store.clear_managed_proof()
+                if self.replication is not None:
+                    self.replication.reset_proof_evidence()
             self.store.trusted_issuers = frozenset(allowed)
+            self.store.managed_trust_required = managed_mesh_id is not None
             self.managed_trust_enabled = managed_mesh_id is not None
             self.managed_trust_mesh_id = managed_mesh_id
 
