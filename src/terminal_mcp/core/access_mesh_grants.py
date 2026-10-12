@@ -577,6 +577,28 @@ class LocalAccessMesh:
     def _after_apply(self, db, event: AccessSlotEvent, *, release_claims: bool = False) -> None:
         """Runtime stores extend this transactional hook; domain replicas stay standalone."""
 
+    def peer_proof_tag(self, *, receiver_id: str, sender_id: str, nonce: str) -> str:
+        """Authenticate compatibility of the pre-enrolled Access proof secret.
+
+        The random challenge is authenticated at the transport layer. Only the
+        HMAC leaves this node; neither a private signing key nor the proof key
+        itself is transmitted.
+        """
+        _required_identifier(receiver_id)
+        _required_identifier(sender_id)
+        if (
+            receiver_id not in self.trusted_issuers
+            or sender_id not in self.trusted_issuers
+            or not isinstance(nonce, str)
+            or re.fullmatch(r"[0-9a-f]{32}", nonce) is None
+        ):
+            raise AccessMeshError("access_mesh_invalid_proof_challenge")
+        return hmac.new(
+            self._proof_key,
+            f"terminal-mcp-native-proof-v1:{receiver_id}:{sender_id}:{nonce}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
     def code_tag(self, issuer_id: str, code: str) -> str:
         """A mesh-keyed verifier, not the plaintext four-digit AC."""
         _required_identifier(issuer_id)

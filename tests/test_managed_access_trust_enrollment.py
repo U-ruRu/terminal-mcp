@@ -11,7 +11,6 @@ from terminal_mcp.core.access_mesh_grants import SlotPolicy
 from terminal_mcp.fleet.access_mesh import AccessMeshReplication, PinnedAccessMeshPeerAuth
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
 
-
 POLICY = SlotPolicy(1200, 60, True, 120, 30)
 
 
