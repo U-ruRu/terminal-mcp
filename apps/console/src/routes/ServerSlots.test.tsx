@@ -33,7 +33,7 @@ function setup(route = '/slots', overrides: Partial<ServerSlotsProps> = {}) {
     if (request.action === 'rotate') { slot.codeGeneration = (slot.codeGeneration ?? 0) + 1; return { ok: true, payload: { issuer_node_id: slot.issuerNodeId, slot_id: slot.slotId, logical_agent_id: slot.logicalAgentId, public_name: slot.publicName, revision: slot.revision, code_generation: slot.codeGeneration, code_expires_at: null, access_code: '0731' } } }
     if (request.action === 'delete') slot.state = 'deleted'
     if (request.action === 'suspend' || request.action === 'resume') { slot.state = request.action === 'suspend' ? 'suspended' : 'active'; slot.sessionLifecycle.state = request.action === 'suspend' ? 'suspended' : 'idle' }
-    if (request.action === 'policy') {
+    if (request.action === 'policy' && request.policy) {
       const p = request.policy
       if (p.duration_seconds !== undefined) slot.policy.durationSeconds = p.duration_seconds
       if (p.cooldown_seconds !== undefined) slot.policy.cooldownSeconds = p.cooldown_seconds
@@ -43,7 +43,7 @@ function setup(route = '/slots', overrides: Partial<ServerSlotsProps> = {}) {
       if (p.release_on_end !== undefined) slot.policy.releaseOnEnd = p.release_on_end
       slot.inheritance = nativeInheritance('override')
     }
-    if (request.action === 'reset_policy') { slot.policy = structuredClone(state.defaults.policy); slot.inheritance = nativeInheritance() }
+    if (request.action === 'policy' && request.inherit_policy) { slot.policy = structuredClone(state.defaults.policy); slot.inheritance = nativeInheritance() }
     if (request.action === 'deadline') slot.sessionLifecycle.hardExpiresAt = request.deadline_at
     return { ok: true, payload: { revision: slot.revision } }
   })
@@ -131,14 +131,15 @@ test('three hours are saved as 10800 seconds for only the selected slot and conf
   await userEvent.click(screen.getByRole('button', { name: 'Save slot policy' }))
   await waitFor(() => expect(test.loadSlots).toHaveBeenCalledTimes(2))
   expect(test.mutate).toHaveBeenCalledTimes(1)
-  expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'policy', slot_id: 'as_alpha', expected_revision: 7, expected_parent_version: 'parent-v2', policy: { duration_seconds: 10800 } })
+  expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'policy', slot_id: 'as_alpha', expected_revision: 7, policy: { duration_seconds: 10800 } })
   expect(other.policy.durationSeconds).toBe(1380)
   expect(input).toHaveValue(3)
   expect(screen.getByText(/Slot override/)).toBeInTheDocument()
 })
 
-test('return to inheritance is an explicit parent-version-bound operation and Cancel writes nothing', async () => {
+test('return to inheritance is an explicit revision-bound operation and Cancel writes nothing', async () => {
   const test = setup(detail)
+  test.state.slots[0].inheritance = nativeInheritance('override')
   const reset = await screen.findByRole('button', { name: 'Use inherited policy' })
   await userEvent.click(reset)
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
@@ -146,7 +147,7 @@ test('return to inheritance is an explicit parent-version-bound operation and Ca
   await userEvent.click(reset)
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Use inherited policy' }))
   await waitFor(() => expect(test.loadSlots).toHaveBeenCalledTimes(2))
-  expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'reset_policy', slot_id: 'as_alpha', expected_revision: 7, expected_parent_version: 'parent-v2' })
+  expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'policy', inherit_policy: true, slot_id: 'as_alpha', expected_revision: 7 })
   expect(test.mutate.mock.calls[0][1]).not.toHaveProperty('policy')
 })
 
@@ -172,5 +173,28 @@ test('Standalone policy is saved through native defaults with its own revision',
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(test.loadDefaults).toHaveBeenCalledTimes(2))
   expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'defaults', expected_revision: 2, policy: { duration_seconds: 10800 } })
-  expect(test.mutate.mock.calls[0][1]).not.toHaveProperty('legacy_enabled')
+  expect(test.mutate.mock.calls[0][1]).toHaveProperty('legacy_enabled', false)
+})
+
+
+test('native Standalone defaults remain editable when the optional fleet-control route is unsupported', async () => {
+  const defaults = { ...nativeDefaults(), inheritanceSupported: true, meshPolicySupported: false }
+  const env = setup('/servers/alpha/slots', {
+    loadFleetControl: vi.fn(async () => { throw new ConsoleHttpError(404, 'not_found') }),
+    loadAccessMeshDefaults: vi.fn(async () => structuredClone(defaults)),
+  })
+  const input = await screen.findByRole('spinbutton', { name: 'Session duration' })
+  await waitFor(() => expect(input).toBeEnabled())
+  expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  expect(env.mutate).not.toHaveBeenCalled()
+})
+
+test('read-only pairing can display fresh slots while all native writes remain disabled', async () => {
+  const instance = fleetInstance(); instance.profile.metadata.scope = 'terminal:read'
+  const env = setup('/servers/alpha/slots', { instances: [instance] })
+  expect(await screen.findByRole('link', { name: 'Alpha' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Create slot' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  expect(env.mutate).not.toHaveBeenCalled()
 })

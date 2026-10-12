@@ -1,4 +1,7 @@
 export const en = {
+  "slots.mesh.elapsedHint": "Warning and alert times are measured from session start. Changes apply to the next session.",
+  "slots.mesh.invalidPolicy": "Use positive times: warning < alert < session duration, and a positive rearm delay.",
+  "slots.mesh.freshAuthorityRequired": "A fresh read from the Mesh control node is required before editing.",
   "slots.native.refreshList": "Refresh slots",
   "slots.native.createServer": "Create on server",
   "slots.native.meshPolicyUnsupported": "This Mesh authority does not report the current native slot policy. Update the authority to edit it here.",
@@ -572,6 +575,9 @@ export type MessageKey = keyof typeof en
 export type Catalog = { [K in MessageKey]: string }
 
 export const ru: Catalog = {
+  "slots.mesh.elapsedHint": "Время предупреждения и тревоги отсчитывается от начала сессии. Изменения применяются к следующей сессии.",
+  "slots.mesh.invalidPolicy": "Укажи положительные значения: предупреждение < тревога < длительность сессии; задержка повторного открытия больше нуля.",
+  "slots.mesh.freshAuthorityRequired": "Для изменения нужно свежее состояние управляющего узла Mesh.",
   "slots.native.refreshList": "Обновить слоты",
   "slots.native.createServer": "Создать на сервере",
   "slots.native.meshPolicyUnsupported": "Авторитет Mesh не сообщает актуальную политику Access-слотов. Для её изменения здесь требуется обновить авторитет.",
@@ -1142,6 +1148,9 @@ export const ru: Catalog = {
 }
 
 export const ka: Catalog = {
+  "slots.mesh.elapsedHint": "გაფრთხილების დრო სესიის დასაწყისიდან ითვლება. ცვლილება შემდეგ სესიაზე ვრცელდება.",
+  "slots.mesh.invalidPolicy": "მიუთითე დადებითი დროები: გაფრთხილება < განგაში < სესიის ხანგრძლივობა.",
+  "slots.mesh.freshAuthorityRequired": "რედაქტირებისთვის საჭიროა Mesh-ის მმართველი კვანძის ახალი მონაცემები.",
   "slots.native.refreshList": "სლოტების განახლება",
   "slots.native.createServer": "შექმნა სერვერზე",
   "slots.native.meshPolicyUnsupported": "Mesh-ის ავტორიტეტი მიმდინარე Access სლოტების პოლიტიკას არ ასახავს. აქ შესაცვლელად განაახლე ავტორიტეტი.",
@@ -1712,6 +1721,9 @@ export const ka: Catalog = {
 }
 
 export const es: Catalog = {
+  "slots.mesh.elapsedHint": "Los avisos se miden desde el inicio de la sesión. Los cambios se aplican a la siguiente sesión.",
+  "slots.mesh.invalidPolicy": "Usa tiempos positivos: aviso < alerta < duración de sesión, y demora de rearme positiva.",
+  "slots.mesh.freshAuthorityRequired": "Se necesita una lectura reciente del nodo de control de Mesh para editar.",
   "slots.native.refreshList": "Actualizar ranuras",
   "slots.native.createServer": "Crear en el servidor",
   "slots.native.meshPolicyUnsupported": "La autoridad Mesh no informa de la política actual de ranuras. Actualiza la autoridad para editarla aquí.",
