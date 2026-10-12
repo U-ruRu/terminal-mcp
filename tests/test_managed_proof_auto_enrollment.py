@@ -133,3 +133,63 @@ def test_signed_managed_replica_installs_group_proof_without_operator_env_edit(t
         before = access.store.code_tag("control", "1234")
         client.portal.call(partial(controller.apply_replica, state, source_node_id="control"))
         assert access.store.code_tag("control", "1234") == before
+
+
+
+def test_pending_membership_does_not_accept_remote_bootstrap_claim(tmp_path):
+    m = store(tmp_path / "pending.sqlite3", "main", MAIN)
+    m.managed_trust_required = True
+    with pytest.raises(AccessMeshError, match="access_mesh_proof_enrollment_pending"):
+        m.attach(issuer_id="bacloud", code="5678", connection_key="fixture-pending")
+    # Local-only historical lookup remains permitted (no slot exists here).
+    with pytest.raises(AccessMeshError, match="access_mesh_slot_not_found"):
+        m.attach(issuer_id="main", code="5678", connection_key="fixture-local")
+    m.install_managed_proof(
+        mesh_id="mesh-test", authority_id="bacloud", ingress_token=AUTHORITY_TOKEN,
+    )
+    with pytest.raises(AccessMeshError, match="access_mesh_slot_not_found"):
+        m.attach(issuer_id="bacloud", code="5678", connection_key="fixture-after")
+    m.clear_managed_proof()
+    m.managed_trust_required = False
+    with pytest.raises(AccessMeshError, match="access_mesh_slot_not_found"):
+        m.attach(issuer_id="main", code="5678", connection_key="fixture-after-leave")
+
+
+def test_preexisting_local_persistent_slot_stays_attachable_after_join_leave_and_restart(tmp_path):
+    from datetime import UTC, datetime
+
+    from terminal_mcp.core.access_mesh_grants import AccessSlotEvent, SlotPolicy
+    from terminal_mcp.storage.sqlite import SqliteRepository
+    import asyncio
+
+    path = tmp_path / "preserved.sqlite3"
+    asyncio.run(SqliteRepository(path, tmp_path / "out.sqlite3").initialize())
+    s = store(path, "main", MAIN)
+    code = "4298"
+    event = AccessSlotEvent(
+        issuer_id="main", slot_id="original-local-slot", logical_agent_id="original-local-agent",
+        event_id="local-initial-1", revision=1, kind="SlotIssued",
+        policy=SlotPolicy(duration_seconds=1200, cooldown_seconds=60),
+        code_tag=s.code_tag("main", code),
+        effective_at=datetime(2026, 10, 12, 14, 0, tzinfo=UTC),
+    )
+    assert s.apply_event(
+        event, authenticated_peer_id="main", issued_kind="persistent",
+    ).outcome == "applied"
+    assert s.attach(issuer_id="main", code=code, connection_key="before-enrollment").slot_id == (
+        "original-local-slot"
+    )
+    assert s.install_managed_proof(
+        mesh_id="mesh-a", authority_id="bacloud", ingress_token=AUTHORITY_TOKEN,
+    )
+    assert s.attach(issuer_id="main", code=code, connection_key="after-enrollment").slot_id == (
+        "original-local-slot"
+    )
+    s.clear_managed_proof()
+    assert s.attach(issuer_id="main", code=code, connection_key="after-leave").slot_id == (
+        "original-local-slot"
+    )
+    s = store(path, "main", MAIN)
+    assert s.attach(issuer_id="main", code=code, connection_key="after-restart").slot_id == (
+        "original-local-slot"
+    )

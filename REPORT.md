@@ -85,3 +85,10 @@ Reproduce on Secondary:
 Release and live not accepted: Juliett-5 owns existing APK Join UI, success gating on control.native_access_trust.ready, durable partial retry/reconcile, release integration and the sole deployment. Do not claim success from membership-only applied revisions. No live server, trust, auth/RKB, data, pairing or service was changed here. Still unverified: full CI, Android device E2E, multi-node status acknowledgments, real BacLOUD Access PIN -> remote Exec attach and restart retest.
 
 Operator constraint from dot at 14:45 UTC: user wants an accepted update on FOUR STANDALONE servers preserving OAuth/auth and RKB, leaves Secondary untouched, and will personally join all servers including Main using APK. Do not join Main, reset anything, or deploy without Juliett's precise approval-time file deletion/preservation manifest. The candidate branch is not an accepted release.
+
+## 2026-10-12 15:00 UTC — security acceptance addendum
+
+- Fail-closed remote attach while managed membership has not yet installed its authority proof. Verified membership alone cannot validate a remote issuer using an old shared bootstrap proof. Autonomous bootstrap attachments continue normally, and locally issued slots remain available.
+- On Mesh transfer or authority change, previous managed proof scope is cleared before new trust becomes active; authenticated new enrollment installs the new scope. Archived historical proofs cannot reopen remote issuers.
+- Rotated code lookup uses the same local-only historical tag fallback, ensuring pre-existing local persistent slots survive Join, Leave and restart. Added actual Sqlite-backed SlotIssued+attach exercise rather than only comparing tag strings.
+- Focused proof/attach regression: 19 passed (12.62s). Active-slot/migration guard suite: 30 passed (6.62s). Previous broader access/fleet suite: 66 passed (38.97s). No live changes.

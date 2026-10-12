@@ -17,3 +17,7 @@
 New worktree /workspace/terminal-mcp-native-trust-finish-lima5, branch task/native-access-trust-finish-lima5-20261012, parent 6d6593d0a667734139b4afa5d033a56a66b15e4a. Generic authority-derived managed group proof with encrypted local historical proof archive added; no Main-specific behavior. Baseline Legacy/Persistent regression fixed: originally fab7afe timeout after 27s, now target passes. 66 module tests pass plus independent 6 checks. No live writes/deployment.
 
 Handoff to Juliett-5: cherry-pick candidate after integration review, gate existing APK Join on native_access_trust.ready and all nodes' convergence, durable retry of partial Join, full release suite and real Android E2E. Sole deploy owner Juliett, no competing releases. User later requested four standalone nodes with auth/RKB retained, Secondary separate, user performs Join personally. No reset until action-time manifest approval; no real Access -> remote Exec pass yet. Full commands and restore plan in REPORT.md.
+
+## Security addendum, 15:00 UTC
+
+Managed Join pending proof rejects REMOTE attach; old local Access slots retain local attach through Join/Leave/restart. Authority changes immediately invalidate former active proof scope. Test suites: 19 + 30 + prior 66 passed. No deploy/reset/real Android run; release integration and all live tests remain with Juliett-5 and subsequent user Join.
