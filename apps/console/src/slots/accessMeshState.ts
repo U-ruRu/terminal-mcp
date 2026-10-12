@@ -1,3 +1,4 @@
+import { connectionAuthorityScope } from '../connections/authorityScope'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConsoleHttpError } from '../api/client'
@@ -15,6 +16,9 @@ export type AccessMeshReadState = {
   slotsError?: SlotReadFailure
   defaultsError?: SlotReadFailure
   observedAt: number
+  defaultsObservedAt?: number
+  slotsPending?: boolean
+  defaultsPending?: boolean
 }
 
 export function slotReadFailure(error: unknown): SlotReadFailure {
@@ -30,11 +34,11 @@ export function slotReadFailure(error: unknown): SlotReadFailure {
 export function useAccessMeshState(instances: FleetInstanceView[], loadSlots?: AccessMeshSlotsLoader, loadDefaults?: AccessMeshDefaultsLoader) {
   const sequence = useRef<Record<string, number>>({})
   const alive = useRef(true)
+  const inFlight = useRef<Record<string, number | undefined>>({})
   const targets = JSON.stringify(instances.map((instance) => ({
     id: instance.profile.instanceId, connected: instance.runtime.authStatus === 'connected',
     // Re-pairing is a new authority read even if the human-facing server name is unchanged.
-    origin: instance.profile.origin, credential: instance.profile.credentialRef,
-    device: instance.profile.metadata.deviceId, client: instance.profile.metadata.clientId,
+    authority: connectionAuthorityScope(instance.profile),
   })).sort((a, b) => a.id.localeCompare(b.id)))
 
   // An authority change invalidates its previous read before any action can render.
@@ -47,31 +51,62 @@ export function useAccessMeshState(instances: FleetInstanceView[], loadSlots?: A
     if (!loadSlots || !loadDefaults || !targetList.some((item) => item.id === instanceId && item.connected)) return undefined
     const serial = (sequence.current[instanceId] ?? 0) + 1
     sequence.current[instanceId] = serial
-    const [slots, defaults] = await Promise.allSettled([loadSlots(instanceId), loadDefaults(instanceId)])
+    inFlight.current[instanceId] = serial
+    const publish = (patch: Partial<AccessMeshReadState>) => {
+      if (!alive.current || sequence.current[instanceId] !== serial) return
+      setCache((current) => current.targets !== targets ? current : {
+        ...current, states: { ...current.states, [instanceId]: {
+          observedAt: 0, ...current.states[instanceId], ...patch,
+        } },
+      })
+    }
+    publish({ slotsPending: true, defaultsPending: true })
+    // Independent settlement: a slow defaults endpoint must not hide readable slots.
+    const slotsRequest = Promise.resolve().then(() => loadSlots(instanceId)).then((value) => {
+      const observedAt = Date.now()
+      publish({ slots: value, slotsError: undefined, slotsPending: false, observedAt })
+      return { value, observedAt }
+    }, (error: unknown) => {
+      // Retained rows keep their original sample time; a failed refresh is not a new observation.
+      publish({ slotsError: slotReadFailure(error), slotsPending: false })
+      throw error
+    })
+    const defaultsRequest = Promise.resolve().then(() => loadDefaults(instanceId)).then((value) => {
+      const observedAt = Date.now()
+      publish({ defaults: value, defaultsError: undefined, defaultsPending: false, defaultsObservedAt: observedAt })
+      return { value, observedAt }
+    }, (error: unknown) => {
+      publish({ defaultsError: slotReadFailure(error), defaultsPending: false })
+      throw error
+    })
+    const [slots, defaults] = await Promise.allSettled([slotsRequest, defaultsRequest])
+    if (inFlight.current[instanceId] === serial) delete inFlight.current[instanceId]
+    if (!alive.current || sequence.current[instanceId] !== serial) return undefined
     const result: AccessMeshReadState = {
-      slots: slots.status === 'fulfilled' ? slots.value : undefined,
-      defaults: defaults.status === 'fulfilled' ? defaults.value : undefined,
+      slots: slots.status === 'fulfilled' ? slots.value.value : undefined,
+      defaults: defaults.status === 'fulfilled' ? defaults.value.value : undefined,
       slotsError: slots.status === 'rejected' ? slotReadFailure(slots.reason) : undefined,
       defaultsError: defaults.status === 'rejected' ? slotReadFailure(defaults.reason) : undefined,
-      observedAt: Date.now(),
+      observedAt: slots.status === 'fulfilled' ? slots.value.observedAt : 0,
+      defaultsObservedAt: defaults.status === 'fulfilled' ? defaults.value.observedAt : undefined,
+      slotsPending: false, defaultsPending: false,
     }
-    if (!alive.current || sequence.current[instanceId] !== serial) return undefined
-    setCache((current) => {
-      if (current.targets !== targets) return current
-      return { ...current, states: { ...current.states, [instanceId]: {
-        ...result,
-        slots: result.slots ?? current.states[instanceId]?.slots,
-        defaults: result.defaults ?? current.states[instanceId]?.defaults,
-      } } }
-    })
     return result
   }, [loadDefaults, loadSlots, targets])
 
   useEffect(() => {
     const entries: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
     for (const entry of entries) if (entry.connected) void refresh(entry.id)
+    const refreshIdle = () => {
+      if (document.visibilityState === 'hidden') return
+      for (const entry of entries) if (entry.connected && !inFlight.current[entry.id]) void refresh(entry.id)
+    }
+    const timer = window.setInterval(refreshIdle, 15_000)
+    document.addEventListener('visibilitychange', refreshIdle)
     const serials = sequence.current
     return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshIdle)
       for (const entry of entries) serials[entry.id] = (serials[entry.id] ?? 0) + 1
     }
   }, [refresh, targets])

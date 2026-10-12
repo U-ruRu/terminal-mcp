@@ -347,3 +347,25 @@ test('credential replacement recreates only the affected server actor', () => {
   expect(created[1].stopCalls).toBe(0)
   expect(manager.getInstances()[0].profile.metadata.deviceId).toBe('device-a-repaired')
 })
+
+test.each(['pairedAt', 'scope'] as const)('a new %s invalidates the old actor even with the same credential reference', (field) => {
+  const profile = makeProfile('same')
+  const registry = new MutableRegistry([profile])
+  const actors: FakeActor[] = []
+  const manager = new FleetConnectionManager(registry, (item) => {
+    const actor = new FakeActor(item.instanceId)
+    actors.push(actor)
+    return actor
+  })
+  manager.syncProfiles()
+  actors[0].setState(makeRuntime('same', 'live'))
+  registry.profiles = [{ ...profile, metadata: { ...profile.metadata,
+    ...(field === 'pairedAt' ? { pairedAt: profile.metadata.pairedAt + 1 } : { scope: 'terminal:read terminal:execute' }),
+  } }]
+  const fresh = manager.syncProfiles()
+  expect(actors).toHaveLength(2)
+  expect(actors[0].stopCalls).toBe(1)
+  expect(fresh[0].runtime.authStatus).not.toBe('connected')
+  expect(fresh[0].runtime.status).not.toBe('live')
+  manager.stopAll()
+})

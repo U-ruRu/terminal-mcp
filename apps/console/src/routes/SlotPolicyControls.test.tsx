@@ -18,7 +18,7 @@ function status(revision = 1, duration = 1380): ManagedSlotStatusReadModel {
       remainingSeconds: 1260, initialDurationSeconds: 1380, effectiveDurationSeconds: 1380, hardExpiresAt: '2026-10-12T10:23:00Z',
       warningBeforeExpirySeconds: 180, drainingBeforeExpirySeconds: 90, rearmAfterSeconds: 180, rearmAt: null, windowRevision: 1,
     },
-    session: { workSessionId: 'ws_alpha', sessionEpoch: 1, role: 'executor', contractVersion: '1', state: 'active', startedAt: '2026-10-12T10:00:00Z', endedAt: null, endReason: null },
+    session: { workSessionId: 'ws_alpha', sessionEpoch: 1, role: 'executor', contractVersion: 1, state: 'active', startedAt: '2026-10-12T10:00:00Z', endedAt: null, endReason: null },
   }
 }
 

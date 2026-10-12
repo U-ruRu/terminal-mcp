@@ -1,3 +1,4 @@
+import { connectionAuthorityScope } from '../connections/authorityScope'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 
@@ -78,32 +79,43 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
   const [filterKey, setFilterKey] = useState(query.get('filter') ?? sessionStorage.getItem('slots-list-filter') ?? 'all')
   const [settingsKey, setSettingsKey] = useState(query.get('settings') ?? sessionStorage.getItem('slots-settings-context') ?? '')
   const [createChoice, setCreateChoice] = useState('')
-  const [controls, setControls] = useState<Record<string, ManagedFleetControlReadModel | undefined>>(() => Object.fromEntries(instances.map((item) => [item.profile.instanceId, loadCachedFleetControlForProfile(item.profile.instanceId, item.profile.origin)?.control])))
-  const [controlErrors, setControlErrors] = useState<Record<string, string | undefined>>({})
+  const targets = JSON.stringify(instances.map((item) => ({ id: item.profile.instanceId, connected: item.runtime.authStatus === 'connected', authority: connectionAuthorityScope(item.profile) })).sort((a, b) => a.id.localeCompare(b.id)))
+  const [controlCache, setControlCache] = useState<{
+    targets: string
+    controls: Record<string, ManagedFleetControlReadModel | undefined>
+    errors: Record<string, string | undefined>
+    confirmed: Record<string, boolean | undefined>
+  }>(() => ({ targets, controls: Object.fromEntries(instances.map((item) => [item.profile.instanceId, loadCachedFleetControlForProfile(item.profile.instanceId, item.profile.origin)?.control])), errors: {}, confirmed: {} }))
+  if (controlCache.targets !== targets) setControlCache({ targets, controls: {}, errors: {}, confirmed: {} })
+  const controls = controlCache.targets === targets ? controlCache.controls : {}
+  const controlErrors = controlCache.targets === targets ? controlCache.errors : {}
+  const controlsConfirmed = controlCache.targets === targets ? controlCache.confirmed : {}
   const controlSerial = useRef<Record<string, number>>({})
   const mounted = useRef(true)
   const { states: reads, refresh: refreshNative } = useAccessMeshState(instances, loadAccessMeshSlots, loadAccessMeshDefaults)
-  const targets = JSON.stringify(instances.map((item) => ({ id: item.profile.instanceId, connected: item.runtime.authStatus === 'connected', origin: item.profile.origin, credential: item.profile.credentialRef })).sort((a, b) => a.id.localeCompare(b.id)))
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const refreshControl = useCallback(async (instanceId: string) => {
-    if (!loadFleetControl) return undefined
+    const currentTargets: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
+    if (!loadFleetControl || !currentTargets.some((item) => item.id === instanceId && item.connected)) return undefined
     const serial = (controlSerial.current[instanceId] ?? 0) + 1
     controlSerial.current[instanceId] = serial
+    setControlCache((current) => current.targets === targets ? { ...current, confirmed: { ...current.confirmed, [instanceId]: false } } : current)
     try {
       const value = await loadFleetControl(instanceId)
       if (!mounted.current || serial !== controlSerial.current[instanceId]) return undefined
       saveCachedFleetControl(instanceId, value, Date.now()); propagateCachedFleetControl(value, Date.now())
-      setControls((current) => ({ ...current, [instanceId]: value }))
-      setControlErrors((current) => ({ ...current, [instanceId]: undefined }))
+      setControlCache((current) => current.targets === targets ? { ...current, controls: { ...current.controls, [instanceId]: value }, errors: { ...current.errors, [instanceId]: undefined }, confirmed: { ...current.confirmed, [instanceId]: true } } : current)
       return value
     } catch (error) {
-      if (mounted.current && serial === controlSerial.current[instanceId]) setControlErrors((current) => ({ ...current, [instanceId]: slotReadFailure(error).code }))
+      if (mounted.current && serial === controlSerial.current[instanceId]) setControlCache((current) => current.targets === targets ? { ...current, errors: { ...current.errors, [instanceId]: slotReadFailure(error).code }, confirmed: { ...current.confirmed, [instanceId]: false } } : current)
       return undefined
     }
-  }, [loadFleetControl])
+  }, [loadFleetControl, targets])
   useEffect(() => {
     const values: Array<{ id: string; connected: boolean }> = JSON.parse(targets)
     for (const value of values) if (value.connected) void refreshControl(value.id)
+    const serials = controlSerial.current
+    return () => { for (const value of values) serials[value.id] = (serials[value.id] ?? 0) + 1 }
   }, [refreshControl, targets])
 
   const contexts = contextsFromTopology(instances, controls, reads)
@@ -177,7 +189,7 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
 
   const operationScope = (instanceId: string) => {
     const profile = instances.find((item) => item.profile.instanceId === instanceId)?.profile
-    return profile ? `${normalizedOrigin(profile.origin)}|${profile.metadata.deviceId}|${profile.metadata.clientId}` : instanceId
+    return profile ? connectionAuthorityScope(profile) : instanceId
   }
   const pendingFor = (instanceId: string): { value: PendingSlotOperation | null; unavailable: boolean } => {
     try { return { value: loadSlotOperation(operationScope(instanceId)), unavailable: false } } catch { return { value: null, unavailable: true } }
@@ -185,9 +197,9 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
   const blocked = (instanceId: string) => { const current = pendingFor(instanceId); return Boolean(current.value || current.unavailable) }
   const pending = instances.filter((item) => relevantIds.has(item.profile.instanceId)).map((item) => ({ instanceId: item.profile.instanceId, name: item.profile.displayName, ...pendingFor(item.profile.instanceId) })).filter((item) => item.value || item.unavailable)
   const finish = (instanceId: string) => { clearSlotOperation(operationScope(instanceId)); updateOperations((value) => value + 1) }
-  const canMutate = (instanceId: string) => Boolean(mutateAccessMesh && instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected') && reads[instanceId]?.slots && !reads[instanceId]?.slotsError && !blocked(instanceId))
+  const canMutate = (instanceId: string) => Boolean(mutateAccessMesh && instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected') && reads[instanceId]?.slots && !reads[instanceId]?.slotsError && !reads[instanceId]?.slotsPending && clock - (reads[instanceId]?.observedAt ?? 0) <= 30_000 && !blocked(instanceId))
   const execute = async (instanceId: string, request: AccessMeshMutationRequest, recover = false): Promise<AccessMeshActionResult> => {
-    if (!mutateAccessMesh || lock.current || !instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected')) return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
+    if (!mutateAccessMesh || lock.current || (!recover && !canMutate(instanceId)) || !instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected')) return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
     lock.current = true; setBusy(request.action === 'create' ? 'create' : `${instanceId}:${request.action}`); setMessage('')
     const scope = operationScope(instanceId)
     try {
@@ -277,9 +289,9 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
   const createdEntry = created ? allEntries.find((entry) => sameSlot(entry, created)) : undefined
   const createdCode = createdEntry ? codeFor(createdEntry) : null
   const selectedCode = selected ? codeFor(selected) : null
-  const createReady = Boolean(createRead?.slots && !createRead.slotsError && createRead.defaults && !createRead.defaultsError && canMutate(createInstanceId))
-  const standaloneConfirmed = Boolean(activeContext?.kind === 'server' && defaults?.writeTarget !== 'fleet_control')
-  const defaultsWritable = Boolean(standaloneConfirmed && !reads[policyInstanceId]?.defaultsError && canMutate(policyInstanceId))
+  const createReady = Boolean(createRead?.slots && !createRead.slotsError && createRead.defaults && !createRead.defaultsError && !createRead.defaultsPending && canMutate(createInstanceId))
+  const standaloneConfirmed = Boolean(controlsConfirmed[policyInstanceId] && activeContext?.kind === 'server' && defaults?.writeTarget !== 'fleet_control')
+  const defaultsWritable = Boolean(standaloneConfirmed && !reads[policyInstanceId]?.defaultsError && !reads[policyInstanceId]?.defaultsPending && canMutate(policyInstanceId))
   const allRead = relevantIds.size > 0 && [...relevantIds].every((id) => Boolean(reads[id]?.slots && !reads[id]?.slotsError))
 
   // Native Mesh policy wiring is versioned separately. Never substitute legacy timing fields.
@@ -290,7 +302,7 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
     {globalMode && !logicalAgentId ? <div className="slots-global-filter surface-section"><label className="ui-field"><span>{t('slots.filter')}</span><select value={filter} onChange={(event) => setFilterKey(event.target.value)}><option value="all">{t('slots.all')}</option>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label><IconButton icon="retry" variant="quiet" label={t('slots.native.refreshList')} disabled={Boolean(busy)} onClick={refreshVisible} /></div> : null}
     {!loadAccessMeshSlots || !loadAccessMeshDefaults ? <FeedbackState variant="partial" title={t('slots.native.unsupported')} /> : <div className="slot-context-statuses">{instances.filter((item) => relevantIds.has(item.profile.instanceId)).map((item) => {
       const read = reads[item.profile.instanceId]
-      if (!read) return <p role="status" className="muted" key={item.profile.instanceId}>{item.profile.displayName} · {item.runtime.authStatus === 'connected' ? t('slots.native.loading') : t('slots.liveRequired')}</p>
+      if (!read || (!read.slots && read.slotsPending)) return <p role="status" className="muted" key={item.profile.instanceId}>{item.profile.displayName} · {item.runtime.authStatus === 'connected' ? t('slots.native.loading') : t('slots.liveRequired')}</p>
       const failures = [read.slotsError, read.defaultsError].filter((error, index, values) => error && values.findIndex((value) => value?.kind === error.kind && value?.code === error.code) === index)
       return failures.map((error) => error ? <div className="attention-strip" role="status" key={item.profile.instanceId + ':' + error.kind + ':' + error.code}><strong>{item.profile.displayName}</strong><span>{t(error.kind === 'unsupported' ? 'slots.native.unsupported' : error.kind === 'disabled' ? 'slots.disabled' : error.kind === 'denied' ? 'slots.native.denied' : 'slots.native.failed')} · {error.code}</span><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh') + ' — ' + item.profile.displayName} disabled={Boolean(busy)} onClick={() => void refreshNative(item.profile.instanceId)} /></div> : null)
     })}</div>}

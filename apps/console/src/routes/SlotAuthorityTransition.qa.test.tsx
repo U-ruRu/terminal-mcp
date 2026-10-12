@@ -154,3 +154,28 @@ test('a displayed code is removed at its own expiry while the slot stays visible
   expect(screen.getByRole('link', { name: 'Alpha' })).toBeInTheDocument()
   expect(mutate).not.toHaveBeenCalled()
 })
+
+test.each(['pairedAt', 'scope'] as const)('same server and saved credentials invalidate successful reads when %s changes', async (field) => {
+  const original = fleetInstance()
+  let completeNewRead: (slots: AccessMeshSlotReadModel[]) => void = () => undefined
+  const loadSlots = vi.fn<(id: string) => Promise<AccessMeshSlotReadModel[]>>()
+    .mockResolvedValueOnce([nativeSlot()])
+    .mockImplementationOnce(() => new Promise((resolve) => { completeNewRead = resolve }))
+  const mutate = vi.fn(async () => ({ ok: false, payload: {} }))
+  const view = render(<Screen instances={[original]} loadSlots={loadSlots} mutate={mutate} />)
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled())
+  const replacement: FleetInstanceView = { ...original, profile: { ...original.profile,
+    metadata: { ...original.profile.metadata, ...(field === 'pairedAt'
+      ? { pairedAt: original.profile.metadata.pairedAt + 1 }
+      : { scope: original.profile.metadata.scope + ' terminal:audit' }) },
+  } }
+  view.rerender(<Screen instances={[replacement]} loadSlots={loadSlots} mutate={mutate} />)
+  const oldPause = screen.queryByRole('button', { name: 'Pause' })
+  if (oldPause) expect(oldPause).toBeDisabled()
+  await waitFor(() => expect(loadSlots).toHaveBeenCalledTimes(2))
+  expect(mutate).not.toHaveBeenCalled()
+  await act(async () => { completeNewRead([nativeSlot('beta')]) })
+  expect(await screen.findByRole('link', { name: 'Beta' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Alpha' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled()
+})

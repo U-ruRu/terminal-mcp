@@ -1,3 +1,4 @@
+import { connectionAuthorityScope } from './authorityScope'
 import { generateDevicePublicKey } from '../auth/pairing'
 import { restoreCredential, type PublicStoredConnection } from '../auth/restore'
 import { PairingTransport } from '../auth/transport'
@@ -460,11 +461,7 @@ export class BrowserConnectionRegistry {
 
 
   private sameProfileCredential(left: ConnectionProfile, right: ConnectionProfile): boolean {
-    return left.instanceId === right.instanceId
-      && left.origin === right.origin
-      && left.credentialRef === right.credentialRef
-      && left.metadata.deviceId === right.metadata.deviceId
-      && left.metadata.clientId === right.metadata.clientId
+    return connectionAuthorityScope(left) === connectionAuthorityScope(right)
   }
 
   private cloneConnected(result: ConnectedProfileSession): ConnectedProfileSession {
