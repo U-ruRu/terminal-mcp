@@ -66,6 +66,12 @@ class AccessMeshApplication:
         self.registry = ProviderIdentityRegistry()
         self.replication = None
         self.messages = None
+        # Trust for autonomous operation remains the original, operator-pinned
+        # bootstrap. Managed enrollment is derived exclusively from the verified
+        # Fleet Control replica, never from an inbound Access request.
+        self._bootstrap_trusted_issuers = frozenset(store.trusted_issuers)
+        self.managed_trust_enabled = False
+        self.managed_trust_mesh_id = None
         self._cleanup_lock = asyncio.Lock()
         self._issuer_lock = asyncio.Lock()
         self._issuer_session_lock = asyncio.Lock()
@@ -163,10 +169,41 @@ class AccessMeshApplication:
                     "mesh_id": local["mesh_id"],
                     "control_node_id": state.get("control_node_id"),
                 }
+        # apply_fleet_policy receives only locally committed/verified Fleet
+        # Control state. Every other entry point must stay on bootstrap trust.
+        # Deliberately do not trust a peer merely because it contacted the API.
+        allowed = self._bootstrap_trusted_issuers
+        managed_mesh_id = None
+        if state and state.get("managed"):
+            nodes = state.get("nodes") or []
+            local = next(
+                (
+                    node for node in nodes
+                    if node.get("node_id") == self.store.local_node_id
+                    and node.get("state") != "detached"
+                ),
+                None,
+            )
+            mesh_id = local.get("mesh_id") if local else None
+            authority = state.get("control_node_id")
+            member_ids = {
+                node["node_id"]
+                for node in nodes
+                if isinstance(node, dict)
+                and isinstance(node.get("node_id"), str)
+                and node.get("mesh_id") == mesh_id
+                and node.get("state") != "detached"
+            } if mesh_id else set()
+            if mesh_id and authority in member_ids and self.store.local_node_id in member_ids:
+                allowed = frozenset(member_ids)
+                managed_mesh_id = mesh_id
         async with self._issuer_session_lock, self._issuer_lock:
             current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
             self.defaults = SlotPolicy(**current["policy"])
             self.legacy_enabled = current["legacy_enabled"]
+            self.store.trusted_issuers = frozenset(allowed)
+            self.managed_trust_enabled = managed_mesh_id is not None
+            self.managed_trust_mesh_id = managed_mesh_id
 
     @staticmethod
     def require_write(actor: ActorContext) -> None:

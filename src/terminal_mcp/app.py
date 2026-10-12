@@ -654,7 +654,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Managed Fleet Control changes fleet_replication.config in place at
         # startup. Access Mesh outbound uses the bootstrap config; inbound
         # authentication MUST use that same pinned trust/token material.
-        mesh_peer_auth = PinnedAccessMeshPeerAuth(fleet_config)
+        mesh_peer_auth = PinnedAccessMeshPeerAuth(fleet_config, access_mesh_replication)
         app.include_router(build_access_mesh_router(access_mesh, mesh_peer_auth))
         if lifecycle_event_mesh is not None:
             app.include_router(
