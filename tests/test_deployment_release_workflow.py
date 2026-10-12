@@ -71,7 +71,8 @@ def bundle_fixture(root: Path):
         "dirty": False,
         "source_changed": False,
         "exit_code": 0,
-        "releasable": True,
+        "full_test_evidence_eligible": True,
+        "deselected": 0,
         "verdict": "passed",
         "tests": {
             "collected": 8,
@@ -102,8 +103,15 @@ def bundle_fixture(root: Path):
         selection={"scope": "full"},
         python=platform_id()["python"],
         dependencies={"example": "1.0"},
+        runtime={
+            "sqlite_version": manifest["sqlite"],
+            "python_version": manifest["platform"]["python"],
+            "machine": manifest["platform"]["machine"],
+            "implementation": manifest["platform"]["implementation"],
+            "libc": manifest["platform"]["libc"],
+        },
     )
-    (root / "profile.json").write_text('{"deselected":0}')
+    (root / "profile.json").write_text('{"deselected":[]}')
     (root / "junit.xml").write_text(
         '<testsuites><testsuite tests="8" failures="0" errors="0" skipped="0"/></testsuites>'
     )
@@ -523,3 +531,56 @@ def test_real_http_client_distinguishes_application_cdn_and_html(http_server):
 def test_probe_configuration_does_not_carry_secrets(url):
     with pytest.raises(ReleaseError):
         checked_url(url)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("sqlite_version", "3.46.1"),
+        ("python_version", "0.0.0"),
+        ("machine", "unknown-machine"),
+        ("implementation", "unknown-implementation"),
+        ("libc", ["unknown-libc", "0"]),
+    ],
+)
+def test_acceptance_requires_the_same_native_runtime(tmp_path, field, value):
+    from terminal_mcp.deployment.artifact import validate_receipt
+
+    bundle, approval, _ = bundle_fixture(tmp_path)
+    accepted = read_json(approval)
+    report = accepted["receipt"]
+    report["runtime"][field] = value
+    with pytest.raises(ReleaseError, match="acceptance_native_runtime_mismatch"):
+        validate_receipt(report, read_json(bundle / "manifest.json"), accepted["policy"])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("full_test_evidence_eligible", False),
+        ("deselected", 1),
+        ("deselected", False),
+    ],
+)
+def test_acceptance_refuses_ineligible_or_deselected_report(tmp_path, field, value):
+    from terminal_mcp.deployment.artifact import validate_receipt
+
+    bundle, approval, _ = bundle_fixture(tmp_path)
+    accepted = read_json(approval)
+    report = accepted["receipt"]
+    report[field] = value
+    with pytest.raises(ReleaseError):
+        validate_receipt(report, read_json(bundle / "manifest.json"), accepted["policy"])
+
+
+@pytest.mark.parametrize("deselected", [None, ["lost-test"], 1, False])
+def test_real_profile_list_deselection_is_not_silently_accepted(tmp_path, deselected):
+    from terminal_mcp.deployment.artifact import verify_evidence_files
+
+    _, approval, _ = bundle_fixture(tmp_path)
+    report = read_json(approval)["receipt"]
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps({"deselected": deselected}))
+    report["files"]["profile.json"] = sha256(path)
+    with pytest.raises(ReleaseError, match="acceptance_deselected_tests"):
+        verify_evidence_files(tmp_path / "receipt.json", report)

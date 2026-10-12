@@ -334,6 +334,22 @@ def validate_receipt(report: dict, manifest: dict, policy: dict) -> None:
         "operator_acceptance_required",
     )
     require(REQUIRED_GUARANTEES <= set(policy.get("guarantees", [])), "upgrade_guarantees_missing")
+    require(
+        report.get("full_test_evidence_eligible") is True, "eligible_full_test_evidence_required"
+    )
+    require(
+        type(report.get("deselected")) is int and report["deselected"] == 0,
+        "acceptance_deselected_tests",
+    )
+    runtime = report.get("runtime", {})
+    require(
+        runtime.get("sqlite_version") == manifest["sqlite"]
+        and runtime.get("python_version") == manifest["platform"]["python"]
+        and runtime.get("machine") == manifest["platform"]["machine"]
+        and runtime.get("implementation") == manifest["platform"]["implementation"]
+        and runtime.get("libc") == manifest["platform"]["libc"],
+        "acceptance_native_runtime_mismatch",
+    )
     # A source-only run with a different Python/installed dependency set does not
     # accept this binary artifact, even if its source SHA is identical.
     require(
@@ -348,7 +364,12 @@ def verify_evidence_files(receipt: Path, report: dict) -> None:
     for name, digest in report["files"].items():
         require(sha256(receipt.parent / name) == digest, "test_evidence_file_mismatch")
     profile = read_json(receipt.parent / "profile.json")
-    require(profile.get("deselected", 0) == 0, "acceptance_deselected_tests")
+    deselected = profile.get("deselected")
+    require(
+        (isinstance(deselected, list) and len(deselected) == 0)
+        or (type(deselected) is int and deselected == 0),
+        "acceptance_deselected_tests",
+    )
     tree = ElementTree.parse(receipt.parent / "junit.xml")
     suites = [tree.getroot()] if tree.getroot().tag == "testsuite" else list(tree.iter("testsuite"))
     require(
