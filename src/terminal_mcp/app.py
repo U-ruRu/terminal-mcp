@@ -661,7 +661,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 build_lifecycle_event_router(
                     lifecycle_event_mesh,
                     mesh_peer_auth,
-                    access_mesh.store.trusted_issuers,
+                    access_mesh,
                 )
             )
         if lifecycle_event_mesh is not None:
@@ -669,7 +669,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 build_message_event_router(
                     lifecycle_event_mesh.message_events,
                     mesh_peer_auth,
-                    access_mesh.store.trusted_issuers,
+                    access_mesh,
                 )
             )
         app.include_router(build_access_mesh_message_router(access_mesh_messages, mesh_peer_auth))

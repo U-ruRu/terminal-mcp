@@ -15,6 +15,7 @@ import aiosqlite
 from fastapi import APIRouter, Header, HTTPException
 
 from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
+from terminal_mcp.fleet.access_mesh import authenticate_access_mesh_peer
 
 LIFECYCLE_NAMES = ("agent.attached", "agent.inactive", "session.ended")
 INTEREST_LEASE_SECONDS = 600
@@ -428,19 +429,17 @@ class LifecycleEventMesh:
             self.peer_health[peer.instance_id] = self.message_events.peer_health[peer.instance_id]
 
 
-def build_lifecycle_event_router(lifecycle, replication_auth, trusted_issuers):
+def build_lifecycle_event_router(lifecycle, replication_auth, mesh):
     router = APIRouter()
 
     def authenticate(peer_id, authorization, payload):
-        peer = replication_auth.authenticate(peer_id, authorization)
-        if peer is None or peer.instance_id not in trusted_issuers:
-            raise HTTPException(401, "invalid access mesh peer")
+        peer_id = authenticate_access_mesh_peer(mesh, replication_auth, peer_id, authorization)
         if (
             len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode())
             > MAX_WIRE_BYTES
         ):
             raise HTTPException(413, "lifecycle payload exceeds byte budget")
-        return peer.instance_id
+        return peer_id
 
     @router.post("/internal/fleet/access-mesh/lifecycle/interest", include_in_schema=False)
     async def interest(

@@ -13,6 +13,7 @@ import aiosqlite
 from fastapi import APIRouter, Header, HTTPException
 
 from terminal_mcp.core.orchestration import parse_utc, utc_now, utc_text
+from terminal_mcp.fleet.access_mesh import authenticate_access_mesh_peer
 
 PRIVATE_EVENT_BYTES = 128 * 1024
 CHUNK_BYTES = 32 * 1024
@@ -655,16 +656,14 @@ class MessageEventMesh:
             }
 
 
-def build_message_event_router(messages, auth, trusted):
+def build_message_event_router(messages, auth, mesh):
     router = APIRouter()
 
     def authenticate(peer_id, authorization, payload):
-        peer = auth.authenticate(peer_id, authorization)
-        if peer is None or peer.instance_id not in trusted:
-            raise HTTPException(401, "invalid access mesh peer")
+        peer_id = authenticate_access_mesh_peer(mesh, auth, peer_id, authorization)
         if len(wire_bytes(payload)) > 64 * 1024:
             raise HTTPException(413, "message event payload exceeds byte budget")
-        return peer.instance_id
+        return peer_id
 
     @router.post("/internal/fleet/access-mesh/message-events/interest", include_in_schema=False)
     async def interest(

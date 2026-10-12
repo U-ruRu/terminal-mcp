@@ -63,7 +63,7 @@ class Fence:
         return []
 
 
-async def node(tmp_path, name, names, routes, client):
+async def node(tmp_path, name, names, routes, client, *, trusted_names=None):
     path = tmp_path / (name + ".db")
     await SqliteRepository(path, tmp_path / (name + "-output.db")).initialize()
     events = MCPEventStore(path, name)
@@ -71,7 +71,7 @@ async def node(tmp_path, name, names, routes, client):
     store = AccessMeshStore(
         path,
         local_node_id=name,
-        trusted_issuers=frozenset(names),
+        trusted_issuers=frozenset(names if trusted_names is None else trusted_names),
         proof_key=KEY,
     )
     mesh = AccessMeshApplication(store, task_store=TaskStore(path), execution_fence=Fence())
@@ -87,10 +87,8 @@ async def node(tmp_path, name, names, routes, client):
     auth = PinnedAccessMeshPeerAuth(config)
     app = FastAPI()
     app.include_router(build_access_mesh_router(mesh, auth))
-    app.include_router(build_lifecycle_event_router(lifecycle, auth, store.trusted_issuers))
-    app.include_router(
-        build_message_event_router(lifecycle.message_events, auth, store.trusted_issuers)
-    )
+    app.include_router(build_lifecycle_event_router(lifecycle, auth, mesh))
+    app.include_router(build_message_event_router(lifecycle.message_events, auth, mesh))
     routes.apps[name] = app
     return SimpleNamespace(
         path=path,
@@ -452,10 +450,10 @@ async def message_subscription(access, slot):
 def local_message(source, recipient, key, text):
     from terminal_mcp.storage.access_mesh_messages import AccessMeshMessageStore
 
-    store = AccessMeshMessageStore(source.path, "source")
+    store = AccessMeshMessageStore(source.path, source.events.node_id)
     wire = {
-        "message_hash": "source:localmsg:" + key,
-        "origin_node_id": "source",
+        "message_hash": source.events.node_id + ":localmsg:" + key,
+        "origin_node_id": source.events.node_id,
         "sender_id": "fixture-sender",
         "sender_name": "Bravo",
         "target": "Alpha",

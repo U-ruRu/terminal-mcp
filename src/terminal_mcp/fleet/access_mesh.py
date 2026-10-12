@@ -817,14 +817,19 @@ class AccessMeshReplication:
                 pass
 
 
+def authenticate_access_mesh_peer(mesh, replication_auth, peer_id: str, authorization: str) -> str:
+    """Use the server's current verified membership and existing peer credentials."""
+    peer = replication_auth.authenticate(peer_id, authorization)
+    if peer is None or peer.instance_id not in mesh.store.trusted_issuers:
+        raise HTTPException(401, "invalid access mesh peer")
+    return peer.instance_id
+
+
 def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
     router = APIRouter()
 
     def authenticated(peer_id: str, authorization: str) -> str:
-        peer = replication_auth.authenticate(peer_id, authorization)
-        if peer is None or peer.instance_id not in mesh.store.trusted_issuers:
-            raise HTTPException(401, "invalid access mesh peer")
-        return peer.instance_id
+        return authenticate_access_mesh_peer(mesh, replication_auth, peer_id, authorization)
 
     def bounded(payload: dict) -> None:
         if len(json.dumps(payload, separators=(",", ":")).encode()) > MAX_WIRE_BYTES:
