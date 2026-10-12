@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Accepted artifacts share this supported entry point; legacy provisioning remains below.
+if [ "${1:-}" = release ]; then
+  shift
+  SOURCE=$(cd "$(dirname "$0")/.." && pwd)
+  ROOT=${TERMINAL_MCP_INSTALL_ROOT:-/opt/terminal-mcp}
+  PYTHON=${TERMINAL_MCP_DEPLOY_PYTHON:-$ROOT/current/bin/python}
+  [ -x "$PYTHON" ] || PYTHON=python3
+  export PYTHONPATH="$SOURCE/src"
+  export PYTHONDONTWRITEBYTECODE=1
+  exec "$PYTHON" -m terminal_mcp.deployment.release "$@"
+fi
 CMD=${1:-install}
 [ $# -eq 0 ] || shift
 ALLOW_DOWNGRADE=false
@@ -492,6 +503,9 @@ stage(){
     return 1
   fi
   version_args=(--source "$BUILD_SOURCE" --stamp --output "$STAGED_RELEASE/RELEASE_META.json")
+  if [ -n "${TERMINAL_MCP_RELEASE_BASELINE:-}" ]; then
+    version_args+=(--prior-baseline "$TERMINAL_MCP_RELEASE_BASELINE")
+  else
   # An existing QA deployment is not the released schema baseline.
   # Anchor its automatic bump to the last confirmed canonical release.
   prior_release="$ROOT/current"
@@ -540,6 +554,7 @@ stage(){
       }
       version_args+=(--prior-package "$prior_pkg")
     fi
+  fi
   fi
   if [ -n "${TERMINAL_MCP_SOURCE_SHA:-}" ]; then
     version_args+=(--sha "$TERMINAL_MCP_SOURCE_SHA")
@@ -867,6 +882,11 @@ if [ "$CMD" = install ] || [ "$CMD" = update ]; then
   [ ! -e "$DATA/auth.sqlite3" ] || chmod 0600 "$DATA/auth.sqlite3"
 fi
 case "$CMD" in
+ build-stage)
+   [ "${TERMINAL_MCP_ARTIFACT_BUILD:-}" = 1 ] || { echo 'build-stage is internal to release build' >&2; exit 2; }
+   stage
+   printf '%s\n' "$STAGED_RELEASE"
+   ;;
  install) [ -f "$ENV_FILE" ] || write_env; ensure_env_defaults; write_unit; stage; configure_console_caddy; activate "$STAGED_RELEASE"; $SYSTEMCTL enable terminal-mcp ;;
  update) ensure_env_defaults; stage; guard_downgrade "$STAGED_RELEASE"; schema_rollback_safe "$STAGED_RELEASE"; backup "$STAGED_RELEASE"; configure_console_caddy; activate "$STAGED_RELEASE" ;;
  ingress) ensure_env_defaults; configure_console_caddy ;;
