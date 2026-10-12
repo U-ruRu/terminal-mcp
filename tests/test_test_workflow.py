@@ -192,6 +192,8 @@ def test_receipt_binds_exact_clean_full_success(
     assert workflow.run(args, plan, root=tmp_path) == exit_code
     receipt = json.loads((output / "report.json").read_text())
     assert receipt["source_sha"] == sha
+    assert receipt["runtime"]["sqlite_version"]
+    assert receipt["runtime"]["python_version"]
     assert receipt["full_test_evidence_eligible"] is full_test_evidence_eligible
     assert receipt["dirty"] is bool(dirty)
     assert len(receipt["files"]["junit.xml"]) == 64

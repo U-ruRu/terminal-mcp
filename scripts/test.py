@@ -9,8 +9,10 @@ import hashlib
 import importlib.metadata as metadata
 import json
 import os
+import platform
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -207,6 +209,13 @@ def run(args: argparse.Namespace, plan: dict, root: Path = ROOT) -> int:
         "started_at": now(),
         "state": "running",
         "python": sys.version,
+        "runtime": {
+            "python_version": platform.python_version(),
+            "sqlite_version": sqlite3.sqlite_version,
+            "implementation": sys.implementation.name,
+            "machine": platform.machine(),
+            "libc": list(platform.libc_ver()),
+        },
         "dependencies": dependencies,
         "load_start": os.getloadavg(),
     }
