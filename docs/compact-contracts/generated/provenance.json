@@ -32,7 +32,7 @@
     "pyproject.toml": "a939a6a39f329de24060ad9f44e4afd8fa8bedb35beb4e82fa4645201e9d24c9",
     "scripts/build_compact_catalogs.py": "728ed6dbc6fa18119113e6cb55d80d0b2aff582550f6f358a86e158c2c6492ec",
     "src/terminal_mcp/application/task_requests.py": "6472afbb7b6af075c8a9340d9dbf14bfab0fe4b7e713b0b0d499eba3bb16b1e9",
-    "src/terminal_mcp/core/public_errors.py": "1a3a14bbd996def733a0d1464e8b699eac8968c6ca5d0ced1c4a7228bb2c9f76",
+    "src/terminal_mcp/core/public_errors.py": "f5401b33828592f543121fabc393db232e287ff3822a926c9d09573c1834b627",
     "src/terminal_mcp/mcp/access.py": "c6a19a0992983d42609602ff3704dc48265d3512b5ac4112fd959f4eade7c3de",
     "src/terminal_mcp/mcp/access_contracts.py": "060757c0dbfe12b4f1bcf6f1513268592eaabf1b3c90be1e13964830ef98d0e6",
     "src/terminal_mcp/mcp/compact_annotations.json": "e9678b867ecbe42eafdb3762387bc28a019d7ba70bd7cf917cf5fe4996a09d6b",
