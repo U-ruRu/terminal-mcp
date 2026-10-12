@@ -1,0 +1,18 @@
+{
+  "reviewed_at_utc": "2026-10-12T21:24:38.787676+00:00",
+  "reviewer": "Papa-5",
+  "producer": "Quebec-5 / Uniform-156",
+  "subject_file": "docs/mcp-events-payload-20261013/agent-b/transport-capture.json",
+  "subject_sha256": "49ece7065203f41f50f149f7c992d737bd561f9c54fe1f2159824f336c96674d",
+  "probe_sha256": "7f862c5e1f8c411cfdf27b7cec455e167ec71c4a19c688e6a58b007e778dbf85",
+  "verdict": "PASS_FOR_SYNTHETIC_SENDER_BOUNDARY_ONLY",
+  "checked": [
+    "all 3 body digests and UTF-8 sizes",
+    "singleton object envelope",
+    "eventId/header correlation",
+    "subscription header",
+    "exact six data fields including quotes newline Unicode",
+    "synthetic vs live boundary explicitly labelled"
+  ],
+  "live_dot_payload_proven": false
+}

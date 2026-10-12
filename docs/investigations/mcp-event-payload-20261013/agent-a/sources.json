@@ -1,0 +1,274 @@
+{
+  "captured_at_utc": "2026-10-12T21:13:44.987879+00:00",
+  "repos": [
+    {
+      "repo": "modelcontextprotocol/experimental-ext-triggers-events",
+      "sha": "d5316be214be2e76e51462069c1d67e00a5a7619",
+      "committed_at": "2026-10-09T14:23:23Z",
+      "url": "https://github.com/modelcontextprotocol/experimental-ext-triggers-events/commit/d5316be214be2e76e51462069c1d67e00a5a7619",
+      "tree_truncated": false,
+      "files": 6,
+      "selected_files": [
+        {
+          "path": "docs/design-sketch-proposal.md",
+          "bytes": 121024,
+          "sha256": "4a3f75a1db48d99f7baa38f4a0129ec5876dcf81935f5ab7bf43715016491f59",
+          "url": "https://raw.githubusercontent.com/modelcontextprotocol/experimental-ext-triggers-events/d5316be214be2e76e51462069c1d67e00a5a7619/docs/design-sketch-proposal.md"
+        }
+      ]
+    },
+    {
+      "repo": "standard-webhooks/standard-webhooks",
+      "sha": "7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b",
+      "committed_at": "2026-08-31T10:42:12Z",
+      "url": "https://github.com/standard-webhooks/standard-webhooks/commit/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b",
+      "tree_truncated": false,
+      "files": 125,
+      "selected_files": [
+        {
+          "path": "spec/standard-webhooks.md",
+          "bytes": 28403,
+          "sha256": "47cf696ee08a583f6cddf2d02b13e544e1bd28435b8e418870e8b557b1ed4082",
+          "url": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b/spec/standard-webhooks.md"
+        },
+        {
+          "path": "libraries/javascript/src/index.ts",
+          "bytes": 5019,
+          "sha256": "70542bf417caf596fcc90f8ba1ee8f861eca00644afb08f2df44791e0e828a89",
+          "url": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b/libraries/javascript/src/index.ts"
+        },
+        {
+          "path": "libraries/python/standardwebhooks/webhooks.py",
+          "bytes": 3840,
+          "sha256": "09cdb57c841b8ab2836508f00084260267791933885e06c9079b7c977e7af3ee",
+          "url": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b/libraries/python/standardwebhooks/webhooks.py"
+        },
+        {
+          "path": "libraries/python/tests/test_webhooks.py",
+          "bytes": 6978,
+          "sha256": "4d88de10e933fa741a8bcdb72e3f8c2d85f6e24eeb91ba1aeb98abcb4db058c1",
+          "url": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b/libraries/python/tests/test_webhooks.py"
+        },
+        {
+          "path": "libraries/javascript/package.json",
+          "bytes": 1033,
+          "sha256": "686397f0f0202e0b693cfd3f6241d7a8da3df326f9642867a484fbbd295690b6",
+          "url": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b/libraries/javascript/package.json"
+        }
+      ]
+    },
+    {
+      "repo": "hookdeck/mcp-events-bridge",
+      "sha": "73483a0849349596db5b5f2feb2ba96269684cb6",
+      "committed_at": "2026-10-12T13:23:41Z",
+      "url": "https://github.com/hookdeck/mcp-events-bridge/commit/73483a0849349596db5b5f2feb2ba96269684cb6",
+      "tree_truncated": false,
+      "files": 126,
+      "selected_files": [
+        {
+          "path": "src/core/sign.ts",
+          "bytes": 1686,
+          "sha256": "b63831a763573eddf9e0a5eedf636e3b7d2e92d17760eb0a36e272dbe87b3aef",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/src/core/sign.ts"
+        },
+        {
+          "path": "src/core/relay.ts",
+          "bytes": 10583,
+          "sha256": "b59ecca2ac4b49122c5a86a19ba9d3c09af187a962e4123fc4855ab45f9ca79c",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/src/core/relay.ts"
+        },
+        {
+          "path": "src/core/subscriptions.ts",
+          "bytes": 11459,
+          "sha256": "5cf909239ed55380f089d5fcbe44ace24ab5b916ad0e66f2f7c68ffd7efc94a9",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/src/core/subscriptions.ts"
+        },
+        {
+          "path": "src/core/mcp.ts",
+          "bytes": 10207,
+          "sha256": "ee975d73769fb5cd0989da9c7cb9aa2c788c4628190f9177229bdf420bceb5b4",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/src/core/mcp.ts"
+        },
+        {
+          "path": "src/core/callback.ts",
+          "bytes": 4703,
+          "sha256": "2fb321cf1d7c08711938485e75f7114b1381b172e455c99dbc58704edb4eebb8",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/src/core/callback.ts"
+        },
+        {
+          "path": "package.json",
+          "bytes": 1968,
+          "sha256": "67b12e2aef4e9de6859d838c7127ff51fbde1d500d890f41e6690e91bc37ae7f",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/package.json"
+        },
+        {
+          "path": "docs/PLAN.md",
+          "bytes": 18117,
+          "sha256": "ff9eab6a89a85cff4a380b82d7413724c110787f4f421b9f61f8ae37d2a2af20",
+          "url": "https://raw.githubusercontent.com/hookdeck/mcp-events-bridge/73483a0849349596db5b5f2feb2ba96269684cb6/docs/PLAN.md"
+        }
+      ]
+    },
+    {
+      "repo": "yaodiff/feishu-dot-bridge",
+      "sha": "ae337fb1dc70dff4e355bf785418cab712f12031",
+      "committed_at": "2026-10-10T15:48:53Z",
+      "url": "https://github.com/yaodiff/feishu-dot-bridge/commit/ae337fb1dc70dff4e355bf785418cab712f12031",
+      "tree_truncated": false,
+      "files": 125,
+      "selected_files": [
+        {
+          "path": "src/callback.ts",
+          "bytes": 3369,
+          "sha256": "94ed60c870d705ce0467f6b35686f2158320bb677a1d64fbc34228debd849fba",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/src/callback.ts"
+        },
+        {
+          "path": "src/crypto.ts",
+          "bytes": 1024,
+          "sha256": "b42e7755c361566e98553bdc5ffe894d5a8bd5fc8c350f9de4a52e1013015c5f",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/src/crypto.ts"
+        },
+        {
+          "path": "src/bridge.ts",
+          "bytes": 30633,
+          "sha256": "9f6450a3118c889ea851fcbfcb97b0fb52b30ea86e93e4385af4e75952237bd1",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/src/bridge.ts"
+        },
+        {
+          "path": "src/mcp.ts",
+          "bytes": 19192,
+          "sha256": "1eb7c38ccad1a644337a3fe75730cb0d12bf93c9f10f746addcb1323d82d73b4",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/src/mcp.ts"
+        },
+        {
+          "path": "docs/PROTOCOL.md",
+          "bytes": 6344,
+          "sha256": "2cfb879013ef7c6ac1217ba0321c1f6f72c53639dcac796699ce4e784477f251",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/docs/PROTOCOL.md"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "bytes": 8157,
+          "sha256": "a9ec1fea0a1597c3596d238056231333e383abcbc7bebdd1625701b43e4fa783",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/docs/ACCEPTANCE.md"
+        },
+        {
+          "path": "package.json",
+          "bytes": 1375,
+          "sha256": "14d929dd8da9a5a5f5d8cba22f55fad8165aa56ed52bdb449e7590fb3ca476ff",
+          "url": "https://raw.githubusercontent.com/yaodiff/feishu-dot-bridge/ae337fb1dc70dff4e355bf785418cab712f12031/package.json"
+        }
+      ]
+    },
+    {
+      "repo": "openai/openai-apps-sdk-examples",
+      "sha": "18cc38e78a968712c357bacdc3c79fead5bfc6b4",
+      "committed_at": "2026-04-15T17:01:42Z",
+      "url": "https://github.com/openai/openai-apps-sdk-examples/commit/18cc38e78a968712c357bacdc3c79fead5bfc6b4",
+      "tree_truncated": false,
+      "files": 138,
+      "selected_files": []
+    },
+    {
+      "repo": "rokrokss/recly",
+      "sha": "edb2765d5498c792e43d898946d149ae6ba36303",
+      "committed_at": "2026-10-03T21:01:14Z",
+      "url": "https://github.com/rokrokss/recly/commit/edb2765d5498c792e43d898946d149ae6ba36303",
+      "selected_files": [
+        {
+          "path": "experiments/dot-probe/probe.mjs",
+          "sha256": "17adfbb52b20e2709c87b9e85b62522f935485330fee2a18eb81f1edd47ac57a",
+          "bytes": 38934,
+          "url": "https://raw.githubusercontent.com/rokrokss/recly/edb2765d5498c792e43d898946d149ae6ba36303/experiments/dot-probe/probe.mjs"
+        },
+        {
+          "path": "experiments/dot-probe/README.md",
+          "sha256": "f90f2ce301786baf7360abecefe6a2ac487e75fc48fd93fdfd8d870465ffd1cc",
+          "bytes": 3554,
+          "url": "https://raw.githubusercontent.com/rokrokss/recly/edb2765d5498c792e43d898946d149ae6ba36303/experiments/dot-probe/README.md"
+        }
+      ]
+    },
+    {
+      "repo": "rokrokss/recly",
+      "sha": "f28ecc503b8fc1b11b0e48cba9717e3654376f4e",
+      "committed_at": "2026-10-05T08:33:52Z",
+      "url": "https://github.com/rokrokss/recly/commit/f28ecc503b8fc1b11b0e48cba9717e3654376f4e",
+      "selected_files": [
+        {
+          "path": "events/internal/webhook/sign.go",
+          "sha256": "fd7421bd477024d3aad875a0185a974ba39d0db57c09b60bf8a14f00a96bf615",
+          "bytes": 1709,
+          "url": "https://raw.githubusercontent.com/rokrokss/recly/f28ecc503b8fc1b11b0e48cba9717e3654376f4e/events/internal/webhook/sign.go"
+        },
+        {
+          "path": "events/internal/webhook/hub.go",
+          "sha256": "cec5c226cfea91c6a924fb4d641f9eb3abd734229730220609f4bd44b5a7e802",
+          "bytes": 14500,
+          "url": "https://raw.githubusercontent.com/rokrokss/recly/f28ecc503b8fc1b11b0e48cba9717e3654376f4e/events/internal/webhook/hub.go"
+        },
+        {
+          "path": "events/internal/mcpserver/handler.go",
+          "sha256": "2423f953df23559c732c62dc359459bf081d520682fd670496af4656a749b2bb",
+          "bytes": 8439,
+          "url": "https://raw.githubusercontent.com/rokrokss/recly/f28ecc503b8fc1b11b0e48cba9717e3654376f4e/events/internal/mcpserver/handler.go"
+        },
+        {
+          "path": "events/README.md",
+          "sha256": "25f3fdac3edc5b342db8f8051131654a5c535aa93024545753ec312eef87c081",
+          "bytes": 14638,
+          "url": "https://raw.githubusercontent.com/rokrokss/recly/f28ecc503b8fc1b11b0e48cba9717e3654376f4e/events/README.md"
+        }
+      ]
+    },
+    {
+      "repo": "s1980amber-commits/mcp-webhook-events",
+      "sha": "2a5a00540ecb96509752537a0a4de575f0b3d183",
+      "committed_at": "2026-10-04T08:27:49Z",
+      "url": "https://github.com/s1980amber-commits/mcp-webhook-events/commit/2a5a00540ecb96509752537a0a4de575f0b3d183",
+      "version": "0.2.0",
+      "version_source": "https://pypi.org/project/mcp-webhook-events/0.2.0/",
+      "selected_files": [
+        {
+          "path": "README.md",
+          "bytes": 7663,
+          "sha256": "eb1cc040b10918b9fc4bd1505b946ebc38cd9090cebf9f185d702aacad41edf5",
+          "url": "https://raw.githubusercontent.com/s1980amber-commits/mcp-webhook-events/2a5a00540ecb96509752537a0a4de575f0b3d183/README.md"
+        },
+        {
+          "path": "examples/watch_server.py",
+          "bytes": 1704,
+          "sha256": "ab32e6c03433c4fa3c5a04048d3b00d898c23caeb26e8d728ee19f7224a9bdb7",
+          "url": "https://raw.githubusercontent.com/s1980amber-commits/mcp-webhook-events/2a5a00540ecb96509752537a0a4de575f0b3d183/examples/watch_server.py"
+        },
+        {
+          "path": "mcp_webhook_events/__init__.py",
+          "bytes": 26884,
+          "sha256": "5d6d5cbc34f185b7e66f1f6f888f34d8b9bc3082592f777835accee2696ed46d",
+          "url": "https://raw.githubusercontent.com/s1980amber-commits/mcp-webhook-events/2a5a00540ecb96509752537a0a4de575f0b3d183/mcp_webhook_events/__init__.py"
+        },
+        {
+          "path": "pyproject.toml",
+          "bytes": 1074,
+          "sha256": "c20c369138f3d96624d9940464290332e2462b4ed1891a7718956e58249610c1",
+          "url": "https://raw.githubusercontent.com/s1980amber-commits/mcp-webhook-events/2a5a00540ecb96509752537a0a4de575f0b3d183/pyproject.toml"
+        }
+      ]
+    }
+  ],
+  "official": {
+    "url": "https://developers.openai.com/plugins/build/mcp-events.md",
+    "sha256": "68c534c9d1bd3f9322b31b515f10d56d69cbcefb6c6be1e314c116b2a68e0632",
+    "bytes": 16061,
+    "last_modified": "Mon, 12 Oct 2026 20:38:58 GMT",
+    "etag": null
+  },
+  "issue_50714": {
+    "html_url": "https://github.com/openai/codex/issues/50714",
+    "state": "open",
+    "created_at": "2026-10-03T20:58:26Z",
+    "updated_at": "2026-10-03T20:59:19Z",
+    "comments": 0
+  }
+}

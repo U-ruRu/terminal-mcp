@@ -1,0 +1,13 @@
+{
+  "captured_at_utc": "2026-10-12T21:18:00.485365+00:00",
+  "test": "Terminal MCP signed_headers vs published Standard Webhooks fixed vector",
+  "result": "PASS",
+  "subject_commit": "4ecb7201bcc8e2d7ce2b75fcb18d2f77690a66e4",
+  "subject_source": "src/terminal_mcp/mcp/event_webhooks.py",
+  "subject_file_sha256": "43720d32a3bbb3059c8668f727efa30130dd000ae30f31511fb90e19d2db3659",
+  "reference_url": "https://github.com/standard-webhooks/standard-webhooks/blob/7537d2a2d3d52d8f2e0ecd12527af4a9307fd81b/libraries/python/tests/test_webhooks.py#L214-L223",
+  "method": "AST selects only the two reviewed project functions; stdlib inputs; fixed published vector; no downloaded code executed",
+  "network_requests": 0,
+  "production_changes": false,
+  "live_dot_payload_proven": false
+}
