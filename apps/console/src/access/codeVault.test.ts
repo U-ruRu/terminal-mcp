@@ -42,3 +42,24 @@ describe('persistent Access code vault', () => {
     expect(loadAccessCode('la_alpha', 4)).toBeNull()
   })
 })
+
+  test('native issuer scopes keep the same logical ID on different servers separate', () => {
+    saveAccessCode('la_same', { code: '0042', generation: 1 }, localStorage, 'issuer:a:slot:a')
+    saveAccessCode('la_same', { code: '7319', generation: 1 }, localStorage, 'issuer:b:slot:b')
+    expect(loadAccessCode('la_same', 1, localStorage, 'issuer:a:slot:a')?.code).toBe('0042')
+    expect(loadAccessCode('la_same', 1, localStorage, 'issuer:b:slot:b')?.code).toBe('7319')
+    expect(loadAccessCode('la_same', 1)).toBeNull()
+  })
+
+  test('server-provided expiry expires a stored code without borrowing the session deadline', () => {
+    saveAccessCode('la_alpha', { code: '0042', generation: 1, expiresAt: '2000-01-01T00:00:00Z' })
+    expect(loadAccessCode('la_alpha', 1)).toBeNull()
+    saveAccessCode('la_alpha', { code: '0042', generation: 1, expiresAt: null })
+    expect(loadAccessCode('la_alpha', 1)?.code).toBe('0042')
+  })
+
+  test('an old native server without code generation retains a code only at its issuance revision', () => {
+    saveAccessCode('la_native', { code: '0042', generation: 0, issuedRevision: 4 }, localStorage, 'native:a')
+    expect(loadAccessCode('la_native', 0, localStorage, 'native:a', 4)?.code).toBe('0042')
+    expect(loadAccessCode('la_native', 0, localStorage, 'native:a', 5)).toBeNull()
+  })

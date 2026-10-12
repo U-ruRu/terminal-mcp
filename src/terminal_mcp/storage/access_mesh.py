@@ -53,61 +53,8 @@ def public_name(issuer_id: str, logical_agent_id: str) -> str:
 
 
 def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
-    now = _utc(now)
-    base = {
-        "state": slot.state,
-        "started_at": None,
-        "hard_expires_at": None,
-        "remaining_seconds": 0,
-        "rearm_at": None,
-    }
-    if slot.state != "active" or slot.anchor is None:
-        return {**base, "state": slot.state if slot.state != "active" else "idle"}
-    anchor = _utc(slot.anchor)
-    if now < anchor:
-        return {**base, "state": "cooldown", "rearm_at": _text(anchor)}
-    policy = slot.policy
-    start = anchor
-    end = (
-        _utc(slot.deadline_at)
-        if slot.deadline_at
-        else anchor + timedelta(seconds=policy.duration_seconds)
-    )
-    if now >= end:
-        if not policy.rearm_enabled:
-            return {
-                **base,
-                "state": "expired",
-                "started_at": _text(start),
-                "hard_expires_at": _text(end),
-            }
-        next_start = end + timedelta(seconds=policy.cooldown_seconds)
-        if now < next_start:
-            return {
-                **base,
-                "state": "cooldown",
-                "started_at": _text(start),
-                "hard_expires_at": _text(end),
-                "rearm_at": _text(next_start),
-            }
-        period = policy.duration_seconds + policy.cooldown_seconds
-        index = int((now - next_start).total_seconds() // period)
-        start = next_start + timedelta(seconds=index * period)
-        end = start + timedelta(seconds=policy.duration_seconds)
-    base.update(started_at=_text(start), hard_expires_at=_text(end))
-    if now >= end:
-        return {
-            **base,
-            "state": "cooldown",
-            "rearm_at": _text(end + timedelta(seconds=policy.cooldown_seconds)),
-        }
-    remaining = (end - now).total_seconds()
-    phase = "active"
-    if policy.draining_seconds and remaining <= policy.draining_seconds:
-        phase = "draining"
-    elif policy.warning_seconds and remaining <= policy.warning_seconds:
-        phase = "warning"
-    return {**base, "state": phase, "remaining_seconds": max(0, int(remaining))}
+    from terminal_mcp.core.access_policy_windows import slot_cycle
+    return slot_cycle(slot, now)
 
 
 class AccessMeshStore(LocalAccessMesh):
@@ -905,7 +852,8 @@ class AccessMeshStore(LocalAccessMesh):
             slot,
             anchor=start,
             deadline_at=expiry,
-            policy=replace(slot.policy, rearm_enabled=False),
+            policy=replace(slot.effective(start).policy, rearm_enabled=False),
+            policy_window=None,
         )
         cycle = local_cycle(effective_slot, now)
         latest_end = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
@@ -1250,7 +1198,15 @@ class AccessMeshStore(LocalAccessMesh):
                 "AND slot_id>? ORDER BY slot_id LIMIT ?",
                 (issuer_id, after, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            # Generation is issuer-local public vault metadata, not a bearer proof.
+            item.pop("code_generation", None)
+            if item.get("policy_window_json") is None:
+                item.pop("policy_window_json", None)
+            result.append(item)
+        return result
 
     def apply_snapshot(self, raw: dict, *, authenticated_peer_id: str) -> str:
         fields = {
@@ -1265,12 +1221,12 @@ class AccessMeshStore(LocalAccessMesh):
             "code_tag",
             "anchor",
         }
-        optional = {"deadline_at", "fence_revision", "agent_name", "display_suffix"}
+        optional = {"deadline_at", "fence_revision", "agent_name", "display_suffix", "policy_window_json"}
         if not isinstance(raw, dict) or not fields <= set(raw) or set(raw) - fields - optional:
             raise AccessMeshError("access_mesh_invalid_snapshot")
         raw = {
             "deadline_at": None, "fence_revision": raw["revision"],
-            "agent_name": None, "display_suffix": None, **raw,
+            "agent_name": None, "display_suffix": None, "policy_window_json": None, **raw,
         }
         fields |= optional
         if (
@@ -1282,6 +1238,9 @@ class AccessMeshStore(LocalAccessMesh):
             from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
             policy = SlotPolicy(**json.loads(raw["policy_json"]))
+            if raw["policy_window_json"] is not None:
+                from terminal_mcp.core.access_mesh_grants import CapturedAccessWindow
+                CapturedAccessWindow.from_wire(json.loads(raw["policy_window_json"]))
             if (
                 type(raw["fence_revision"]) is not int
                 or not 1 <= raw["fence_revision"] <= raw["revision"]
@@ -1324,7 +1283,7 @@ class AccessMeshStore(LocalAccessMesh):
                 if old["revision"] > event.revision:
                     return "stale"
                 if old["revision"] == event.revision:
-                    if dict(old) != raw:
+                    if {key: old[key] for key in fields} != raw:
                         raise AccessMeshError("access_mesh_event_conflict")
                     return "duplicate"
                 if old["state"] == "deleted" and raw["state"] != "deleted":
