@@ -936,6 +936,10 @@ class LocalAccessMesh:
         A ready-but-cooling-down slot can attach now and work after rearm.
         """
         _required_identifier(connection_key)
+        # Old, persisted claims never re-authorize a node after it leaves the
+        # Mesh or moves to a different Mesh/authority.
+        if issuer_id not in self.trusted_issuers:
+            raise AccessMeshError("access_mesh_untrusted_issuer")
         tag = self.code_tag(issuer_id, code)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")

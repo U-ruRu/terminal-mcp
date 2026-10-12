@@ -30,11 +30,20 @@ class PinnedAccessMeshPeerAuth:
     Access Mesh uses its own static peer proof/token pair in outbound requests.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, managed_replication=None):
         self.config = config
+        self.managed_replication = managed_replication
 
     def authenticate(self, peer_instance_id: str, authorization: str):
-        peer = self.config.peers_by_id.get(peer_instance_id)
+        # Only Fleet Control's verified managed enrollment can switch the
+        # credential source. Unmanaged mode retains pinned bootstrap credentials.
+        managed = self.managed_replication
+        config = (
+            managed.config
+            if managed is not None and getattr(managed.mesh, "managed_trust_enabled", False)
+            else self.config
+        )
+        peer = config.peers_by_id.get(peer_instance_id)
         prefix = "bearer "
         if peer is None or not authorization.lower().startswith(prefix):
             return None
@@ -72,18 +81,27 @@ class AccessMeshReplication:
         Transport changes from the operator still need to reach this worker.
         """
         enabled = {peer.instance_id: peer for peer in managed_config.peers}
-        selected = tuple(
-            replace(
-                pinned,
-                origin=enabled[pinned.instance_id].origin,
-                transport=enabled[pinned.instance_id].transport,
-                bootstrap_origin=pinned.bootstrap_origin or pinned.origin,
+        if getattr(self.mesh, "managed_trust_enabled", False):
+            # An explicit, verified managed Mesh enrollment controls issuer
+            # trust. Its peer identity and ingress token arrive through Fleet
+            # Control's authenticated, revisioned replication channel.
+            selected = tuple(
+                peer for peer in managed_config.peers
+                if peer.instance_id in self.store.trusted_issuers
+                and peer.instance_id != self.store.local_node_id
             )
-            for pinned in self._bootstrap_config.peers
-            # General Fleet membership never implicitly grants Access Mesh trust.
-            # Only explicitly trusted Access issuers serve the signed Mesh router.
-            if pinned.instance_id in enabled and pinned.instance_id in self.store.trusted_issuers
-        )
+        else:
+            selected = tuple(
+                replace(
+                    pinned,
+                    origin=enabled[pinned.instance_id].origin,
+                    transport=enabled[pinned.instance_id].transport,
+                    bootstrap_origin=pinned.bootstrap_origin or pinned.origin,
+                )
+                for pinned in self._bootstrap_config.peers
+                if pinned.instance_id in enabled
+                and pinned.instance_id in self.store.trusted_issuers
+            )
         selected_ids = {peer.instance_id for peer in selected}
         # Drop health entries for peers no longer active or trusted, otherwise
         # perpetual catchup_pending phantom peers degrade global health.
@@ -99,7 +117,15 @@ class AccessMeshReplication:
         new_transport_state = tuple(
             (peer.instance_id, peer.origin, peer.transport) for peer in selected
         )
-        self.config = replace(self._bootstrap_config, peers=selected)
+        self.config = replace(
+            self._bootstrap_config,
+            peers=selected,
+            local_auth_token=(
+                managed_config.local_auth_token
+                if getattr(self.mesh, "managed_trust_enabled", False)
+                else self._bootstrap_config.local_auth_token
+            ),
+        )
         for peer in selected:
             self._snapshot_after.setdefault(peer.instance_id, "")
             if previous.get(peer.instance_id) != peer.origin:

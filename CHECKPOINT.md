@@ -1,0 +1,13 @@
+# Lima-5 checkpoint 2026-10-12
+- Worktree: /workspace/terminal-mcp-access-trust-lima5
+- Branch: task/native-access-trust-lima5-20261012
+- Base: 0cbd9c38a0f6bb6ba23f87849ed579866b2d7ace
+- Coordinator dot direct recipient unavailable. Juliett-5 informed of finding and proof mismatch.
+- BacLOUD-issued number attaches locally; remote three fail. Four server services active.
+- Main proof secret differs; requires approved protected migration.
+- All four backups: /var/backups/terminal-mcp/native-access-20261012-lima5 (local env + fleet DB).
+- Zero live trust writes or service restarts.
+- Code implements runtime managed peer allowlist and revocation on trust/membership change; isolated tests added.
+- Outstanding: pytest, independent review, Juliett-5 APK/UI gating, missing proof handshake, four-node live enrollment/attach, Android E2E.
+- Reproduce: git show --stat HEAD; PYTHONPATH=src python -m pytest -q tests/test_managed_access_trust_enrollment.py
+- Restore plan and non-mutation evidence: REPORT.md.
