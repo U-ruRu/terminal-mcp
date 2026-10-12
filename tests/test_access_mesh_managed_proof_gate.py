@@ -50,6 +50,11 @@ async def setup(tmp_path, name, other, key, routes, client):
     )
     mesh.managed_trust_enabled = True
     mesh.managed_trust_mesh_id = "mesh-test"
+    # Explicitly enroll the synthetic authority proof. Different fixture
+    # tokens intentionally simulate an incompatible managed enrollment.
+    store.install_managed_proof(
+        mesh_id="mesh-test", authority_id="bacloud", ingress_token=key.decode(),
+    )
     peer = FleetPeer(other, "https://" + other, "test-public", "token-" + other)
     config = FleetConfig(name, "private-fixture", (peer,), 1.0, 1.0, "token-" + name)
     replica = AccessMeshReplication(mesh, config, client=client)
@@ -102,7 +107,9 @@ async def test_proof_gate_detects_mismatched_secret_recovers_and_rechecks_after_
         assert rep.peer_health["firstbyte"]["status"] == "degraded"
 
         # A valid authenticated peer with the same non-exported proof can recover.
-        other.store._proof_key = PROOF
+        other.store.install_managed_proof(
+            mesh_id="mesh-test", authority_id="bacloud", ingress_token=PROOF.decode(),
+        )
         assert await rep.verify_peer_proof(rep.peers[0])
         assert rep.native_trust_status()["state"] == "ready"
 

@@ -51,11 +51,11 @@ def actor():
     )
 
 
-async def node(tmp_path, name, other, routes, client):
+async def node(tmp_path, name, other, routes, client, *, proof_key=KEY):
     path = tmp_path / f"{name}.db"
     await SqliteRepository(path, tmp_path / f"{name}-out.db").initialize()
     store = AccessMeshStore(
-        path, local_node_id=name, trusted_issuers=frozenset({name, other}), proof_key=KEY
+        path, local_node_id=name, trusted_issuers=frozenset({name, other}), proof_key=proof_key
     )
     mesh = AccessMeshApplication(
         store, task_store=TaskStore(path), execution_fence=Fence(), clock=lambda: T0
@@ -241,3 +241,59 @@ async def test_startup_drains_more_than_one_outbox_page_without_periodic_polling
             await asyncio.wait_for(acknowledged(), 4)
         finally:
             await replication.stop()
+
+
+
+@pytest.mark.asyncio
+async def test_managed_join_auto_proof_preserves_cross_node_attach_with_different_bootstrap(tmp_path):
+    """Actual network proof+reservation+replication+Exec attach from one authority."""
+    routes = Routes()
+    async with httpx.AsyncClient(transport=routes) as client:
+        fb, fb_rep = await node(
+            tmp_path, "firstbyte", "bacloud", routes, client,
+            proof_key=b"firstbyte-local-bootstrap-proof-32bytes",
+        )
+        bac, bac_rep = await node(
+            tmp_path, "bacloud", "firstbyte", routes, client,
+            proof_key=b"bacloud-local-bootstrap-proof-different-32",
+        )
+        for mesh in (fb, bac):
+            mesh.managed_trust_enabled = True
+            mesh.managed_trust_mesh_id = "mesh-prod-fixture"
+            mesh.store.install_managed_proof(
+                mesh_id="mesh-prod-fixture",
+                authority_id="bacloud",
+                ingress_token="validated-authority-ingress-" + "a" * 48,
+            )
+
+        assert fb.store.code_tag("bacloud", "4731") == bac.store.code_tag("bacloud", "4731")
+        assert fb_rep.native_trust_status()["state"] == "pending"
+        assert await fb_rep.verify_peer_proof(fb_rep.peers[0])
+        assert await bac_rep.verify_peer_proof(bac_rep.peers[0])
+        assert bac_rep.native_trust_status()["ready"]
+        assert fb_rep.native_trust_status()["ready"]
+
+        issued = await bac.issue(actor(), code="4731")
+        await bac_rep.tick()
+        await fb_rep.tick()
+        attached = await fb.attach(actor(), issuer_node_id="bacloud", access_code="4731")
+        assert issued["logical_agent_id"] == attached["logical_agent_id"]
+        await bac.attach(actor(), issuer_node_id="bacloud", access_code="4731")
+        assert (await bac.resolve(actor(), ManagedOperation.COMMAND_RUN))["work_session_id"]
+
+        # Revoking authority trust invalidates new remote attach. The existing
+        # local BacLOUD grant still exists and can run normally.
+        fb.store.trusted_issuers = frozenset({"firstbyte"})
+        with pytest.raises(Exception) as denied:
+            await fb.attach(
+                ActorContext(
+                    auth_mode="bearer", principal_id="different-fixture-user",
+                    credential_id="fixture", auth_generation=1,
+                    scopes=frozenset({"terminal:read", "terminal:execute"}),
+                    provider="openai",
+                    provider_metadata={"openai/subject": "other", "openai/session": "other"},
+                    transport="mcp", endpoint_role="executor",
+                ),
+                issuer_node_id="bacloud", access_code="4731",
+            )
+        assert getattr(denied.value, "code", "") == "access_mesh_untrusted_issuer"

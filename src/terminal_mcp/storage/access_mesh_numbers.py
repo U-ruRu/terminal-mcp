@@ -106,11 +106,12 @@ class MeshSessionNumbers:
             return True
         # Legacy grants store per-issuer HMAC tags; no plaintext scan is needed.
         for issuer in self.store.trusted_issuers:
-            tag = self.store.code_tag(issuer, number)
+            tags = self.store.code_tags(issuer, number)
+            placeholders = ",".join("?" for _ in tags)
             rows = db.execute(
                 "SELECT anchor,deadline_at,policy_json FROM access_mesh_slot_replicas "
-                "WHERE issuer_id=? AND code_tag=? AND state!='deleted'",
-                (issuer, tag),
+                f"WHERE issuer_id=? AND code_tag IN ({placeholders}) AND state!='deleted'",
+                (issuer, *tags),
             ).fetchall()
             for row in rows:
                 policy = json.loads(row["policy_json"])
