@@ -9,7 +9,9 @@ import type { ManagedFleetControlReadModel, ManagedFleetMeshReadModel, ManagedFl
 import { useConnectionRuntime } from '../connections/runtime'
 import { inspectCanonicalPairingLink } from '../connections/pairingLink'
 import { connectionLifecycle, pairingErrorMessageKey, type ConnectionLifecycle } from '../connections/lifecycle'
-import { isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
+import { beginMeshCreate, finishMeshCreate, readPendingMeshCreate } from '../connections/meshCreate'
+import { joinPreflightError } from '../connections/joinPreflight'
+import { clearCachedFleetControl, isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { ConnectionProfile } from '../connections/types'
 import type { MessageKey } from '../i18n/catalogs'
 import { useI18n } from '../i18n/useI18n'
@@ -52,6 +54,25 @@ type MutationPhase = 'pending' | 'confirmed' | 'failed'
 type MembershipMutation = { targetMeshId: string; phase: MutationPhase; error?: string }
 type MembershipProjection = { kind: 'mesh' | 'standalone' | 'unknown'; meshId?: string; node?: ManagedFleetNodeReadModel; freshness: FleetControlFreshness }
 type OperationalState = 'current' | 'applying' | 'unavailable' | 'attention'
+
+/** Never display raw HTTP transport messages or token-bearing exception text. */
+function controlErrorCode(cause: unknown): string {
+  const value = cause && typeof cause === 'object' && 'code' in cause ? (cause as { code: unknown }).code : undefined
+  if (typeof value === 'string' && /^[a-zA-Z0-9_:-]{1,120}$/.test(value)) return value
+  if (cause instanceof Error && cause.message === 'mesh_create_reconcile_required') return cause.message
+  if (cause instanceof Error && cause.message === 'storage_unavailable') return cause.message
+  return 'control_request_failed'
+}
+
+function recoveryKey(error: string): MessageKey {
+  if (error.includes('fleet_id_mismatch')) return 'connections.recovery.fleet'
+  if (error.includes('management_contract') || error.includes('contract_')) return 'connections.recovery.contract'
+  if (error === 'mesh_create_reconcile_required') return 'connections.recovery.pendingCreate'
+  if (error === 'cross_authority_handoff_required') return 'connections.recovery.handoff'
+  if (error.includes('enrollment_') || error.includes('pairing_') || error === 'control_write_unavailable') return 'connections.recovery.pair'
+  if (error.includes('revision_conflict') || error.includes('already_managed')) return 'connections.recovery.conflict'
+  return 'connections.recovery.unknown'
+}
 type AuthorityView = {
   control: ManagedFleetControlReadModel
   freshness: FleetControlFreshness
@@ -107,7 +128,7 @@ function resolvedMembershipMutation(
 ): MembershipMutation | undefined {
   if (!mutation || mutation.phase !== 'pending' || membership.freshness !== 'fresh') return mutation
   const confirmed = mutation.targetMeshId
-    ? membership.kind === 'mesh' && membership.meshId === mutation.targetMeshId
+    ? membership.kind === 'mesh' && membership.meshId === mutation.targetMeshId && isConverged(membership.node)
     : membership.kind === 'standalone'
   return confirmed ? { ...mutation, phase: 'confirmed' } : mutation
 }
@@ -152,12 +173,38 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   const [newMeshName, setNewMeshName] = useState('Fleet')
   const [newMeshControlInstanceId, setNewMeshControlInstanceId] = useState('')
   const [selectedMeshId, setSelectedMeshId] = useState('')
-  const [controlBusy, setControlBusy] = useState(false)
+  // Independent control authorities must never share a UI write lock.
+  const [busyAuthorities, setBusyAuthorities] = useState<Record<string, number>>({})
+  const markBusy = useCallback((instanceId: string, change: number) => {
+    setBusyAuthorities((previous) => {
+      const value = Math.max(0, (previous[instanceId] ?? 0) + change)
+      return { ...previous, [instanceId]: value }
+    })
+  }, [])
+  const busyFor = (instanceId: string | undefined) => Boolean(instanceId && busyAuthorities[instanceId])
   const [controlError, setControlError] = useState<string | null>(null)
   const [optimisticMeshes, setOptimisticMeshes] = useState<ManagedFleetMeshReadModel[] | null>(null)
   const [meshMutationPhase, setMeshMutationPhase] = useState<MutationPhase | null>(null)
   const [membershipMutations, setMembershipMutations] = useState<Record<string, MembershipMutation>>({})
   const [membershipTargets, setMembershipTargets] = useState<Record<string, string>>({})
+
+  // Recover a confirmed Create Mesh after navigation, timeout or process restart.
+  useEffect(() => {
+    for (const profile of profiles) {
+      let pending
+      try { pending = readPendingMeshCreate(localStorage, profile.instanceId) } catch { continue }
+      if (!pending) continue
+      const observed = controls[profile.instanceId]
+      const control = observed?.freshness === 'fresh' ? observed.control : undefined
+      if (!control || control.nodeId !== pending.controlNodeId || control.controlNodeId !== pending.controlNodeId) continue
+      const mesh = control.meshes.find((item) => item.meshId === pending.meshId && item.displayName === pending.displayName)
+      const node = control.nodes.find((item) => item.nodeId === pending.controlNodeId)
+      if (mesh && node?.meshId === pending.meshId && isConverged(node)) {
+        finishMeshCreate(localStorage, profile.instanceId, pending.meshId)
+        setMeshMutationPhase('confirmed')
+      }
+    }
+  }, [controls, profiles])
   const [confirmation, setConfirmation] = useState<{ kind: 'delete-mesh'; label: string } | { kind: 'remove-connection'; instanceId: string; label: string } | null>(null)
 
   const refreshControls = useCallback(async () => {
@@ -298,7 +345,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         setControlError(failure.error)
         return failure
       }
-      setControlBusy(true)
+      markBusy(profile.instanceId, 1)
       setControlError(null)
       try {
         const result = await api.fleetControlMutation(path, body)
@@ -320,15 +367,15 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       } catch (cause) {
         const failure = {
           ok: false,
-          error: cause instanceof Error ? cause.message : 'control_mutation_failed',
+          error: controlErrorCode(cause),
         }
         setControlError(failure.error)
         return failure
       } finally {
-        setControlBusy(false)
+        markBusy(profile.instanceId, -1)
       }
     },
-    [client, refreshControls],
+    [client, markBusy, refreshControls],
   )
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -342,15 +389,14 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       const existing = profiles.find(
         (profile) => normalizedOrigin(profile.origin) === normalizedOrigin(target.origin),
       )
-      if (existing) {
-        setDisplayName('')
-        setPairingFeedback({ key: 'connections.pairingDuplicate', error: false })
-        window.setTimeout(() => {
-          document.getElementById('connection-' + existing.instanceId)?.focus()
-        }, 0)
-        return
-      }
+      // A new valid one-time link may re-authorize a revoked/stale saved profile.
+      // Pairing registry replaces credentials atomically after successful exchange.
       await pair(oneTimeLink, displayName || undefined)
+      if (existing) {
+        clearCachedFleetControl(existing.instanceId)
+        setControls((current) => ({ ...current, [existing.instanceId]: { freshness: 'unknown' } }))
+        void refreshControls()
+      }
       setDisplayName('')
       setPairingFeedback({ key: 'connections.pairingSuccess', error: false })
     } catch (cause) {
@@ -460,11 +506,11 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     const node = control.nodes.find((item) => item.nodeId === nodeId)
     const mesh = node?.meshId ? control.meshes.find((item) => item.meshId === node.meshId) : undefined
     const projected = { ...control, nodeId, mesh }
-    const observedAt = Date.now()
-    saveCachedFleetControl(instanceId, projected, observedAt)
+    // The authority's desired membership is a projection, not a fresh read of
+    // the participant's applied state. Only its own GET can confirm convergence.
     setControls((current) => ({
       ...current,
-      [instanceId]: { control: projected, freshness: 'fresh', observedAt },
+      [instanceId]: { control: projected, freshness: 'stale', observedAt: Date.now() },
     }))
   }, [])
 
@@ -490,15 +536,31 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     }
     setOptimisticMeshes([...meshes, pendingMesh])
     setMeshMutationPhase('pending')
-    setControlBusy(true)
+    markBusy(selectedProfile.instanceId, 1)
     setControlError(null)
     let result: ManagedFleetMutationResult
+    let requestedMeshId = ''
+    let requestedNodeId = ''
     try {
       const enrollment = await api.fleetEnrollment()
-      result = await api.fleetControlMutation('/actions/fleet/control/adopt', {
+      const pending = beginMeshCreate(localStorage, selectedProfile.instanceId, enrollment.nodeId, displayName)
+      requestedMeshId = pending.meshId
+      requestedNodeId = enrollment.nodeId
+      // Resolve a possibly committed lost response before sending another write.
+      const current = await api.fleetControl()
+      const alreadyCreated = current.nodeId === enrollment.nodeId
+        && current.controlNodeId === enrollment.nodeId
+        && current.meshes.some((mesh) => mesh.meshId === pending.meshId && mesh.displayName === displayName)
+        && isConverged(current.nodes.find((node) => node.nodeId === enrollment.nodeId && node.meshId === pending.meshId))
+      result = alreadyCreated ? { ok: true, control: current } : await api.fleetControlMutation('/actions/fleet/control/adopt', {
+        mesh_id: pending.meshId,
         display_name: displayName,
         control_node_id: enrollment.nodeId,
       })
+      if (result.ok && result.control?.meshes.some((mesh) => mesh.meshId === pending.meshId && mesh.displayName === displayName)
+        && isConverged(result.control.nodes.find((node) => node.nodeId === enrollment.nodeId && node.meshId === pending.meshId))) {
+        finishMeshCreate(localStorage, selectedProfile.instanceId, pending.meshId)
+      }
       if (result.ok && result.control) {
         const observedAt = Date.now()
         saveCachedFleetControl(selectedProfile.instanceId, result.control, observedAt)
@@ -512,14 +574,17 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         setControlError(result.code ?? result.error ?? 'control_mutation_failed')
       }
     } catch (cause) {
-      result = { ok: false, error: cause instanceof Error ? cause.message : 'control_mutation_failed' }
+      result = { ok: false, error: controlErrorCode(cause) }
       setControlError(result.error ?? 'control_mutation_failed')
     } finally {
-      setControlBusy(false)
+      markBusy(selectedProfile.instanceId, -1)
     }
     setOptimisticMeshes(null)
-    setMeshMutationPhase(result.ok && result.control?.meshes.some((mesh) => mesh.displayName === displayName) ? 'confirmed' : result.ok ? 'pending' : 'failed')
-    if (result.ok) setNewMeshName('Fleet')
+    setMeshMutationPhase(result.ok && result.control?.meshes.some((mesh) => mesh.meshId === requestedMeshId)
+      && isConverged(result.control.nodes.find((node) => node.nodeId === requestedNodeId))
+      ? 'confirmed' : result.ok ? 'pending' : 'failed')
+    if (result.ok && result.control?.meshes.some((mesh) => mesh.meshId === requestedMeshId)
+      && isConverged(result.control.nodes.find((node) => node.nodeId === requestedNodeId))) setNewMeshName('Fleet')
   }
 
   async function renameMesh() {
@@ -561,7 +626,19 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     }
     setControlError(null)
     try {
+      const targetControl = await targetApi.fleetControl()
+      const preflightError = joinPreflightError(targetControl, targetAuthority.control)
+      if (preflightError) {
+        const failure = { ok: false, code: preflightError, error: preflightError }
+        setControlError(failure.error)
+        return failure
+      }
       const enrollment = await targetApi.fleetEnrollment()
+      if (enrollment.nodeId !== targetControl.nodeId) {
+        const failure = { ok: false, code: 'enrollment_identity_changed', error: 'enrollment_identity_changed' }
+        setControlError(failure.error)
+        return failure
+      }
       const result = await mutateControl(targetAuthority, '/actions/fleet/control/nodes/upsert', {
         node_id: enrollment.nodeId,
         mesh_id: meshId,
@@ -575,7 +652,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       }
       return result
     } catch (cause) {
-      const failure = { ok: false, error: cause instanceof Error ? cause.message : 'enrollment_unavailable' }
+      const failure = { ok: false, error: controlErrorCode(cause) }
       setControlError(failure.error)
       return failure
     }
@@ -618,9 +695,9 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       if (result.ok && result.control) projectMembershipControl(instanceId, result.control, node.nodeId)
       return result
     }
-    const detached = await detachFromMesh(instanceId)
-    if (!detached.ok) return detached
-    return addToMesh(instanceId, targetMeshId)
+    // Cross-authority rehome needs a durable prepare/commit/compensate protocol.
+    // Refuse before detaching anything; a multi-write UI sequence can strand the node.
+    return { ok: false, code: 'cross_authority_handoff_required', error: 'cross_authority_handoff_required' }
   }
 
   async function changeMembership(instanceId: string, targetMeshId: string) {
@@ -667,7 +744,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     const authoritativeNode = result.control?.nodes.find((node) => (
       current.node?.nodeId ? node.nodeId === current.node.nodeId : normalizedOrigin(node.origin) === normalizedOrigin(profile.origin)
     ))
-    const confirmed = Boolean(result.ok && authoritativeNode && (
+    const confirmed = Boolean(result.ok && authoritativeNode && isConverged(authoritativeNode) && (
       targetMeshId
         ? authoritativeNode.state !== 'detached' && authoritativeNode.meshId === targetMeshId
         : authoritativeNode.state === 'detached' || !authoritativeNode.meshId
@@ -689,7 +766,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       setControlError('control_write_unavailable')
       return
     }
-    setControlBusy(true)
+    markBusy(instanceId, 1)
     setControlError(null)
     try {
       const result = await api.fleetControlMutation('/actions/fleet/control/trust/rotate', {
@@ -710,9 +787,9 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       }
       void refreshControls()
     } catch (cause) {
-      setControlError(cause instanceof Error ? cause.message : 'control_mutation_failed')
+      setControlError(controlErrorCode(cause))
     } finally {
-      setControlBusy(false)
+      markBusy(instanceId, -1)
     }
   }
 
@@ -870,8 +947,8 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
               />
             </label>
             <IconButtonRow className="connection-actions">
-              <IconButton icon="edit" variant="secondary" label={t('connections.renameMesh')} disabled={controlBusy || !writeProfile} onClick={() => void renameMesh()} />
-              <IconButton icon="delete" variant="destructive" label={t('connections.deleteMesh')} disabled={controlBusy || !writeProfile} onClick={() => { if (selectedMesh) setConfirmation({ kind: 'delete-mesh', label: selectedMesh.displayName }) }} />
+              <IconButton icon="edit" variant="secondary" label={t('connections.renameMesh')} disabled={busyFor(writeProfile?.instanceId) || !writeProfile} onClick={() => void renameMesh()} />
+              <IconButton icon="delete" variant="destructive" label={t('connections.deleteMesh')} disabled={busyFor(writeProfile?.instanceId) || !writeProfile} onClick={() => { if (selectedMesh) setConfirmation({ kind: 'delete-mesh', label: selectedMesh.displayName }) }} />
             </IconButtonRow>
           </>
         ) : null}
@@ -890,7 +967,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
           <span>{t('connections.controlNode')}</span>
           <select
             value={newMeshControlInstanceId}
-            disabled={controlBusy || eligibleControlProfiles.length === 0}
+            disabled={eligibleControlProfiles.length === 0}
             onChange={(event) => setNewMeshControlInstanceId(event.target.value)}
           >
             {eligibleControlProfiles.map((profile) => (
@@ -899,12 +976,12 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
           </select>
         </label>
         <div className="connection-actions">
-          <IconButton icon="create" variant="primary" label={t('connections.createMesh')} disabled={controlBusy || !newMeshControlInstanceId} onClick={() => void createMesh()} />
+          <IconButton icon="create" variant="primary" label={t('connections.createMesh')} disabled={busyFor(newMeshControlInstanceId) || !newMeshControlInstanceId} onClick={() => void createMesh()} />
         </div>
         </> : null}
         <p className={'mutation-status-slot ' + (controlError || meshMutationPhase === 'failed' ? 'connection-error' : 'muted')} role={controlError ? 'alert' : meshMutationPhase || (routeMeshId && authoritativeFreshness !== 'fresh') ? 'status' : undefined} aria-live={controlError || meshMutationPhase || (routeMeshId && authoritativeFreshness !== 'fresh') ? 'polite' : undefined}>
           {controlError
-            ? t('connections.actionRequired')
+            ? <>{t('connections.actionRequired')} · {controlError} · {t(recoveryKey(controlError))}</>
             : meshMutationPhase === 'pending'
               ? t('connections.pending')
               : meshMutationPhase === 'confirmed'
@@ -925,7 +1002,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         confirmLabel={confirmation.kind === 'delete-mesh' ? t('connections.deleteMesh') : t('connections.remove')}
         confirmIcon={confirmation.kind === 'delete-mesh' ? 'delete' : 'disconnect'}
         confirmVariant="destructive"
-        busy={confirmation.kind === 'delete-mesh' && controlBusy}
+        busy={confirmation.kind === 'delete-mesh' && busyFor(writeProfile?.instanceId)}
         onCancel={() => setConfirmation(null)}
         onConfirm={() => {
           const current = confirmation
@@ -968,6 +1045,10 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                       : t('connections.unknown')
                   const authoritativeTarget = membership.kind === 'mesh' ? membership.meshId ?? '' : ''
                   const membershipTarget = membershipTargets[profile.instanceId] ?? authoritativeTarget
+                  const membershipAuthorityId = (membershipTarget
+                    ? authorityForMesh(membershipTarget)?.profile?.instanceId
+                    : authorityForProfile(profile)?.profile?.instanceId) ?? profile.instanceId
+                  const membershipBusy = busyFor(membershipAuthorityId)
                   return (
                     <article
                       className="panel connection-card"
@@ -1008,7 +1089,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                               type="button"
                               className={membershipTarget === '' ? 'chip active' : 'chip'}
                               aria-pressed={membershipTarget === ''}
-                              disabled={controlBusy || !connectionIsLive || membershipMutation?.phase === 'pending'}
+                              disabled={membershipBusy || !connectionIsLive || membershipMutation?.phase === 'pending'}
                               onClick={() => setMembershipTargets((value) => ({ ...value, [profile.instanceId]: '' }))}
                             >
                               {t('connections.standalone')}
@@ -1019,14 +1100,14 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                                 type="button"
                                 className={membershipTarget === mesh.meshId ? 'chip active' : 'chip'}
                                 aria-pressed={membershipTarget === mesh.meshId}
-                                disabled={controlBusy || !connectionIsLive || membershipMutation?.phase === 'pending'}
+                                disabled={membershipBusy || !connectionIsLive || membershipMutation?.phase === 'pending'}
                                 onClick={() => setMembershipTargets((value) => ({ ...value, [profile.instanceId]: mesh.meshId }))}
                               >
                                 {mesh.displayName}
                               </button>
                             ))}
                           </div>
-                          <IconButton className="membership-commit" icon="apply" variant="primary" label={t('connections.applyMembership')} busy={membershipMutation?.phase === 'pending'} disabled={controlBusy || !connectionIsLive} onClick={() => void changeMembership(profile.instanceId, membershipTarget)} />
+                          <IconButton className="membership-commit" icon="apply" variant="primary" label={t('connections.applyMembership')} busy={membershipMutation?.phase === 'pending'} disabled={membershipBusy || !connectionIsLive} onClick={() => void changeMembership(profile.instanceId, membershipTarget)} />
                         </div>
                       ) : null}
                       {routeMeshId && membership.kind === 'mesh' && observed?.control?.managed && connectionIsLive ? (
@@ -1052,13 +1133,13 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                           : observed?.error
                             ? <>{t('connections.controlError')} · <code>/actions/fleet/control</code> · {observed.error}{observed.elapsedMs === undefined ? '' : ` · ${observed.elapsedMs} ms`}</>
                             : member?.lastError
-                              ? t('connections.actionRequired')
+                              ? <>{t('connections.actionRequired')} · {member.lastError} · {t(recoveryKey(member.lastError))}</>
                               : membershipMutation?.phase === 'pending'
                                 ? t('connections.applying')
                                 : membershipMutation?.phase === 'confirmed'
                                   ? t('connections.confirmed')
                                   : membershipMutation?.phase === 'failed'
-                                    ? t('connections.actionRequired')
+                                    ? <>{t('connections.actionRequired')} · {membershipMutation.error ?? 'control_mutation_failed'} · {t(recoveryKey(membershipMutation.error ?? 'control_mutation_failed'))}</>
                                     : '\u00a0'}
                       </p>
                       <IconButtonRow className="connection-actions">
@@ -1075,7 +1156,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
                           />
                         ) : null}
                         {routeMeshId && observed?.control?.managed ? (
-                          <IconButton icon="rotate" variant="secondary" label={t('connections.rotateTrust')} disabled={controlBusy || !connectionIsLive} onClick={() => void rotateTrust(profile.instanceId)} />
+                          <IconButton icon="rotate" variant="secondary" label={t('connections.rotateTrust')} disabled={busyFor(profile.instanceId) || !connectionIsLive} onClick={() => void rotateTrust(profile.instanceId)} />
                         ) : null}
                         {!routeMeshId ? <IconButton icon="disconnect" variant="destructive" label={t('connections.remove')} onClick={() => setConfirmation({ kind: 'remove-connection', instanceId: profile.instanceId, label: profile.displayName })} /> : null}
                       </IconButtonRow>

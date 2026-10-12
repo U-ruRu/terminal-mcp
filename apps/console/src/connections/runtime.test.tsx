@@ -651,8 +651,8 @@ test('rejected managed membership mutation rolls the optimistic projection back 
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
   await waitFor(() => expect(apply()).toBeEnabled())
-  expect(within(betaCard()).getByText('Attention required')).toBeInTheDocument()
-  expect(within(betaCard()).queryByText(/revision_conflict/)).not.toBeInTheDocument()
+  expect(within(betaCard()).getByText(/Attention required.*revision_conflict/)).toBeInTheDocument()
+  expect(within(betaCard()).getByText(/revision_conflict/)).toBeInTheDocument()
   expect(within(betaCard()).getByText('Mesh: Standalone')).toBeInTheDocument()
   expect(within(betaCard()).getByText('Authoritative state: Standalone')).toBeInTheDocument()
 })
@@ -861,7 +861,8 @@ test('creates a second mesh on an independently selected standalone control node
     }
     if (url.pathname === '/actions/fleet/control/adopt' && init?.method === 'POST') {
       expect(url.origin).toBe('https://beta.example')
-      expect(JSON.parse(String(init.body))).toEqual({ display_name: 'Staging', control_node_id: 'beta' })
+      expect(JSON.parse(String(init.body))).toMatchObject({ display_name: 'Staging', control_node_id: 'beta' })
+      expect(JSON.parse(String(init.body)).mesh_id).toMatch(/^mesh-[0-9a-f]{32}$/)
       betaManaged = true
       return new Response(JSON.stringify(envelope('beta')), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
@@ -902,7 +903,7 @@ test('creates a second mesh on an independently selected standalone control node
   })
 })
 
-test('moves a member between meshes with different authorities via detach then join', async () => {
+test('rejects cross-authority move before detach, preserves owner and explains recovery', async () => {
   const storage = new MemoryStorage()
   let nextId = 0
   const registry = new BrowserConnectionRegistry(
@@ -1029,10 +1030,11 @@ test('moves a member between meshes with different authorities via detach then j
   await userEvent.click(within(gammaTarget()).getByRole('button', { name: 'Staging' }))
   await userEvent.click(applyGamma())
 
-  await waitFor(() => {
-    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/detach'))).toHaveLength(1)
-    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/upsert'))).toHaveLength(1)
-    expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/move'))).toHaveLength(0)
-  })
-  await waitFor(() => expect(within(gammaCard()).getByText('Authoritative state: Staging')).toBeInTheDocument())
+  await waitFor(() => expect(within(gammaCard()).getByText(/cross_authority_handoff_required/)).toBeInTheDocument())
+  expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/detach'))).toHaveLength(0)
+  expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/upsert'))).toHaveLength(0)
+  expect(fetcher.mock.calls.filter(([input]) => new URL(String(input)).pathname.endsWith('/nodes/move'))).toHaveLength(0)
+  expect(within(gammaCard()).getByText('Authoritative state: Production')).toBeInTheDocument()
+  expect(gammaAuthority).toBe('alpha')
+  expect(gammaAlphaMesh).toBe('mesh-a')
 })

@@ -344,6 +344,25 @@ def _catalog() -> Mapping[str, ErrorSpec]:
     ):
         spec = result[code]
         result[code] = ErrorSpec(spec.kind, "stop", spec.message)
+    # Offline deployment subprocess failures require state reconciliation even
+    # for timeout/unavailable variants; automatic replay is never implied.
+    for phase in (
+        "artifact_build",
+        "isolated_runtime_smoke",
+        "consistent_snapshot",
+        "migration",
+        "unit_inventory",
+        "service_observation",
+    ):
+        for suffix in ("", "_outcome_unknown", "_unavailable"):
+            code = phase + suffix
+            if code in result:
+                raise ValueError("Duplicate deployment error policy")
+            result[code] = ErrorSpec(
+                "internal",
+                "reconcile",
+                "Inspect the private deployment journal and current state before retrying.",
+            )
     return MappingProxyType(result)
 
 

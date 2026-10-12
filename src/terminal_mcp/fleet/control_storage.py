@@ -824,11 +824,28 @@ class FleetControlStore:
                 topology, trust, policy_revision = await self._control_revisions(db)
                 existing_mesh = await (
                     await db.execute(
-                        "SELECT active FROM managed_meshes WHERE mesh_id=?",
+                        "SELECT active, display_name FROM managed_meshes WHERE mesh_id=?",
                         (mesh_id,),
                     )
                 ).fetchone()
                 if existing_mesh is not None and bool(existing_mesh[0]):
+                    # Idempotent create: a lost HTTP response must not create a second
+                    # mesh or bump topology when the same control node retries its ID.
+                    local_node = await (
+                        await db.execute(
+                            "SELECT mesh_id, state FROM managed_nodes WHERE node_id=?",
+                            (self.node_id,),
+                        )
+                    ).fetchone()
+                    if (
+                        attach_local_control
+                        and existing_mesh[1] == display_name
+                        and local_node is not None
+                        and local_node[0] == mesh_id
+                        and local_node[1] == "active"
+                    ):
+                        await db.commit()
+                        return await self.control_state(include_secrets=False)
                     raise FleetControlError("mesh_already_exists")
                 topology = await self._bump_revision(db, "topology", stamp)
                 if existing_mesh is None:

@@ -73,6 +73,13 @@ export function loadCachedFleetControl(instanceId: string): CachedFleetControl |
   return readDocument().entries[instanceId]
 }
 
+export function clearCachedFleetControl(instanceId: string): void {
+  const document = readDocument()
+  if (!(instanceId in document.entries)) return
+  delete document.entries[instanceId]
+  writeDocument(document)
+}
+
 function normalizedOrigin(value: string | undefined): string {
   return (value ?? '').replace(/\/+$/, '').toLowerCase()
 }

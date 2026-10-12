@@ -588,3 +588,26 @@ def test_unconfirmed_control_mutation_requires_reconciliation():
         )
         assert decision.action == "reconcile"
         assert decision.retry_after_ms is None
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "artifact_build",
+        "isolated_runtime_smoke",
+        "consistent_snapshot",
+        "migration",
+        "unit_inventory",
+        "service_observation",
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "_outcome_unknown", "_unavailable"])
+def test_deployment_failure_policy_requires_reconciliation(phase, suffix):
+    code = phase + suffix
+    spec = ERROR_SPECS[code]
+    assert spec.kind == "internal"
+    assert spec.recovery == "reconcile"
+    assert "private deployment journal" in spec.message
+    assert len(spec.message) <= MAX_ERROR_MESSAGE
+    assert public_error(code).code == code
+    assert retry_decision(public_error(code), operation="deployment.apply").action == "reconcile"
