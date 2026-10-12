@@ -1,58 +1,44 @@
+import { coalesceControlReads } from '../fleet/controlRead'
+import { ServerSlots, type ServerSlotsProps } from './ServerSlots'
 import { useEffect, useMemo, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { Link } from 'react-router-dom'
 
-import type { ManagedFleetControlReadModel, PersistentMutationResult, PersistentSlotReadModel } from '../api/models'
-import { clearAccessCode, loadAccessCode, saveAccessCode } from '../access/codeVault'
+import type { ManagedFleetControlReadModel, PersistentMutationResult } from '../api/models'
 import { FleetDashboard, type FleetServerGroup } from '../components/FleetDashboard'
-import { ConfirmationDialog, FeedbackState, IconButton, UiButton } from '../components/UiPrimitives'
+import { FeedbackState } from '../components/UiPrimitives'
 import type { FleetReadModel } from '../fleet/readModel'
 import type { FleetInstanceView } from '../fleet/types'
 import { useI18n } from '../i18n/useI18n'
-import { meshPersistentSlotRoute, meshRoute, slotRoute } from '../navigation/routes'
+import { meshRoute } from '../navigation/routes'
 
 type MeshObservation = { instanceId: string; control?: ManagedFleetControlReadModel; unavailable?: boolean }
 type Membership = { meshId: string; label: string; revision: number }
-type ActiveSlotEntry = { slot: PersistentSlotReadModel; instanceId: string; groupKey: string; groupLabel: string; meshId?: string; authorityMatch: boolean }
 
 function normalizedOrigin(value: string | undefined): string { return (value ?? '').replace(/\/+$/, '').toLowerCase() }
-function idempotencyKey(): string { return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `console-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 
-export function Overview({ model, instances = [], loadFleetControl, mutatePersistent }: {
+export function Overview({ model, instances = [], loadFleetControl: sourceControlLoader, loadAccessMeshSlots, loadAccessMeshDefaults, mutateAccessMesh }: {
+  loadAccessMeshSlots?: ServerSlotsProps['loadAccessMeshSlots']
+  loadAccessMeshDefaults?: ServerSlotsProps['loadAccessMeshDefaults']
+  mutateAccessMesh?: ServerSlotsProps['mutateAccessMesh']
   model: FleetReadModel
   instances?: FleetInstanceView[]
   loadFleetControl?: (instanceId: string) => Promise<ManagedFleetControlReadModel>
   mutatePersistent?: (instanceId: string, path: string, body: Record<string, unknown>) => Promise<PersistentMutationResult>
 }) {
-  const { t, number, locale } = useI18n()
+  const { t, number } = useI18n()
   const [observations, setObservations] = useState<MeshObservation[]>([])
-  const [clockOrigin] = useState(() => Date.now())
-  const [clock, setClock] = useState(() => Date.now())
-  const [slotMessage, setSlotMessage] = useState('')
-  const [busy, setBusy] = useState('')
-  const [, setAccessRevision] = useState(0)
-  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState<ActiveSlotEntry | null>(null)
-
-  useEffect(() => {
-    if (!slotMessage) return
-    const clear = window.setTimeout(() => setSlotMessage(''), 3000)
-    return () => window.clearTimeout(clear)
-  }, [slotMessage])
+  const loadFleetControl = useMemo(() => sourceControlLoader ? coalesceControlReads(sourceControlLoader) : undefined, [sourceControlLoader])
 
   useEffect(() => {
     if (!loadFleetControl || model.servers.length === 0) return
     let cancelled = false
-    void Promise.all(model.servers.map(async (server): Promise<MeshObservation> => {
-      try { return { instanceId: server.instanceId, control: await loadFleetControl(server.instanceId) } }
-      catch { return { instanceId: server.instanceId, unavailable: true } }
-    })).then((values) => { if (!cancelled) setObservations(values) })
+    for (const server of model.servers) {
+      void loadFleetControl(server.instanceId).then((control) => ({ instanceId: server.instanceId, control }), () => ({ instanceId: server.instanceId, unavailable: true }))
+        .then((value) => { if (!cancelled) setObservations((current) => [...current.filter((item) => item.instanceId !== value.instanceId), value]) })
+    }
     return () => { cancelled = true }
   }, [loadFleetControl, model.servers])
-
-  useEffect(() => {
-    const handle = window.setInterval(() => setClock(Date.now()), 1000)
-    return () => window.clearInterval(handle)
-  }, [])
 
   const topology = useMemo(() => {
     const meshes = new Map<string, { meshId: string; displayName: string; members: number; revision: number }>()
@@ -107,123 +93,16 @@ export function Overview({ model, instances = [], loadFleetControl, mutatePersis
     return groups
   }, [model.servers, t, topology.memberships])
 
-  const activeSlotGroups = useMemo(() => {
-    const entries = new Map<string, ActiveSlotEntry>()
-    for (const instance of instances) {
-      const persistent = instance.runtime.realtime?.snapshot?.persistent
-      if (!persistent?.enabled || !persistent.available) continue
-      const membership = topology.memberships.get(instance.profile.instanceId)
-      const groupKey = membership ? `mesh:${membership.meshId}` : `server:${instance.profile.instanceId}`
-      const groupLabel = membership?.label ?? instance.profile.displayName
-      const control = observations.find((item) => item.instanceId === instance.profile.instanceId)?.control
-      for (const slot of persistent.slots ?? []) {
-        if (!slot.workSession || !['active', 'stopping'].includes(slot.state) || !['active', 'stopping'].includes(slot.workSession.state)) continue
-        const slotServerNow = Date.parse(slot.serverNow)
-        const anchoredNow = Number.isFinite(slotServerNow) ? slotServerNow + (clock - clockOrigin) : clock
-        if (!Number.isFinite(Date.parse(slot.workSession.hardExpiresAt)) || Date.parse(slot.workSession.hardExpiresAt) <= anchoredNow) continue
-        const authorityMatch = slot.authorityNodeId === instance.profile.instanceId || slot.authorityNodeId === control?.nodeId
-        const key = `${groupKey}:${slot.logicalAgentId}`
-        const current = entries.get(key)
-        const candidate = { slot, instanceId: instance.profile.instanceId, groupKey, groupLabel, meshId: membership?.meshId, authorityMatch }
-        if (!current || (authorityMatch && !current.authorityMatch) || (authorityMatch === current.authorityMatch && slot.slotRevision > current.slot.slotRevision)) entries.set(key, candidate)
-      }
-    }
-    const groups = new Map<string, { key: string; label: string; meshId?: string; entries: ActiveSlotEntry[] }>()
-    for (const entry of entries.values()) {
-      const group = groups.get(entry.groupKey) ?? { key: entry.groupKey, label: entry.groupLabel, meshId: entry.meshId, entries: [] }
-      group.entries.push(entry); groups.set(entry.groupKey, group)
-    }
-    return Array.from(groups.values()).sort((a, b) => Number(!a.meshId) - Number(!b.meshId) || a.label.localeCompare(b.label)).map((group) => ({ ...group, entries: group.entries.sort((a, b) => (a.slot.access?.publicName ?? a.slot.displayName).localeCompare(b.slot.access?.publicName ?? b.slot.displayName)) }))
-  }, [clock, clockOrigin, instances, observations, topology.memberships])
-
   const loading = Boolean(loadFleetControl) && model.servers.length > 0 && observations.length === 0
   const unavailable = observations.length > 0 && observations.every((item) => !item.control)
-
-  const slotName = (slot: PersistentSlotReadModel) => {
-    const publicName = slot.access?.publicName?.trim()
-    const displayName = slot.displayName.trim()
-    return publicName && publicName !== slot.logicalAgentId ? (displayName && displayName !== publicName && displayName !== slot.logicalAgentId ? `${publicName} · ${displayName}` : publicName) : (displayName && displayName !== slot.logicalAgentId ? displayName : t('slots.identityUnavailable'))
-  }
-  const slotHref = (entry: ActiveSlotEntry) => entry.meshId ? meshPersistentSlotRoute(entry.meshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)
-  const timer = (slot: PersistentSlotReadModel) => {
-    const serverBase = Date.parse(slot.serverNow)
-    const anchoredNow = Number.isFinite(serverBase) ? serverBase + (clock - clockOrigin) : clock
-    const remaining = Math.max(0, Math.floor((Date.parse(slot.workSession?.hardExpiresAt ?? '') - anchoredNow) / 1000))
-    const h = Math.floor(remaining / 3600), m = Math.floor((remaining % 3600) / 60), s = remaining % 60
-    const suffix = locale === 'ru' ? ['ч','м','с'] : ['h','m','s']
-    return h ? `${h}${suffix[0]} ${String(m).padStart(2,'0')}${suffix[1]} ${String(s).padStart(2,'0')}${suffix[2]}` : m ? `${m}${suffix[1]} ${String(s).padStart(2,'0')}${suffix[2]}` : `${s}${suffix[2]}`
-  }
-  const mutateSlot = async (entry: ActiveSlotEntry, action: 'suspend' | 'delete' | 'rotate') => {
-    if (!mutatePersistent) { setSlotMessage(t('slots.liveRequired')); return }
-    const instance = instances.find((item) => item.profile.instanceId === entry.instanceId)
-    if (instance?.runtime.authStatus !== 'connected') { setSlotMessage(t('slots.liveRequired')); return }
-    const key = `${entry.slot.logicalAgentId}:${action}`; setBusy(key); setSlotMessage('')
-    try {
-      const path = action === 'rotate' ? '/actions/persistent/slots/rotate-access-code' : `/actions/persistent/slots/${action}`
-      const body = action === 'rotate' ? { logical_agent_id: entry.slot.logicalAgentId } : { logical_agent_id: entry.slot.logicalAgentId, expected_revision: entry.slot.slotRevision, idempotency_key: idempotencyKey() }
-      const result = await mutatePersistent(entry.instanceId, path, body)
-      if (!result.ok) { setSlotMessage(result.code ?? result.error ?? t('slots.mutationFailed')); return }
-      if (action === 'delete') { clearAccessCode(entry.slot.logicalAgentId); setAccessRevision((value) => value + 1) }
-      if (action === 'rotate') {
-        const access = result.payload.access as Record<string, unknown> | undefined
-        const code = typeof access?.access_code === 'string' ? access.access_code : ''
-        const generation = Number.isInteger(access?.access_generation) ? Number(access?.access_generation) : 0
-        const publicName = typeof access?.public_name === 'string' ? access.public_name : undefined
-        if (/^[0-9]{4}$/.test(code) && generation > 0) { saveAccessCode(entry.slot.logicalAgentId, { code, generation, publicName }); setAccessRevision((value) => value + 1); try { await navigator.clipboard.writeText(code) } catch { /* keep rotated code in vault */ } }
-      }
-      setSlotMessage(t('slots.mutationApplied'))
-    } catch (error) { setSlotMessage(error instanceof Error ? error.message : t('slots.mutationFailed')) }
-    finally { setBusy('') }
-  }
 
   return (
     <div className="stack fleet-overview">
       <FleetDashboard model={model} groups={serverGroups} />
 
-      {confirmDeleteEntry ? <ConfirmationDialog
-        title={t('slots.delete')}
-        subject={slotName(confirmDeleteEntry.slot)}
-        detail={t('slots.deleteConfirm')}
-        cancelLabel={t('slots.confirmCancel')}
-        confirmLabel={t('slots.delete')}
-        confirmIcon="delete"
-        confirmVariant="destructive"
-        busy={Boolean(busy)}
-        onCancel={() => setConfirmDeleteEntry(null)}
-        onConfirm={() => {
-          const entry = confirmDeleteEntry
-          setConfirmDeleteEntry(null)
-          void mutateSlot(entry, 'delete')
-        }}
-      /> : null}
-
       <section className="fleet-agent-sessions" aria-labelledby="fleet-agent-sessions-title">
         <h2 id="fleet-agent-sessions-title" className="fleet-section-title">{t('fleet.agentSessions')}</h2>
-        {slotMessage ? <div className="transient-toast" role="status" aria-live="polite">{slotMessage}</div> : null}
-        {activeSlotGroups.length === 0 ? <FeedbackState variant="empty" title={t('fleet.noActiveSharedSessions')} /> : activeSlotGroups.map((group) => (
-          <section className="fleet-session-group" key={group.key} aria-label={group.label}>
-            <h3 className="fleet-group-title">{group.label}</h3>
-            <div className="slot-grid fleet-slot-grid">{group.entries.map((entry) => {
-              const saved = loadAccessCode(entry.slot.logicalAgentId, entry.slot.access?.accessGeneration ?? 0)
-              return <article className="panel slot-card slot-cue-normal" key={`${group.key}:${entry.slot.logicalAgentId}`}>
-                <div className="slot-card-primary">
-                  <Link className="text-link slot-card-identity" to={slotHref(entry)}><strong>{slotName(entry.slot)}</strong></Link>
-                  <span className="slot-timer">{timer(entry.slot)}</span>
-                  <span className={'status server-status slot-session-badge slot-session-' + entry.slot.state}>{entry.slot.state === 'stopping' ? t('slots.state.stopping') : t('slots.state.active')}</span>
-                </div>
-                <div className="slot-card-secondary">
-                  <span className="slot-code-cell">{saved ? <span className="access-code-copy"><code>{saved.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + slotName(entry.slot)} onClick={() => void navigator.clipboard.writeText(saved.code)} /></span> : <span className="slot-code-unavailable">—</span>}</span>
-                  <IconButton icon="pause" variant="primary" label={t('slots.suspend')} disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'suspend')} />
-                  <details className="slot-more-actions"><summary aria-label={t('slots.moreActions')}><Icon name="more" /></summary><div className="slot-overflow-menu">
-                    <UiButton type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void mutateSlot(entry, 'rotate')}><Icon name="rotate" />{t('slots.rotateAccessCode')}</UiButton>
-                    <UiButton type="button" variant="destructive" disabled={Boolean(busy)} onClick={() => setConfirmDeleteEntry(entry)}><Icon name="delete" />{t('slots.delete')}</UiButton>
-                    <Link className="nav-link" to={slotHref(entry)}>{t('slots.details')}</Link>
-                  </div></details>
-                </div>
-              </article>
-            })}</div>
-          </section>
-        ))}
+        <ServerSlots activeSessionsOnly instances={instances} loadAccessMeshSlots={loadAccessMeshSlots} loadAccessMeshDefaults={loadAccessMeshDefaults} mutateAccessMesh={mutateAccessMesh} loadFleetControl={loadFleetControl} />
       </section>
 
       <section className="fleet-mesh-index" aria-labelledby="fleet-mesh-title">

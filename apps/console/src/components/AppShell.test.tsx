@@ -1,3 +1,4 @@
+import { APK_VERSION_LABEL } from '../appVersion'
 import { cleanup, render, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test } from 'vitest'
@@ -43,7 +44,7 @@ test('renders both mobile drawer navigation and a separate bottom navigation sur
   expect(within(bottom).getByRole('link', { name: /Slots/ })).toHaveAttribute('href', '/slots')
   expect(within(bottom).getByRole('link', { name: /Fleet/ })).toBeInTheDocument()
   expect(within(bottom).getByRole('link', { name: /Settings/ })).toBeInTheDocument()
-  expect(document.querySelector('.navigation-version')).toHaveTextContent('APK 0.2.35 · code 37')
+  expect(document.querySelector('.navigation-version')).toHaveTextContent(APK_VERSION_LABEL)
 })
 
 

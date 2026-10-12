@@ -16,7 +16,7 @@ import hmac
 import json
 import re
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -130,6 +130,71 @@ class SlotPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class CapturedAccessWindow:
+    """Policy of the already-open window, separate from the next defaults."""
+
+    policy: SlotPolicy
+    started_at: datetime | None
+    hard_expires_at: datetime | None
+    rearm_at: datetime | None
+    closed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.policy, SlotPolicy):
+            raise AccessMeshError("access_mesh_invalid_policy_window")
+        if (self.started_at is None) != (self.hard_expires_at is None):
+            raise AccessMeshError("access_mesh_invalid_policy_window")
+        for value in (self.started_at, self.hard_expires_at, self.rearm_at, self.closed_at):
+            if value is not None:
+                _utc(value)
+        if self.started_at is not None and self.hard_expires_at < self.started_at:
+            raise AccessMeshError("access_mesh_invalid_policy_window")
+        if (
+            self.hard_expires_at is not None
+            and self.rearm_at is not None
+            and self.rearm_at < (self.closed_at or self.hard_expires_at)
+        ):
+            raise AccessMeshError("access_mesh_invalid_policy_window")
+
+    def to_wire(self) -> dict:
+        return {
+            "policy": asdict(self.policy),
+            "started_at": _text(self.started_at) if self.started_at else None,
+            "hard_expires_at": _text(self.hard_expires_at) if self.hard_expires_at else None,
+            "rearm_at": _text(self.rearm_at) if self.rearm_at else None,
+            **({"closed_at": _text(self.closed_at)} if self.closed_at is not None else {}),
+        }
+
+    @classmethod
+    def from_wire(cls, value: dict) -> CapturedAccessWindow:
+        if (
+            not isinstance(value, dict)
+            or not {"policy", "started_at", "hard_expires_at", "rearm_at"} <= set(value)
+            or set(value) - {"policy", "started_at", "hard_expires_at", "rearm_at", "closed_at"}
+        ):
+            raise AccessMeshError("access_mesh_invalid_policy_window")
+        try:
+            if not isinstance(value["policy"], dict):
+                raise ValueError("invalid policy")
+            dates = []
+            for key in ("started_at", "hard_expires_at", "rearm_at"):
+                item = value[key]
+                if item is not None and not isinstance(item, str):
+                    raise ValueError("invalid timestamp")
+                dates.append(datetime.fromisoformat(item) if item is not None else None)
+            closed = value.get("closed_at")
+            if closed is not None and not isinstance(closed, str):
+                raise ValueError("invalid closed time")
+            return cls(
+                SlotPolicy(**value["policy"]),
+                *dates,
+                datetime.fromisoformat(closed) if closed is not None else None,
+            )
+        except (TypeError, ValueError, KeyError, OverflowError) as exc:
+            raise AccessMeshError("access_mesh_invalid_policy_window") from exc
+
+
+@dataclass(frozen=True, slots=True)
 class AccessSlotEvent:
     issuer_id: str
     slot_id: str
@@ -143,12 +208,24 @@ class AccessSlotEvent:
     deadline_at: datetime | None = None
     agent_name: str | None = None
     display_suffix: str | None = None
+    policy_window: CapturedAccessWindow | None = None
+    inherit_policy: bool | None = None
 
     def __post_init__(self) -> None:
         for value in (self.issuer_id, self.slot_id, self.logical_agent_id, self.event_id):
             _required_identifier(value)
         if type(self.revision) is not int or self.revision < 1:
             raise AccessMeshError("access_mesh_invalid_revision")
+        if self.policy_window is not None and (
+            self.kind != "SlotPolicyChanged"
+            or not isinstance(self.policy_window, CapturedAccessWindow)
+        ):
+            raise AccessMeshError("access_mesh_invalid_policy_window")
+        if self.inherit_policy is not None and (
+            type(self.inherit_policy) is not bool
+            or self.kind not in {"SlotIssued", "SlotPolicyChanged"}
+        ):
+            raise AccessMeshError("access_mesh_invalid_policy")
         if self.kind not in _EVENT_KINDS:
             raise AccessMeshError("access_mesh_invalid_event")
         if self.code_tag is not None and not _TAG_PATTERN.fullmatch(self.code_tag):
@@ -197,6 +274,12 @@ class AccessSlotEvent:
             "policy": asdict(self.policy) if self.policy is not None else None,
             "code_tag": self.code_tag,
             "effective_at": _text(self.effective_at) if self.effective_at else None,
+            **(
+                {"policy_window": self.policy_window.to_wire()}
+                if self.policy_window is not None
+                else {}
+            ),
+            **({"inherit_policy": self.inherit_policy} if self.inherit_policy is not None else {}),
             **({"deadline_at": _text(self.deadline_at)} if self.deadline_at else {}),
             **({"agent_name": self.agent_name} if self.agent_name is not None else {}),
             **({"display_suffix": self.display_suffix} if self.display_suffix is not None else {}),
@@ -215,7 +298,13 @@ class AccessSlotEvent:
             "code_tag",
             "effective_at",
         }
-        optional = {"deadline_at", "agent_name", "display_suffix"}
+        optional = {
+            "deadline_at",
+            "agent_name",
+            "display_suffix",
+            "policy_window",
+            "inherit_policy",
+        }
         if not isinstance(data, dict) or not allowed <= set(data) or set(data) - allowed - optional:
             raise AccessMeshError("access_mesh_invalid_wire_event")
         try:
@@ -243,6 +332,10 @@ class AccessSlotEvent:
                 else None,
                 agent_name=data.get("agent_name"),
                 display_suffix=data.get("display_suffix"),
+                policy_window=CapturedAccessWindow.from_wire(data["policy_window"])
+                if "policy_window" in data
+                else None,
+                inherit_policy=data.get("inherit_policy"),
             )
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise AccessMeshError("access_mesh_invalid_wire_event") from exc
@@ -277,9 +370,18 @@ class SlotSnapshot:
     fence_revision: int = 1
     agent_name: str | None = None
     display_suffix: str | None = None
+    policy_window: CapturedAccessWindow | None = None
+    inherit_policy: bool | None = None
+    code_generation: int = 1
 
     def writable_at(self, now: datetime) -> bool:
-        return self.state == "active" and self.policy.active_at(self.anchor, now, self.deadline_at)
+        slot = self.effective(now)
+        return slot.state == "active" and slot.policy.active_at(slot.anchor, now, slot.deadline_at)
+
+    def effective(self, now: datetime) -> SlotSnapshot:
+        from terminal_mcp.core.access_policy_windows import effective_slot
+
+        return effective_slot(self, _utc(now))
 
 
 class LocalAccessMesh:
@@ -384,6 +486,20 @@ class LocalAccessMesh:
             for column in ("agent_name", "display_suffix"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE access_mesh_slot_replicas ADD COLUMN {column} TEXT")
+            if "inherit_policy" not in columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_slot_replicas "
+                    "ADD COLUMN inherit_policy INTEGER NOT NULL DEFAULT 0"
+                )
+            if "policy_window_json" not in columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_slot_replicas ADD COLUMN policy_window_json TEXT"
+                )
+            if "code_generation" not in columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_slot_replicas "
+                    "ADD COLUMN code_generation INTEGER NOT NULL DEFAULT 1"
+                )
             if "deadline_at" not in columns:
                 db.execute("ALTER TABLE access_mesh_slot_replicas ADD COLUMN deadline_at TEXT")
             if "fence_revision" not in columns:
@@ -426,6 +542,11 @@ class LocalAccessMesh:
             fence_revision=row["fence_revision"] if "fence_revision" in row.keys() else 1,
             agent_name=row["agent_name"] if "agent_name" in row.keys() else None,
             display_suffix=row["display_suffix"] if "display_suffix" in row.keys() else None,
+            policy_window=CapturedAccessWindow.from_wire(json.loads(row["policy_window_json"]))
+            if "policy_window_json" in row.keys() and row["policy_window_json"]
+            else None,
+            code_generation=row["code_generation"] if "code_generation" in row.keys() else 1,
+            inherit_policy=bool(row["inherit_policy"]) if "inherit_policy" in row.keys() else False,
         )
 
     def slot(self, issuer_id: str, slot_id: str) -> SlotSnapshot | None:
@@ -536,6 +657,7 @@ class LocalAccessMesh:
         authenticated_peer_id: str,
         issued_kind: Literal["legacy", "persistent"] | None = None,
         broadcast_to: tuple[str, ...] = (),
+        _connection=None,
     ) -> ApplyResult:
         """Process an issuer event once; out-of-order gaps demand snapshot/catchup.
 
@@ -550,8 +672,9 @@ class LocalAccessMesh:
             or any(p not in self.trusted_issuers or p == self.local_node_id for p in recipients)
         ):
             raise AccessMeshError("access_mesh_untrusted_peer")
-        with self._connect() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with self._connect() if _connection is None else nullcontext(_connection) as db:
+            if _connection is None:
+                db.execute("BEGIN IMMEDIATE")
             old = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                 (event.issuer_id, event.slot_id),
@@ -577,8 +700,8 @@ class LocalAccessMesh:
                 db.execute(
                     """INSERT INTO access_mesh_slot_replicas
                        (issuer_id,slot_id,logical_agent_id,kind,state,revision,
-                        event_id,policy_json,code_tag,anchor,agent_name,display_suffix)
-                       VALUES(?,?,?,?,'active',?,?,?,?,?,?,?)""",
+                        event_id,policy_json,code_tag,anchor,agent_name,display_suffix,inherit_policy)
+                       VALUES(?,?,?,?,'active',?,?,?,?,?,?,?,?)""",
                     (
                         event.issuer_id,
                         event.slot_id,
@@ -591,6 +714,7 @@ class LocalAccessMesh:
                         _text(event.effective_at) if event.effective_at else None,
                         event.agent_name,
                         event.display_suffix,
+                        int(bool(event.inherit_policy)),
                     ),
                 )
                 self._queue_event(db, event, issued_kind, recipients)
@@ -615,12 +739,20 @@ class LocalAccessMesh:
             anchor = old["anchor"]
             deadline = old["deadline_at"]
             fence_revision = old["fence_revision"]
+            policy_window = self._snapshot(old).policy_window
+            code_generation = old["code_generation"]
+            inherit_policy = bool(old["inherit_policy"])
+            ended_policy = policy
             if event.kind in {"SlotSuspended", "SlotDeleted", "SessionStarted", "SessionEnded"}:
                 fence_revision = event.revision
             if event.kind == "SlotIssued":
                 raise AccessMeshError("access_mesh_issue_replayed")
             if event.kind == "SlotPolicyChanged":
                 policy = event.policy
+                if event.inherit_policy is not None:
+                    inherit_policy = event.inherit_policy
+                if event.policy_window is not None:
+                    policy_window = event.policy_window
             elif event.kind == "SlotSuspended":
                 state = "suspended"
             elif event.kind == "SlotResumed":
@@ -629,31 +761,74 @@ class LocalAccessMesh:
                 state = "deleted"
             elif event.kind == "AccessCodeRotated":
                 tag = event.code_tag
+                code_generation += 1
             elif event.kind in {"SessionStarted", "SessionUpdated"}:
                 anchor = _text(event.effective_at)
                 deadline = _text(event.deadline_at) if event.deadline_at else None
                 if event.policy is not None:
                     policy = event.policy
+                if event.kind == "SessionStarted":
+                    if (
+                        policy_window is not None
+                        and event.deadline_at is not None
+                        and event.effective_at == policy_window.started_at
+                    ):
+                        captured_policy = policy_window.policy
+                        policy_window = CapturedAccessWindow(
+                            captured_policy,
+                            event.effective_at,
+                            event.deadline_at,
+                            event.deadline_at + timedelta(seconds=captured_policy.cooldown_seconds)
+                            if captured_policy.rearm_enabled
+                            else None,
+                        )
+                    else:
+                        policy_window = None
+                elif policy_window is not None:
+                    current_policy = self._snapshot(old).effective(event.effective_at).policy
+                    end = event.deadline_at or event.effective_at + timedelta(
+                        seconds=current_policy.duration_seconds
+                    )
+                    policy_window = CapturedAccessWindow(
+                        current_policy,
+                        event.effective_at,
+                        end,
+                        end + timedelta(seconds=current_policy.cooldown_seconds)
+                        if current_policy.rearm_enabled
+                        else None,
+                    )
             elif event.kind == "SessionEnded":
+                ended_policy = self._snapshot(old).effective(event.effective_at).policy
                 deadline = None
-                anchor = (
-                    _text(event.effective_at + timedelta(seconds=policy.cooldown_seconds))
-                    if policy.rearm_enabled
+                next_start = (
+                    event.effective_at + timedelta(seconds=ended_policy.cooldown_seconds)
+                    if ended_policy.rearm_enabled
                     else None
                 )
+                anchor = _text(next_start) if next_start is not None else None
+                if policy_window is not None:
+                    # Explicit end preserves the captured window's own cooldown;
+                    # subsequent windows then resolve the committed new defaults.
+                    policy_window = CapturedAccessWindow(
+                        ended_policy,
+                        policy_window.started_at,
+                        policy_window.hard_expires_at,
+                        next_start,
+                        event.effective_at,
+                    )
             self._before_slot_update(db, old, state=state, code_tag=tag)
             release_claims = (
                 event.kind == "SlotDeleted"
                 or (old["kind"] == "legacy" and event.kind == "SlotSuspended")
                 or (
                     event.kind == "SessionEnded"
-                    and (old["kind"] == "legacy" or policy.release_on_end is True)
+                    and (old["kind"] == "legacy" or ended_policy.release_on_end is True)
                 )
             )
             db.execute(
                 """UPDATE access_mesh_slot_replicas
                    SET state=?,revision=?,event_id=?,policy_json=?,code_tag=?,anchor=?,
-                       deadline_at=?,fence_revision=?
+                       deadline_at=?,fence_revision=?,policy_window_json=?,code_generation=?,inherit_policy=?
                    WHERE issuer_id=? AND slot_id=?""",
                 (
                     state,
@@ -664,6 +839,11 @@ class LocalAccessMesh:
                     anchor,
                     deadline,
                     fence_revision,
+                    json.dumps(policy_window.to_wire(), sort_keys=True)
+                    if policy_window is not None
+                    else None,
+                    code_generation,
+                    int(inherit_policy),
                     event.issuer_id,
                     event.slot_id,
                 ),

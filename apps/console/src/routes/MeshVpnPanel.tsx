@@ -41,7 +41,8 @@ export function MeshVpnPanel({ instanceId, nodeId, peers, client, expectedTopolo
 
   useEffect(() => {
     if (!expanded) return
-    void refresh().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'vpn_unavailable'))
+    const timer = window.setTimeout(() => { void refresh().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'vpn_unavailable')) }, 0)
+    return () => window.clearTimeout(timer)
   }, [expanded, refresh])
 
   async function perform(action: 'prepare' | 'activate' | 'backend' | 'switch' | 'revoke',

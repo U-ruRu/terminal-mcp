@@ -569,3 +569,22 @@ def test_work_window_rejection_preserves_machine_error(code):
     assert result.code == code
     assert result.outcome == "not_committed"
     assert result.retry != "reconcile"
+
+
+def test_unconfirmed_control_mutation_requires_reconciliation():
+    failure = normalize_public_error(
+        {"ok": False, "code": "control_mutation_unconfirmed", "error": SECRET}
+    )
+    assert failure.code == "control_mutation_unconfirmed"
+    assert failure.outcome == "unknown"
+    assert failure.retry == "reconcile"
+    assert SECRET not in json.dumps(failure.as_dict())
+    assert 0 < len(failure.message) <= MAX_ERROR_MESSAGE
+    for idempotency_guaranteed in (False, True):
+        decision = retry_decision(
+            failure,
+            operation="fleet.control.policy",
+            idempotency_guaranteed=idempotency_guaranteed,
+        )
+        assert decision.action == "reconcile"
+        assert decision.retry_after_ms is None

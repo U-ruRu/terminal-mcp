@@ -53,61 +53,9 @@ def public_name(issuer_id: str, logical_agent_id: str) -> str:
 
 
 def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
-    now = _utc(now)
-    base = {
-        "state": slot.state,
-        "started_at": None,
-        "hard_expires_at": None,
-        "remaining_seconds": 0,
-        "rearm_at": None,
-    }
-    if slot.state != "active" or slot.anchor is None:
-        return {**base, "state": slot.state if slot.state != "active" else "idle"}
-    anchor = _utc(slot.anchor)
-    if now < anchor:
-        return {**base, "state": "cooldown", "rearm_at": _text(anchor)}
-    policy = slot.policy
-    start = anchor
-    end = (
-        _utc(slot.deadline_at)
-        if slot.deadline_at
-        else anchor + timedelta(seconds=policy.duration_seconds)
-    )
-    if now >= end:
-        if not policy.rearm_enabled:
-            return {
-                **base,
-                "state": "expired",
-                "started_at": _text(start),
-                "hard_expires_at": _text(end),
-            }
-        next_start = end + timedelta(seconds=policy.cooldown_seconds)
-        if now < next_start:
-            return {
-                **base,
-                "state": "cooldown",
-                "started_at": _text(start),
-                "hard_expires_at": _text(end),
-                "rearm_at": _text(next_start),
-            }
-        period = policy.duration_seconds + policy.cooldown_seconds
-        index = int((now - next_start).total_seconds() // period)
-        start = next_start + timedelta(seconds=index * period)
-        end = start + timedelta(seconds=policy.duration_seconds)
-    base.update(started_at=_text(start), hard_expires_at=_text(end))
-    if now >= end:
-        return {
-            **base,
-            "state": "cooldown",
-            "rearm_at": _text(end + timedelta(seconds=policy.cooldown_seconds)),
-        }
-    remaining = (end - now).total_seconds()
-    phase = "active"
-    if policy.draining_seconds and remaining <= policy.draining_seconds:
-        phase = "draining"
-    elif policy.warning_seconds and remaining <= policy.warning_seconds:
-        phase = "warning"
-    return {**base, "state": phase, "remaining_seconds": max(0, int(remaining))}
+    from terminal_mcp.core.access_policy_windows import slot_cycle
+
+    return slot_cycle(slot, now)
 
 
 class AccessMeshStore(LocalAccessMesh):
@@ -171,6 +119,16 @@ class AccessMeshStore(LocalAccessMesh):
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL,
                 policy_json TEXT NOT NULL, legacy_enabled INTEGER NOT NULL
             )""")
+            default_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(access_mesh_operator_defaults)")
+            }
+            if "inherit_policy" not in default_columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_operator_defaults "
+                    "ADD COLUMN inherit_policy INTEGER NOT NULL DEFAULT 0"
+                )
+            if "parent_json" not in default_columns:
+                db.execute("ALTER TABLE access_mesh_operator_defaults ADD COLUMN parent_json TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_slot_catalog (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT, issuer_id TEXT NOT NULL,
                 slot_id TEXT NOT NULL, UNIQUE(issuer_id,slot_id)
@@ -233,7 +191,8 @@ class AccessMeshStore(LocalAccessMesh):
             (
                 slot.logical_agent_id,
                 full_agent_name(slot.agent_name, slot.display_suffix)
-                if slot.agent_name else "Agent name unavailable",
+                if slot.agent_name
+                else "Agent name unavailable",
                 self.local_node_id,
                 stamp,
                 stamp,
@@ -307,7 +266,7 @@ class AccessMeshStore(LocalAccessMesh):
             if db.execute(
                 "SELECT 1 FROM access_mesh_recipient_holds WHERE number=? "
                 "AND state='held' AND (issuer_id!=? OR slot_id!=?) LIMIT 1",
-                (number["number"],event.issuer_id,event.slot_id),
+                (number["number"], event.issuer_id, event.slot_id),
             ).fetchone():
                 raise AccessMeshError("access_mesh_subscription_hold")
             db.execute(
@@ -484,9 +443,8 @@ class AccessMeshStore(LocalAccessMesh):
     def _before_slot_update(self, db, old, *, state, code_tag):
         from terminal_mcp.storage.access_mesh_recipient_holds import slot_held
 
-        if (
-            (state == "deleted" or code_tag != old["code_tag"])
-            and slot_held(db, old["issuer_id"], old["slot_id"])
+        if (state == "deleted" or code_tag != old["code_tag"]) and slot_held(
+            db, old["issuer_id"], old["slot_id"]
         ):
             raise AccessMeshError("access_mesh_subscription_hold")
 
@@ -510,7 +468,11 @@ class AccessMeshStore(LocalAccessMesh):
                 # The parent transaction has committed before this hook runs.
                 # It is safe to wake the transport; failure to notify never
                 # invalidates the durable outbox committed with the event.
-                if result.outcome == "applied" and self._delivery_notifier is not None:
+                if (
+                    result.outcome == "applied"
+                    and self._delivery_notifier is not None
+                    and kwargs.get("_connection") is None
+                ):
                     self._delivery_notifier()
                 return result
             except sqlite3.IntegrityError as exc:
@@ -869,6 +831,68 @@ class AccessMeshStore(LocalAccessMesh):
             ).fetchall()
         return [self._snapshot(row) for row in rows]
 
+    def capture_policy_window(self, slot: SlotSnapshot, now: datetime):
+        """Capture the same number-backed window that public MCP actually authorizes.
+
+        The stable number claim is an identity, not the rotating connection code.
+        Existing direct/non-number slots retain their original domain behavior.
+        """
+        from terminal_mcp.core.access_mesh_grants import CapturedAccessWindow
+        from terminal_mcp.core.access_policy_windows import capture_window
+
+        readable = replace(slot, state="active") if slot.state == "suspended" else slot
+        winner = self.numbers.group_winner(slot.issuer_id, slot.slot_id)
+        if winner is None:
+            return capture_window(readable, now)
+        current = readable
+        if (winner["issuer_id"], winner["slot_id"]) != (slot.issuer_id, slot.slot_id):
+            current = self.slot(winner["issuer_id"], winner["slot_id"]) or readable
+        cycle = self.merged_cycle(readable, now)
+        start, end = _parse(cycle["started_at"]), _parse(cycle["hard_expires_at"])
+        if start is None or end is None:
+            return capture_window(readable, now)
+        policy = current.effective(start).policy
+        rearm = end + timedelta(seconds=policy.cooldown_seconds) if policy.rearm_enabled else None
+        ended = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
+        closed = _parse(ended["ended_at"]) if ended else None
+        if closed is not None and closed < start:
+            closed = None
+        if closed is not None and policy.rearm_enabled:
+            rearm = closed + timedelta(seconds=policy.cooldown_seconds)
+        return CapturedAccessWindow(policy, start, end, rearm, closed)
+
+    def rotated_code_slot(self, code: str):
+        """Resolve a rotated bearer tag without changing a stable recipient identity.
+
+        Only issuer-authenticated replicated slot tags with an existing number
+        claim qualify. No new grant, alias table or implicit window is created.
+        Ambiguous claims stay closed. Each issuer lookup uses its code-tag index.
+        """
+        self.numbers.validate(code)
+        found = []
+        with self._connect() as db:
+            for issuer in sorted(self.trusted_issuers):
+                rows = db.execute(
+                    "SELECT s.* FROM access_mesh_slot_replicas s "
+                    "JOIN access_mesh_number_claims c USING(issuer_id,slot_id) "
+                    "WHERE s.issuer_id=? AND s.code_tag=? AND s.state='active' "
+                    "AND c.number!=? AND c.logical_agent_id=s.logical_agent_id",
+                    (issuer, self.code_tag(issuer, code), code),
+                ).fetchall()
+                found.extend(self._snapshot(row) for row in rows)
+        if len(found) > 1:
+            raise AccessMeshError("access_mesh_ambiguous_code")
+        if found:
+            selected = found[0]
+            winner = self.numbers.group_winner(selected.issuer_id, selected.slot_id)
+            if winner is None or (winner["issuer_id"], winner["slot_id"]) != (
+                selected.issuer_id,
+                selected.slot_id,
+            ):
+                raise AccessMeshError("access_mesh_identity_conflict")
+            return selected
+        return None
+
     def merged_cycle(self, slot: SlotSnapshot, now: datetime) -> dict:
         """Project explicit, shared Mesh start/end transitions for this epoch.
 
@@ -905,7 +929,8 @@ class AccessMeshStore(LocalAccessMesh):
             slot,
             anchor=start,
             deadline_at=expiry,
-            policy=replace(slot.policy, rearm_enabled=False),
+            policy=replace(slot.effective(start).policy, rearm_enabled=False),
+            policy_window=None,
         )
         cycle = local_cycle(effective_slot, now)
         latest_end = self.numbers.end_for_slot(slot.issuer_id, slot.slot_id)
@@ -1108,27 +1133,39 @@ class AccessMeshStore(LocalAccessMesh):
                 "revision": row["revision"],
                 "policy": json.loads(row["policy_json"]),
                 "legacy_enabled": bool(row["legacy_enabled"]),
+                "inherit_policy": bool(row["inherit_policy"]),
+                "parent": json.loads(row["parent_json"]) if row["parent_json"] else None,
             }
             if row
             else None
         )
 
-    def change_defaults(self, *, expected_revision, policy, legacy_enabled, receipt):
-        with self._connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT revision FROM access_mesh_operator_defaults WHERE singleton=1"
-            ).fetchone()
-            revision = row[0] if row else 1
-            if expected_revision != revision:
-                raise AccessMeshError("revision_conflict")
-            db.execute(
-                "INSERT INTO access_mesh_operator_defaults VALUES(1,?,?,?) "
-                "ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,"
-                "policy_json=excluded.policy_json,legacy_enabled=excluded.legacy_enabled",
-                (revision + 1, json.dumps(policy, sort_keys=True), int(legacy_enabled)),
-            )
-            self._save_receipt_tx(db, receipt)
+    def change_defaults(
+        self,
+        *,
+        expected_revision,
+        policy,
+        legacy_enabled,
+        receipt,
+        inherit_policy=False,
+        parent=None,
+    ):
+        from terminal_mcp.storage.access_policy_inheritance import change_defaults
+
+        return change_defaults(
+            self,
+            expected_revision=expected_revision,
+            policy=policy,
+            legacy_enabled=legacy_enabled,
+            receipt=receipt,
+            inherit_policy=inherit_policy,
+            parent=parent,
+        )
+
+    def sync_parent_defaults(self, parent):
+        from terminal_mcp.storage.access_policy_inheritance import sync_parent_defaults
+
+        return sync_parent_defaults(self, parent)
 
     def latest_session_window(self, slot_id: str):
         """Return the latest explicit window anchor/deadline and its event revision.
@@ -1250,7 +1287,17 @@ class AccessMeshStore(LocalAccessMesh):
                 "AND slot_id>? ORDER BY slot_id LIMIT ?",
                 (issuer_id, after, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            # Generation is issuer-local public vault metadata, not a bearer proof.
+            item.pop("code_generation", None)
+            if not item.get("inherit_policy"):
+                item.pop("inherit_policy", None)
+            if item.get("policy_window_json") is None:
+                item.pop("policy_window_json", None)
+            result.append(item)
+        return result
 
     def apply_snapshot(self, raw: dict, *, authenticated_peer_id: str) -> str:
         fields = {
@@ -1265,12 +1312,24 @@ class AccessMeshStore(LocalAccessMesh):
             "code_tag",
             "anchor",
         }
-        optional = {"deadline_at", "fence_revision", "agent_name", "display_suffix"}
+        optional = {
+            "deadline_at",
+            "fence_revision",
+            "agent_name",
+            "display_suffix",
+            "policy_window_json",
+            "inherit_policy",
+        }
         if not isinstance(raw, dict) or not fields <= set(raw) or set(raw) - fields - optional:
             raise AccessMeshError("access_mesh_invalid_snapshot")
         raw = {
-            "deadline_at": None, "fence_revision": raw["revision"],
-            "agent_name": None, "display_suffix": None, **raw,
+            "deadline_at": None,
+            "fence_revision": raw["revision"],
+            "agent_name": None,
+            "display_suffix": None,
+            "policy_window_json": None,
+            "inherit_policy": 0,
+            **raw,
         }
         fields |= optional
         if (
@@ -1282,6 +1341,12 @@ class AccessMeshStore(LocalAccessMesh):
             from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
             policy = SlotPolicy(**json.loads(raw["policy_json"]))
+            if type(raw["inherit_policy"]) is not int or raw["inherit_policy"] not in {0, 1}:
+                raise ValueError("invalid inheritance flag")
+            if raw["policy_window_json"] is not None:
+                from terminal_mcp.core.access_mesh_grants import CapturedAccessWindow
+
+                CapturedAccessWindow.from_wire(json.loads(raw["policy_window_json"]))
             if (
                 type(raw["fence_revision"]) is not int
                 or not 1 <= raw["fence_revision"] <= raw["revision"]
@@ -1324,15 +1389,13 @@ class AccessMeshStore(LocalAccessMesh):
                 if old["revision"] > event.revision:
                     return "stale"
                 if old["revision"] == event.revision:
-                    if dict(old) != raw:
+                    if {key: old[key] for key in fields} != raw:
                         raise AccessMeshError("access_mesh_event_conflict")
                     return "duplicate"
                 if old["state"] == "deleted" and raw["state"] != "deleted":
                     raise AccessMeshError("access_mesh_deleted_slot")
             if old:
-                self._before_slot_update(
-                    db, old, state=raw["state"], code_tag=raw["code_tag"]
-                )
+                self._before_slot_update(db, old, state=raw["state"], code_tag=raw["code_tag"])
             columns = tuple(sorted(fields))
             db.execute(
                 f"INSERT INTO access_mesh_slot_replicas ({','.join(columns)}) "

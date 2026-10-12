@@ -252,8 +252,12 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ("conflict", "reconcile", "access_mesh_issue_replayed"),
         ("access", "stop", "session_draining"),
         ("transient", "retry", "claim_release_failed"),
+        ("transient", "reconcile", "control_mutation_unconfirmed"),
     )
     messages = {
+        "control_mutation_unconfirmed": (
+            "The control mutation outcome is uncertain. Read current control state before retrying."
+        ),
         "intent_required": (
             "Set initial intent with session(action='intent', intent=...) before writing."
         ),

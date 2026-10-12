@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { App } from '../App'
-import type { ContextReadModel, PersistentAuditReadModel } from '../api/models'
+import type { AccessMeshMutationRequest, ContextReadModel, PersistentAuditReadModel } from '../api/models'
 import { PairingHandoffController } from '../connections/PairingHandoffController'
 import { BrowserConnectionRegistry } from '../connections/registry'
 import { ConnectionRuntimeProvider } from '../connections/runtime'
@@ -110,6 +110,22 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
     [fleetEnabled],
   )
   const fleetRuntimeRef = useRef<FleetAdaptiveReadRuntime | null>(null)
+  const loadAccessMeshSlots = useCallback(
+    (instanceId: string) => directAuthority.accessMeshSlots(instanceId),
+    [directAuthority],
+  )
+  const loadAccessMeshDefaults = useCallback(
+    (instanceId: string) => directAuthority.accessMeshDefaults(instanceId),
+    [directAuthority],
+  )
+  const mutateAccessMesh = useCallback(async (instanceId: string, body: AccessMeshMutationRequest) => {
+    const result = await directAuthority.accessMeshMutation(instanceId, body)
+    // The native screen rereads its own authority. Advisory legacy-cache sync must
+    // never replace an accepted receipt with a cache error or lose its one-time code.
+    const runtime = fleetRuntimeRef.current
+    if (runtime) void runtime.syncOnce().catch(() => undefined)
+    return result
+  }, [directAuthority])
   const runtimeSignatures = useRef(new Map<string, string>())
   const fleetSignature = useRef('')
   const bootRecorded = useRef(false)
@@ -330,6 +346,9 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
     >
       <PairingHandoffController />
       <App
+        loadAccessMeshSlots={loadAccessMeshSlots}
+        loadAccessMeshDefaults={loadAccessMeshDefaults}
+        mutateAccessMesh={mutateAccessMesh}
         model={model}
         diagnostics={diagnostics}
         instances={instances}
@@ -417,6 +436,7 @@ export function FleetRuntime({ dependencies = {} }: { dependencies?: FleetRuntim
           }
           return directAuthority.task(instanceId, namespace, taskId)
         }}
+        loadManagedSlotStatus={(instanceId, logicalAgentId) => directAuthority.managedSlotStatus(instanceId, logicalAgentId)}
         loadFleetControl={(instanceId) => directAuthority.fleetControl(instanceId)}
         mutateFleetControl={async (instanceId, path, body) => {
           const result = await directAuthority.fleetControlMutation(instanceId, path, body)

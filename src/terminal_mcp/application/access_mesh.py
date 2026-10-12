@@ -55,6 +55,8 @@ class AccessMeshApplication:
         self.execution_fence = execution_fence
         self.legacy_enabled = legacy_enabled
         self.defaults = defaults or SlotPolicy(1380, 60, True, 120, 30)
+        self.configured_defaults = self.defaults
+        self.configured_legacy_enabled = self.legacy_enabled
         self.clock = clock or (lambda: datetime.now(UTC))
         self.store.clock = self.clock
         stored_defaults = self.store.defaults()
@@ -72,6 +74,99 @@ class AccessMeshApplication:
         self._scan_after = ""
         self._scan_error: str | None = None
         self.last_error: str | None = None
+
+    def local_parent_policy(self):
+        return {
+            "source": "server",
+            "revision": 1,
+            "policy": asdict(self.configured_defaults),
+            "legacy_enabled": self.configured_legacy_enabled,
+        }
+
+    def defaults_state(self):
+        stored = self.store.defaults()
+        current = stored or {
+            "revision": 1,
+            "policy": asdict(self.defaults),
+            "legacy_enabled": self.legacy_enabled,
+            "inherit_policy": True,
+        }
+        parent = current.get("parent") or self.local_parent_policy()
+        source = parent["source"] if current["inherit_policy"] else "server"
+        parent_view = self.policy_parent_view(parent)
+        return {
+            **current,
+            "parent": parent,
+            "policy_source": source,
+            "issuer_node_id": self.store.local_node_id,
+            "write_target": "access_defaults",
+            "inheritance": {
+                "mode": "inherit" if current["inherit_policy"] else "override",
+                "source": "standalone" if source == "server" else source,
+                "parent": parent_view,
+                "reset_supported": True,
+                "applies_to": "next_window",
+                "pending": False,
+            },
+            "inheritance_supported": True,
+            "management_contract_version": 2,
+            "mesh_policy_supported": parent["source"] == "mesh",
+            "policy_override": None if current["inherit_policy"] else current["policy"],
+            "inherited_policy": parent["policy"],
+            "policy_applies_to": "next_session",
+        }
+
+    def policy_parent_view(self, parent):
+        source = "mesh" if parent["source"] == "mesh" else "standalone"
+        ident = parent.get("mesh_id") or self.store.local_node_id
+        revision = parent["revision"]
+        authoritative = (
+            source == "standalone" or parent.get("control_node_id") == self.store.local_node_id
+        )
+        return {
+            "source": source,
+            "id": ident,
+            "revision": revision,
+            "version": f"{source}:{ident}:{revision}",
+            "freshness": "authoritative" if authoritative else "last_known",
+            "convergence": "converged",
+        }
+
+    async def apply_fleet_policy(self, state=None):
+        """Use only the existing, authenticated Fleet controller's applied replica."""
+        parent = self.local_parent_policy()
+        if state and state.get("managed"):
+            local = next(
+                (
+                    node
+                    for node in state.get("nodes", [])
+                    if node.get("node_id") == self.store.local_node_id
+                ),
+                None,
+            )
+            if local and local.get("mesh_id") and local.get("state") != "detached":
+                policy = state.get("policy")
+                if not policy:
+                    raise AccessMeshError("access_mesh_policy_unavailable")
+                resolved = SlotPolicy(
+                    duration_seconds=policy["duration_seconds"],
+                    cooldown_seconds=policy["rearm_after_seconds"],
+                    rearm_enabled=True,
+                    warning_seconds=policy["duration_seconds"] - policy["warning_after_seconds"],
+                    draining_seconds=policy["duration_seconds"] - policy["alert_after_seconds"],
+                )
+                parent = {
+                    "source": "mesh",
+                    "revision": policy["revision"],
+                    "policy": asdict(resolved),
+                    "legacy_enabled": policy["legacy_admission_enabled"],
+                    "mesh_id": local["mesh_id"],
+                    "control_node_id": state.get("control_node_id"),
+                }
+        async with self._issuer_session_lock, self._issuer_lock:
+            current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
+            self.defaults = SlotPolicy(**current["policy"])
+            self.legacy_enabled = current["legacy_enabled"]
 
     @staticmethod
     def require_write(actor: ActorContext) -> None:
@@ -138,11 +233,24 @@ class AccessMeshApplication:
         self.require_write(actor)
         if session_number is not None:
             winner = await asyncio.to_thread(self.store.numbers.winner, session_number)
-            if winner is None:
+            rotated = await asyncio.to_thread(self.store.rotated_code_slot, session_number)
+            if rotated is not None and winner is not None:
+                # A missing slot replica is not proof that an unexpired numeric
+                # claim is free. Keep conflicts closed even during partial catch-up.
+                if datetime.fromisoformat(winner["hard_expires_at"]) > self.clock():
+                    raise AccessMeshError("access_mesh_ambiguous_code")
+            if winner is None and rotated is None:
                 raise AccessMeshError("invalid_session_number")
             connection = self.connection_key(actor)
             current = await asyncio.to_thread(self.store.attached_slot, connection)
-            if current is not None:
+            if rotated is not None:
+                slot = await asyncio.to_thread(
+                    self.store.attach,
+                    issuer_id=rotated.issuer_id,
+                    code=session_number,
+                    connection_key=connection,
+                )
+            elif current is not None:
                 bound_number = await asyncio.to_thread(
                     self.store.numbers.number_for_slot, current.issuer_id, current.slot_id
                 )
@@ -474,7 +582,9 @@ class AccessMeshApplication:
         ).hexdigest()
         return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
 
-    def _slot_receipt(self, slot, action, *, revision=None, code=None):
+    def _slot_receipt(
+        self, slot, action, *, revision=None, code=None, include_code_generation=False
+    ):
         return {
             "ok": True,
             "action": action,
@@ -484,6 +594,11 @@ class AccessMeshApplication:
             "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "revision": revision or slot.revision,
+            **(
+                {"code_generation": slot.code_generation + (1 if action == "rotate" else 0)}
+                if include_code_generation
+                else {}
+            ),
             **({"access_code": code} if code is not None else {}),
         }
 
@@ -496,6 +611,7 @@ class AccessMeshApplication:
         start: bool = True,
         code: str | None = None,
         display_name: str | None = None,
+        inherit_policy: bool | None = None,
         receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
@@ -512,9 +628,7 @@ class AccessMeshApplication:
                     reserved_number,
                     attempt_id,
                     announcement_deadline,
-                ) = await self.replication.negotiate_number(
-                    preferred=code, exact=code is not None
-                )
+                ) = await self.replication.negotiate_number(preferred=code, exact=code is not None)
             elif code is None:
                 candidate = f"{secrets.randbelow(10000):04d}"
                 proposed = await asyncio.to_thread(
@@ -543,6 +657,7 @@ class AccessMeshApplication:
                     event_id="ae_" + secrets.token_urlsafe(18),
                     kind="SlotIssued",
                     policy=policy or self.defaults,
+                    inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                     code_tag=self.store.code_tag(self.store.local_node_id, allocated),
                     effective_at=self.clock() if start else None,
                     agent_name=number_agent_name(allocated),
@@ -558,6 +673,7 @@ class AccessMeshApplication:
                     "revision": 1,
                     "public_name": full_agent_name(event.agent_name, event.display_suffix),
                     "access_code": allocated,
+                    **({"code_generation": 1} if actor.endpoint_role == "operator" else {}),
                 }
                 receipt = (
                     self.store.prepare_receipt(
@@ -613,6 +729,7 @@ class AccessMeshApplication:
         receipt_spec=None,
         number_end: dict | None = None,
         number_start: dict | None = None,
+        inherit_policy: bool | None = None,
     ) -> dict:
         self.require_write(actor)
         async with self._issuer_lock:
@@ -622,17 +739,27 @@ class AccessMeshApplication:
             if slot.revision != expected_revision:
                 raise AccessMeshError("revision_conflict")
             code = None
+            rotation_attempt = None
+            rotation_deadline = None
             if kind == "AccessCodeRotated":
-                for _ in range(100):
-                    candidate = f"{secrets.randbelow(10000):04d}"
-                    if (
-                        await asyncio.to_thread(self.store.code_slot, slot.issuer_id, candidate)
-                        is None
-                    ):
-                        code = candidate
-                        break
-                if code is None:
-                    raise AccessMeshError("access_mesh_code_capacity")
+                if self.replication is not None:
+                    (
+                        code,
+                        rotation_attempt,
+                        rotation_deadline,
+                    ) = await self.replication.negotiate_number()
+                else:
+                    rotation_attempt = "nr_" + secrets.token_urlsafe(16)
+                    reserved = await asyncio.to_thread(
+                        self.store.numbers.reserve,
+                        number=f"{secrets.randbelow(10000):04d}",
+                        attempt_id=rotation_attempt,
+                        now=self.clock(),
+                    )
+                    code = reserved.get("number") or reserved["suggested_number"]
+                if await asyncio.to_thread(self.store.code_slot, slot.issuer_id, code) is not None:
+                    await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
+                    raise AccessMeshError("access_mesh_code_in_use")
             event = AccessSlotEvent(
                 issuer_id=slot.issuer_id,
                 slot_id=slot.slot_id,
@@ -641,9 +768,17 @@ class AccessMeshApplication:
                 event_id="ae_" + secrets.token_urlsafe(18),
                 kind=kind,
                 policy=policy,
+                inherit_policy=(bool(inherit_policy) if kind == "SlotPolicyChanged" else None),
                 code_tag=self.store.code_tag(slot.issuer_id, code) if code else None,
                 effective_at=effective_at or (self.clock() if kind.startswith("Session") else None),
                 deadline_at=deadline_at,
+                # Future policy edits must not renew the currently granted window.
+                # Capture it on the issuer so every replica applies the same boundary.
+                policy_window=await asyncio.to_thread(
+                    self.store.capture_policy_window, slot, self.clock()
+                )
+                if kind == "SlotPolicyChanged"
+                else None,
             )
             action = {
                 "SessionStarted": "start",
@@ -655,7 +790,13 @@ class AccessMeshApplication:
                 "SlotDeleted": "delete",
                 "AccessCodeRotated": "rotate",
             }.get(kind, "update")
-            result = self._slot_receipt(slot, action, revision=event.revision, code=code)
+            result = self._slot_receipt(
+                slot,
+                action,
+                revision=event.revision,
+                code=code,
+                include_code_generation=actor.endpoint_role == "operator",
+            )
             receipt = (
                 self.store.prepare_receipt(event_id=event.event_id, result=result, **receipt_spec)
                 if receipt_spec
@@ -673,8 +814,41 @@ class AccessMeshApplication:
                     mutation_end=number_end,
                     mutation_start=number_start,
                 )
-            except AccessMeshError:
+            except Exception:
+                if rotation_attempt is not None:
+                    await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
                 raise
+            if rotation_attempt is not None:
+                # Releasing a lease is cleanup, never a new outcome for a committed receipt.
+                try:
+                    await asyncio.to_thread(self.store.numbers.release, rotation_attempt)
+                except Exception:
+                    _LOG.warning("Mesh code-rotation reservation cleanup pending")
+        if rotation_attempt is not None and self.replication is not None:
+            try:
+                await self.replication.announce_code_rotation(
+                    event_id=event.event_id,
+                    attempt_id=rotation_attempt,
+                    deadline=rotation_deadline,
+                )
+            except Exception:
+                _LOG.warning("Mesh code-rotation propagation pending")
+        if (
+            number_end is not None
+            and actor.endpoint_role == "operator"
+            and self.replication is not None
+        ):
+            try:
+                await self.replication.announce_end(
+                    number=number_end["number"],
+                    cycle_key=number_end["cycle_key"],
+                    issuer_id=event.issuer_id,
+                    slot_id=event.slot_id,
+                    event_id=event.event_id,
+                    ended_at=event.effective_at.isoformat(),
+                )
+            except Exception:
+                _LOG.warning("Mesh operator-end propagation pending")
         # Cleanup is resumable after commit. Its failures cannot turn a durable
         # issuer event into an apparent pre-commit failure or permit duplicate events.
         try:

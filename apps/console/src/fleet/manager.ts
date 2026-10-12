@@ -1,3 +1,4 @@
+import { connectionAuthorityScope } from '../connections/authorityScope'
 import type { ActivityFeedReadModel, PersistentMutationResult, TaskReadModel } from '../api/models'
 
 import type {
@@ -12,12 +13,7 @@ import { DEFAULT_FLEET_MAX_CONCURRENT_STARTS } from './policy'
 type FleetListener = (instances: FleetInstanceView[]) => void
 
 function sameActorCredential(a: FleetInstanceView['profile'], b: FleetInstanceView['profile']): boolean {
-  return (
-    a.origin === b.origin &&
-    a.credentialRef === b.credentialRef &&
-    a.metadata.deviceId === b.metadata.deviceId &&
-    a.metadata.clientId === b.metadata.clientId
-  )
+  return connectionAuthorityScope(a) === connectionAuthorityScope(b)
 }
 
 export class FleetConnectionManager {

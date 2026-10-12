@@ -26,6 +26,7 @@ def internal_persistent_start(client, app, number):
 
     Public Access.start intentionally accepts action only.
     """
+
     async def start():
         return await app.state.access_mesh.issuer_session(
             actor("access"), action="start", mode="persistent", code=number
@@ -71,7 +72,21 @@ def test_mobile_provisioning_policy_rotation_delete_and_idempotency(tmp_path):
         persistent = mutate(client, "create", "create-persistent", mode="persistent")
         assert persistent["ok"], persistent
         view = client.get(f"/actions/access/slots/{persistent['slot_id']}", headers=HEADERS).json()
-        assert view["slot"]["session_lifecycle"]["state"] == "idle"
+        # Management v2 reports the number-backed window authorized by public
+        # MCP. A persistent slot's unused local anchor is not that window:
+        # issuance already reserves a live shared-number window, while attach
+        # separately materializes its local WorkSession. Do not restore the
+        # old local-only "idle" projection fixed by the public-path regression.
+        store = app.state.access_mesh.store
+        native = store.slot(persistent["issuer_node_id"], persistent["slot_id"])
+        assert native.anchor is None
+        public_window = store.merged_cycle(native, app.state.access_mesh.clock())
+        assert view["slot"]["management_contract_version"] == 2
+        assert view["slot"]["session_lifecycle"]["state"] == public_window["state"] == "active"
+        assert (
+            view["slot"]["session_lifecycle"]["hard_expires_at"] == public_window["hard_expires_at"]
+        )
+        assert view["slot"]["session_lifecycle"]["started_at"] == public_window["started_at"]
         started = internal_persistent_start(client, app, persistent["access_code"])
         assert started["ok"], started
         binding = {"session_number": first["access_code"]}
@@ -214,11 +229,12 @@ def test_deadline_override_and_nonrearm_end_cooldown(tmp_path):
         assert ended["ok"], ended
         immediate = internal_persistent_start(client, app, slot["access_code"])
         assert immediate["ok"], immediate
-        resumed = client.get(
-            f"/actions/access/slots/{slot['slot_id']}", headers=HEADERS
-        ).json()["slot"]
-        assert resumed["session_lifecycle"]["hard_expires_at"] == (
-            view["session_lifecycle"]["hard_expires_at"]
+        resumed = client.get(f"/actions/access/slots/{slot['slot_id']}", headers=HEADERS).json()[
+            "slot"
+        ]
+        assert (
+            resumed["session_lifecycle"]["hard_expires_at"]
+            == (view["session_lifecycle"]["hard_expires_at"])
         )
         clock[0] += timedelta(seconds=5)
         restarted = internal_persistent_start(client, app, slot["access_code"])

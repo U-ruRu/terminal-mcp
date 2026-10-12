@@ -1,3 +1,4 @@
+import { connectionAuthorityScope } from './authorityScope'
 import { generateDevicePublicKey } from '../auth/pairing'
 import { restoreCredential, type PublicStoredConnection } from '../auth/restore'
 import { PairingTransport } from '../auth/transport'
@@ -311,7 +312,7 @@ export class BrowserConnectionRegistry {
         this.storage,
       )
       const restored = await restoreCredential(credentialVault, transport, this.now)
-      const currentProfile = this.get(instanceId)
+      let currentProfile = this.get(instanceId)
       if (!currentProfile) {
         this.accessSessions.delete(instanceId)
         return { status: 'missing' }
@@ -329,7 +330,15 @@ export class BrowserConnectionRegistry {
 
       let result: ProfileRestoreResult
       switch (restored.status) {
-        case 'connected':
+        case 'connected': {
+          // Refresh scopes are authoritative. Keep the public profile and its read-context
+          // identity in sync with the already-rotated credential, preserving the pairing.
+          if (restored.connection.scope !== currentProfile.metadata.scope) {
+            currentProfile = { ...currentProfile, metadata: { ...currentProfile.metadata, scope: restored.connection.scope }, updatedAt: this.now() }
+            const document = this.document()
+            document.profiles = document.profiles.map((item) => item.instanceId === instanceId ? currentProfile! : item)
+            this.persist(document)
+          }
           result = {
             status: 'connected',
             profile: currentProfile,
@@ -338,6 +347,7 @@ export class BrowserConnectionRegistry {
           }
           this.accessSessions.set(instanceId, result)
           break
+        }
         case 'revoked':
         case 'expired':
           this.accessSessions.delete(instanceId)
@@ -460,11 +470,7 @@ export class BrowserConnectionRegistry {
 
 
   private sameProfileCredential(left: ConnectionProfile, right: ConnectionProfile): boolean {
-    return left.instanceId === right.instanceId
-      && left.origin === right.origin
-      && left.credentialRef === right.credentialRef
-      && left.metadata.deviceId === right.metadata.deviceId
-      && left.metadata.clientId === right.metadata.clientId
+    return connectionAuthorityScope(left) === connectionAuthorityScope(right)
   }
 
   private cloneConnected(result: ConnectedProfileSession): ConnectedProfileSession {
