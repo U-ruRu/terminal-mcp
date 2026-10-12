@@ -7,8 +7,9 @@ Secondary, Uniform-156 on BacLOUD. Agent A: Papa-5. Coordinator dot: Romeo-5.
 
 The acceptance criterion remains open. Four focused tests and an isolated sender-boundary
 probe pass. Inspected production source matches the documented ChatGPT MCP Events profile.
-A separate user-approved live subscription has been created; its control outcome is recorded
-in LIVE-RESULT.md. No product fix or runtime change has been made by B.
+A separate user-approved live subscription was created. The second sender did not send,
+and the native self-send was rejected with `cannot_message_self` / `not_committed`; therefore
+a new end-to-end control is not claimed. Its exact outcome is in LIVE-RESULT.md. No product fix or runtime change has been made by B.
 
 The historical symptom is an absent injected `automations.mcp_event` result. It is not an
 observed empty JSON object. HTTP 200 and an automation run do not establish model visibility.

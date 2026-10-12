@@ -16,3 +16,9 @@ lengths, six exact data values, ID/header/subscription correlation and one-plus-
 calls matched. Capture SHA256: `49ece7065203f41f50f149f7c992d737bd561f9c54fe1f2159824f336c96674d`.
 This approval applies to the adapter boundary, not production HTTP or dot visibility.
 The full live result is reviewed separately after it is available.
+
+A also independently read B's primary BacLOUD results 124b9cf0, 1c63e92f and a0169a9b
+through code-free command_read, confirming the runtime hashes, historical32 sent/200
+and distinct temporary recipient subscription (secondary:msg:hJ1qRVZYvdXEfdTV).
+A accepted the wording correction and published source evidence in
+`bbb7f5cf71b6477ff3fa7fe2115f9fd8191f8367`.

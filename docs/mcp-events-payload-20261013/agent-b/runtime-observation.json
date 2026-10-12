@@ -69,6 +69,13 @@
       "recipient_node_id": "bacloud",
       "recipient_role": "session_number",
       "existing_dot_subscription_changed": false
+    },
+    {
+      "utc": "2026-10-12T21:29:33.250166+00:00",
+      "command": "f3c38b0a",
+      "runtime_realpath": "/opt/terminal-mcp/releases/b6b0605d893444ccce50089c6a865891fb63d8f8-07820ca3ecd1",
+      "three_event_source_hashes_unchanged": true,
+      "test_subscription_deliveries_count": 0
     }
   ],
   "runtime_source_matches_checkout": "All three SHA256 values match inspected 4ecb7201 checkout (Secondary command b6765f18).",
