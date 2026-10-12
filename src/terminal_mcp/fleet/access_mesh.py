@@ -135,6 +135,8 @@ class AccessMeshReplication:
         for node_id in tuple(self._proof_health):
             if node_id not in context or self._proof_context.get(node_id) != context[node_id]:
                 self._proof_health.pop(node_id, None)
+        if set(self._proof_context) != set(context):
+            self._wake.set()
         self._proof_context = context
         self.config = replace(
             self._bootstrap_config,
@@ -162,17 +164,28 @@ class AccessMeshReplication:
         if old_transport_state != new_transport_state:
             self._wake.set()
 
+    def reset_proof_evidence(self) -> None:
+        """A changed authority proof cannot retain a previous ready receipt."""
+        self._proof_health.clear()
+        self._wake.set()
+
     def native_trust_status(self) -> dict:
-        """Operator-safe native trust readiness, with no tokens or secrets."""
+        """Operator-safe Native Access readiness, no peer credentials or secrets."""
         if not getattr(self.mesh, "managed_trust_enabled", False):
             return {"state": "autonomous", "ready": True, "peers": {}}
         expected = set(self.store.trusted_issuers) - {self.store.local_node_id}
         actual = {peer.instance_id for peer in self.peers}
+        installed = getattr(self.store, "managed_proof_ready", True)
         states = {
-            node_id: self._proof_health.get(node_id, {}).get("state", "pending")
+            node_id: (
+                "enrollment_pending"
+                if not installed
+                else self._proof_health.get(node_id, {}).get("state", "pending")
+            )
             for node_id in sorted(expected)
         }
-        ready = (expected == actual and all(v == "verified" for v in states.values()))
+        ready = bool(installed and expected == actual
+                     and all(v == "verified" for v in states.values()))
         return {
             "state": "ready" if ready else "pending",
             "ready": ready,
@@ -184,6 +197,9 @@ class AccessMeshReplication:
     async def verify_peer_proof(self, peer) -> bool:
         if not getattr(self.mesh, "managed_trust_enabled", False):
             return True
+        if not getattr(self.store, "managed_proof_ready", True):
+            self._proof_health[peer.instance_id] = {"state": "enrollment_pending"}
+            return False
         # No cached proof survives a service restart, a topology edit or any
         # change of the pinned identity/ingress credential.
         now = asyncio.get_running_loop().time()
@@ -278,7 +294,14 @@ class AccessMeshReplication:
         end = loop.time() + min(30.0, max(0.0, _budget_seconds))
         negotiation_end = max(loop.time(), end - min(3.0, _budget_seconds * 0.1))
         peers = self.peers
-        if len(peers) != len(self.config.peers):
+        if getattr(self.mesh, "managed_trust_enabled", False) and not self.native_trust_status()["ready"]:
+            # An acknowledged managed membership is not yet Native Access
+            # enrollment. Retain locally issued Legacy/Persistent sessions
+            # while peers are being authenticated. These claims are explicitly
+            # LOCAL-ONLY until the full proof gate converges; UI reports pending.
+            # Once fully ready, every configured peer must reserve the number.
+            peers = ()
+        elif len(peers) != len(self.config.peers):
             raise AccessMeshError("session_number_unconfirmed")
         peer_keys = tuple((p.instance_id, p.origin, p.transport) for p in peers)
         attempt_id = "nr_" + secrets.token_urlsafe(16)
@@ -408,7 +431,10 @@ class AccessMeshReplication:
             attempt_id=attempt_id,
         )
         budget = deadline - asyncio.get_running_loop().time()
-        if budget <= 0 or not self.peers:
+        if budget <= 0 or not self.peers or (
+            getattr(self.mesh, "managed_trust_enabled", False)
+            and not self.native_trust_status()["ready"]
+        ):
             return
 
         async def publish(peer):

@@ -76,12 +76,109 @@ class AccessMeshStore(LocalAccessMesh):
         self.clock = clock or (lambda: datetime.now(UTC))
         self._delivery_notifier = None
         super().__init__(*args, **kwargs)
+        # History is encrypted with this node's immutable bootstrap proof. It
+        # holds only derived group-verification keys, never Fleet signing keys.
+        with self._connect() as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS access_mesh_local_proof_history(
+                  mesh_id TEXT NOT NULL,
+                  authority_id TEXT NOT NULL,
+                  proof_fingerprint TEXT NOT NULL,
+                  sealed BLOB NOT NULL,
+                  PRIMARY KEY(mesh_id, authority_id, proof_fingerprint)
+                ) WITHOUT ROWID
+            """)
+        self._load_local_proof_history()
         from terminal_mcp.storage.access_mesh_numbers import MeshSessionNumbers
 
         self.numbers = MeshSessionNumbers(self)
         from terminal_mcp.storage.access_mesh_recipient_holds import MeshRecipientHolds
 
         self.recipient_holds = MeshRecipientHolds(self)
+
+    def _archive_cipher(self):
+        key = hmac.new(
+            self._proof_key,
+            f"terminal-mcp-access-local-proof-history-v1:{self.local_node_id}".encode(),
+            hashlib.sha256,
+        ).digest()
+        return AESGCM(key)
+
+    def _load_local_proof_history(self):
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT mesh_id,authority_id,proof_fingerprint,sealed "
+                "FROM access_mesh_local_proof_history ORDER BY mesh_id,authority_id"
+            ).fetchall()
+        keys = []
+        for row in rows:
+            associated = f"{row['mesh_id']}:{row['authority_id']}".encode()
+            blob = row["sealed"]
+            try:
+                key = self._archive_cipher().decrypt(blob[:12], blob[12:], associated)
+            except Exception as exc:
+                raise AccessMeshError("access_mesh_proof_history_unreadable") from exc
+            if not hmac.compare_digest(hashlib.sha256(key).hexdigest(), row["proof_fingerprint"]):
+                raise AccessMeshError("access_mesh_proof_history_unreadable")
+            if key not in keys:
+                keys.append(key)
+        self._local_proof_history = tuple(keys)
+
+    def install_managed_proof(self, *, mesh_id: str, authority_id: str, ingress_token: str) -> bool:
+        """Derive group proof from the authenticated managed authority credential.
+
+        Every authorized member already receives this credential through signed
+        Fleet Control replication. HKDF-style domain separation prevents using
+        the resulting proof as a bearer token. Protect historical local slots
+        with an encrypted archive before switching the live verifier.
+        """
+        import re
+
+        if (
+            not isinstance(mesh_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", mesh_id) is None
+            or not isinstance(authority_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", authority_id) is None
+            or not isinstance(ingress_token, str)
+            or len(ingress_token.encode()) < 32
+            or authority_id not in self.trusted_issuers
+        ):
+            raise AccessMeshError("access_mesh_proof_enrollment_invalid")
+        key = hmac.new(
+            ingress_token.encode(),
+            f"terminal-mcp-managed-native-access-proof-v1:{mesh_id}:{authority_id}".encode(),
+            hashlib.sha256,
+        ).digest()
+        if (
+            self._managed_proof_key == key
+            and getattr(self, "_managed_proof_scope", None) == (mesh_id, authority_id)
+        ):
+            return False
+        nonce = secrets.token_bytes(12)
+        associated = f"{mesh_id}:{authority_id}".encode()
+        sealed = nonce + self._archive_cipher().encrypt(nonce, key, associated)
+        fingerprint = hashlib.sha256(key).hexdigest()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT OR IGNORE INTO access_mesh_local_proof_history("
+                "mesh_id,authority_id,proof_fingerprint,sealed) VALUES(?,?,?,?)",
+                (mesh_id, authority_id, fingerprint, sealed),
+            )
+        self._load_local_proof_history()
+        self._managed_proof_key = key
+        self._managed_proof_scope = (mesh_id, authority_id)
+        return True
+
+    def clear_managed_proof(self) -> bool:
+        changed = self._managed_proof_key is not None
+        self._managed_proof_key = None
+        self._managed_proof_scope = None
+        return changed
+
+    @property
+    def managed_proof_ready(self) -> bool:
+        return self._managed_proof_key is not None
 
     def set_delivery_notifier(self, callback) -> None:
         """Register an in-process wakeup, never a network call or durability gate."""
@@ -643,14 +740,17 @@ class AccessMeshStore(LocalAccessMesh):
         return self._snapshot(row) if row else None
 
     def code_slot(self, issuer_id: str, code: str) -> SlotSnapshot | None:
-        tag = self.code_tag(issuer_id, code)
+        tags = self.code_tags(issuer_id, code)
         with self._connect() as db:
-            row = db.execute(
+            placeholders = ",".join("?" for _ in tags)
+            rows = db.execute(
                 "SELECT * FROM access_mesh_slot_replicas "
-                "WHERE issuer_id=? AND code_tag=? AND state!='deleted'",
-                (issuer_id, tag),
-            ).fetchone()
-        return self._snapshot(row) if row else None
+                f"WHERE issuer_id=? AND code_tag IN ({placeholders}) AND state!='deleted'",
+                (issuer_id, *tags),
+            ).fetchall()
+        if len(rows) > 1:
+            raise AccessMeshError("access_mesh_ambiguous_code")
+        return self._snapshot(rows[0]) if rows else None
 
     def slot_for_agent(self, logical_agent_id: str) -> SlotSnapshot | None:
         with self._connect() as db:

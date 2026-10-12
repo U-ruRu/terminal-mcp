@@ -67,3 +67,21 @@ NOT DONE: live BacLOUD Access -> all Exec attach, Android E2E, proof migration/e
 
 * dot current Secondary identity November-5, BacLOUD identity Foxtrot-31 (verified 13:55 UTC); exact path correction sent to November-5 and Juliett-5.
 * Juliett-5 owns existing APK/API and deployment integration; Kilo-5 owns recovery logic. This candidate is a separate backend branch, not a competing release.
+
+## 2026-10-12 14:53 UTC — automatic Native Access enrollment continuation
+
+Historical regression resolved: baseline 0cbd9c3 passes test_applied_mesh_replica_and_detach_keep_current_snapshot in 5.93s; previous fab7afe fails after 27s. Dynamic managed peers entered global session-number reservation before Access trust was established, blocking isolated local Legacy/Persistent issuance. Fix: local-only issuance while native trust remains pending; full cross-node reservation/claim forwarding requires proof verification, and APK Join remains pending.
+
+Generic enrollment, not special-cased for Main: after signed/authenticated managed Fleet Control membership applies, each authorized member derives its Mesh-scoped Native Access group key from the already-replicated authority ingress credential plus mesh_id/authority_id (domain-separated HMAC). No Fleet signing private key is exported; no manual Access environment edit on newly joined nodes. Invalid/missing authority material results in pending/error rather than success.
+
+Preservation: the node-local bootstrap proof stays immutable for old local PINs and sealed receipts. Previously used managed proof keys are encrypted in access_mesh_local_proof_history in existing Access SQLite and accepted ONLY for node-local historical slots. Removed remote issuers cannot use archived proofs. Join retry is idempotent, leave clears active managed proof while archived local sessions survive restart. Rotating the node-local bootstrap proof itself requires a deliberate archive migration.
+
+Validation: 66 tests passed (one external dependency warning) across access_slot_inheritance_http, managed_proof_auto_enrollment, managed_access_trust_enrollment, access_mesh_managed_proof_gate, access_mesh_replication_http, access_mesh_trusted_fleet_peer_health, access_mesh_session_restart_contract, access_mesh_native_lifecycle, access_mesh_grants, fleet_control_hardening in 38.97s (14:46 UTC). Follow-up 6 tests passed in 7.57s (14:49 UTC), covering signed control-plane enrollment/retry, two-node real HTTP authority issue -> remote attach with unlike local bootstrap proofs, revocation, leave/restart and invalid proof. Source compileall and git diff --check passed.
+
+Reproduce on Secondary:
+  cd /workspace/terminal-mcp-native-trust-finish-lima5
+  PYTHONPATH=src /tmp/tmcp-qa-papa21-venv/bin/python -m pytest -q tests/test_access_slot_inheritance_http.py tests/test_managed_proof_auto_enrollment.py tests/test_managed_access_trust_enrollment.py tests/test_access_mesh_managed_proof_gate.py tests/test_access_mesh_replication_http.py tests/test_access_mesh_trusted_fleet_peer_health.py tests/test_access_mesh_session_restart_contract.py tests/test_access_mesh_native_lifecycle.py tests/test_access_mesh_grants.py tests/test_fleet_control_hardening.py
+
+Release and live not accepted: Juliett-5 owns existing APK Join UI, success gating on control.native_access_trust.ready, durable partial retry/reconcile, release integration and the sole deployment. Do not claim success from membership-only applied revisions. No live server, trust, auth/RKB, data, pairing or service was changed here. Still unverified: full CI, Android device E2E, multi-node status acknowledgments, real BacLOUD Access PIN -> remote Exec attach and restart retest.
+
+Operator constraint from dot at 14:45 UTC: user wants an accepted update on FOUR STANDALONE servers preserving OAuth/auth and RKB, leaves Secondary untouched, and will personally join all servers including Main using APK. Do not join Main, reset anything, or deploy without Juliett's precise approval-time file deletion/preservation manifest. The candidate branch is not an accepted release.

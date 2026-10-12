@@ -413,7 +413,12 @@ class LocalAccessMesh:
         self.trusted_issuers = frozenset(trusted_issuers)
         if not isinstance(proof_key, bytes) or len(proof_key) < 16:
             raise AccessMeshError("access_mesh_invalid_proof_key")
+        # The node-local bootstrap proof remains immutable: it encrypts durable
+        # receipts and validates pre-enrollment local slots. A verified managed
+        # Mesh may install a separate group proof without rewriting either.
         self._proof_key = proof_key
+        self._managed_proof_key: bytes | None = None
+        self._local_proof_history: tuple[bytes, ...] = ()
         self._initialize()
 
     @contextmanager
@@ -594,21 +599,37 @@ class LocalAccessMesh:
         ):
             raise AccessMeshError("access_mesh_invalid_proof_challenge")
         return hmac.new(
-            self._proof_key,
+            self._managed_proof_key or self._proof_key,
             f"terminal-mcp-native-proof-v1:{receiver_id}:{sender_id}:{nonce}".encode(),
             hashlib.sha256,
         ).hexdigest()
 
-    def code_tag(self, issuer_id: str, code: str) -> str:
-        """A mesh-keyed verifier, not the plaintext four-digit AC."""
+    def code_tags(self, issuer_id: str, code: str) -> tuple[str, ...]:
+        """Current verifier, plus LOCAL historical proof tags only.
+
+        Remote claims are always validated against the current managed proof;
+        archived proofs cannot resurrect a removed remote issuer. Historical
+        node-local grants continue to attach after authority rotation, leave,
+        or process restart, subject to their normal slot/session lifecycle.
+        """
         _required_identifier(issuer_id)
         if not isinstance(code, str) or not re.fullmatch(r"[0-9]{4}", code):
             raise AccessMeshError("access_mesh_invalid_code")
-        return hmac.new(
-            self._proof_key,
-            f"terminal-mcp-ac-v1:{issuer_id}:{code}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        keys = [self._managed_proof_key or self._proof_key]
+        if issuer_id == self.local_node_id:
+            keys.extend((self._proof_key, *self._local_proof_history))
+        tags = []
+        for key in keys:
+            tag = hmac.new(
+                key, f"terminal-mcp-ac-v1:{issuer_id}:{code}".encode(), hashlib.sha256
+            ).hexdigest()
+            if tag not in tags:
+                tags.append(tag)
+        return tuple(tags)
+
+    def code_tag(self, issuer_id: str, code: str) -> str:
+        """Current Mesh verifier for new grants, never the plaintext PIN."""
+        return self.code_tags(issuer_id, code)[0]
 
     @staticmethod
     def _snapshot(row: sqlite3.Row) -> SlotSnapshot:
@@ -962,13 +983,14 @@ class LocalAccessMesh:
         # Mesh or moves to a different Mesh/authority.
         if issuer_id not in self.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_issuer")
-        tag = self.code_tag(issuer_id, code)
+        tags = self.code_tags(issuer_id, code)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            placeholders = ",".join("?" for _ in tags)
             rows = db.execute(
-                """SELECT * FROM access_mesh_slot_replicas
-                   WHERE issuer_id=? AND code_tag=? AND state='active'""",
-                (issuer_id, tag),
+                "SELECT * FROM access_mesh_slot_replicas "
+                f"WHERE issuer_id=? AND code_tag IN ({placeholders}) AND state='active'",
+                (issuer_id, *tags),
             ).fetchall()
             if len(rows) != 1:
                 raise AccessMeshError(

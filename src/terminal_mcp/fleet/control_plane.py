@@ -906,6 +906,9 @@ class ManagedFleetControl:
         if self.native_access is not None:
             await self.native_access.apply_fleet_policy(state)
         if not state.get("managed"):
+            if self.native_access is not None and hasattr(self.native_access.store, "clear_managed_proof"):
+                if self.native_access.store.clear_managed_proof():
+                    self.native_access.replication.reset_proof_evidence()
             if self.bootstrap_config.mesh_vpn_state_dir:
                 await asyncio.to_thread(
                     prune_detached_peers,
@@ -932,6 +935,9 @@ class ManagedFleetControl:
         )
         policy = state.get("policy")
         if local_mesh_id is None:
+            if self.native_access is not None and hasattr(self.native_access.store, "clear_managed_proof"):
+                if self.native_access.store.clear_managed_proof():
+                    self.native_access.replication.reset_proof_evidence()
             await self._restore_local_policy()
         elif policy:
             await self.policy_controller.apply_managed(
@@ -984,6 +990,38 @@ class ManagedFleetControl:
             if any(node["node_id"] == node_id for node in active_nodes)
         )
         identity = await self._ensure_local_identity()
+        # Signed Fleet Control replication already pins authority identity and
+        # transports each member's ingress token. Derive a domain-separated
+        # Native Access group proof from the *authority* credential, without
+        # distributing another static operator secret or any signing private key.
+        # The node-local Access receipt/bootstrap secret remains unchanged.
+        if self.native_access is not None and self.native_access.managed_trust_enabled:
+            authority = str(state.get("control_node_id") or "")
+            authority_entry = next(
+                (node for node in all_nodes if node.get("node_id") == authority),
+                None,
+            )
+            if authority_entry is None or authority_entry.get("mesh_id") != local_mesh_id:
+                raise FleetControlError("native_access_authority_not_in_mesh")
+            authority_token = (
+                str(identity["ingress_token"])
+                if authority == self.config.instance_id
+                else str((material.get(authority) or {}).get("auth_token") or "")
+            )
+            if len(authority_token.encode()) < 32:
+                await self.store.mark_managed_applied(
+                    self.config.instance_id,
+                    error="native_access_authority_proof_unavailable",
+                )
+                return
+            changed = await asyncio.to_thread(
+                self.native_access.store.install_managed_proof,
+                mesh_id=local_mesh_id,
+                authority_id=authority,
+                ingress_token=authority_token,
+            )
+            if changed and self.native_access.replication is not None:
+                self.native_access.replication.reset_proof_evidence()
         local_material = await self.store.managed_node(self.config.instance_id)
         local_auth_token = (
             str(local_material.get("auth_token") or "") if local_material else ""

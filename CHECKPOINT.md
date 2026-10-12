@@ -11,3 +11,9 @@
 * Blocker: broader regression one failed `test_applied_mesh_replica_and_detach_keep_current_snapshot` (synthetic managed peer issue hangs/timeouts); isolate original `fab7afe` versus this branch and repair without weakening security.
 * Live sign-off pending dot/user; no manual apply. Next action: send commit to Juliett-5, complete APK readiness/partial journal, verify proof migration, full tests, and only then accepted fleet rollout + BacLOUD->FirstByte/Tokyo/Main attach.
 * Exact test and live recovery commands in `REPORT.md`. Review actual process env/DB path first; never overwrite auth DB or active work sessions.
+
+## Lima-5 continuation checkpoint, 2026-10-12 14:53 UTC
+
+New worktree /workspace/terminal-mcp-native-trust-finish-lima5, branch task/native-access-trust-finish-lima5-20261012, parent 6d6593d0a667734139b4afa5d033a56a66b15e4a. Generic authority-derived managed group proof with encrypted local historical proof archive added; no Main-specific behavior. Baseline Legacy/Persistent regression fixed: originally fab7afe timeout after 27s, now target passes. 66 module tests pass plus independent 6 checks. No live writes/deployment.
+
+Handoff to Juliett-5: cherry-pick candidate after integration review, gate existing APK Join on native_access_trust.ready and all nodes' convergence, durable retry of partial Join, full release suite and real Android E2E. Sole deploy owner Juliett, no competing releases. User later requested four standalone nodes with auth/RKB retained, Secondary separate, user performs Join personally. No reset until action-time manifest approval; no real Access -> remote Exec pass yet. Full commands and restore plan in REPORT.md.
