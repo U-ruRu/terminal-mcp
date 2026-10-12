@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -69,14 +70,17 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     tmp_path, monkeypatch, capsys, caplog
 ):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"\n'
         'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "opaque-pairing-secret")
@@ -102,7 +106,8 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     }
     assert "opaque-pairing-secret" not in caplog.text
 
-    with sqlite3.connect(db_path) as db:
+    assert not db_path.exists()
+    with sqlite3.connect(auth_path) as db:
         row = db.execute(
             "SELECT secret_hash, expires_at-created_at FROM console_pairings"
         ).fetchone()
@@ -111,14 +116,17 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
 
 def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example"\n'
         'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "explicit-name-secret-value")
@@ -130,15 +138,19 @@ def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     assert payload["name"] == "Secondary Test"
     assert payload["server"] == "https://terminal.example"
+    assert auth_path.exists()
+    assert not db_path.exists()
 
 
 def _entrypoint_env(tmp_path):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         chr(10).join(
             [
                 f'TERMINAL_MCP_DATABASE_PATH="{db_path}"',
+                f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_path}"',
                 'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"',
                 'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"',
             ]
@@ -148,6 +160,7 @@ def _entrypoint_env(tmp_path):
     env = os.environ.copy()
     env["TERMINAL_MCP_ENV_FILE_PATH"] = str(env_path)
     env.pop("TERMINAL_MCP_DATABASE_PATH", None)
+    env.pop("TERMINAL_MCP_AUTH_DATABASE_PATH", None)
     env.pop("TERMINAL_MCP_PUBLIC_BASE_URL", None)
     env.pop("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", None)
     source = str(Path(__file__).resolve().parents[1] / "src")
@@ -184,6 +197,8 @@ def test_console_script_pair_exits_zero_and_emits_url_once(tmp_path):
     assert parsed.path == "/connect"
     assert parsed.query == ""
     assert parsed.fragment
+    assert (tmp_path / "auth.sqlite3").exists()
+    assert not (tmp_path / "terminal.sqlite3").exists()
 
 
 def test_console_script_devices_list_exits_zero_and_uses_stdout(tmp_path):
@@ -192,6 +207,8 @@ def test_console_script_devices_list_exits_zero_and_uses_stdout(tmp_path):
     assert result.returncode == 0
     assert result.stderr == ""
     assert json.loads(result.stdout) == []
+    assert (tmp_path / "auth.sqlite3").exists()
+    assert not (tmp_path / "terminal.sqlite3").exists()
 
 
 def test_pair_cli_rejects_non_positive_ttl():
@@ -254,17 +271,20 @@ async def test_list_devices_returns_only_safe_metadata(tmp_path):
 
 def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
 
-    store = PairingStore(db_path)
-    asyncio.run(OAuthStore(db_path).initialize())
+    store = PairingStore(auth_path)
+    asyncio.run(OAuthStore(auth_path).initialize())
     asyncio.run(store.initialize())
     secret = asyncio.run(store.create())
     exchange, _ = asyncio.run(
@@ -298,8 +318,81 @@ def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, caps
     assert cli.main(["devices", "revoke", exchange.device_id]) == 1
     error = capsys.readouterr().err
     assert "not found or already revoked" in error
+    assert not db_path.exists()
 
 
 def test_devices_cli_is_not_remote_surface():
     source = Path(cli.__file__).read_text()
     assert 'subcommands.add_parser("devices"' in source
+
+
+def test_cli_pair_list_revoke_preserve_existing_runtime_database(tmp_path, monkeypatch, capsys):
+    runtime = tmp_path / "runtime" / "runtime.sqlite3"
+    auth = tmp_path / "protected" / "auth.sqlite3"
+    runtime.parent.mkdir(mode=0o750)
+    auth.parent.mkdir()
+    with sqlite3.connect(runtime) as db:
+        db.execute("CREATE TABLE runtime_sentinel(value TEXT NOT NULL)")
+        db.execute("INSERT INTO runtime_sentinel VALUES('preserve-runtime')")
+    runtime.chmod(0o640)
+    before = (runtime.read_bytes(), runtime.stat().st_mode, runtime.parent.stat().st_mode)
+
+    def assert_runtime_preserved():
+        assert (
+            runtime.read_bytes(),
+            runtime.stat().st_mode,
+            runtime.parent.stat().st_mode,
+        ) == before
+
+    settings = SimpleNamespace(
+        database_path=runtime,
+        auth_database_path=auth,
+        public_base_url="https://terminal.example",
+        console_public_base_url="https://console.example",
+    )
+    monkeypatch.setattr(cli, "_local_settings", lambda: settings)
+    protected = PairingStore(auth)
+    asyncio.run(OAuthStore(auth).initialize())
+    asyncio.run(protected.initialize())
+    seed = asyncio.run(protected.create())
+    device, reason = asyncio.run(
+        protected.exchange(
+            seed, "synthetic-public-key-" + "x" * 64, "Protected phone", "terminal:read", 3600
+        )
+    )
+    assert reason == "" and device is not None
+    monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "synthetic-cli-pairing")
+
+    assert cli.main(["pair", "--ttl", "42"]) == 0
+    assert_runtime_preserved()
+    url = capsys.readouterr().out.strip()
+    fragment = urlsplit(url).fragment
+    payload = json.loads(base64.urlsafe_b64decode(fragment + "=" * (-len(fragment) % 4)))
+    with sqlite3.connect(auth) as db:
+        row = db.execute(
+            "SELECT expires_at-created_at,consumed_at FROM console_pairings WHERE secret_hash=?",
+            (PairingStore.digest(payload["secret"]),),
+        ).fetchone()
+    assert row == (42, None)
+
+    assert cli.main(["devices", "list"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert [item["device_id"] for item in listed] == [device.device_id]
+    assert_runtime_preserved()
+    assert cli.main(["devices", "revoke", device.device_id]) == 0
+    capsys.readouterr()
+    assert_runtime_preserved()
+    assert asyncio.run(protected.device_active(device.device_id, device.client_id)) is False
+    with sqlite3.connect(auth) as db:
+        for table in ("oauth_clients", "oauth_codes", "oauth_refresh_tokens"):
+            assert (
+                db.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE client_id=?", (device.client_id,)
+                ).fetchone()[0]
+                == 0
+            )
+    with sqlite3.connect(runtime) as db:
+        assert db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [
+            ("runtime_sentinel",)
+        ]
+        assert db.execute("SELECT value FROM runtime_sentinel").fetchone() == ("preserve-runtime",)
