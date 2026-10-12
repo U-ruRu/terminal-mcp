@@ -90,6 +90,8 @@ export function ConnectionRuntimeProvider({
   )
   const [error, setError] = useState<string | null>(null)
   const restoreStarted = useRef(false)
+  const restoreRetryTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const restoreRetryAttempts = useRef(new Map<string, number>())
 
   const syncProfiles = useCallback(() => {
     const next = registry.list()
@@ -180,11 +182,55 @@ export function ConnectionRuntimeProvider({
     async (instanceId: string) => {
       setError(null)
       const profile = registry.get(instanceId)
+      const timer = restoreRetryTimers.current.get(instanceId)
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        restoreRetryTimers.current.delete(instanceId)
+      }
       diagnostics?.append({ type: 'profile_retry', instanceId, server: profile?.displayName })
       await restoreOne(instanceId)
     },
     [diagnostics, registry, restoreOne],
   )
+
+  // Temporary authentication failures (including proxy HTTP 520) must recover
+  // without requiring an Android process restart or another pairing.
+  useEffect(() => {
+    const eligible = new Set<string>()
+    for (const [instanceId, state] of Object.entries(states)) {
+      if (state.status === 'error' && state.retryable && registry.credential(instanceId)) {
+        eligible.add(instanceId)
+        if (!restoreRetryTimers.current.has(instanceId)) {
+          const attempt = (restoreRetryAttempts.current.get(instanceId) ?? 0) + 1
+          restoreRetryAttempts.current.set(instanceId, attempt)
+          const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt - 1, 5))
+          const handle = setTimeout(() => {
+            restoreRetryTimers.current.delete(instanceId)
+            void restoreOne(instanceId)
+          }, delay)
+          restoreRetryTimers.current.set(instanceId, handle)
+        }
+      } else if (state.status !== 'restoring') {
+        restoreRetryAttempts.current.delete(instanceId)
+      }
+    }
+    for (const [instanceId, handle] of restoreRetryTimers.current) {
+      if (!eligible.has(instanceId)) {
+        clearTimeout(handle)
+        restoreRetryTimers.current.delete(instanceId)
+      }
+    }
+  }, [registry, restoreOne, states])
+
+  useEffect(() => {
+    const timers = restoreRetryTimers.current
+    const attempts = restoreRetryAttempts.current
+    return () => {
+      for (const handle of timers.values()) clearTimeout(handle)
+      timers.clear()
+      attempts.clear()
+    }
+  }, [])
 
   const client = useCallback(
     (instanceId: string): Pick<ConsoleClient, 'fleetControl' | 'fleetControlMutation' | 'fleetEnrollment' | 'meshVpnStatus' | 'meshVpnMutation'> | null => {
@@ -205,6 +251,10 @@ export function ConnectionRuntimeProvider({
     (instanceId: string) => {
       const profile = registry.get(instanceId)
       registry.disconnect(instanceId)
+      const timer = restoreRetryTimers.current.get(instanceId)
+      if (timer !== undefined) clearTimeout(timer)
+      restoreRetryTimers.current.delete(instanceId)
+      restoreRetryAttempts.current.delete(instanceId)
       diagnostics?.append({ type: 'profile_removed', instanceId, server: profile?.displayName })
       syncProfiles()
       onProfilesChanged?.()

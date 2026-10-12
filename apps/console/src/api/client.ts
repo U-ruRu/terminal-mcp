@@ -351,7 +351,8 @@ export class ConsoleClient {
       }
       const body = await payload(response)
       if (!response.ok) {
-        throw new ConsoleHttpError(response.status, publicErrorCode(body), undefined,
+        const code = publicErrorCode(body)
+        throw new ConsoleHttpError(response.status, code === 'request_failed' ? 'http_' + response.status : code, undefined,
           endpoint, Date.now() - startedAt)
       }
       return body

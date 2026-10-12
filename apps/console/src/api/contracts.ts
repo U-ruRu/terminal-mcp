@@ -629,6 +629,16 @@ export function decodeManagedFleetControl(value: unknown): import('./models').Ma
   const envelope = record(value, '$')
   const raw = record(envelope.control, '$.control')
   const revisions = record(raw.revisions, '$.control.revisions')
+  const trust = raw.native_access_trust == null ? undefined : record(raw.native_access_trust, '$.control.native_access_trust')
+  const nativeAccessTrust = trust ? {
+    state: string(trust.state, '$.control.native_access_trust.state'),
+    ready: boolean(trust.ready, '$.control.native_access_trust.ready'),
+    meshId: optionalString(trust.mesh_id, '$.control.native_access_trust.mesh_id'),
+    peers: Object.fromEntries(Object.entries(record(trust.peers, '$.control.native_access_trust.peers'))
+      .map(([id, state]) => [id, string(state, '$.control.native_access_trust.peers.' + id)])),
+    missingTransport: array(trust.missing_transport ?? [], '$.control.native_access_trust.missing_transport')
+      .map((id, index) => string(id, '$.control.native_access_trust.missing_transport[' + index + ']')),
+  } : undefined
   const meshRaw = raw.mesh === null || raw.mesh === undefined
     ? undefined
     : record(raw.mesh, '$.control.mesh')
@@ -671,6 +681,7 @@ export function decodeManagedFleetControl(value: unknown): import('./models').Ma
     }
   })
   return {
+    nativeAccessTrust,
     schemaVersion: integer(raw.schema_version, '$.control.schema_version'),
     fleetId: string(raw.fleet_id, '$.control.fleet_id'),
     nodeId: string(raw.node_id, '$.control.node_id'),

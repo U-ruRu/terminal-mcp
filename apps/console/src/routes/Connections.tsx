@@ -5,11 +5,13 @@ import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
+import { ConsoleHttpError } from '../api/client'
 import type { ManagedFleetControlReadModel, ManagedFleetMeshReadModel, ManagedFleetMutationResult, ManagedFleetNodeReadModel } from '../api/models'
 import { useConnectionRuntime } from '../connections/runtime'
 import { inspectCanonicalPairingLink } from '../connections/pairingLink'
 import { connectionLifecycle, pairingErrorMessageKey, type ConnectionLifecycle } from '../connections/lifecycle'
 import { beginMeshCreate, finishMeshCreate, readPendingMeshCreate } from '../connections/meshCreate'
+import { isConverged, membershipReady, nativeTrustReady, MembershipMutationLifetime } from '../connections/membershipReadiness'
 import { joinPreflightError } from '../connections/joinPreflight'
 import { clearCachedFleetControl, isFleetControlRevisionRegression, loadCachedFleetControl, propagateCachedFleetControl, saveCachedFleetControl, type FleetControlFreshness } from '../connections/controlState'
 import type { ConnectionProfile } from '../connections/types'
@@ -52,7 +54,7 @@ function lifecycleLabel(
 
 type MutationPhase = 'pending' | 'confirmed' | 'failed'
 type MembershipMutation = { targetMeshId: string; phase: MutationPhase; error?: string }
-type MembershipProjection = { kind: 'mesh' | 'standalone' | 'unknown'; meshId?: string; node?: ManagedFleetNodeReadModel; freshness: FleetControlFreshness }
+type MembershipProjection = { ready?: boolean; kind: 'mesh' | 'standalone' | 'unknown'; meshId?: string; node?: ManagedFleetNodeReadModel; freshness: FleetControlFreshness }
 type OperationalState = 'current' | 'applying' | 'unavailable' | 'attention'
 
 /** Never display raw HTTP transport messages or token-bearing exception text. */
@@ -103,18 +105,6 @@ function nodeForProfile(
   ))
 }
 
-function isConverged(
-  node: ManagedFleetControlReadModel['nodes'][number] | undefined,
-): boolean {
-  return Boolean(
-    node &&
-      !node.lastError &&
-      node.desiredTopologyRevision === node.appliedTopologyRevision &&
-      node.desiredTrustRevision === node.appliedTrustRevision &&
-      node.desiredPolicyRevision === node.appliedPolicyRevision,
-  )
-}
-
 function operationalLabel(state: OperationalState, t: (key: MessageKey) => string): string {
   if (state === 'current') return t('connections.current')
   if (state === 'applying') return t('connections.applying')
@@ -126,9 +116,9 @@ function resolvedMembershipMutation(
   membership: MembershipProjection,
   mutation: MembershipMutation | undefined,
 ): MembershipMutation | undefined {
-  if (!mutation || mutation.phase !== 'pending' || membership.freshness !== 'fresh') return mutation
+  if (!mutation || (mutation.phase !== 'pending' && mutation.error !== 'control_commit_uncertain') || membership.freshness !== 'fresh') return mutation
   const confirmed = mutation.targetMeshId
-    ? membership.kind === 'mesh' && membership.meshId === mutation.targetMeshId && isConverged(membership.node)
+    ? membership.kind === 'mesh' && membership.meshId === mutation.targetMeshId && membership.ready === true
     : membership.kind === 'standalone'
   return confirmed ? { ...mutation, phase: 'confirmed' } : mutation
 }
@@ -141,7 +131,7 @@ function memberOperationalState(
   if (mutation?.phase === 'pending') return 'applying'
   if (membership.freshness !== 'fresh' || membership.kind === 'unknown') return 'unavailable'
   if (membership.node?.lastError) return 'attention'
-  if (membership.kind === 'mesh' && !isConverged(membership.node)) return 'applying'
+  if (membership.kind === 'mesh' && !membership.ready) return 'applying'
   return 'current'
 }
 
@@ -186,24 +176,29 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   const [optimisticMeshes, setOptimisticMeshes] = useState<ManagedFleetMeshReadModel[] | null>(null)
   const [meshMutationPhase, setMeshMutationPhase] = useState<MutationPhase | null>(null)
   const [membershipMutations, setMembershipMutations] = useState<Record<string, MembershipMutation>>({})
+  const [membershipInFlight] = useState(() => new MembershipMutationLifetime())
   const [membershipTargets, setMembershipTargets] = useState<Record<string, string>>({})
 
   // Recover a confirmed Create Mesh after navigation, timeout or process restart.
   useEffect(() => {
-    for (const profile of profiles) {
-      let pending
-      try { pending = readPendingMeshCreate(localStorage, profile.instanceId) } catch { continue }
-      if (!pending) continue
-      const observed = controls[profile.instanceId]
-      const control = observed?.freshness === 'fresh' ? observed.control : undefined
-      if (!control || control.nodeId !== pending.controlNodeId || control.controlNodeId !== pending.controlNodeId) continue
-      const mesh = control.meshes.find((item) => item.meshId === pending.meshId && item.displayName === pending.displayName)
-      const node = control.nodes.find((item) => item.nodeId === pending.controlNodeId)
-      if (mesh && node?.meshId === pending.meshId && isConverged(node)) {
-        finishMeshCreate(localStorage, profile.instanceId, pending.meshId)
-        setMeshMutationPhase('confirmed')
+    const handle = window.setTimeout(() => {
+      for (const profile of profiles) {
+        let pending
+        try { pending = readPendingMeshCreate(localStorage, profile.instanceId) } catch { continue }
+        if (!pending) continue
+        const observed = controls[profile.instanceId]
+        const control = observed?.freshness === 'fresh' ? observed.control : undefined
+        if (!control || control.nodeId !== pending.controlNodeId || control.controlNodeId !== pending.controlNodeId) continue
+        const mesh = control.meshes.find((item) => item.meshId === pending.meshId && item.displayName === pending.displayName)
+        const node = control.nodes.find((item) => item.nodeId === pending.controlNodeId)
+        if (mesh && node?.meshId === pending.meshId && isConverged(node) && nativeTrustReady(control, pending.meshId)) {
+          finishMeshCreate(localStorage, profile.instanceId, pending.meshId)
+          setMeshMutationPhase('confirmed')
+          setControlError(null)
+        }
       }
-    }
+    }, 0)
+    return () => window.clearTimeout(handle)
   }, [controls, profiles])
   const [confirmation, setConfirmation] = useState<{ kind: 'delete-mesh'; label: string } | { kind: 'remove-connection'; instanceId: string; label: string } | null>(null)
 
@@ -229,8 +224,14 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     const handle = window.setTimeout(() => {
       void refreshControls()
     }, 0)
-    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden' && controlLifetime.idle()) void refreshControls() }, 15_000)
-    return () => { window.clearTimeout(handle); window.clearInterval(timer) }
+    const recover = () => { if (document.visibilityState !== 'hidden' && controlLifetime.idle()) void refreshControls() }
+    const timer = window.setInterval(recover, 15_000)
+    document.addEventListener('visibilitychange', recover)
+    window.addEventListener('online', recover)
+    return () => {
+      window.clearTimeout(handle); window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', recover); window.removeEventListener('online', recover)
+    }
   }, [refreshControls, controlLifetime])
 
   const authorityViews = useMemo(() => {
@@ -303,17 +304,17 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   const authoritative = selectedAuthority?.control
   const authoritativeFreshness = selectedAuthority?.freshness ?? 'unknown'
   const writeProfile = selectedAuthority?.profile
-  const selectedMembers = useMemo(() => (
+  const selectedMembers = (
     selectedMesh && authoritative
       ? authoritative.nodes.filter((node) => node.meshId === selectedMesh.meshId && node.state !== 'detached')
       : []
-  ), [authoritative, selectedMesh])
+  )
   const meshOperationalState: OperationalState = (() => {
     if (meshMutationPhase === 'failed') return 'attention'
     if (meshMutationPhase === 'pending') return 'applying'
     if (!selectedMesh || !authoritative || authoritativeFreshness !== 'fresh') return 'unavailable'
     if (controlError || selectedMembers.some((node) => Boolean(node.lastError))) return 'attention'
-    if (selectedMembers.some((node) => !isConverged(node))) return 'applying'
+    if (selectedMembers.some((node) => !isConverged(node)) || !nativeTrustReady(authoritative, selectedMesh.meshId)) return 'applying'
     return 'current'
   })()
 
@@ -367,6 +368,8 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       } catch (cause) {
         const failure = {
           ok: false,
+          code: cause instanceof ConsoleHttpError && (cause.status === 0 || cause.status >= 500)
+            ? 'control_commit_uncertain' : undefined,
           error: controlErrorCode(cause),
         }
         setControlError(failure.error)
@@ -421,6 +424,9 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         return (right.authority.observedAt ?? 0) - (left.authority.observedAt ?? 0)
       })
     const authoritative = authorityCandidates[0]
+    const readyFor = (node: ManagedFleetNodeReadModel) => Boolean(node.meshId
+      && observed?.freshness === 'fresh' && authoritative?.authority.freshness === 'fresh'
+      && membershipReady(observed.control, authoritative.authority.control, node.nodeId, node.meshId))
 
     if (authoritative) {
       const candidate = authoritative.authority
@@ -452,7 +458,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
 
       if (supersedesObserved) {
         return authoritative.node.meshId
-          ? { kind: 'mesh', meshId: authoritative.node.meshId, node: authoritative.node, freshness: candidate.freshness }
+          ? { kind: 'mesh', ready: readyFor(authoritative.node), meshId: authoritative.node.meshId, node: authoritative.node, freshness: candidate.freshness }
           : { kind: 'standalone', node: authoritative.node, freshness: candidate.freshness }
       }
     }
@@ -469,14 +475,14 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       const localNode = nodeForProfile(profile, observed.control, observed)
       if (localNode) {
         return localNode.meshId
-          ? { kind: 'mesh', meshId: localNode.meshId, node: localNode, freshness: observed.freshness }
+          ? { kind: 'mesh', ready: readyFor(localNode), meshId: localNode.meshId, node: localNode, freshness: observed.freshness }
           : { kind: 'standalone', node: localNode, freshness: observed.freshness }
       }
     }
 
     if (authoritative) {
       return authoritative.node.meshId
-        ? { kind: 'mesh', meshId: authoritative.node.meshId, node: authoritative.node, freshness: authoritative.authority.freshness }
+        ? { kind: 'mesh', ready: readyFor(authoritative.node), meshId: authoritative.node.meshId, node: authoritative.node, freshness: authoritative.authority.freshness }
         : { kind: 'standalone', node: authoritative.node, freshness: authoritative.authority.freshness }
     }
     return { kind: 'unknown', freshness: observed?.freshness ?? 'unknown' }
@@ -505,7 +511,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   ) => {
     const node = control.nodes.find((item) => item.nodeId === nodeId)
     const mesh = node?.meshId ? control.meshes.find((item) => item.meshId === node.meshId) : undefined
-    const projected = { ...control, nodeId, mesh }
+    const projected = { ...control, nodeId, mesh, nativeAccessTrust: undefined }
     // The authority's desired membership is a projection, not a fresh read of
     // the participant's applied state. Only its own GET can confirm convergence.
     setControls((current) => ({
@@ -551,14 +557,15 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       const alreadyCreated = current.nodeId === enrollment.nodeId
         && current.controlNodeId === enrollment.nodeId
         && current.meshes.some((mesh) => mesh.meshId === pending.meshId && mesh.displayName === displayName)
-        && isConverged(current.nodes.find((node) => node.nodeId === enrollment.nodeId && node.meshId === pending.meshId))
+        && current.nodes.some((node) => node.nodeId === enrollment.nodeId && node.meshId === pending.meshId && node.state !== 'detached')
       result = alreadyCreated ? { ok: true, control: current } : await api.fleetControlMutation('/actions/fleet/control/adopt', {
         mesh_id: pending.meshId,
         display_name: displayName,
         control_node_id: enrollment.nodeId,
       })
       if (result.ok && result.control?.meshes.some((mesh) => mesh.meshId === pending.meshId && mesh.displayName === displayName)
-        && isConverged(result.control.nodes.find((node) => node.nodeId === enrollment.nodeId && node.meshId === pending.meshId))) {
+        && isConverged(result.control.nodes.find((node) => node.nodeId === enrollment.nodeId && node.meshId === pending.meshId))
+        && nativeTrustReady(result.control, pending.meshId)) {
         finishMeshCreate(localStorage, selectedProfile.instanceId, pending.meshId)
       }
       if (result.ok && result.control) {
@@ -582,9 +589,11 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     setOptimisticMeshes(null)
     setMeshMutationPhase(result.ok && result.control?.meshes.some((mesh) => mesh.meshId === requestedMeshId)
       && isConverged(result.control.nodes.find((node) => node.nodeId === requestedNodeId))
+      && nativeTrustReady(result.control, requestedMeshId)
       ? 'confirmed' : result.ok ? 'pending' : 'failed')
     if (result.ok && result.control?.meshes.some((mesh) => mesh.meshId === requestedMeshId)
-      && isConverged(result.control.nodes.find((node) => node.nodeId === requestedNodeId))) setNewMeshName('Fleet')
+      && isConverged(result.control.nodes.find((node) => node.nodeId === requestedNodeId))
+      && nativeTrustReady(result.control, requestedMeshId)) setNewMeshName('Fleet')
   }
 
   async function renameMesh() {
@@ -626,12 +635,20 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
     }
     setControlError(null)
     try {
-      const targetControl = await targetApi.fleetControl()
-      const preflightError = joinPreflightError(targetControl, targetAuthority.control)
+      const authorityApi = targetAuthority.profile ? client(targetAuthority.profile.instanceId) : null
+      if (!authorityApi) return { ok: false, error: 'control_write_unavailable' }
+      const [targetControl, authorityControl] = await Promise.all([targetApi.fleetControl(), authorityApi.fleetControl()])
+      const preflightError = joinPreflightError(targetControl, authorityControl)
       if (preflightError) {
         const failure = { ok: false, code: preflightError, error: preflightError }
         setControlError(failure.error)
         return failure
+      }
+      const existing = authorityControl.nodes.find((node) => node.nodeId === targetControl.nodeId && node.state !== 'detached' && node.meshId === meshId)
+      if (existing) {
+        projectMembershipControl(instanceId, authorityControl, targetControl.nodeId)
+        void refreshControls()
+        return { ok: true, control: authorityControl }
       }
       const enrollment = await targetApi.fleetEnrollment()
       if (enrollment.nodeId !== targetControl.nodeId) {
@@ -645,10 +662,25 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         origin: enrollment.origin,
         public_key: enrollment.publicKey,
         auth_token: enrollment.authToken,
-        expected_topology_revision: targetAuthority.control.revisions.topology,
+        expected_topology_revision: authorityControl.revisions.topology,
       })
       if (result.ok && result.control) {
         projectMembershipControl(instanceId, result.control, enrollment.nodeId)
+      } else if (/^(control_commit_uncertain|http_5\d\d|network_error|timeout|request_timeout|direct_authority_auth_transient)$/.test(result.code ?? result.error ?? '')) {
+        // POST may have committed. Reconcile by GET; never automatically replay it.
+        try {
+          const control = await authorityApi.fleetControl()
+          const node = control.nodes.find((item) => item.nodeId === enrollment.nodeId && item.state !== 'detached' && item.meshId === meshId)
+          if (node) {
+            projectMembershipControl(instanceId, control, enrollment.nodeId)
+            setControlError(null)
+            void refreshControls()
+            return { ok: true, control }
+          }
+        } catch { /* Keep the uncertain receipt; later fresh reads may resolve it. */ }
+        void refreshControls()
+        setControlError('control_commit_uncertain')
+        return { ok: false, code: 'control_commit_uncertain', error: 'control_commit_uncertain' }
       }
       return result
     } catch (cause) {
@@ -656,7 +688,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       setControlError(failure.error)
       return failure
     }
-    }, [authorityForMesh, client, mutateControl, projectMembershipControl])
+    }, [authorityForMesh, client, mutateControl, projectMembershipControl, refreshControls])
   async function detachFromMesh(instanceId: string): Promise<ManagedFleetMutationResult> {
     const profile = profiles.find((item) => item.instanceId === instanceId)
     if (!profile) return { ok: false, error: 'membership_unknown' }
@@ -701,6 +733,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
   }
 
   async function changeMembership(instanceId: string, targetMeshId: string) {
+    if (membershipInFlight.has(instanceId)) return
     const profile = profiles.find((item) => item.instanceId === instanceId)
     if (!profile) return
     const current = membershipFor(profile)
@@ -709,7 +742,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       current.kind !== 'unknown'
       && currentMeshId === targetMeshId
       && current.freshness === 'fresh'
-      && (current.kind === 'standalone' || isConverged(current.node))
+      && (current.kind === 'standalone' || current.ready === true)
     )
     if (alreadyAuthoritative) {
       setMembershipMutations((value) => ({
@@ -724,31 +757,32 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
       [instanceId]: { targetMeshId, phase: 'pending' },
     }))
 
+    membershipInFlight.begin(instanceId)
     let result: ManagedFleetMutationResult
-    if (!targetMeshId) {
-      result = current.kind === 'mesh'
-        ? await detachFromMesh(instanceId)
-        : { ok: false, error: 'membership_unknown' }
-    } else if (current.kind === 'mesh' && currentMeshId === targetMeshId) {
-      // Re-apply the displayed target through authority. This is intentionally not
-      // a UI no-op: a stale replica may still display the desired Mesh after detach.
-      result = await addToMesh(instanceId, targetMeshId)
-    } else if (current.kind === 'mesh') {
-      result = await moveToMesh(instanceId, targetMeshId)
-    } else if (current.kind === 'standalone') {
-      result = await addToMesh(instanceId, targetMeshId)
-    } else {
-      result = { ok: false, error: 'membership_unknown' }
-    }
+    try {
+      if (!targetMeshId) {
+        result = current.kind === 'mesh'
+          ? await detachFromMesh(instanceId)
+          : { ok: false, error: 'membership_unknown' }
+      } else if (current.kind === 'mesh' && currentMeshId === targetMeshId) {
+        // Read authority before repeating Join: a stale replica may still
+        // display the desired Mesh after detach or an uncertain response.
+        result = await addToMesh(instanceId, targetMeshId)
+      } else if (current.kind === 'mesh') {
+        result = await moveToMesh(instanceId, targetMeshId)
+      } else if (current.kind === 'standalone') {
+        result = await addToMesh(instanceId, targetMeshId)
+      } else {
+        result = { ok: false, error: 'membership_unknown' }
+      }
+
+    } finally { membershipInFlight.finish(instanceId) }
 
     const authoritativeNode = result.control?.nodes.find((node) => (
       current.node?.nodeId ? node.nodeId === current.node.nodeId : normalizedOrigin(node.origin) === normalizedOrigin(profile.origin)
     ))
-    const confirmed = Boolean(result.ok && authoritativeNode && isConverged(authoritativeNode) && (
-      targetMeshId
-        ? authoritativeNode.state !== 'detached' && authoritativeNode.meshId === targetMeshId
-        : authoritativeNode.state === 'detached' || !authoritativeNode.meshId
-    ))
+    const confirmed = Boolean(!targetMeshId && result.ok && authoritativeNode && isConverged(authoritativeNode)
+      && (authoritativeNode.state === 'detached' || !authoritativeNode.meshId))
     setMembershipMutations((value) => ({
       ...value,
       [instanceId]: {
@@ -757,6 +791,7 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         error: result.ok ? undefined : result.code ?? result.error ?? 'control_mutation_failed',
       },
     }))
+    void refreshControls()
   }
 
   async function rotateTrust(instanceId: string) {

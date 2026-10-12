@@ -269,7 +269,7 @@ test('managed mesh membership supports standalone attach move and detach with ex
   let nodes = ['alpha', 'beta'].map((nodeId) => ({
     node_id: nodeId,
     origin: 'https://' + nodeId + '.example',
-    mesh_id: null as string | null,
+    mesh_id: (nodeId === 'alpha' ? 'mesh-a' : null) as string | null,
     state: 'active',
     desired_topology_revision: 2,
     applied_topology_revision: 2,
@@ -294,6 +294,7 @@ test('managed mesh membership supports standalone attach move and detach with ex
         control_node_id: 'alpha',
         managed: true,
         mesh: localMesh ?? null,
+        native_access_trust: { state: localMesh ? 'ready' : 'autonomous', ready: true, mesh_id: localMesh?.mesh_id, peers: {}, missing_transport: [] },
         meshes,
         nodes,
         policy: {

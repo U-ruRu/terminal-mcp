@@ -357,7 +357,16 @@ export type ManagedFleetMeshReadModel = {
   updatedAt: string
 }
 
+export type NativeAccessTrustReadModel = {
+  state: string
+  ready: boolean
+  meshId?: string
+  peers: Record<string, string>
+  missingTransport: string[]
+}
+
 export type ManagedFleetControlReadModel = {
+  nativeAccessTrust?: NativeAccessTrustReadModel
   schemaVersion: number
   fleetId: string
   nodeId: string
