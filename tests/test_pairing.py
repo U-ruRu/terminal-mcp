@@ -69,14 +69,17 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     tmp_path, monkeypatch, capsys, caplog
 ):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_db_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_db_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"\n'
         'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "opaque-pairing-secret")
@@ -102,23 +105,29 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     }
     assert "opaque-pairing-secret" not in caplog.text
 
-    with sqlite3.connect(db_path) as db:
+    assert not db_path.exists()
+    with sqlite3.connect(auth_db_path) as db:
         row = db.execute(
             "SELECT secret_hash, expires_at-created_at FROM console_pairings"
         ).fetchone()
     assert row == (hashlib.sha256(payload["secret"].encode()).hexdigest(), 42)
+    # The HTTP pairing endpoint uses auth_database_path; the CLI secret must be redeemable there.
+    assert asyncio.run(PairingStore(auth_db_path).consume(payload["secret"])) is True
 
 
 def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_db_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_db_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example"\n'
         'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "explicit-name-secret-value")
@@ -130,15 +139,19 @@ def test_pair_cli_embeds_explicit_display_name(tmp_path, monkeypatch, capsys):
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     assert payload["name"] == "Secondary Test"
     assert payload["server"] == "https://terminal.example"
+    assert auth_db_path.exists()
+    assert not db_path.exists()
 
 
 def _entrypoint_env(tmp_path):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_db_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         chr(10).join(
             [
                 f'TERMINAL_MCP_DATABASE_PATH="{db_path}"',
+                f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_db_path}"',
                 'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"',
                 'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"',
             ]
@@ -148,6 +161,7 @@ def _entrypoint_env(tmp_path):
     env = os.environ.copy()
     env["TERMINAL_MCP_ENV_FILE_PATH"] = str(env_path)
     env.pop("TERMINAL_MCP_DATABASE_PATH", None)
+    env.pop("TERMINAL_MCP_AUTH_DATABASE_PATH", None)
     env.pop("TERMINAL_MCP_PUBLIC_BASE_URL", None)
     env.pop("TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL", None)
     source = str(Path(__file__).resolve().parents[1] / "src")
@@ -184,6 +198,8 @@ def test_console_script_pair_exits_zero_and_emits_url_once(tmp_path):
     assert parsed.path == "/connect"
     assert parsed.query == ""
     assert parsed.fragment
+    assert (tmp_path / "auth.sqlite3").exists()
+    assert not (tmp_path / "terminal.sqlite3").exists()
 
 
 def test_console_script_devices_list_exits_zero_and_uses_stdout(tmp_path):
@@ -254,17 +270,20 @@ async def test_list_devices_returns_only_safe_metadata(tmp_path):
 
 def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "terminal.sqlite3"
+    auth_db_path = tmp_path / "auth.sqlite3"
     env_path = tmp_path / "terminal-mcp.env"
     env_path.write_text(
         f'TERMINAL_MCP_DATABASE_PATH="{db_path}"\n'
+        f'TERMINAL_MCP_AUTH_DATABASE_PATH="{auth_db_path}"\n'
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example"\n'
     )
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_PUBLIC_BASE_URL", raising=False)
 
-    store = PairingStore(db_path)
-    asyncio.run(OAuthStore(db_path).initialize())
+    store = PairingStore(auth_db_path)
+    asyncio.run(OAuthStore(auth_db_path).initialize())
     asyncio.run(store.initialize())
     secret = asyncio.run(store.create())
     exchange, _ = asyncio.run(
@@ -277,6 +296,7 @@ def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, caps
         )
     )
     assert exchange is not None
+    assert not db_path.exists()
 
     assert cli.main(["devices", "list"]) == 0
     output = capsys.readouterr().out
