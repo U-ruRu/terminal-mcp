@@ -9,6 +9,7 @@ from pathlib import Path
 
 DEV_TESTS = (
     "tests/test_public_errors.py",
+    "tests/test_compact_contracts.py",
     "tests/test_read_contract.py",
     "tests/test_work_window_domain.py",
     "tests/test_release_version.py",

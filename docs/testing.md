@@ -7,7 +7,7 @@ It prints an external `report.json` path; results never disappear into terminal 
 ## Commands
 
 ```sh
-# Development feedback: bounded public errors, read/window/version contracts and runner safeguards.
+# Development feedback: public/compact artifact contracts, read/window/version and runner safeguards.
 python scripts/test.py dev
 
 # Component feedback, with documented transitive integration dependencies.
@@ -36,6 +36,9 @@ frontend input, unknown file or deleted test expands to the **entire** test suit
 Only isolated test-file changes use a smaller selection. Their transitive test-helper
 importers are found with AST analysis. An unresolved graph expands to all tests.
 There is no claim of exact runtime impact inference from file names.
+
+Development checks include exact generated compact-artifact provenance so a stale
+source hash is caught before the long release run.
 
 The full mode forbids selectors, checks the exact SHA, and requires a clean checkout.
 It strips inherited pytest filters and Python optimization, counts setup/teardown and

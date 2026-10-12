@@ -233,3 +233,8 @@ def test_live_probe_reports_cdn_block_without_claiming_app_failure():
 def test_live_probe_rejects_secrets_in_urls():
     with pytest.raises(ValueError, match="without credentials"):
         workflow.node_check("https://user:password@node.example", "release")
+
+
+def test_development_checks_cover_generated_contract_provenance():
+    assert "tests/test_public_errors.py" in test_plan.DEV_TESTS
+    assert "tests/test_compact_contracts.py" in test_plan.DEV_TESTS
