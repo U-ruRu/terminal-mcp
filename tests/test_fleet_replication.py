@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI
 
-from terminal_mcp.core.orchestration import parse_utc, utc_text
+from terminal_mcp.core.orchestration import parse_utc, public_agent_name, utc_text
 from terminal_mcp.fleet.config import FleetConfig, FleetPeer
 from terminal_mcp.fleet.identity import (
     AgentIdentityRecord,
@@ -263,9 +263,7 @@ async def test_three_peer_partition_rejoin_preserves_one_global_session_clock(
     assert delivered_b.record.revision == delivered_c.record.revision == 1
     assert delivered_b.record.session_started_at == delivered_c.record.session_started_at == started
     assert (
-        delivered_b.record.expires_at
-        == delivered_c.record.expires_at
-        == "2026-01-01T00:25:00.000Z"
+        delivered_b.record.expires_at == delivered_c.record.expires_at == "2026-01-01T00:25:00.000Z"
     )
 
 
@@ -487,7 +485,11 @@ async def fleet_service(tmp_path, instance_id, private, peers, *, transport=None
 
 
 @pytest.mark.asyncio
-async def test_two_peer_scoped_intent_round_trip_preserves_both_server_intents(tmp_path):
+async def test_two_peer_scoped_intent_round_trip_preserves_both_server_intents(
+    tmp_path, monkeypatch
+):
+    # The public NATO name can contain a hyphen; do not truncate X-ray to X.
+    monkeypatch.setattr("terminal_mcp.core.agents.generate_agent_id", lambda: "X-ray-1V84ASMA")
     private_a, public_a = keypair()
     private_b, public_b = keypair()
     peer_a = FleetPeer(
@@ -521,9 +523,7 @@ async def test_two_peer_scoped_intent_round_trip_preserves_both_server_intents(t
     assert origin_v1 is not None
     assert origin_v1.record.payload_version == 3
 
-    assert await replication_b.receive(
-        origin_v1, authenticated_peer_id="server-a"
-    ) == "applied"
+    assert await replication_b.receive(origin_v1, authenticated_peer_id="server-a") == "applied"
     assert (await service_b.agent_start(agent_id=agent_id))["ok"] is True
     changed = await service_b.coordinate(agent_id, step=1, intent="peer intent")
     assert changed["ok"] is True
@@ -533,31 +533,30 @@ async def test_two_peer_scoped_intent_round_trip_preserves_both_server_intents(t
     update = pending[0]
     assert update["origin_instance_id"] == "server-a"
     assert update["source_instance_id"] == "server-b"
-    assert await replication_a.receive_session_update(
-        agent_id,
-        "server-b",
-        update["activity_at"],
-        intent=update["intent"],
-        step=update["intent_step"],
-        intent_updated_at=update["intent_updated_at"],
-        authenticated_peer_id="server-b",
-    ) is True
+    assert (
+        await replication_a.receive_session_update(
+            agent_id,
+            "server-b",
+            update["activity_at"],
+            intent=update["intent"],
+            step=update["intent_step"],
+            intent_updated_at=update["intent_updated_at"],
+            authenticated_peer_id="server-b",
+        )
+        is True
+    )
 
     origin_v2 = await identities_a.get("server-a", agent_id)
     assert origin_v2 is not None
     assert origin_v2.record.payload_version == 3
-    merged_scopes = {
-        scope.instance_id: scope.intent for scope in origin_v2.record.intent_scopes
-    }
+    merged_scopes = {scope.instance_id: scope.intent for scope in origin_v2.record.intent_scopes}
     assert merged_scopes == {
         "server-a": "origin intent",
         "server-b": "peer intent",
     }
 
-    assert await replication_b.receive(
-        origin_v2, authenticated_peer_id="server-a"
-    ) == "applied"
-    observed = await service_b.agents(agent_id, target=agent_id.split("-", 1)[0])
+    assert await replication_b.receive(origin_v2, authenticated_peer_id="server-a") == "applied"
+    observed = await service_b.agents(agent_id, target=public_agent_name(agent_id))
     scopes = observed["sessions"][0]["intent_scopes"]
     assert {item["instance_id"]: item["intent"] for item in scopes} == {
         "server-a": "origin intent",
@@ -1039,6 +1038,7 @@ async def test_foreign_finish_retries_partition_then_origin_finishes_authoritati
     await replication_a.stop()
     await terminal_b.stop()
     await terminal_a.stop()
+
 
 @pytest.mark.asyncio
 async def test_finished_foreign_identity_overrides_stale_local_active_attachment(tmp_path):
