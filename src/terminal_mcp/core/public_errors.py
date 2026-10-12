@@ -158,6 +158,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             intent_required intent_stale
             control_authority_rehome_requires_standalone control_authority_required
             managed_access_policy_missing managed_control_not_adopted
+            native_access_authority_not_in_mesh
             managed_node_mesh_missing projection_topology_missing
         """,
         ),
@@ -309,6 +310,9 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "fleet_control_main_is_wal": (
             "Fleet control storage contains a WAL header. Restore validated control state."
+        ),
+        "native_access_authority_not_in_mesh": (
+            "Native Access requires the control authority to be a member of this Mesh."
         ),
         "authority_unavailable": (
             "The authoritative node is unavailable. Check state before retrying changes."
