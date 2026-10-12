@@ -47,7 +47,7 @@ def _pairing_url(
 
 async def _pairing_store() -> PairingStore:
     settings = _local_settings()
-    store = PairingStore(settings.database_path)
+    store = PairingStore(settings.auth_database_path)
     await store.initialize()
     return store
 
