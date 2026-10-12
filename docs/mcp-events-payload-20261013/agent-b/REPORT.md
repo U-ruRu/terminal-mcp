@@ -60,7 +60,7 @@ All inspected properties match. Source/transport checks do not reveal a server-f
 that justifies changing fields or adding wrappers. No speculative compatibility patch was made.
 The public documents do not specify the internal insertion of `automations.mcp_event`.
 
-A's published evidence commit is `bbb7f5cf71b6477ff3fa7fe2115f9fd8191f8367`; its pinned source report is independently reviewed in `PEER-REVIEW.md`. The matching public
+A's published evidence commit is `02b754cf7d18e7694031faede3969083247a508b`; its pinned source report is independently reviewed in `PEER-REVIEW.md`. The matching public
 incident https://github.com/openai/codex/issues/50714 has an author-provided Node probe at
 https://github.com/rokrokss/recly/commit/edb2765d5498c792e43d898946d149ae6ba36303 .
 This is a reported dot failure with Work success, not a reproduced success by this investigation.

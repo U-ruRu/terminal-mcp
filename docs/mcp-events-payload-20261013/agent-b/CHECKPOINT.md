@@ -11,8 +11,8 @@ separate b6b0605 rollout. Historical outbox32 sent/200; stored message data popu
 Exact historical HTTP bodies/signing timestamps/responses are not retained by the outbox.
 
 Live blocker: second sender unavailable; direct self-send rejected cannot_message_self,
-not_committed. No control event created and no batch test. Dot requested the temporary
-subscription shutdown; verify her confirmation before any cleanup or another test.
+not_committed. No control event created and no batch test. Temporary automation shutdown is confirmed by B native update at21:32:37.677003UTC,
+is_enabled=false, last_run_time=null. Revalidate a new approved test before continuing.
 Original dot subscriptions, production runtime and identity-conflict fix are untouched by B.
 
 Next: acquire a separately authenticated native sender and attached test recipient;

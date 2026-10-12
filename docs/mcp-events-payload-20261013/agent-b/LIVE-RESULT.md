@@ -72,3 +72,12 @@ Minimum next step: an available separately authenticated native sender sends one
 to the approved attached receiver; dot records the supplied tool result before any inbox
 read. Revalidate the receiver and create a fresh approved test subscription if the old
 window has ended. Do not reuse a stale session number from this report.
+
+## Cleanup confirmed
+
+B disabled only the user-approved temporary automation using the native automations
+update API at `2026-10-12T21:32:37.677003+00:00`. Response: `status=SUCCESS`,
+`id=6acd4f27939c819186c3ea71c2970103`, `is_enabled=false`, `last_run_time=null`.
+This confirms the temporary automation had no recorded run and is now disabled.
+The original coordinator automation was not changed. No raw event payload was received
+from this test; the last-run value is not a substitute for a successful control.

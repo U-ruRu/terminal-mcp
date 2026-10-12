@@ -76,6 +76,15 @@
       "runtime_realpath": "/opt/terminal-mcp/releases/b6b0605d893444ccce50089c6a865891fb63d8f8-07820ca3ecd1",
       "three_event_source_hashes_unchanged": true,
       "test_subscription_deliveries_count": 0
+    },
+    {
+      "utc": "2026-10-12T21:32:37.677003+00:00",
+      "source": "native automations.update result",
+      "id": "6acd4f27939c819186c3ea71c2970103",
+      "status": "SUCCESS",
+      "is_enabled": false,
+      "last_run_time": null,
+      "scope": "agreed temporary test only"
     }
   ],
   "runtime_source_matches_checkout": "All three SHA256 values match inspected 4ecb7201 checkout (Secondary command b6765f18).",
