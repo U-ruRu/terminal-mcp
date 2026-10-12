@@ -11,7 +11,7 @@ export function nativeInheritance(mode: 'inherit' | 'override' | 'stored' = 'inh
 export function nativeSlot(id = 'alpha'): AccessMeshSlotReadModel {
   return {
     issuerNodeId: id, slotId: 'as_' + id, logicalAgentId: 'la_' + id, publicName: id === 'alpha' ? 'Alpha' : id === 'beta' ? 'Beta' : id,
-    mode: 'persistent', state: 'active', revision: 7, codeGeneration: 2, codeExpiresAt: null,
+    inheritanceSupported: true, mode: 'persistent', state: 'active', revision: 7, codeGeneration: 2, codeExpiresAt: null,
     createdAt: '2026-10-12T09:00:00Z', updatedAt: '2026-10-12T10:00:00Z',
     policy: { durationSeconds: 1380, warningSeconds: 180, drainingSeconds: 90, cooldownSeconds: 180, rearmEnabled: true, releaseOnEnd: null },
     inheritance: nativeInheritance(), windowPolicy: undefined,
@@ -20,7 +20,7 @@ export function nativeSlot(id = 'alpha'): AccessMeshSlotReadModel {
 }
 export function nativeDefaults(): AccessMeshDefaultsReadModel {
   const inheritance = nativeInheritance(); inheritance.parent = null; inheritance.resetSupported = false
-  return { revision: 2, legacyEnabled: false, policy: nativeSlot().policy, inheritance, writeTarget: 'access_defaults' }
+  return { inheritanceSupported: true, meshPolicySupported: false, revision: 2, legacyEnabled: false, policy: nativeSlot().policy, inheritance, writeTarget: 'access_defaults' }
 }
 export function fleetInstance(id = 'alpha'): FleetInstanceView {
   return {

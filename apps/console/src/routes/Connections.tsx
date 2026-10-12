@@ -1,3 +1,7 @@
+import { ConnectionDataFacts } from '../components/ConnectionDataFacts'
+import { ControlReadLifetime, observeControl, mergeControlObservation, currentControlObservation, type ControlObservation } from '../connections/controlObservation'
+import type { FleetServerReadModel } from '../fleet/readModel'
+import type { BrowserDiagnosticJournal } from '../diagnostics/journal'
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
@@ -14,12 +18,7 @@ import { returnToState } from '../navigation/context'
 import { meshPersistentRoute, meshRoute, serverRoute } from '../navigation/routes'
 import { MeshVpnPanel } from './MeshVpnPanel'
 
-type ControlObservation = {
-  control?: ManagedFleetControlReadModel
-  error?: string
-  freshness: FleetControlFreshness
-  observedAt?: number
-}
+
 
 function lifecycleLabel(
   lifecycle: ConnectionLifecycle,
@@ -125,7 +124,7 @@ function memberOperationalState(
   return 'current'
 }
 
-export function Connections() {
+export function Connections({ servers = [], diagnostics }: { servers?: FleetServerReadModel[]; diagnostics?: BrowserDiagnosticJournal } = {}) {
   const { profiles, states, pair, retry, disconnect, client } = useConnectionRuntime()
   const { meshId: routeMeshId } = useParams()
   const { t, number } = useI18n()
@@ -133,7 +132,7 @@ export function Connections() {
   const [displayName, setDisplayName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [pairingFeedback, setPairingFeedback] = useState<{ key: MessageKey; error: boolean } | null>(null)
-  const [controls, setControls] = useState<Record<string, ControlObservation>>(() => (
+  const [storedControls, setControls] = useState<Record<string, ControlObservation>>(() => (
     Object.fromEntries(profiles.map((profile) => {
       const cached = loadCachedFleetControl(profile.instanceId)
       return [profile.instanceId, cached
@@ -141,6 +140,14 @@ export function Connections() {
         : { freshness: 'unknown' as const }]
     }))
   ))
+  const [clock, setClock] = useState(() => Date.now())
+  const [controlLifetime] = useState(() => new ControlReadLifetime())
+  const controls = useMemo(() => Object.fromEntries(Object.entries(storedControls).map(([id, value]) => [id, currentControlObservation(value, clock)])), [storedControls, clock])
+  useEffect(() => {
+    controlLifetime.activate()
+    const timer = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => { controlLifetime.deactivate(); window.clearInterval(timer) }
+  }, [controlLifetime])
   const [meshName, setMeshName] = useState('Fleet')
   const [newMeshName, setNewMeshName] = useState('Fleet')
   const [newMeshControlInstanceId, setNewMeshControlInstanceId] = useState('')
@@ -154,72 +161,30 @@ export function Connections() {
   const [confirmation, setConfirmation] = useState<{ kind: 'delete-mesh'; label: string } | { kind: 'remove-connection'; instanceId: string; label: string } | null>(null)
 
   const refreshControls = useCallback(async () => {
-    const results = await Promise.all(
-      profiles.map(async (profile): Promise<readonly [string, ControlObservation]> => {
-        const api = client(profile.instanceId)
-        if (!api) {
-          return [profile.instanceId, {
-            freshness: 'unknown',
-            error: 'control_client_unavailable',
-          }]
-        }
-        try {
-          const control = await api.fleetControl()
-          return [profile.instanceId, {
-            control,
-            freshness: 'fresh',
-            observedAt: Date.now(),
-          }]
-        } catch (cause) {
-          const message = cause instanceof Error ? cause.message : 'control_unavailable'
-          return [profile.instanceId, {
-            freshness: 'unknown',
-            error: message,
-          }]
-        }
-      }),
-    )
-
-    for (const [instanceId, observation] of results) {
-      if (!observation.control) continue
-      const cached = loadCachedFleetControl(instanceId)?.control
-      if (isFleetControlRevisionRegression(observation.control, cached)) continue
-      saveCachedFleetControl(instanceId, observation.control, observation.observedAt)
-      propagateCachedFleetControl(observation.control, observation.observedAt)
-    }
-
-    setControls((current) => {
-      const next = { ...current }
-      for (const [instanceId, observation] of results) {
-        const prior = next[instanceId]
-        if (observation.control) {
-          if (isFleetControlRevisionRegression(observation.control, prior?.control)) {
-            next[instanceId] = {
-              ...prior,
-              freshness: prior?.control ? 'stale' : 'unknown',
-              error: 'control_revision_regression',
-            }
-          } else {
-            next[instanceId] = observation
-          }
-        } else {
-          next[instanceId] = {
-            ...prior,
-            freshness: prior?.control ? 'stale' : 'unknown',
-            error: observation.error,
-          }
-        }
+    const epoch = controlLifetime.begin()
+    try { await Promise.all(profiles.map(async (profile) => {
+      const api = client(profile.instanceId)
+      const observation = api ? await observeControl(() => api.fleetControl())
+        : { freshness: 'unknown' as const, error: 'control_client_unavailable' }
+      if (!controlLifetime.isCurrent(epoch)) return
+      if (observation.control && !isFleetControlRevisionRegression(observation.control, loadCachedFleetControl(profile.instanceId)?.control)) {
+        saveCachedFleetControl(profile.instanceId, observation.control, observation.observedAt)
+        propagateCachedFleetControl(observation.control, observation.observedAt)
       }
-      return next
-    })
-  }, [client, profiles])
+      // Publish each server independently, so one slow Mesh participant cannot hold all others.
+      setControls((current) => ({ ...current, [profile.instanceId]: mergeControlObservation(current[profile.instanceId], observation) }))
+      if (observation.error && api) diagnostics?.append({ type: 'request_failed', instanceId: profile.instanceId,
+        code: observation.error, detail: `/actions/fleet/control status=${observation.status ?? 'unknown'} elapsed_ms=${observation.elapsedMs ?? 0}` })
+    })) } finally { controlLifetime.finish() }
+  }, [client, profiles, diagnostics, controlLifetime])
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
       void refreshControls()
     }, 0)
-    return () => window.clearTimeout(handle)
-  }, [refreshControls])
+    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden' && controlLifetime.idle()) void refreshControls() }, 15_000)
+    return () => { window.clearTimeout(handle); window.clearInterval(timer) }
+  }, [refreshControls, controlLifetime])
 
   const authorityViews = useMemo(() => {
     const grouped = new Map<string, ControlObservation & { control: ManagedFleetControlReadModel }>()
@@ -985,7 +950,7 @@ export function Connections() {
                   const state = states[profile.instanceId]
                   const observed = controls[profile.instanceId]
                   const lifecycle = connectionLifecycle(state, observed)
-                  const connectionIsLive = lifecycle === 'live'
+                  const connectionIsLive = Boolean(state?.status === 'connected' && observed?.freshness === 'fresh' && observed.control && !observed.error && profile.metadata.scope.split(/\s+/).includes('terminal:execute'))
                   const membership = membershipFor(profile)
                   const member = membership.node
                   const memberMesh = membership.kind === 'mesh' && membership.meshId
@@ -1020,13 +985,14 @@ export function Connections() {
                         </span>
                       </div>
                       <p className="muted">{t('connections.device')}: {profile.metadata.deviceLabel}</p>
+                      <ConnectionDataFacts server={servers.find((item) => item.instanceId === profile.instanceId)} control={observed} canConfigure={connectionIsLive} />
                       <div className="connection-fleet-status">
                         <span>
                           {t('connections.mesh')}: {membership.kind === 'mesh' && membership.meshId && !routeMeshId
                             ? <a className="text-link" href={meshRoute(membership.meshId)}>{membershipLabel}</a>
                             : membershipLabel}{membership.freshness === 'stale' ? ' · ' + t('connections.stale') : ''}
                         </span>
-                        <span>{t('connections.reachability')}: {lifecycleLabel(lifecycle, t)}</span>
+                        <span>{t('connections.reachability')}: {state?.status === 'connected' ? t('connections.authenticated') : lifecycleLabel(lifecycle, t)}</span>
                         {membership.kind === 'mesh' || membershipMutation ? (
                           <span>
                             {t('connections.syncState')}: {operationalLabel(memberState, t)}
@@ -1084,7 +1050,7 @@ export function Connections() {
                         {state?.status === 'error'
                           ? t('connections.actionRequired') + (state.retryable ? ' · ' + t('connections.retryAvailable') : '')
                           : observed?.error
-                            ? t('connections.controlError')
+                            ? <>{t('connections.controlError')} · <code>/actions/fleet/control</code> · {observed.error}{observed.elapsedMs === undefined ? '' : ` · ${observed.elapsedMs} ms`}</>
                             : member?.lastError
                               ? t('connections.actionRequired')
                               : membershipMutation?.phase === 'pending'
@@ -1105,7 +1071,7 @@ export function Connections() {
                             icon="retry"
                             variant="primary"
                             label={t('connections.retryNow')}
-                            onClick={() => void retry(profile.instanceId).then(refreshControls)}
+                            onClick={() => void retry(profile.instanceId).then(() => refreshControls())}
                           />
                         ) : null}
                         {routeMeshId && observed?.control?.managed ? (

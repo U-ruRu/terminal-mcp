@@ -198,3 +198,15 @@ test('read-only pairing can display fresh slots while all native writes remain d
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   expect(env.mutate).not.toHaveBeenCalled()
 })
+
+
+test('old native semantics show slots and codes but never enable a next-session policy write', async () => {
+  const slot = nativeSlot(); slot.inheritanceSupported = undefined
+  const env = setup(detail, { loadAccessMeshSlots: vi.fn(async () => [structuredClone(slot)]) })
+  const input = await screen.findByRole('spinbutton', { name: 'Slot session duration' })
+  expect(input).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Save slot policy' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeEnabled()
+  expect(screen.getByText(/Update this server to edit next-session policies safely/)).toBeInTheDocument()
+  expect(env.mutate).not.toHaveBeenCalled()
+})

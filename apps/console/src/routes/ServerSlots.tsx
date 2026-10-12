@@ -25,6 +25,7 @@ export type PersistentMutator = (instanceId: string, path: string, body: Record<
 export type FleetControlLoader = (instanceId: string) => Promise<ManagedFleetControlReadModel>
 export type FleetControlMutator = (instanceId: string, path: string, body: Record<string, unknown>) => Promise<ManagedFleetMutationResult>
 export type ServerSlotsProps = {
+  activeSessionsOnly?: boolean
   instances: FleetInstanceView[]
   loadFleetControl?: FleetControlLoader
   mutateFleetControl?: FleetControlMutator
@@ -62,7 +63,7 @@ async function writeClipboard(value: string): Promise<boolean> {
 function timer(entry: Entry, now: number, locale: ReturnType<typeof useI18n>['locale']) {
   const cycle = entry.slot.sessionLifecycle
   if (!cycle.hardExpiresAt || cycle.remainingSeconds === undefined || !['active', 'warning', 'draining'].includes(cycle.state)) return { text: '', cue: 'normal' as const }
-  const remaining = Math.max(0, Math.floor(cycle.remainingSeconds - (now - entry.observedAt) / 1000))
+  const remaining = Math.max(0, Math.floor(cycle.remainingSeconds - Math.max(0, now - entry.observedAt) / 1000))
   const h = Math.floor(remaining / 3600), m = Math.floor(remaining % 3600 / 60), s = remaining % 60
   const units = locale === 'ru' ? ['ч', 'м', 'с'] : locale === 'ka' ? ['სთ', 'წთ', 'წმ'] : ['h', 'min', 's']
   const text = h > 0 ? `${h}${units[0]} ${String(m).padStart(2, '0')}${units[1]} ${String(s).padStart(2, '0')}${units[2]}` : m > 0 ? `${m}${units[1]} ${String(s).padStart(2, '0')}${units[2]}` : `${s}${units[2]}`
@@ -72,7 +73,7 @@ function timer(entry: Entry, now: number, locale: ReturnType<typeof useI18n>['lo
   return { text, cue }
 }
 
-export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, loadAccessMeshSlots, loadAccessMeshDefaults, mutateAccessMesh }: ServerSlotsProps) {
+export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetControl, mutateFleetControl, loadAccessMeshSlots, loadAccessMeshDefaults, mutateAccessMesh }: ServerSlotsProps) {
   const { t, locale } = useI18n()
   const location = useLocation()
   const { instanceId: routeInstanceId = '', meshId: routeMeshId = '', logicalAgentId } = useParams()
@@ -121,7 +122,7 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
   }, [refreshControl, targets])
 
   const contexts = contextsFromTopology(instances, controls, reads)
-  const filter = resolveContextKey(filterKey, contexts)
+  const filter = activeSessionsOnly ? 'all' : resolveContextKey(filterKey, contexts)
   const routeContext = routeMeshId ? contexts.find((item) => item.meshId === routeMeshId) : routeInstanceId ? contexts.find((item) => item.memberInstanceIds.includes(routeInstanceId)) : undefined
   const activeContext = globalMode ? contexts.find((item) => item.key === resolveContextKey(settingsKey, contexts)) ?? contexts[0] : routeContext
   const relevantIds = new Set(globalMode ? (filter === 'all' ? contexts : contexts.filter((item) => item.key === filter)).flatMap((item) => item.memberInstanceIds) : routeInstanceId ? [routeInstanceId] : routeContext?.memberInstanceIds ?? [])
@@ -178,7 +179,7 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
     return () => document.removeEventListener('pointerdown', outside)
   }, [])
   const rememberScroll = () => {
-    if (!globalMode) return
+    if (!globalMode || activeSessionsOnly) return
     sessionStorage.setItem('slots-list-filter', filter)
     if (activeContext) sessionStorage.setItem('slots-settings-context', activeContext.key)
     sessionStorage.setItem(`slots-scroll:${filter}`, String(window.scrollY))
@@ -199,9 +200,14 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
   const blocked = (instanceId: string) => { const current = pendingFor(instanceId); return Boolean(current.value || current.unavailable) }
   const pending = instances.filter((item) => relevantIds.has(item.profile.instanceId)).map((item) => ({ instanceId: item.profile.instanceId, name: item.profile.displayName, ...pendingFor(item.profile.instanceId) })).filter((item) => item.value || item.unavailable)
   const finish = (instanceId: string) => { clearSlotOperation(operationScope(instanceId)); updateOperations((value) => value + 1) }
-  const canMutate = (instanceId: string) => Boolean(mutateAccessMesh && instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected' && item.profile.metadata.scope.split(/\s+/).includes('terminal:execute')) && reads[instanceId]?.slots && !reads[instanceId]?.slotsError && !reads[instanceId]?.slotsPending && clock - (reads[instanceId]?.observedAt ?? 0) <= 30_000 && !blocked(instanceId))
+  const hasFreshWriteContext = (instanceId: string) => Boolean(mutateAccessMesh && instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected' && item.profile.metadata.scope.split(/\s+/).includes('terminal:execute')) && reads[instanceId]?.slots && !reads[instanceId]?.slotsError && !reads[instanceId]?.slotsPending && clock - (reads[instanceId]?.observedAt ?? 0) <= 30_000)
+  const canMutate = (instanceId: string) => hasFreshWriteContext(instanceId) && !blocked(instanceId)
   const execute = async (instanceId: string, request: AccessMeshMutationRequest, recover = false): Promise<AccessMeshActionResult> => {
-    if (!mutateAccessMesh || lock.current || (!recover && !canMutate(instanceId)) || !instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected')) return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
+    if (!mutateAccessMesh || lock.current || !hasFreshWriteContext(instanceId) || (!recover && blocked(instanceId)) || !instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected')) return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
+    if (request.action === 'policy' || request.action === 'defaults') {
+      const target = request.action === 'defaults' ? reads[instanceId]?.defaults : reads[instanceId]?.slots?.find((slot) => slot.slotId === request.slot_id)
+      if (!target?.inheritanceSupported || target.inheritance?.appliesTo !== 'next_window') return { result: { ok: false, code: 'unsupported_policy_semantics', payload: {} }, confirmed: false }
+    }
     lock.current = true; setBusy(request.action === 'create' ? 'create' : `${instanceId}:${request.action}`); setMessage('')
     const scope = operationScope(instanceId)
     try {
@@ -266,6 +272,10 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
   }
   const href = (entry: Entry) => {
     const params = new URLSearchParams({ issuer: entry.slot.issuerNodeId, slot: entry.slot.slotId })
+    if (activeSessionsOnly) {
+      const context = contexts.find((item) => item.key === entry.contextKey)
+      return `${context?.meshId ? meshPersistentSlotRoute(context.meshId, entry.slot.logicalAgentId) : slotRoute(entry.instanceId, entry.slot.logicalAgentId)}?${params}`
+    }
     if (globalMode) {
       if (filter !== 'all') params.set('filter', filter)
       if (activeContext) params.set('settings', activeContext.key)
@@ -332,19 +342,58 @@ export function ServerSlots({ instances, loadFleetControl, mutateFleetControl, l
       throw error
     } finally { lock.current = false; setBusy('') }
   }
-  if (routeInstanceId && !instances.some((item) => item.profile.instanceId === routeInstanceId)) return <Navigate to="/" replace />
-  if (!instances.length) return <FeedbackState variant="empty" title={t('slots.empty')} />
-  return <section className="stack compact-operational-surface slots-surface" aria-label={t('nav.slots')}>
-    {globalMode && !logicalAgentId ? <div className="slots-global-filter surface-section"><label className="ui-field"><span>{t('slots.filter')}</span><select value={filter} onChange={(event) => setFilterKey(event.target.value)}><option value="all">{t('slots.all')}</option>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label><IconButton icon="retry" variant="quiet" label={t('slots.native.refreshList')} disabled={Boolean(busy)} onClick={refreshVisible} /></div> : null}
+  const operationFeedback = <>
     {!loadAccessMeshSlots || !loadAccessMeshDefaults ? <FeedbackState variant="partial" title={t('slots.native.unsupported')} /> : <div className="slot-context-statuses">{instances.filter((item) => relevantIds.has(item.profile.instanceId)).map((item) => {
       const read = reads[item.profile.instanceId]
       if (!read || (!read.slots && read.slotsPending)) return <p role="status" className="muted" key={item.profile.instanceId}>{item.profile.displayName} · {item.runtime.authStatus === 'connected' ? t('slots.native.loading') : t('slots.liveRequired')}</p>
       const failures = [read.slotsError, read.defaultsError].filter((error, index, values) => error && values.findIndex((value) => value?.kind === error.kind && value?.code === error.code) === index)
       return failures.map((error) => error ? <div className="attention-strip" role="status" key={item.profile.instanceId + ':' + error.kind + ':' + error.code}><strong>{item.profile.displayName}</strong><span>{t(error.kind === 'unsupported' ? 'slots.native.unsupported' : error.kind === 'disabled' ? 'slots.disabled' : error.kind === 'denied' ? 'slots.native.denied' : 'slots.native.failed')} · {error.code}</span><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh') + ' — ' + item.profile.displayName} disabled={Boolean(busy)} onClick={() => void refreshNative(item.profile.instanceId)} /></div> : null)
     })}</div>}
-    {pending.map((item) => <div className="attention-strip slot-operation-recovery" role="status" key={item.instanceId}><strong>{item.name}</strong><p>{t(item.unavailable ? 'slots.operation.storage' : 'slots.operation.pending')}</p>{item.value?.backend === 'access-mesh' ? <IconButton icon="retry" variant="secondary" label={t('slots.operation.recover')} disabled={Boolean(busy)} onClick={() => { const operation = item.value; if (operation?.backend === 'access-mesh') void execute(item.instanceId, operation.request, true).catch(() => undefined) }} /> : null}</div>)}
+    {pending.map((item) => <div className="attention-strip slot-operation-recovery" role="status" key={item.instanceId}><strong>{item.name}</strong><p>{t(item.unavailable ? 'slots.operation.storage' : 'slots.operation.pending')}</p>{item.value?.backend === 'access-mesh' ? <IconButton icon="retry" variant="secondary" label={t('slots.operation.recover')} disabled={Boolean(busy) || !hasFreshWriteContext(item.instanceId)} onClick={() => { const operation = item.value; if (operation?.backend === 'access-mesh') void execute(item.instanceId, operation.request, true).catch(() => undefined) }} /> : null}</div>)}
     {message ? <div className={'transient-toast' + (toastLeaving ? ' transient-toast-exit' : '')} role="status" aria-live="polite" onPointerDown={(event) => { toastStartX.current = event.clientX }} onPointerUp={(event) => { if (toastStartX.current !== null && Math.abs(event.clientX - toastStartX.current) >= 48) setMessage(''); toastStartX.current = null }} onPointerCancel={() => { toastStartX.current = null }}><span>{message}</span></div> : null}
     {confirmation ? <ConfirmationDialog title={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessCode' : 'slots.delete')} subject={confirmation.publicName} detail={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessConfirm' : 'slots.deleteConfirm')} cancelLabel={t('slots.confirmCancel')} confirmLabel={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessCode' : 'slots.delete')} confirmIcon={confirmation.kind === 'rotate' ? 'rotate' : 'delete'} confirmVariant={confirmation.kind === 'rotate' ? 'primary' : 'destructive'} onCancel={() => setConfirmation(null)} onConfirm={confirm} /> : null}
+  </>
+  if (activeSessionsOnly) {
+    const active = entries.filter((entry) => {
+      if (!['active', 'warning', 'draining', 'stopping'].includes(entry.slot.sessionLifecycle.state)) return false
+      const remaining = entry.slot.sessionLifecycle.remainingSeconds
+      return remaining !== undefined ? remaining > 0 && remaining - Math.max(0, clock - entry.observedAt) / 1000 > 0
+        : Date.parse(entry.slot.sessionLifecycle.hardExpiresAt ?? '') > clock
+    })
+    const groups = contexts.filter((context) => active.some((entry) => entry.contextKey === context.key))
+      .sort((a, b) => Number(a.kind !== 'mesh') - Number(b.kind !== 'mesh') || a.label.localeCompare(b.label))
+    return <>
+      {operationFeedback}
+      {!instances.length || active.length === 0 && allRead ? <FeedbackState variant="empty" title={t('fleet.noActiveSharedSessions')} /> : null}
+      {groups.map((group) => <section className="fleet-session-group" key={group.key} aria-label={group.label}>
+        <h3 className="fleet-group-title">{group.label}</h3>
+        <div className="slot-grid fleet-slot-grid">{active.filter((entry) => entry.contextKey === group.key).sort((a, b) => a.slot.publicName.localeCompare(b.slot.publicName)).map((entry) => {
+          const saved = codeFor(entry), timing = timer(entry, clock, locale), writable = canMutate(entry.instanceId) && !busy
+          return <article className={'panel slot-card slot-cue-' + timing.cue} key={entry.slot.issuerNodeId + ':' + entry.slot.slotId}>
+            <div className="slot-card-primary">
+              <Link className="text-link slot-card-identity" to={href(entry)}><strong>{entry.slot.publicName}</strong></Link>
+              <span className="slot-timer">{timing.text}</span>
+              <span className={'status server-status slot-session-badge slot-session-' + entry.slot.sessionLifecycle.state}>{t(stateKeys[entry.slot.sessionLifecycle.state] ?? 'slots.state.unknown')}</span>
+            </div>
+            <div className="slot-card-secondary">
+              <span className="slot-code-cell">{saved ? <span className="access-code-copy"><code>{saved.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + entry.slot.publicName} onClick={() => void copy(entry)} /></span> : <span className="slot-code-unavailable">—</span>}</span>
+              <IconButton icon="pause" variant="primary" label={t('slots.suspend')} disabled={!writable} onClick={() => changeState(entry, 'suspend')} />
+              <details className="slot-more-actions" onToggle={(event) => positionMenu(event.currentTarget)}><summary aria-label={t('slots.moreActions')}><Icon name="more" /></summary><div className="slot-overflow-menu">
+                <UiButton type="button" variant="secondary" disabled={!writable} onClick={() => showConfirmation(entry, 'rotate')}><Icon name="rotate" />{t('slots.rotateAccessCode')}</UiButton>
+                <UiButton type="button" variant="destructive" disabled={!writable} onClick={() => showConfirmation(entry, 'delete')}><Icon name="delete" />{t('slots.delete')}</UiButton>
+                <Link className="nav-link" to={href(entry)}>{t('slots.details')}</Link>
+              </div></details>
+            </div>
+          </article>
+        })}</div>
+      </section>)}
+    </>
+  }
+  if (routeInstanceId && !instances.some((item) => item.profile.instanceId === routeInstanceId)) return <Navigate to="/" replace />
+  if (!instances.length) return <FeedbackState variant="empty" title={t('slots.empty')} />
+  return <section className="stack compact-operational-surface slots-surface" aria-label={t('nav.slots')}>
+    {globalMode && !logicalAgentId ? <div className="slots-global-filter surface-section"><label className="ui-field"><span>{t('slots.filter')}</span><select value={filter} onChange={(event) => setFilterKey(event.target.value)}><option value="all">{t('slots.all')}</option>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label><IconButton icon="retry" variant="quiet" label={t('slots.native.refreshList')} disabled={Boolean(busy)} onClick={refreshVisible} /></div> : null}
+    {operationFeedback}
     {!logicalAgentId && activeContext ? <article className="surface-section policy-controls">
       {globalMode ? <label className="ui-field slots-context-select"><span>{t('slots.settingsContext')}</span><select value={activeContext.key} onChange={(event) => setSettingsKey(event.target.value)}>{contexts.map((item) => <option key={item.key} value={item.key}>{item.label}{item.kind === 'unknown' ? ` · ${t('slots.policyScopeUnknown')}` : ''}</option>)}</select></label> : null}
       {meshSettings ? meshPolicy && meshSupported ? <MeshAccessPolicyControls key={authorityId + ':' + targets} policy={meshPolicy} authorityName={meshAuthority?.profile.displayName ?? meshControl?.controlNodeId ?? ''} canMutate={meshWritable} externalBusy={Boolean(busy)} save={saveMesh} refresh={() => { if (authorityId) { void refreshControl(authorityId); void refreshNative(authorityId) } }} /> : <FeedbackState variant="partial" title={t('slots.native.meshPolicyUnsupported')} /> : defaults ? <AccessMeshDefaultsControls key={policyInstanceId + ':' + targets} defaults={defaults} canMutate={defaultsWritable} externalBusy={Boolean(busy)} execute={(request) => execute(policyInstanceId, request)} refresh={() => void refreshNative(policyInstanceId)} /> : null}

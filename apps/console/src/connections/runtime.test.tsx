@@ -202,7 +202,7 @@ test('cold start preserves last authoritative Production membership while contro
   for (const name of ['Main', 'BacLOUD', 'Firstbyte', 'Tokyo']) {
     const card = screen.getByRole('heading', { name }).closest('article')!
     expect(card).toHaveTextContent('Mesh: Production · Stale')
-    expect(within(card).getByText('Synchronization: Unavailable')).toBeInTheDocument()
+    expect(within(card).getByText('Mesh replication: Unavailable')).toBeInTheDocument()
   }
   expect(screen.getByRole('link', { name: 'Main' })).toHaveAttribute('href', '/servers/main-profile')
   expect(screen.getByRole('link', { name: 'BacLOUD' })).toHaveAttribute('href', '/servers/bacloud-profile')

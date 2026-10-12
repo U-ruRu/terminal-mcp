@@ -31,6 +31,7 @@ type FormProps = {
   inheritance?: PolicyInheritanceDisplay
   slotId?: string
   legacyEnabled?: boolean
+  policySupported: boolean
   canMutate: boolean
   externalBusy?: boolean
   execute: AccessMeshActionExecutor
@@ -60,7 +61,7 @@ function NativePolicyForm(props: FormProps) {
   const [resetConfirmation, setResetConfirmation] = useState<{ revision: number } | null>(null)
   const draft = edited ?? makeDraft(props)
   const conflict = Boolean(edited && edited.base !== policyKey(props.policy, props.revision, props.inheritance))
-  const disabled = !props.canMutate || Boolean(props.externalBusy) || busy
+  const disabled = !props.policySupported || !props.canMutate || Boolean(props.externalBusy) || busy
 
   const perform = async (request: AccessMeshMutationRequest) => {
     if (disabled || busyRef.current) return
@@ -102,7 +103,8 @@ function NativePolicyForm(props: FormProps) {
   return <>
     <div className="section-heading"><h3>{t(props.slotId ? 'slots.managed.title' : 'slots.policyControls')}</h3><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh')} disabled={busy || Boolean(props.externalBusy)} onClick={props.refresh} /></div>
     <PolicyInheritance value={props.inheritance} />
-    <p className="muted">{t(props.inheritance?.appliesTo === 'next_window' ? 'slots.managed.nextWindow' : 'slots.inheritance.currentSchedule')}</p>
+    {!props.policySupported ? <p role="status" className="attention-strip">{t('slots.native.policyUpgradeRequired')}</p> : null}
+    <p className="muted">{t(props.policySupported && props.inheritance?.appliesTo === 'next_window' ? 'slots.managed.nextWindow' : 'slots.inheritance.currentSchedule')}</p>
     <div className="policy-controls-grid">
       <DurationField label={t(props.slotId ? 'slots.managed.duration' : 'slots.durationSeconds')} value={draft.duration} disabled={disabled} onChange={(duration) => setEdited({ ...draft, duration })} />
       <DurationField label={t('slots.managed.warning')} value={draft.warning} disabled={disabled} onChange={(warning) => setEdited({ ...draft, warning })} />
@@ -118,7 +120,7 @@ function NativePolicyForm(props: FormProps) {
     <IconButtonRow className="server-actions policy-actions">
       <IconButton icon="save" variant="primary" label={t(props.slotId ? 'slots.managed.savePolicy' : 'slots.savePolicy')} disabled={disabled || conflict} busy={busy} onClick={save} />
       <IconButton icon="reset" variant="secondary" label={t('slots.managed.cancel')} disabled={busy || !edited} onClick={() => { setEdited(null); setNotice('') }} />
-      {props.inheritance?.resetSupported && props.inheritance.mode === 'override' ? <IconButton icon="reset" variant="secondary" label={t('slots.inheritance.reset')} disabled={disabled} onClick={() => setResetConfirmation({ revision: props.revision })} /> : null}
+      {props.policySupported && props.inheritance?.resetSupported && props.inheritance.mode === 'override' ? <IconButton icon="reset" variant="secondary" label={t('slots.inheritance.reset')} disabled={disabled} onClick={() => setResetConfirmation({ revision: props.revision })} /> : null}
     </IconButtonRow>
     {resetConfirmation ? <ConfirmationDialog title={t('slots.inheritance.reset')} subject={props.inheritance?.parent?.id ?? ''} detail={t('slots.inheritance.resetConfirm')} cancelLabel={t('slots.confirmCancel')} confirmLabel={t('slots.inheritance.reset')} confirmIcon="reset" confirmVariant="primary" onCancel={() => setResetConfirmation(null)} onConfirm={reset} /> : null}
   </>
@@ -131,7 +133,7 @@ export function AccessMeshDefaultsControls({ defaults, ...props }: {
   execute: AccessMeshActionExecutor
   refresh: () => void
 }) {
-  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} legacyEnabled={defaults.legacyEnabled} /></div>
+  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} legacyEnabled={defaults.legacyEnabled} policySupported={Boolean(defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
 }
 
 export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute, refresh }: {
@@ -175,7 +177,7 @@ export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute,
     finally { busyRef.current = false; setBusy(false) }
   }
   return <div className="slot-subsection slot-policy-controls" aria-label={t('slots.managed.title')}>
-    <NativePolicyForm policy={slot.policy} revision={slot.revision} inheritance={slot.inheritance} slotId={slot.slotId} canMutate={canMutate} externalBusy={externalBusy || busy} execute={execute} refresh={refresh} />
+    <NativePolicyForm policySupported={Boolean(slot.inheritanceSupported && slot.inheritance?.appliesTo === 'next_window')} policy={slot.policy} revision={slot.revision} inheritance={slot.inheritance} slotId={slot.slotId} canMutate={canMutate} externalBusy={externalBusy || busy} execute={execute} refresh={refresh} />
     <div className="slot-subsection"><h3>{t('slots.managed.window')}</h3>
       {cycle.hardExpiresAt ? <dl className="slot-details-grid"><div><dt>{t('slots.managed.opened')}</dt><dd>{cycle.startedAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.managed.deadline')}</dt><dd>{cycle.hardExpiresAt}</dd></div><div><dt>{t('slots.managed.remaining')}</dt><dd>{cycle.remainingSeconds === undefined ? t('common.unavailable') : formatDuration(cycle.remainingSeconds, locale)}</dd></div>
         {slot.windowPolicy ? <><div><dt>{t('slots.managed.duration')}</dt><dd>{formatDuration(slot.windowPolicy.durationSeconds, locale)}</dd></div><div><dt>{t('slots.managed.windowWarning')}</dt><dd>{formatDuration(slot.windowPolicy.warningSeconds, locale)}</dd></div><div><dt>{t('slots.managed.windowDraining')}</dt><dd>{formatDuration(slot.windowPolicy.drainingSeconds, locale)}</dd></div></> : null}

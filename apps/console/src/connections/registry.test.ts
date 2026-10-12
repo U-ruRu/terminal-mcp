@@ -476,3 +476,25 @@ test('rejects unsafe pairing extensions and unsupported major before exchange', 
   )).rejects.toThrowError(new ConnectionRegistryError('unsupported_pairing_version'))
   expect(fetcher).not.toHaveBeenCalled()
 })
+
+test.each(['terminal:read terminal:execute', 'terminal:read'])(
+  'refresh replaces saved profile authorization scope only with the granted value: %s', async (granted) => {
+    const storage = new MemoryStorage()
+    const registry = new BrowserConnectionRegistry(storage, () => 2000, ids('scoped'))
+    const original = { ...connection('https://scoped.example', 'isolated-refresh'),
+      scope: granted === 'terminal:read' ? 'terminal:read terminal:execute' : 'terminal:read' }
+    const profile = registry.add(original, 'Scoped server')
+    const fetcher = vi.fn(async () => jsonResponse({ access_token: 'isolated-access', refresh_token: 'isolated-rotated', expires_in: 3600, token_type: 'Bearer', scope: granted }))
+    const transport = new PairingTransport(fetcher)
+    const restored = await registry.restore(profile.instanceId, transport)
+    expect(restored.status).toBe('connected')
+    if (restored.status !== 'connected') throw new Error('expected connected test session')
+    expect(restored.profile.metadata.scope).toBe(granted)
+    expect(registry.get(profile.instanceId)?.metadata.scope).toBe(granted)
+    expect(restored.profile.metadata.pairedAt).toBe(original.pairedAt)
+    expect(registry.get(profile.instanceId)?.credentialRef).toBe(profile.credentialRef)
+    const cached = await registry.restore(profile.instanceId, transport)
+    expect(cached).toMatchObject({ status: 'connected', profile: { metadata: { scope: granted } } })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  },
+)

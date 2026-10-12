@@ -1,3 +1,4 @@
+import { connectionAuthorityScope } from './authorityScope'
 import {
   createContext,
   type ReactNode,
@@ -114,15 +115,26 @@ export function ConnectionRuntimeProvider({
     [registry, transport],
   )
 
-  useEffect(() => registry.subscribeAuth((instanceId, result) => {
-    const nextState = stateFromRestore(result)
-    setStates((current) => {
-      const next = { ...current }
-      if (nextState) next[instanceId] = nextState
-      else delete next[instanceId]
-      return next
+  useEffect(() => {
+    const knownScopes = new Map(registry.list().map((profile) => [profile.instanceId, connectionAuthorityScope(profile)]))
+    return registry.subscribeAuth((instanceId, result) => {
+      const nextState = stateFromRestore(result)
+      if ('profile' in result) {
+        const scope = connectionAuthorityScope(result.profile)
+        if (scope !== knownScopes.get(instanceId)) {
+          knownScopes.set(instanceId, scope)
+          syncProfiles()
+          onProfilesChanged?.()
+        }
+      }
+      setStates((current) => {
+        const next = { ...current }
+        if (nextState) next[instanceId] = nextState
+        else delete next[instanceId]
+        return next
+      })
     })
-  }), [registry])
+  }, [registry, syncProfiles, onProfilesChanged])
 
   useEffect(() => {
     if (!restoreOnMount || restoreStarted.current) return

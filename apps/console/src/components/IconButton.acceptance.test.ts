@@ -19,12 +19,13 @@ describe('IconButton acceptance regressions', () => {
     expect(connectionsSource).not.toContain('window.confirm(')
     expect(overviewSource).not.toContain('window.confirm(')
     expect(connectionsSource).toContain('<ConfirmationDialog')
-    expect(overviewSource).toContain('<ConfirmationDialog')
+    expect(overviewSource).toContain('<ServerSlots activeSessionsOnly')
     expect(slotsSource).toContain('<ConfirmationDialog')
   })
 
   it('retains IconButton migration across the required surfaces', () => {
-    for (const source of [shellSource, activitySource, diagnosticsSource, slotsSource, overviewSource, connectionsSource, pairingSource]) {
+    expect(overviewSource).toContain('<ServerSlots activeSessionsOnly')
+    for (const source of [shellSource, activitySource, diagnosticsSource, slotsSource, connectionsSource, pairingSource]) {
       expect(source).toContain('IconButton')
     }
   })

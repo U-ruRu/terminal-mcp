@@ -312,7 +312,7 @@ export class BrowserConnectionRegistry {
         this.storage,
       )
       const restored = await restoreCredential(credentialVault, transport, this.now)
-      const currentProfile = this.get(instanceId)
+      let currentProfile = this.get(instanceId)
       if (!currentProfile) {
         this.accessSessions.delete(instanceId)
         return { status: 'missing' }
@@ -330,7 +330,15 @@ export class BrowserConnectionRegistry {
 
       let result: ProfileRestoreResult
       switch (restored.status) {
-        case 'connected':
+        case 'connected': {
+          // Refresh scopes are authoritative. Keep the public profile and its read-context
+          // identity in sync with the already-rotated credential, preserving the pairing.
+          if (restored.connection.scope !== currentProfile.metadata.scope) {
+            currentProfile = { ...currentProfile, metadata: { ...currentProfile.metadata, scope: restored.connection.scope }, updatedAt: this.now() }
+            const document = this.document()
+            document.profiles = document.profiles.map((item) => item.instanceId === instanceId ? currentProfile! : item)
+            this.persist(document)
+          }
           result = {
             status: 'connected',
             profile: currentProfile,
@@ -339,6 +347,7 @@ export class BrowserConnectionRegistry {
           }
           this.accessSessions.set(instanceId, result)
           break
+        }
         case 'revoked':
         case 'expired':
           this.accessSessions.delete(instanceId)
