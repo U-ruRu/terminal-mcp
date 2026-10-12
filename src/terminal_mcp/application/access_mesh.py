@@ -56,6 +56,8 @@ class AccessMeshApplication:
         self.execution_fence = execution_fence
         self.legacy_enabled = legacy_enabled
         self.defaults = defaults or SlotPolicy(1380, 60, True, 120, 30)
+        self.configured_defaults = self.defaults
+        self.configured_legacy_enabled = self.legacy_enabled
         self.clock = clock or (lambda: datetime.now(UTC))
         self.store.clock = self.clock
         stored_defaults = self.store.defaults()
@@ -73,6 +75,98 @@ class AccessMeshApplication:
         self._scan_after = ""
         self._scan_error: str | None = None
         self.last_error: str | None = None
+
+    def local_parent_policy(self):
+        return {
+            "source": "server",
+            "revision": 1,
+            "policy": asdict(self.configured_defaults),
+            "legacy_enabled": self.configured_legacy_enabled,
+        }
+
+    def defaults_state(self):
+        stored = self.store.defaults()
+        current = stored or {
+            "revision": 1,
+            "policy": asdict(self.defaults),
+            "legacy_enabled": self.legacy_enabled,
+            "inherit_policy": True,
+        }
+        parent = current.get("parent") or self.local_parent_policy()
+        source = parent["source"] if current["inherit_policy"] else "server"
+        parent_view = self.policy_parent_view(parent)
+        return {
+            **current,
+            "parent": parent,
+            "policy_source": source,
+            "issuer_node_id": self.store.local_node_id,
+            "write_target": "access_defaults",
+            "inheritance": {
+                "mode": "inherit" if current["inherit_policy"] else "override",
+                "source": "standalone" if source == "server" else source,
+                "parent": parent_view,
+                "reset_supported": True,
+                "applies_to": "next_window",
+                "pending": False,
+            },
+            "inheritance_supported": True,
+            "mesh_policy_supported": parent["source"] == "mesh",
+            "policy_override": None if current["inherit_policy"] else current["policy"],
+            "inherited_policy": parent["policy"],
+            "policy_applies_to": "next_session",
+        }
+
+    def policy_parent_view(self, parent):
+        source = "mesh" if parent["source"] == "mesh" else "standalone"
+        ident = parent.get("mesh_id") or self.store.local_node_id
+        revision = parent["revision"]
+        authoritative = (
+            source == "standalone" or parent.get("control_node_id") == self.store.local_node_id
+        )
+        return {
+            "source": source,
+            "id": ident,
+            "revision": revision,
+            "version": f"{source}:{ident}:{revision}",
+            "freshness": "authoritative" if authoritative else "last_known",
+            "convergence": "converged",
+        }
+
+    async def apply_fleet_policy(self, state=None):
+        """Use only the existing, authenticated Fleet controller's applied replica."""
+        parent = self.local_parent_policy()
+        if state and state.get("managed"):
+            local = next(
+                (
+                    node
+                    for node in state.get("nodes", [])
+                    if node.get("node_id") == self.store.local_node_id
+                ),
+                None,
+            )
+            if local and local.get("mesh_id") and local.get("state") != "detached":
+                policy = state.get("policy")
+                if not policy:
+                    raise AccessMeshError("access_mesh_policy_unavailable")
+                resolved = SlotPolicy(
+                    duration_seconds=policy["duration_seconds"],
+                    cooldown_seconds=policy["rearm_after_seconds"],
+                    rearm_enabled=True,
+                    warning_seconds=policy["duration_seconds"] - policy["warning_after_seconds"],
+                    draining_seconds=policy["duration_seconds"] - policy["alert_after_seconds"],
+                )
+                parent = {
+                    "source": "mesh",
+                    "revision": policy["revision"],
+                    "policy": asdict(resolved),
+                    "legacy_enabled": policy["legacy_admission_enabled"],
+                    "mesh_id": local["mesh_id"],
+                    "control_node_id": state.get("control_node_id"),
+                }
+        async with self._issuer_session_lock, self._issuer_lock:
+            current = await asyncio.to_thread(self.store.sync_parent_defaults, parent)
+            self.defaults = SlotPolicy(**current["policy"])
+            self.legacy_enabled = current["legacy_enabled"]
 
     @staticmethod
     def require_write(actor: ActorContext) -> None:
@@ -475,7 +569,9 @@ class AccessMeshApplication:
         ).hexdigest()
         return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
 
-    def _slot_receipt(self, slot, action, *, revision=None, code=None, include_code_generation=False):
+    def _slot_receipt(
+        self, slot, action, *, revision=None, code=None, include_code_generation=False
+    ):
         return {
             "ok": True,
             "action": action,
@@ -485,8 +581,11 @@ class AccessMeshApplication:
             "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "revision": revision or slot.revision,
-            **({"code_generation": slot.code_generation + (1 if action == "rotate" else 0)}
-               if include_code_generation else {}),
+            **(
+                {"code_generation": slot.code_generation + (1 if action == "rotate" else 0)}
+                if include_code_generation
+                else {}
+            ),
             **({"access_code": code} if code is not None else {}),
         }
 
@@ -499,6 +598,7 @@ class AccessMeshApplication:
         start: bool = True,
         code: str | None = None,
         display_name: str | None = None,
+        inherit_policy: bool | None = None,
         receipt_spec=None,
     ) -> dict:
         self.require_write(actor)
@@ -515,9 +615,7 @@ class AccessMeshApplication:
                     reserved_number,
                     attempt_id,
                     announcement_deadline,
-                ) = await self.replication.negotiate_number(
-                    preferred=code, exact=code is not None
-                )
+                ) = await self.replication.negotiate_number(preferred=code, exact=code is not None)
             elif code is None:
                 candidate = f"{secrets.randbelow(10000):04d}"
                 proposed = await asyncio.to_thread(
@@ -546,6 +644,7 @@ class AccessMeshApplication:
                     event_id="ae_" + secrets.token_urlsafe(18),
                     kind="SlotIssued",
                     policy=policy or self.defaults,
+                    inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                     code_tag=self.store.code_tag(self.store.local_node_id, allocated),
                     effective_at=self.clock() if start else None,
                     agent_name=number_agent_name(allocated),
@@ -617,6 +716,7 @@ class AccessMeshApplication:
         receipt_spec=None,
         number_end: dict | None = None,
         number_start: dict | None = None,
+        inherit_policy: bool | None = None,
     ) -> dict:
         self.require_write(actor)
         async with self._issuer_lock:
@@ -645,6 +745,7 @@ class AccessMeshApplication:
                 event_id="ae_" + secrets.token_urlsafe(18),
                 kind=kind,
                 policy=policy,
+                inherit_policy=(bool(inherit_policy) if kind == "SlotPolicyChanged" else None),
                 code_tag=self.store.code_tag(slot.issuer_id, code) if code else None,
                 effective_at=effective_at or (self.clock() if kind.startswith("Session") else None),
                 deadline_at=deadline_at,
@@ -664,8 +765,13 @@ class AccessMeshApplication:
                 "SlotDeleted": "delete",
                 "AccessCodeRotated": "rotate",
             }.get(kind, "update")
-            result = self._slot_receipt(slot, action, revision=event.revision, code=code,
-                                        include_code_generation=actor.endpoint_role == "operator")
+            result = self._slot_receipt(
+                slot,
+                action,
+                revision=event.revision,
+                code=code,
+                include_code_generation=actor.endpoint_role == "operator",
+            )
             receipt = (
                 self.store.prepare_receipt(event_id=event.event_id, result=result, **receipt_spec)
                 if receipt_spec

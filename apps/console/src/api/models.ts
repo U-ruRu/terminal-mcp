@@ -507,6 +507,8 @@ export type AccessMeshPolicyReadModel = {
 }
 
 export type AccessMeshSlotReadModel = {
+  inheritanceSupported?: boolean
+  inheritedPolicy?: AccessMeshPolicyReadModel
   inheritance?: SlotPolicyInheritanceReadModel
   codeGeneration?: number
   codeExpiresAt?: string | null
@@ -532,6 +534,9 @@ export type AccessMeshSlotReadModel = {
 }
 
 export type AccessMeshDefaultsReadModel = {
+  inheritanceSupported?: boolean
+  meshPolicySupported?: boolean
+  inheritedPolicy?: AccessMeshPolicyReadModel
   inheritance?: SlotPolicyInheritanceReadModel
   writeTarget?: 'fleet_control' | 'access_defaults'
   revision: number
@@ -549,10 +554,9 @@ export type AccessMeshPolicyPatch = {
 }
 
 export type AccessMeshMutationRequest = { idempotency_key: string } & (
-  | { action: 'create'; mode: 'legacy' | 'persistent'; policy?: AccessMeshPolicyPatch }
-  | { action: 'defaults'; expected_revision: number; policy?: AccessMeshPolicyPatch; legacy_enabled?: boolean }
-  | { action: 'policy'; slot_id: string; expected_revision: number; policy: AccessMeshPolicyPatch; expected_parent_version?: string }
-  | { action: 'reset_policy'; slot_id: string; expected_revision: number; expected_parent_version: string }
+  | { action: 'create'; mode: 'legacy' | 'persistent'; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean }
+  | { action: 'defaults'; expected_revision: number; policy?: AccessMeshPolicyPatch; legacy_enabled?: boolean; inherit_policy?: boolean }
+  | { action: 'policy'; slot_id: string; expected_revision: number; policy?: AccessMeshPolicyPatch; inherit_policy?: boolean }
   | { action: 'deadline'; slot_id: string; expected_revision: number; deadline_at: string }
   | { action: 'suspend' | 'resume' | 'delete' | 'rotate' | 'end'; slot_id: string; expected_revision: number }
 )

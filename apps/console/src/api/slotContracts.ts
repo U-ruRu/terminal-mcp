@@ -143,17 +143,33 @@ function accessPolicy(value: unknown, path: string): AccessMeshPolicyReadModel {
   return policy
 }
 
+function requireNativeInheritance(item: JsonRecord, path: string, slot: boolean): void {
+  if (item.inheritance_supported !== true) return
+  if (!decodePolicyInheritance(item.inheritance, path + '.inheritance')) {
+    throw new ConsoleContractError(path + '.inheritance', 'missing supported inheritance metadata')
+  }
+  accessPolicy(item.inherited_policy, path + '.inherited_policy')
+  if (item.policy_override !== null) accessPolicy(item.policy_override, path + '.policy_override')
+  choice(item.policy_source, slot ? ['slot', 'mesh', 'server'] : ['mesh', 'server'], path + '.policy_source')
+  choice(item.policy_applies_to, ['next_session'], path + '.policy_applies_to')
+  if (slot) accessPolicy(item.current_policy, path + '.current_policy')
+  else flag(item.mesh_policy_supported, path + '.mesh_policy_supported')
+}
+
 function accessSlot(value: unknown, path: string): AccessMeshSlotReadModel {
   const item = record(value, path)
+  requireNativeInheritance(item, path, true)
   if (item.mode !== 'legacy' && item.mode !== 'persistent') throw new ConsoleContractError(path + '.mode', 'unsupported mode')
   const cycle = record(item.session_lifecycle, path + '.session_lifecycle')
   return {
     inheritance: decodePolicyInheritance(item.inheritance, path + '.inheritance'),
+    inheritanceSupported: item.inheritance_supported === undefined ? undefined : flag(item.inheritance_supported, path + '.inheritance_supported'),
+    inheritedPolicy: item.inherited_policy === undefined ? undefined : accessPolicy(item.inherited_policy, path + '.inherited_policy'),
     codeGeneration: item.code_generation === undefined ? undefined : integer(item.code_generation, path + '.code_generation', 1),
     codeExpiresAt: item.code_expires_at === undefined ? undefined : nullableText(item.code_expires_at, path + '.code_expires_at'),
     createdAt: item.created_at === undefined ? undefined : text(item.created_at, path + '.created_at'),
     updatedAt: item.updated_at === undefined ? undefined : text(item.updated_at, path + '.updated_at'),
-    windowPolicy: item.window_policy === undefined ? undefined : accessPolicy(item.window_policy, path + '.window_policy'),
+    windowPolicy: item.current_policy !== undefined ? accessPolicy(item.current_policy, path + '.current_policy') : item.window_policy === undefined ? undefined : accessPolicy(item.window_policy, path + '.window_policy'),
     policyEffectiveAt: item.policy_effective_at === undefined ? undefined : nullableText(item.policy_effective_at, path + '.policy_effective_at'),
     issuerNodeId: text(item.issuer_node_id, path + '.issuer_node_id', true),
     slotId: text(item.slot_id, path + '.slot_id', true),
@@ -186,8 +202,12 @@ export function decodeAccessMeshSlots(value: unknown): { slots: AccessMeshSlotRe
 }
 export function decodeAccessMeshDefaults(value: unknown): AccessMeshDefaultsReadModel {
   const root = success(value)
+  requireNativeInheritance(root, '$', false)
   return {
     inheritance: decodePolicyInheritance(root.inheritance),
+    inheritanceSupported: root.inheritance_supported === undefined ? undefined : flag(root.inheritance_supported, '$.inheritance_supported'),
+    meshPolicySupported: root.mesh_policy_supported === undefined ? undefined : flag(root.mesh_policy_supported, '$.mesh_policy_supported'),
+    inheritedPolicy: root.inherited_policy === undefined ? undefined : accessPolicy(root.inherited_policy, '$.inherited_policy'),
     writeTarget: root.write_target === undefined ? undefined : choice(root.write_target, ['fleet_control', 'access_defaults'] as const, '$.write_target'),
     revision: integer(root.revision, '$.revision', 1),
     policy: accessPolicy(root.policy, '$.policy'),

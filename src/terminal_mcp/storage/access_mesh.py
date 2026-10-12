@@ -54,6 +54,7 @@ def public_name(issuer_id: str, logical_agent_id: str) -> str:
 
 def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     from terminal_mcp.core.access_policy_windows import slot_cycle
+
     return slot_cycle(slot, now)
 
 
@@ -118,6 +119,16 @@ class AccessMeshStore(LocalAccessMesh):
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL,
                 policy_json TEXT NOT NULL, legacy_enabled INTEGER NOT NULL
             )""")
+            default_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(access_mesh_operator_defaults)")
+            }
+            if "inherit_policy" not in default_columns:
+                db.execute(
+                    "ALTER TABLE access_mesh_operator_defaults "
+                    "ADD COLUMN inherit_policy INTEGER NOT NULL DEFAULT 0"
+                )
+            if "parent_json" not in default_columns:
+                db.execute("ALTER TABLE access_mesh_operator_defaults ADD COLUMN parent_json TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS access_mesh_slot_catalog (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT, issuer_id TEXT NOT NULL,
                 slot_id TEXT NOT NULL, UNIQUE(issuer_id,slot_id)
@@ -180,7 +191,8 @@ class AccessMeshStore(LocalAccessMesh):
             (
                 slot.logical_agent_id,
                 full_agent_name(slot.agent_name, slot.display_suffix)
-                if slot.agent_name else "Agent name unavailable",
+                if slot.agent_name
+                else "Agent name unavailable",
                 self.local_node_id,
                 stamp,
                 stamp,
@@ -254,7 +266,7 @@ class AccessMeshStore(LocalAccessMesh):
             if db.execute(
                 "SELECT 1 FROM access_mesh_recipient_holds WHERE number=? "
                 "AND state='held' AND (issuer_id!=? OR slot_id!=?) LIMIT 1",
-                (number["number"],event.issuer_id,event.slot_id),
+                (number["number"], event.issuer_id, event.slot_id),
             ).fetchone():
                 raise AccessMeshError("access_mesh_subscription_hold")
             db.execute(
@@ -431,9 +443,8 @@ class AccessMeshStore(LocalAccessMesh):
     def _before_slot_update(self, db, old, *, state, code_tag):
         from terminal_mcp.storage.access_mesh_recipient_holds import slot_held
 
-        if (
-            (state == "deleted" or code_tag != old["code_tag"])
-            and slot_held(db, old["issuer_id"], old["slot_id"])
+        if (state == "deleted" or code_tag != old["code_tag"]) and slot_held(
+            db, old["issuer_id"], old["slot_id"]
         ):
             raise AccessMeshError("access_mesh_subscription_hold")
 
@@ -457,7 +468,11 @@ class AccessMeshStore(LocalAccessMesh):
                 # The parent transaction has committed before this hook runs.
                 # It is safe to wake the transport; failure to notify never
                 # invalidates the durable outbox committed with the event.
-                if result.outcome == "applied" and self._delivery_notifier is not None:
+                if (
+                    result.outcome == "applied"
+                    and self._delivery_notifier is not None
+                    and kwargs.get("_connection") is None
+                ):
                     self._delivery_notifier()
                 return result
             except sqlite3.IntegrityError as exc:
@@ -1056,27 +1071,39 @@ class AccessMeshStore(LocalAccessMesh):
                 "revision": row["revision"],
                 "policy": json.loads(row["policy_json"]),
                 "legacy_enabled": bool(row["legacy_enabled"]),
+                "inherit_policy": bool(row["inherit_policy"]),
+                "parent": json.loads(row["parent_json"]) if row["parent_json"] else None,
             }
             if row
             else None
         )
 
-    def change_defaults(self, *, expected_revision, policy, legacy_enabled, receipt):
-        with self._connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT revision FROM access_mesh_operator_defaults WHERE singleton=1"
-            ).fetchone()
-            revision = row[0] if row else 1
-            if expected_revision != revision:
-                raise AccessMeshError("revision_conflict")
-            db.execute(
-                "INSERT INTO access_mesh_operator_defaults VALUES(1,?,?,?) "
-                "ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,"
-                "policy_json=excluded.policy_json,legacy_enabled=excluded.legacy_enabled",
-                (revision + 1, json.dumps(policy, sort_keys=True), int(legacy_enabled)),
-            )
-            self._save_receipt_tx(db, receipt)
+    def change_defaults(
+        self,
+        *,
+        expected_revision,
+        policy,
+        legacy_enabled,
+        receipt,
+        inherit_policy=False,
+        parent=None,
+    ):
+        from terminal_mcp.storage.access_policy_inheritance import change_defaults
+
+        return change_defaults(
+            self,
+            expected_revision=expected_revision,
+            policy=policy,
+            legacy_enabled=legacy_enabled,
+            receipt=receipt,
+            inherit_policy=inherit_policy,
+            parent=parent,
+        )
+
+    def sync_parent_defaults(self, parent):
+        from terminal_mcp.storage.access_policy_inheritance import sync_parent_defaults
+
+        return sync_parent_defaults(self, parent)
 
     def latest_session_window(self, slot_id: str):
         """Return the latest explicit window anchor/deadline and its event revision.
@@ -1203,6 +1230,8 @@ class AccessMeshStore(LocalAccessMesh):
             item = dict(row)
             # Generation is issuer-local public vault metadata, not a bearer proof.
             item.pop("code_generation", None)
+            if not item.get("inherit_policy"):
+                item.pop("inherit_policy", None)
             if item.get("policy_window_json") is None:
                 item.pop("policy_window_json", None)
             result.append(item)
@@ -1221,12 +1250,24 @@ class AccessMeshStore(LocalAccessMesh):
             "code_tag",
             "anchor",
         }
-        optional = {"deadline_at", "fence_revision", "agent_name", "display_suffix", "policy_window_json"}
+        optional = {
+            "deadline_at",
+            "fence_revision",
+            "agent_name",
+            "display_suffix",
+            "policy_window_json",
+            "inherit_policy",
+        }
         if not isinstance(raw, dict) or not fields <= set(raw) or set(raw) - fields - optional:
             raise AccessMeshError("access_mesh_invalid_snapshot")
         raw = {
-            "deadline_at": None, "fence_revision": raw["revision"],
-            "agent_name": None, "display_suffix": None, "policy_window_json": None, **raw,
+            "deadline_at": None,
+            "fence_revision": raw["revision"],
+            "agent_name": None,
+            "display_suffix": None,
+            "policy_window_json": None,
+            "inherit_policy": 0,
+            **raw,
         }
         fields |= optional
         if (
@@ -1238,8 +1279,11 @@ class AccessMeshStore(LocalAccessMesh):
             from terminal_mcp.core.access_mesh_grants import SlotPolicy
 
             policy = SlotPolicy(**json.loads(raw["policy_json"]))
+            if type(raw["inherit_policy"]) is not int or raw["inherit_policy"] not in {0, 1}:
+                raise ValueError("invalid inheritance flag")
             if raw["policy_window_json"] is not None:
                 from terminal_mcp.core.access_mesh_grants import CapturedAccessWindow
+
                 CapturedAccessWindow.from_wire(json.loads(raw["policy_window_json"]))
             if (
                 type(raw["fence_revision"]) is not int
@@ -1289,9 +1333,7 @@ class AccessMeshStore(LocalAccessMesh):
                 if old["state"] == "deleted" and raw["state"] != "deleted":
                     raise AccessMeshError("access_mesh_deleted_slot")
             if old:
-                self._before_slot_update(
-                    db, old, state=raw["state"], code_tag=raw["code_tag"]
-                )
+                self._before_slot_update(db, old, state=raw["state"], code_tag=raw["code_tag"])
             columns = tuple(sorted(fields))
             db.execute(
                 f"INSERT INTO access_mesh_slot_replicas ({','.join(columns)}) "

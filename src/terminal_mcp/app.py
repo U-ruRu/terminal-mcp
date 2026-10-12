@@ -352,6 +352,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
         service.access_mesh = access_mesh
+        if managed_fleet_control is not None:
+            managed_fleet_control.native_access = access_mesh
         persistent_lifecycle.access_mesh = access_mesh
         if fleet_config and fleet_replication:
             access_mesh_replication = AccessMeshReplication(access_mesh, fleet_config)
@@ -450,7 +452,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     lifecycle_event_mesh = None
     if access_mesh_replication is not None:
         lifecycle_event_mesh = LifecycleEventMesh(
-            mcp_event_store, access_mesh_replication.request,
+            mcp_event_store,
+            access_mesh_replication.request,
             authorization_checker=checked_subscription_access,
         )
         access_mesh_replication.lifecycle_events = lifecycle_event_mesh
@@ -651,14 +654,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         mesh_peer_auth = PinnedAccessMeshPeerAuth(fleet_config)
         app.include_router(build_access_mesh_router(access_mesh, mesh_peer_auth))
         if lifecycle_event_mesh is not None:
-            app.include_router(build_lifecycle_event_router(
-                lifecycle_event_mesh, mesh_peer_auth, access_mesh.store.trusted_issuers,
-            ))
+            app.include_router(
+                build_lifecycle_event_router(
+                    lifecycle_event_mesh,
+                    mesh_peer_auth,
+                    access_mesh.store.trusted_issuers,
+                )
+            )
         if lifecycle_event_mesh is not None:
-            app.include_router(build_message_event_router(
-                lifecycle_event_mesh.message_events, mesh_peer_auth,
-                access_mesh.store.trusted_issuers,
-            ))
+            app.include_router(
+                build_message_event_router(
+                    lifecycle_event_mesh.message_events,
+                    mesh_peer_auth,
+                    access_mesh.store.trusted_issuers,
+                )
+            )
         app.include_router(build_access_mesh_message_router(access_mesh_messages, mesh_peer_auth))
     if fleet_replication:
         if settings.fleet_legacy_replication_enabled:

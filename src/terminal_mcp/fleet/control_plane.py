@@ -48,6 +48,7 @@ class ManagedFleetControl:
         self._deferred_reconcile_task: asyncio.Task | None = None
         self._deferred_reconcile_requested = False
         self._stopped = asyncio.Event()
+        self.native_access = None
 
     async def start(self, interval_seconds: float | None = None) -> None:
         if self._reconcile_task is not None:
@@ -879,6 +880,8 @@ class ManagedFleetControl:
         return await self.snapshot()
 
     async def _restore_local_policy(self) -> None:
+        if self.native_access is not None:
+            await self.native_access.apply_fleet_policy()
         restore = getattr(self.policy_controller, "restore_local", None)
         if restore is not None:
             await restore()
@@ -896,6 +899,8 @@ class ManagedFleetControl:
         self._replace_runtime_config(config)
 
     async def _apply_local(self, state: dict) -> None:
+        if self.native_access is not None:
+            await self.native_access.apply_fleet_policy(state)
         if not state.get("managed"):
             if self.bootstrap_config.mesh_vpn_state_dir:
                 await asyncio.to_thread(

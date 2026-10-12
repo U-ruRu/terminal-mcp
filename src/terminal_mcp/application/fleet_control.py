@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import httpx
+
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.mesh import MeshApplication, MeshApplicationError
 from terminal_mcp.application.operator import OperatorApplication
@@ -17,6 +19,20 @@ class FleetControlApplication:
     async def _mutation(call):
         try:
             return {"ok": True, "control": await call}
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            return {
+                "ok": False,
+                "code": "control_authority_unavailable",
+                "error": "control_authority_unavailable",
+            }
+        except httpx.HTTPError:
+            # A lost reply does not prove that the control node rejected the write.
+            # Never expose request URLs, peer credentials or a raw transport exception.
+            return {
+                "ok": False,
+                "code": "control_mutation_unconfirmed",
+                "error": "control_mutation_unconfirmed",
+            }
         except PersistentPolicyError as exc:
             result = {"ok": False, "code": exc.code, "error": exc.code}
             if exc.blockers:

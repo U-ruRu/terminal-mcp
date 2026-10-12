@@ -27,7 +27,8 @@ class AccessMeshOperator:
             raise AccessMeshError("persistent_auth_required")
         admission.require("terminal:execute" if write else "terminal:read")
 
-    def _view(self, slot):
+    def _view(self, slot, defaults=None):
+        defaults = defaults or self.mesh.defaults_state()
         return {
             "issuer_node_id": slot.issuer_id,
             "slot_id": slot.slot_id,
@@ -38,6 +39,25 @@ class AccessMeshOperator:
             "revision": slot.revision,
             "code_generation": slot.code_generation,
             "policy": asdict(slot.policy),
+            "inheritance": {
+                "mode": "inherit" if slot.inherit_policy else "override",
+                "source": (defaults["inheritance"]["source"] if slot.inherit_policy else "slot"),
+                "parent": {
+                    **defaults["inheritance"]["parent"],
+                    "revision": defaults["revision"],
+                    "version": f"server:{self.store.local_node_id}:{defaults['revision']}",
+                },
+                "reset_supported": True,
+                "applies_to": "next_window",
+                "pending": slot.effective(self.mesh.clock()).policy != slot.policy,
+            },
+            "inheritance_supported": True,
+            "policy_source": defaults["policy_source"] if slot.inherit_policy else "slot",
+            "policy_override": None if slot.inherit_policy else asdict(slot.policy),
+            "inherited_policy": defaults["policy"],
+            "parent": {"source": defaults["policy_source"], "revision": defaults["revision"]},
+            "current_policy": asdict(slot.effective(self.mesh.clock()).policy),
+            "policy_applies_to": "next_session",
             "session_lifecycle": local_cycle(slot, self.mesh.clock()),
         }
 
@@ -64,8 +84,9 @@ class AccessMeshOperator:
         scope = {"kind": "access.operator.slots", "node": self.store.local_node_id}
         after = decode_cursor(cursor, scope)
         rows = await asyncio.to_thread(self.store.issuer_slots, after=after, limit=limit + 1)
+        defaults = await asyncio.to_thread(self.mesh.defaults_state)
         page, _ = bounded_page(
-            [self._view(slot) for _, slot in rows], limit=limit, cursor=None, scope=scope
+            [self._view(slot, defaults) for _, slot in rows], limit=limit, cursor=None, scope=scope
         )
         next_cursor = (
             encode_cursor(rows[len(page) - 1][0], scope) if page and len(rows) > len(page) else None
@@ -81,18 +102,7 @@ class AccessMeshOperator:
 
     async def defaults(self, actor):
         self.require_operator(actor)
-        current = await asyncio.to_thread(self.store.defaults)
-        return {
-            "ok": True,
-            **(
-                current
-                or {
-                    "revision": 1,
-                    "policy": asdict(self.mesh.defaults),
-                    "legacy_enabled": self.mesh.legacy_enabled,
-                }
-            ),
-        }
+        return {"ok": True, **await asyncio.to_thread(self.mesh.defaults_state)}
 
     async def mutate(
         self,
@@ -106,6 +116,7 @@ class AccessMeshOperator:
         policy=None,
         deadline_at=None,
         legacy_enabled=None,
+        inherit_policy=None,
     ):
         self.require_operator(actor, write=True)
         if action not in {
@@ -128,6 +139,7 @@ class AccessMeshOperator:
             "policy": policy,
             "deadline_at": deadline_at,
             "legacy_enabled": legacy_enabled,
+            **({"inherit_policy": inherit_policy} if inherit_policy is not None else {}),
         }
         spec = self._spec(actor, idempotency_key, payload)
         async with self.mesh._issuer_session_lock:
@@ -139,12 +151,25 @@ class AccessMeshOperator:
             if action == "create":
                 resolved = self._policy(policy, self.mesh.defaults)
                 return await self.mesh.issue(
-                    actor, kind=mode, policy=resolved, start=mode == "legacy", receipt_spec=spec
+                    actor,
+                    kind=mode,
+                    policy=resolved,
+                    start=mode == "legacy",
+                    receipt_spec=spec,
+                    inherit_policy=(policy is None) if inherit_policy is None else inherit_policy,
                 )
             if action == "defaults":
                 current = await self.defaults(actor)
-                resolved = self._policy(policy, SlotPolicy(**current["policy"]))
-                enabled = current["legacy_enabled"] if legacy_enabled is None else legacy_enabled
+                inherited = inherit_policy is True
+                base = current["inherited_policy"] if inherited else current["policy"]
+                resolved = self._policy(None if inherited else policy, SlotPolicy(**base))
+                enabled = (
+                    current["parent"]["legacy_enabled"]
+                    if inherited
+                    else current["legacy_enabled"]
+                    if legacy_enabled is None
+                    else legacy_enabled
+                )
                 result = {
                     "ok": True,
                     "issuer_node_id": self.store.local_node_id,
@@ -160,6 +185,8 @@ class AccessMeshOperator:
                     policy=asdict(resolved),
                     legacy_enabled=enabled,
                     receipt=receipt,
+                    inherit_policy=inherited,
+                    parent=current["parent"],
                 )
                 self.mesh.defaults, self.mesh.legacy_enabled = resolved, enabled
                 return result
@@ -179,7 +206,11 @@ class AccessMeshOperator:
             }
             resolved, start, deadline = None, None, None
             if action == "policy":
-                resolved = self._policy(policy, slot.policy)
+                resolved = (
+                    SlotPolicy(**self.mesh.defaults_state()["policy"])
+                    if inherit_policy is True
+                    else self._policy(policy, slot.policy)
+                )
             if action == "deadline":
                 cycle = local_cycle(slot, self.mesh.clock())
                 if cycle["state"] not in {"active", "warning", "draining"}:
@@ -200,4 +231,5 @@ class AccessMeshOperator:
                 effective_at=start,
                 deadline_at=deadline,
                 receipt_spec=spec,
+                inherit_policy=inherit_policy if action == "policy" else None,
             )

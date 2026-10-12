@@ -5,6 +5,7 @@ capture, so a delayed delivery cannot move the already-open deadline or warning
 thresholds. After the captured window's own cooldown, the next window uses the
 new defaults. An idle slot remains idle until an explicit start.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -27,15 +28,23 @@ def effective_slot(slot: SlotSnapshot, now: datetime) -> SlotSnapshot:
     if capture.rearm_at is not None and now >= capture.rearm_at:
         return replace(slot, anchor=capture.rearm_at, deadline_at=None, policy_window=None)
     if capture.closed_at is not None and now >= capture.closed_at:
-        return replace(slot, policy=capture.policy, anchor=capture.rearm_at,
-                       deadline_at=None, policy_window=None)
+        return replace(
+            slot,
+            policy=capture.policy,
+            anchor=capture.rearm_at,
+            deadline_at=None,
+            policy_window=None,
+        )
     # A future anchor denotes the existing cooldown after an explicit end.
     anchor = capture.started_at
     if anchor is None and capture.rearm_at is not None:
         anchor = capture.rearm_at
     return replace(
-        slot, policy=capture.policy, anchor=anchor,
-        deadline_at=capture.hard_expires_at, policy_window=None,
+        slot,
+        policy=capture.policy,
+        anchor=anchor,
+        deadline_at=capture.hard_expires_at,
+        policy_window=None,
     )
 
 
@@ -44,8 +53,11 @@ def slot_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     now = now.astimezone(UTC)
     slot = effective_slot(slot, now)
     base = {
-        "state": slot.state, "started_at": None, "hard_expires_at": None,
-        "remaining_seconds": 0, "rearm_at": None,
+        "state": slot.state,
+        "started_at": None,
+        "hard_expires_at": None,
+        "remaining_seconds": 0,
+        "rearm_at": None,
     }
     if slot.state != "active" or slot.anchor is None:
         return {**base, "state": slot.state if slot.state != "active" else "idle"}
@@ -57,18 +69,32 @@ def slot_cycle(slot: SlotSnapshot, now: datetime) -> dict:
     end = slot.deadline_at or anchor + timedelta(seconds=policy.duration_seconds)
     if now >= end:
         if not policy.rearm_enabled:
-            return {**base, "state": "expired", "started_at": _text(start), "hard_expires_at": _text(end)}
+            return {
+                **base,
+                "state": "expired",
+                "started_at": _text(start),
+                "hard_expires_at": _text(end),
+            }
         next_start = end + timedelta(seconds=policy.cooldown_seconds)
         if now < next_start:
-            return {**base, "state": "cooldown", "started_at": _text(start),
-                    "hard_expires_at": _text(end), "rearm_at": _text(next_start)}
+            return {
+                **base,
+                "state": "cooldown",
+                "started_at": _text(start),
+                "hard_expires_at": _text(end),
+                "rearm_at": _text(next_start),
+            }
         period = policy.duration_seconds + policy.cooldown_seconds
         index = int((now - next_start).total_seconds() // period)
         start = next_start + timedelta(seconds=index * period)
         end = start + timedelta(seconds=policy.duration_seconds)
     base.update(started_at=_text(start), hard_expires_at=_text(end))
     if now >= end:
-        return {**base, "state": "cooldown", "rearm_at": _text(end + timedelta(seconds=policy.cooldown_seconds))}
+        return {
+            **base,
+            "state": "cooldown",
+            "rearm_at": _text(end + timedelta(seconds=policy.cooldown_seconds)),
+        }
     remaining = (end - now).total_seconds()
     phase = "active"
     if policy.draining_seconds and remaining <= policy.draining_seconds:
