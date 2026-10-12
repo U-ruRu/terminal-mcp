@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -10,7 +11,13 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_access_codes_are_keyed_rotated_tombstoned_and_never_persisted_raw(tmp_path):
+def test_access_codes_are_keyed_rotated_tombstoned_and_never_persisted_raw(tmp_path, monkeypatch):
+    # A timestamp may legitimately contain a short PIN as a digit substring.
+    monkeypatch.setattr(
+        "terminal_mcp.auth.access_authority._utc_now",
+        lambda: "2026-10-12T13:20:35.773192+00:00",
+    )
+
     async def scenario():
         path = tmp_path / "auth.sqlite3"
         store = AuthFoundationStore(path)
@@ -24,16 +31,53 @@ def test_access_codes_are_keyed_rotated_tombstoned_and_never_persisted_raw(tmp_p
         assert (await store.resolve_access_code("7319"))["public_name"] == "Alpha"
         with pytest.raises(AuthConflictError):
             await store.issue_access_code("la_one", requested_code="1188")
-        return path, slot, first, second
+        expected = {
+            code: (store.access._index(code), store.access._verifier(code))
+            for code in ("0042", "7319", "1188", "7001")
+        }
+        return path, slot, first, second, expected
 
-    path, slot, first, second = run(scenario())
+    path, slot, first, second, expected = run(scenario())
     assert slot["public_name"] == "Alpha"
     assert first["access_generation"] == 1
     assert second["access_generation"] == 2
-    raw = path.read_bytes()
-    for plaintext in (b"0042", b"7319", b"1188", b"7001"):
-        assert plaintext not in raw
+
+    # Inspect values instead of arbitrary byte substrings in timestamps or HMACs.
+    def assert_no_raw_code(value):
+        if isinstance(value, str):
+            assert value not in expected
+            try:
+                nested = json.loads(value)
+            except (ValueError, TypeError):
+                return
+            if nested != value:
+                assert_no_raw_code(nested)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                assert_no_raw_code(key)
+                assert_no_raw_code(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                assert_no_raw_code(item)
+        elif isinstance(value, bytes):
+            assert value not in {code.encode() for code in expected}
+
     with sqlite3.connect(path) as db:
+        tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for (table,) in tables:
+            safe_table = table.replace('"', '""')
+            for row in db.execute(f'SELECT * FROM "{safe_table}"'):
+                assert_no_raw_code(row)
+        stored = db.execute(
+            "SELECT code_index,verifier FROM auth_access_codes ORDER BY generation"
+        ).fetchall()
+        assert stored == [expected["0042"], expected["7319"]]
+        assert all(
+            len(index) == len(verifier) == 64 and index != verifier for index, verifier in stored
+        )
+        assert {
+            row[0] for row in db.execute("SELECT code_index FROM auth_access_code_tombstones")
+        } == {expected["1188"][0], expected["7001"][0]}
         assert (
             db.execute(
                 "SELECT COUNT(*) FROM auth_access_codes WHERE tombstoned_at IS NOT NULL"
