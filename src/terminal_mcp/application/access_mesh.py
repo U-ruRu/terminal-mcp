@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
+from terminal_mcp.core.access_policy_windows import capture_window
 from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import (
     FINALIZATION_OPERATIONS,
@@ -474,7 +475,7 @@ class AccessMeshApplication:
         ).hexdigest()
         return {"request_key": key, "fingerprint": fingerprint, "connection_key": binding}
 
-    def _slot_receipt(self, slot, action, *, revision=None, code=None):
+    def _slot_receipt(self, slot, action, *, revision=None, code=None, include_code_generation=False):
         return {
             "ok": True,
             "action": action,
@@ -484,6 +485,8 @@ class AccessMeshApplication:
             "public_name": self.store.human_name(slot),
             "mode": slot.kind,
             "revision": revision or slot.revision,
+            **({"code_generation": slot.code_generation + (1 if action == "rotate" else 0)}
+               if include_code_generation else {}),
             **({"access_code": code} if code is not None else {}),
         }
 
@@ -558,6 +561,7 @@ class AccessMeshApplication:
                     "revision": 1,
                     "public_name": full_agent_name(event.agent_name, event.display_suffix),
                     "access_code": allocated,
+                    **({"code_generation": 1} if actor.endpoint_role == "operator" else {}),
                 }
                 receipt = (
                     self.store.prepare_receipt(
@@ -644,6 +648,11 @@ class AccessMeshApplication:
                 code_tag=self.store.code_tag(slot.issuer_id, code) if code else None,
                 effective_at=effective_at or (self.clock() if kind.startswith("Session") else None),
                 deadline_at=deadline_at,
+                # Future policy edits must not renew the currently granted window.
+                # Capture it on the issuer so every replica applies the same boundary.
+                policy_window=capture_window(slot, self.clock())
+                if kind == "SlotPolicyChanged"
+                else None,
             )
             action = {
                 "SessionStarted": "start",
@@ -655,7 +664,8 @@ class AccessMeshApplication:
                 "SlotDeleted": "delete",
                 "AccessCodeRotated": "rotate",
             }.get(kind, "update")
-            result = self._slot_receipt(slot, action, revision=event.revision, code=code)
+            result = self._slot_receipt(slot, action, revision=event.revision, code=code,
+                                        include_code_generation=actor.endpoint_role == "operator")
             receipt = (
                 self.store.prepare_receipt(event_id=event.event_id, result=result, **receipt_spec)
                 if receipt_spec

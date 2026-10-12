@@ -36,6 +36,7 @@ class AccessMeshOperator:
             "mode": slot.kind,
             "state": slot.state,
             "revision": slot.revision,
+            "code_generation": slot.code_generation,
             "policy": asdict(slot.policy),
             "session_lifecycle": local_cycle(slot, self.mesh.clock()),
         }

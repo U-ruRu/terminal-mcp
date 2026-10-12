@@ -40,7 +40,6 @@ PAIRED_CONSOLE_PERSISTENT_MUTATIONS = frozenset(
         "/actions/persistent/slots/delete",
         "/actions/persistent/claims/release",
         "/actions/persistent/claims/reassign",
-        "/actions/persistent/managed/status",
         "/actions/persistent/managed/policy",
         "/actions/persistent/managed/window",
         "/actions/persistent/managed/sessions/end",
@@ -132,6 +131,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if method.upper() == "POST" and path == "/actions/access/mutate":
             return ["terminal:read", "terminal:execute"]
         if method.upper() == "GET" and path == "/actions/console/snapshot":
+            return ["terminal:read"]
+        if method.upper() == "POST" and path == "/actions/persistent/managed/status":
             return ["terminal:read"]
         if method.upper() == "POST" and path in PAIRED_CONSOLE_PERSISTENT_MUTATIONS:
             return ["terminal:read", "terminal:execute"]
