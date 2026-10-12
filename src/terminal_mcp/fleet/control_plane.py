@@ -906,7 +906,10 @@ class ManagedFleetControl:
         if self.native_access is not None:
             await self.native_access.apply_fleet_policy(state)
         if not state.get("managed"):
-            if self.native_access is not None and hasattr(self.native_access.store, "clear_managed_proof"):
+            if (
+                self.native_access is not None
+                and hasattr(self.native_access.store, "clear_managed_proof")
+            ):
                 if self.native_access.store.clear_managed_proof():
                     self.native_access.replication.reset_proof_evidence()
             if self.bootstrap_config.mesh_vpn_state_dir:
@@ -935,7 +938,10 @@ class ManagedFleetControl:
         )
         policy = state.get("policy")
         if local_mesh_id is None:
-            if self.native_access is not None and hasattr(self.native_access.store, "clear_managed_proof"):
+            if (
+                self.native_access is not None
+                and hasattr(self.native_access.store, "clear_managed_proof")
+            ):
                 if self.native_access.store.clear_managed_proof():
                     self.native_access.replication.reset_proof_evidence()
             await self._restore_local_policy()
