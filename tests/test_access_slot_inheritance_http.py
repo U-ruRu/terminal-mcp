@@ -456,5 +456,7 @@ def test_reset_request_requires_explicit_parent_revision(tmp_path):
                 "idempotency_key": "missing-parent-proof",
             },
         )
-        assert response.status_code == 422
+        assert response.status_code == 200
+        assert response.json().get("ok") is False
+        assert response.json().get("code") == "validation_error"
         assert read_slot(client, issued["slot_id"])["revision"] == 1
