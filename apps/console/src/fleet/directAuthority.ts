@@ -3,6 +3,7 @@ import type { ActivityFeedReadModel, ManagedFleetControlReadModel, ManagedFleetM
 import type { ProfileRestoreResult } from '../connections/types'
 
 type ConnectedRestore = Extract<ProfileRestoreResult, { status: 'connected' }>
+const READ_RETRY_DELAYS_MS = [250, 750] as const
 import { DEFAULT_FLEET_REQUEST_TIMEOUT_MS, withRequestTimeout } from './policy'
 import type { FleetActivityOptions } from './types'
 
@@ -22,11 +23,11 @@ export class BrowserDirectAuthorityClient {
   }
 
   fleetControl(instanceId: string): Promise<ManagedFleetControlReadModel> {
-    return this.withClient(instanceId, (client) => client.fleetControl())
+    return this.withReadRetry(instanceId, (client) => client.fleetControl())
   }
 
   meshVpnStatus(instanceId: string): Promise<MeshVpnStatus> {
-    return this.withClient(instanceId, (client) => client.meshVpnStatus())
+    return this.withReadRetry(instanceId, (client) => client.meshVpnStatus())
   }
 
   meshVpnMutation(
@@ -38,7 +39,7 @@ export class BrowserDirectAuthorityClient {
   }
 
   fleetEnrollment(instanceId: string) {
-    return this.withClient(instanceId, (client) => client.fleetEnrollment())
+    return this.withReadRetry(instanceId, (client) => client.fleetEnrollment())
   }
 
   fleetControlMutation(
@@ -65,12 +66,35 @@ export class BrowserDirectAuthorityClient {
     return this.withClient(instanceId, (client) => client.activity(options))
   }
 
+  // Only read operations may be repeated following a transport failure. A write
+  // may have committed before a proxy returned 520, so it must be reconciled.
+  private async withReadRetry<T>(
+    instanceId: string,
+    operation: (client: ConsoleClient) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.withClient(instanceId, operation)
+      } catch (error) {
+        if (
+          attempt >= READ_RETRY_DELAYS_MS.length
+          || !(error instanceof ConsoleHttpError)
+          || !error.retryable
+        ) throw error
+        await new Promise<void>((resolve) => setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt]))
+      }
+    }
+  }
+
   private async withClient<T>(
     instanceId: string,
     operation: (client: ConsoleClient) => Promise<T>,
   ): Promise<T> {
     const restored = await this.registry.restore(instanceId)
     if (restored.status !== 'connected') {
+      if (restored.status === 'error' && restored.retryable) {
+        throw new ConsoleHttpError(0, 'direct_authority_auth_transient')
+      }
       throw new Error('direct_authority_auth_' + restored.status)
     }
     let session: ConnectedRestore = restored

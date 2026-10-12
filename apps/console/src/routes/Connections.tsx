@@ -2,6 +2,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react
 import { Link, useParams } from 'react-router-dom'
 
 import type { ManagedFleetControlReadModel, ManagedFleetMeshReadModel, ManagedFleetMutationResult, ManagedFleetNodeReadModel } from '../api/models'
+import { ConsoleHttpError } from '../api/client'
 import { useConnectionRuntime } from '../connections/runtime'
 import { inspectCanonicalPairingLink } from '../connections/pairingLink'
 import { connectionLifecycle, pairingErrorMessageKey, type ConnectionLifecycle } from '../connections/lifecycle'
@@ -53,6 +54,11 @@ type MutationPhase = 'pending' | 'confirmed' | 'failed'
 type MembershipMutation = { targetMeshId: string; phase: MutationPhase; error?: string }
 type MembershipProjection = { kind: 'mesh' | 'standalone' | 'unknown'; meshId?: string; node?: ManagedFleetNodeReadModel; freshness: FleetControlFreshness }
 type OperationalState = 'current' | 'applying' | 'unavailable' | 'attention'
+
+function isUncertainControlFailure(result: ManagedFleetMutationResult): boolean {
+  const code = result.code ?? result.error ?? ''
+  return /^(http_5\d\d|network_error|timeout|request_timeout|direct_authority_auth_transient)$/.test(code)
+}
 type AuthorityView = {
   control: ManagedFleetControlReadModel
   freshness: FleetControlFreshness
@@ -221,6 +227,31 @@ export function Connections() {
     return () => window.clearTimeout(handle)
   }, [refreshControls])
 
+  // Fleet Control is a read model. Recover it independently of auth and
+  // websocket state when the app returns to foreground or connectivity returns.
+  useEffect(() => {
+    const onForeground = () => {
+      if (document.visibilityState === 'visible') void refreshControls()
+    }
+    const onOnline = () => void refreshControls()
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      const pendingReconciliation = Object.values(membershipMutations).some(
+        (mutation) => mutation.error === 'control_commit_uncertain',
+      )
+      if (pendingReconciliation || profiles.some((profile) => controls[profile.instanceId]?.freshness !== 'fresh')) {
+        void refreshControls()
+      }
+    }, 12_000)
+    document.addEventListener('visibilitychange', onForeground)
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onForeground)
+      window.removeEventListener('online', onOnline)
+    }
+  }, [controls, membershipMutations, profiles, refreshControls])
+
   const authorityViews = useMemo(() => {
     const grouped = new Map<string, ControlObservation & { control: ManagedFleetControlReadModel }>()
     const score = (item: ControlObservation & { control: ManagedFleetControlReadModel }) =>
@@ -355,6 +386,7 @@ export function Connections() {
       } catch (cause) {
         const failure = {
           ok: false,
+          code: cause instanceof ConsoleHttpError ? cause.code : undefined,
           error: cause instanceof Error ? cause.message : 'control_mutation_failed',
         }
         setControlError(failure.error)
@@ -607,6 +639,24 @@ export function Connections() {
       })
       if (result.ok && result.control) {
         projectMembershipControl(instanceId, result.control, enrollment.nodeId)
+      } else if (!result.ok && isUncertainControlFailure(result)) {
+        // A proxy error is not proof that the write failed. Never blindly replay
+        // a POST: reconcile the node with the authoritative read endpoint first.
+        const authorityApi = targetAuthority.profile ? client(targetAuthority.profile.instanceId) : null
+        try {
+          const control = await authorityApi?.fleetControl()
+          const node = control?.nodes.find((item) => item.nodeId === enrollment.nodeId)
+          if (node && node.state !== 'detached' && node.meshId === meshId && control) {
+            projectMembershipControl(instanceId, control, enrollment.nodeId)
+            setControlError(null)
+            return { ok: true, control }
+          }
+        } catch {
+          // An unavailable read leaves the commit uncertain; the screen polls
+          // again after reconnect instead of repeating the write.
+        }
+        void refreshControls()
+        return { ok: false, code: 'control_commit_uncertain', error: 'control_commit_uncertain' }
       }
       return result
     } catch (cause) {
@@ -614,7 +664,7 @@ export function Connections() {
       setControlError(failure.error)
       return failure
     }
-    }, [authorityForMesh, client, mutateControl, projectMembershipControl])
+    }, [authorityForMesh, client, mutateControl, projectMembershipControl, refreshControls])
   async function detachFromMesh(instanceId: string): Promise<ManagedFleetMutationResult> {
     const profile = profiles.find((item) => item.instanceId === instanceId)
     if (!profile) return { ok: false, error: 'membership_unknown' }

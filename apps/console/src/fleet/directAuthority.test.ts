@@ -60,3 +60,47 @@ test('retries one direct-authority request with a refreshed shared session after
   expect(restore).toHaveBeenCalledTimes(2)
   expect(fetcher).toHaveBeenCalledTimes(2)
 })
+
+test('GET enrollment retries proxy HTTP 520 then succeeds', async () => {
+  const restore = vi.fn(async (): Promise<ProfileRestoreResult> => ({
+    status: 'connected', profile, accessToken: 'access', accessExpiresAt: 100_000,
+  }))
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response('{}', { status: 520 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ enrollment: {
+      node_id: 'tokyo', origin: profile.origin, public_key: 'public', auth_token: 'example',
+    } }), { status: 200 }))
+  const client = new BrowserDirectAuthorityClient({ restore }, fetcher)
+
+  await expect(client.fleetEnrollment('tokyo')).resolves.toMatchObject({ nodeId: 'tokyo' })
+  expect(fetcher).toHaveBeenCalledTimes(2)
+})
+
+test('transient auth restore failure is retried before enrollment GET', async () => {
+  const restore = vi.fn()
+    .mockResolvedValueOnce({ status: 'error', profile, retryable: true, message: 'http_520' })
+    .mockResolvedValueOnce({
+      status: 'connected', profile, accessToken: 'access', accessExpiresAt: 100_000,
+    })
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ enrollment: {
+    node_id: 'tokyo', origin: profile.origin, public_key: 'public', auth_token: 'example',
+  } }), { status: 200 }))
+  const client = new BrowserDirectAuthorityClient({ restore }, fetcher)
+
+  await expect(client.fleetEnrollment('tokyo')).resolves.toMatchObject({ nodeId: 'tokyo' })
+  expect(restore).toHaveBeenCalledTimes(2)
+  expect(fetcher).toHaveBeenCalledTimes(1)
+})
+
+test('write is never blindly retried after HTTP 520', async () => {
+  const restore = vi.fn(async (): Promise<ProfileRestoreResult> => ({
+    status: 'connected', profile, accessToken: 'access', accessExpiresAt: 100_000,
+  }))
+  const fetcher = vi.fn().mockResolvedValue(new Response('{}', { status: 520 }))
+  const client = new BrowserDirectAuthorityClient({ restore }, fetcher)
+
+  await expect(client.fleetControlMutation('tokyo', '/actions/fleet/control/nodes/upsert', {
+    node_id: 'tokyo',
+  })).rejects.toMatchObject({ status: 520, code: 'http_520' })
+  expect(fetcher).toHaveBeenCalledTimes(1)
+})

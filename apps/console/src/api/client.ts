@@ -55,12 +55,12 @@ async function payload(response: Response): Promise<unknown> {
   }
 }
 
-function errorCode(value: unknown): string {
+function errorCode(value: unknown, status: number): string {
   if (value && typeof value === 'object' && 'error' in value) {
     const code = (value as { error?: unknown }).error
     if (typeof code === 'string') return code
   }
-  return 'request_failed'
+  return 'http_' + status
 }
 
 export class ConsoleClient {
@@ -281,7 +281,7 @@ export class ConsoleClient {
 
     const body = await payload(response)
     if (!response.ok) {
-      throw new ConsoleHttpError(response.status, errorCode(body))
+      throw new ConsoleHttpError(response.status, errorCode(body, response.status))
     }
     return body
   }
