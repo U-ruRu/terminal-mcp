@@ -109,7 +109,9 @@ and enabled persistent management paths. A CDN challenge is classified separatel
 from an application failure. Public 401 checks prove routing/authentication boundaries;
 they do not claim an authenticated management acceptance test.
 
-Results distinguish `applied`, `not_applied`, and `partially_applied`. Partial application
+Results distinguish `applied`, `not_applied`, and `partially_applied`.
+An unreadable status/recovery context or interrupted migrator reports
+`partially_applied` with `state_unknown=true`; it never asserts that nothing changed. Partial application
 has a nonzero exit status. Inspect its private journal and completion receipt; do not
 paste raw configuration, token databases or keys into chat or public logs.
 

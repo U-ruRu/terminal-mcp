@@ -203,17 +203,24 @@ def main() -> None:
         if result.get("outcome") == "partially_applied":
             raise SystemExit(30)
     except Exception as exc:
+        # An unreadable status or interrupted migrator does not prove that an
+        # earlier invocation made no changes. Never label that outcome not_applied.
+        state_unknown = args.action in {"status", "resume", "recover", "_migrate"}
         result = {
-            "outcome": "not_applied",
+            "outcome": "partially_applied" if state_unknown else "not_applied",
             "error": str(exc)
             if isinstance(exc, ReleaseError)
             else "unclassified_failure_inspect_private_operation_state",
         }
+        if state_unknown:
+            result["state_unknown"] = True
         if operation is not None:
             try:
                 result.update(operation.status())
+                result.pop("state_unknown", None)
             except Exception:
                 result["outcome"] = "partially_applied"
+                result["state_unknown"] = True
             result["error"] = (
                 str(exc) if isinstance(exc, ReleaseError) else "unclassified_operation_failure"
             )

@@ -584,3 +584,29 @@ def test_real_profile_list_deselection_is_not_silently_accepted(tmp_path, desele
     report["files"]["profile.json"] = sha256(path)
     with pytest.raises(ReleaseError, match="acceptance_deselected_tests"):
         verify_evidence_files(tmp_path / "receipt.json", report)
+
+
+@pytest.mark.parametrize("action", ["status", "resume", "recover", "_migrate"])
+def test_unreadable_operation_state_does_not_claim_nothing_was_applied(
+    monkeypatch,
+    capsys,
+    action,
+):
+    from terminal_mcp.deployment import release
+
+    class BrokenDriver:
+        def __init__(self, *args, **kwargs):
+            raise ReleaseError("isolated_profile_unavailable")
+
+    monkeypatch.setattr(release.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(release, "NodeDriver", BrokenDriver)
+    monkeypatch.setattr(release, "offline_driver", lambda *args: BrokenDriver())
+    arguments = SimpleNamespace(action=action, profile=Path("/isolated/missing"), target="isolated")
+    monkeypatch.setattr(release, "parser", lambda: SimpleNamespace(parse_args=lambda: arguments))
+    with pytest.raises(SystemExit) as exited:
+        release.main()
+    assert exited.value.code == 30
+    output = json.loads(capsys.readouterr().out)
+    assert output["outcome"] == "partially_applied"
+    assert output["state_unknown"] is True
+    assert output["error"] == "isolated_profile_unavailable"
