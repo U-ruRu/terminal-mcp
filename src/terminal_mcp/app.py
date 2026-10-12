@@ -330,8 +330,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     access_mesh_messages = None
     if settings.access_mesh_enabled:
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+        native_defaults = SlotPolicy(
+            settings.access_mesh_duration_sec,
+            settings.access_mesh_cooldown_sec,
+            True,
+            settings.access_mesh_warning_sec,
+            settings.access_mesh_draining_sec,
+        )
         mesh_store = AccessMeshStore(
             settings.database_path,
+            upgrade_defaults=native_defaults,
+            upgrade_legacy_enabled=settings.access_mesh_legacy_enabled,
             local_node_id=settings.fleet_instance_id,
             trusted_issuers=frozenset(
                 [settings.fleet_instance_id, *json.loads(settings.access_mesh_peers_json)]
@@ -343,13 +352,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             task_store=service.task_store,
             execution_fence=persistent_local_fence,
             legacy_enabled=settings.access_mesh_legacy_enabled,
-            defaults=SlotPolicy(
-                settings.access_mesh_duration_sec,
-                settings.access_mesh_cooldown_sec,
-                True,
-                settings.access_mesh_warning_sec,
-                settings.access_mesh_draining_sec,
-            ),
+            defaults=native_defaults,
         )
         service.access_mesh = access_mesh
         if managed_fleet_control is not None:

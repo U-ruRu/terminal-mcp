@@ -14,15 +14,17 @@ import json
 import secrets
 import sqlite3
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from terminal_mcp.core.access_mesh_grants import (
+    ACCESS_MESH_SCHEMA_VERSION,
     AccessMeshError,
     AccessSlotEvent,
     LocalAccessMesh,
+    SlotPolicy,
     SlotSnapshot,
     _parse,
     _text,
@@ -61,7 +63,16 @@ def local_cycle(slot: SlotSnapshot, now: datetime) -> dict:
 class AccessMeshStore(LocalAccessMesh):
     """Native storage adapter; construct after the parent directory exists."""
 
-    def __init__(self, *args, clock=None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        clock=None,
+        upgrade_defaults: SlotPolicy | None = None,
+        upgrade_legacy_enabled: bool | None = None,
+        **kwargs,
+    ):
+        self._upgrade_defaults = upgrade_defaults
+        self._upgrade_legacy_enabled = upgrade_legacy_enabled
         self.clock = clock or (lambda: datetime.now(UTC))
         self._delivery_notifier = None
         super().__init__(*args, **kwargs)
@@ -75,6 +86,74 @@ class AccessMeshStore(LocalAccessMesh):
     def set_delivery_notifier(self, callback) -> None:
         """Register an in-process wakeup, never a network call or durability gate."""
         self._delivery_notifier = callback
+
+    def _prepare_schema_upgrade(self, db, *, from_version: int) -> None:
+        super()._prepare_schema_upgrade(db, from_version=from_version)
+        columns = {row[1] for row in db.execute("PRAGMA table_info(access_mesh_operator_defaults)")}
+        ledger_exists = (
+            db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migration_state'"
+            ).fetchone()
+            is not None
+        )
+        snapshot_required = ledger_exists and (
+            db.execute(
+                "SELECT 1 FROM schema_migration_state "
+                "WHERE name='access_defaults_snapshot_required'"
+            ).fetchone()
+            is not None
+        )
+        # No native table means a fresh installation, whose Mesh inheritance
+        # remains unchanged. An existing absent row meant configured native
+        # defaults before v25; snapshot that effective policy, never Fleet policy.
+        if not columns:
+            return
+        actual_version = int(db.execute("PRAGMA user_version").fetchone()[0])
+        # Core omits the ledger at version zero only for empty Access-only
+        # metadata with no sequence history. Preserve that partial first
+        # install's inheritance without manufacturing a persisted defaults row.
+        if actual_version == 0 and not ledger_exists:
+            return
+        if (
+            not snapshot_required
+            and actual_version >= ACCESS_MESH_SCHEMA_VERSION
+            and {"inherit_policy", "parent_json"} <= columns
+        ):
+            return
+        if db.execute("SELECT 1 FROM access_mesh_operator_defaults WHERE singleton=1").fetchone():
+            if snapshot_required:
+                db.execute(
+                    "DELETE FROM schema_migration_state "
+                    "WHERE name='access_defaults_snapshot_required'"
+                )
+            return
+        if (
+            not isinstance(self._upgrade_defaults, SlotPolicy)
+            or type(self._upgrade_legacy_enabled) is not bool
+        ):
+            raise RuntimeError("native Access upgrade requires its configured effective defaults")
+        names = ["singleton", "revision", "policy_json", "legacy_enabled"]
+        values = [
+            1,
+            1,
+            json.dumps(asdict(self._upgrade_defaults), sort_keys=True),
+            int(self._upgrade_legacy_enabled),
+        ]
+        if "inherit_policy" in columns:
+            names.append("inherit_policy")
+            values.append(0)
+        if "parent_json" in columns:
+            names.append("parent_json")
+            values.append(None)
+        db.execute(
+            "INSERT INTO access_mesh_operator_defaults (" + ",".join(names) + ") "
+            "VALUES(" + ",".join("?" for _ in values) + ")",
+            values,
+        )
+        if snapshot_required:
+            db.execute(
+                "DELETE FROM schema_migration_state WHERE name='access_defaults_snapshot_required'"
+            )
 
     def _initialize(self) -> None:
         super()._initialize()
@@ -1287,17 +1366,19 @@ class AccessMeshStore(LocalAccessMesh):
                 "AND slot_id>? ORDER BY slot_id LIMIT ?",
                 (issuer_id, after, limit),
             ).fetchall()
-        result = []
-        for row in rows:
-            item = dict(row)
-            # Generation is issuer-local public vault metadata, not a bearer proof.
-            item.pop("code_generation", None)
-            if not item.get("inherit_policy"):
-                item.pop("inherit_policy", None)
-            if item.get("policy_window_json") is None:
-                item.pop("policy_window_json", None)
-            result.append(item)
-        return result
+        return [self.snapshot_wire(row) for row in rows]
+
+    @staticmethod
+    def snapshot_wire(row) -> dict:
+        """Project a stored slot through the shared replication wire contract."""
+        item = dict(row)
+        # Generation is issuer-local public vault metadata, not a bearer proof.
+        item.pop("code_generation", None)
+        if not item.get("inherit_policy"):
+            item.pop("inherit_policy", None)
+        if item.get("policy_window_json") is None:
+            item.pop("policy_window_json", None)
+        return item
 
     def apply_snapshot(self, raw: dict, *, authenticated_peer_id: str) -> str:
         fields = {

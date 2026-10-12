@@ -22,6 +22,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+# Keep aligned with storage.sqlite.SCHEMA_VERSION. The release fingerprint
+# requires that storage constant to remain a literal integer.
+ACCESS_MESH_SCHEMA_VERSION = 25
+
 EventKind = Literal[
     "SlotIssued",
     "SlotPolicyChanged",
@@ -423,8 +427,65 @@ class LocalAccessMesh:
         finally:
             db.close()
 
+    def _prepare_schema_upgrade(self, db, *, from_version: int) -> None:
+        """Native adapters preserve configured defaults inside the migration transaction."""
+
     def _initialize(self) -> None:
         with self._connect() as db:
+            # DDL otherwise autocommits one statement at a time. The version
+            # fence must become durable with the first incompatible Access DDL,
+            # before later store constructors or asynchronous startup can fail.
+            db.execute("BEGIN IMMEDIATE")
+            current_version = int(db.execute("PRAGMA user_version").fetchone()[0])
+            if current_version > ACCESS_MESH_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"database schema {current_version} is newer than supported "
+                    f"{ACCESS_MESH_SCHEMA_VERSION}"
+                )
+            tables = {
+                row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            ledger_exists = "schema_migration_state" in tables
+            has_history = any(
+                table != "sqlite_sequence" and not table.startswith("access_mesh_")
+                for table in tables
+            )
+            if current_version == 0 and not has_history:
+                # A first constructor, including an interrupted older one,
+                # can leave only empty Access metadata. It has no historical
+                # data migration to preserve. Never erase an existing ledger
+                # or infer authorization; the identity guard remains unchanged.
+                for table in tables:
+                    if table == "sqlite_sequence":
+                        history = db.execute(
+                            "SELECT 1 FROM sqlite_sequence WHERE seq>0 LIMIT 1"
+                        ).fetchone()
+                    else:
+                        quoted = table.replace('"', '""')
+                        history = db.execute(f'SELECT 1 FROM "{quoted}" LIMIT 1').fetchone()
+                    if history is not None:
+                        has_history = True
+                        break
+            if current_version < ACCESS_MESH_SCHEMA_VERSION and (current_version or has_history):
+                db.execute("""CREATE TABLE IF NOT EXISTS schema_migration_state (
+                    name TEXT PRIMARY KEY, value INTEGER NOT NULL
+                ) WITHOUT ROWID""")
+                ledger_exists = True
+                # SqliteRepository still needs the original revision for its
+                # historical conditional migrations (notably pre-21 claims).
+                db.execute(
+                    "INSERT OR IGNORE INTO schema_migration_state(name,value) "
+                    "VALUES('repository_schema_from',?)",
+                    (current_version,),
+                )
+            origin = None
+            if ledger_exists:
+                origin = db.execute(
+                    "SELECT value FROM schema_migration_state WHERE name='repository_schema_from'"
+                ).fetchone()
+            self._prepare_schema_upgrade(
+                db, from_version=int(origin[0]) if origin else current_version
+            )
             db.execute("""
                 CREATE TABLE IF NOT EXISTS access_mesh_slot_replicas (
                   issuer_id TEXT NOT NULL,
@@ -511,6 +572,7 @@ class LocalAccessMesh:
                 "CREATE INDEX IF NOT EXISTS access_mesh_slots_agent "
                 "ON access_mesh_slot_replicas(logical_agent_id)"
             )
+            db.execute(f"PRAGMA user_version={ACCESS_MESH_SCHEMA_VERSION}")
 
     def _after_apply(self, db, event: AccessSlotEvent, *, release_claims: bool = False) -> None:
         """Runtime stores extend this transactional hook; domain replicas stay standalone."""

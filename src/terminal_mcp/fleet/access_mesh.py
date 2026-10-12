@@ -572,7 +572,7 @@ class AccessMeshReplication:
                         "SELECT * FROM access_mesh_slot_replicas WHERE issuer_id=? AND slot_id=?",
                         (self.store.local_node_id, gap),
                     ).fetchone()
-                    snapshot = dict(row) if row else None
+                    snapshot = self.store.snapshot_wire(row) if row else None
             if snapshot is None:
                 raise AccessMeshError("access_mesh_slot_not_found")
             restored = await self.request(peer, "snapshot/apply", {"slot": snapshot})

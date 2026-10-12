@@ -30,9 +30,10 @@ from terminal_mcp.storage.sqlite_observability import (
 )
 from terminal_mcp.storage.work_windows import install_work_window_schema
 
-# The local-message schema increment (24) includes the previously accepted
-# bounded SQLite integrity-health probe from revision 23.
-SCHEMA_VERSION = 24
+# Revision 25 fences the Access inheritance/current-window/code-generation
+# migration. Keep this literal aligned with core.access_mesh_grants and retain
+# its static form for scripts/release_version.py's schema fingerprint.
+SCHEMA_VERSION = 25
 HEALTH_INTEGRITY_CACHE_SECONDS = 30.0
 HEALTH_INTEGRITY_TIMEOUT_SECONDS = 3.0
 
@@ -262,6 +263,47 @@ class SqliteRepository:
                 raise RuntimeError(
                     f"database schema {current_version} is newer than supported {SCHEMA_VERSION}"
                 )
+            # Access can be disabled while the repository upgrades. Preserve
+            # the old "no row means configured defaults" interpretation before
+            # stamping 25, including a partially upgraded six-column table.
+            # Use the actual version, not the earlier migration origin below:
+            # a fresh Access constructor can legitimately have origin zero.
+            if current_version < 25:
+                native_defaults_exist = await (
+                    await db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='access_mesh_operator_defaults'"
+                    )
+                ).fetchone()
+                if native_defaults_exist:
+                    defaults = await (
+                        await db.execute(
+                            "SELECT 1 FROM access_mesh_operator_defaults WHERE singleton=1"
+                        )
+                    ).fetchone()
+                    if defaults is None:
+                        await db.execute("""CREATE TABLE IF NOT EXISTS schema_migration_state (
+                            name TEXT PRIMARY KEY, value INTEGER NOT NULL
+                        ) WITHOUT ROWID""")
+                        await db.execute(
+                            "INSERT OR IGNORE INTO schema_migration_state(name,value) "
+                            "VALUES('access_defaults_snapshot_required',1)"
+                        )
+            migration_state_exists = await (
+                await db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='schema_migration_state'"
+                )
+            ).fetchone()
+            if migration_state_exists:
+                origin = await (
+                    await db.execute(
+                        "SELECT value FROM schema_migration_state "
+                        "WHERE name='repository_schema_from'"
+                    )
+                ).fetchone()
+                if origin is not None:
+                    current_version = min(current_version, int(origin[0]))
             await db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS commands(
@@ -629,6 +671,12 @@ class SqliteRepository:
 
                 await migrate_existing_claim_leases(db, now=utc_text())
             await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            if migration_state_exists:
+                # Clear only our origin marker, in the same successful commit.
+                # Failed/cancelled startup must preserve migration eligibility.
+                await db.execute(
+                    "DELETE FROM schema_migration_state WHERE name='repository_schema_from'"
+                )
             await db.commit()
             if legacy_output_migrated:
                 await db.execute("VACUUM")
@@ -1265,9 +1313,11 @@ class SqliteRepository:
         """Add QA to the SQLite CHECK while preserving rows, indexes and triggers."""
         import re
 
-        row = await (await db.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'"
-        )).fetchone()
+        row = await (
+            await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'"
+            )
+        ).fetchone()
         if not row or not row[0]:
             raise RuntimeError("work_items table is missing")
         old_sql = row[0]
@@ -1276,32 +1326,41 @@ class SqliteRepository:
 
         expanded = re.sub(
             r"(state\s+IN\s*\(\s*'ready'\s*,\s*'in_progress'\s*,\s*)'blocked'",
-            r"\1'qa','blocked'", old_sql, count=1, flags=re.I,
+            r"\1'qa','blocked'",
+            old_sql,
+            count=1,
+            flags=re.I,
         )
         if expanded == old_sql:
             raise RuntimeError("unrecognized work_items state constraint")
         replacement = re.sub(
-            r'(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
-            r'(?:\"work_items\"|\`work_items\`|\[work_items\]|work_items)\b',
-            "CREATE TABLE work_items_qa_v22", expanded, count=1,
+            r"(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+            r"(?:\"work_items\"|\`work_items\`|\[work_items\]|work_items)\b",
+            "CREATE TABLE work_items_qa_v22",
+            expanded,
+            count=1,
         )
         # Quoted table names are followed by a quote, not a word boundary.
         if replacement == expanded:
             replacement = re.sub(
-                r'(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
-                r'(?:\"work_items\"|\`work_items\`|\[work_items\]|work_items)',
-                "CREATE TABLE work_items_qa_v22", expanded, count=1,
+                r"(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+                r"(?:\"work_items\"|\`work_items\`|\[work_items\]|work_items)",
+                "CREATE TABLE work_items_qa_v22",
+                expanded,
+                count=1,
             )
         if replacement == expanded:
             raise RuntimeError("could not prepare QA migration")
-        columns = [item[1] for item in await (
-            await db.execute("PRAGMA table_info(work_items)")
-        ).fetchall()]
+        columns = [
+            item[1] for item in await (await db.execute("PRAGMA table_info(work_items)")).fetchall()
+        ]
         column_list = ",".join('"' + col.replace('"', '""') + '"' for col in columns)
-        saved = await (await db.execute(
-            "SELECT type,sql FROM sqlite_master WHERE tbl_name='work_items' "
-            "AND type IN ('index','trigger') AND sql IS NOT NULL"
-        )).fetchall()
+        saved = await (
+            await db.execute(
+                "SELECT type,sql FROM sqlite_master WHERE tbl_name='work_items' "
+                "AND type IN ('index','trigger') AND sql IS NOT NULL"
+            )
+        ).fetchall()
 
         await db.commit()
         await db.execute("PRAGMA foreign_keys=OFF")
@@ -1323,7 +1382,7 @@ class SqliteRepository:
             raise
         finally:
             await db.execute("PRAGMA foreign_keys=ON")
-        if (await (await db.execute("PRAGMA foreign_key_check")).fetchall()):
+        if await (await db.execute("PRAGMA foreign_key_check")).fetchall():
             raise RuntimeError("QA workflow migration broke foreign keys")
         return True
 
@@ -1862,7 +1921,8 @@ class SqliteRepository:
                 if command.status == "queued":
                     await db.execute(
                         "UPDATE commands SET status='cancelled',finished_at=?,error=NULL "
-                        "WHERE hash=? AND status='queued'", (now, cmd_hash),
+                        "WHERE hash=? AND status='queued'",
+                        (now, cmd_hash),
                     )
                 await db.commit()
                 return command, command.status
