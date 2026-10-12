@@ -82,6 +82,8 @@ Behavior tests may reuse two kinds of preparation:
 1. Immutable MCP schema dictionaries are built by the original generator, then stored
    in a bounded cache. Every consumer receives a deep copy. Function identity and
    generator arguments form the key; unknown/unhashable input uses the real generator.
+   Static input and role-output model catalogs also reuse only model_json_schema
+   dictionaries; BaseModel itself and unknown/dynamic models are never patched.
    Runtime validators, real HTTP/MCP adapters, processes and network boundaries remain
    unchanged. Contract/catalog/generator tests stay outside this allowlist.
 2. Selected behavioral tests seed a new main SQLite database from a verified empty,

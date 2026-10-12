@@ -14,7 +14,12 @@ from functools import wraps
 from pathlib import Path
 
 import pytest
-from preparation import ImmutablePreparationCache, seed_absent_database, snapshot_empty_database
+from preparation import (
+    ImmutablePreparationCache,
+    immutable_schema_models,
+    seed_absent_database,
+    snapshot_empty_database,
+)
 
 # These files test behavior over unchanged schema metadata, not schema generation itself.
 SCHEMA_PREPARATION_MODULES = frozenset(
@@ -119,6 +124,21 @@ def reuse_immutable_schema_preparation(monkeypatch, immutable_schema_cache):
         return immutable_schema_cache.get(
             key, lambda: planning(actions=actions, exclude_fields=exclude_fields)
         )
+
+    # Capture all inherited implementations before changing any class so subclasses
+    # cannot accidentally wrap a parent that was patched earlier in the loop.
+    methods = [(model, model.model_json_schema.__func__) for model in immutable_schema_models()]
+
+    def copy_model_metadata(original):
+        @wraps(original)
+        def copied(cls, *args, **kwargs):
+            key = (original, cls, args, tuple(sorted(kwargs.items())))
+            return immutable_schema_cache.get(key, lambda: original(cls, *args, **kwargs))
+
+        return classmethod(copied)
+
+    for model, original in methods:
+        monkeypatch.setattr(model, "model_json_schema", copy_model_metadata(original))
 
     monkeypatch.setattr(output_contracts, "_success_schema", copied_success)
     monkeypatch.setattr(task_planning, "task_action_planning_schema", copied_planning)

@@ -9,7 +9,12 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from preparation import ImmutablePreparationCache, seed_absent_database, snapshot_empty_database
+from preparation import (
+    ImmutablePreparationCache,
+    immutable_schema_models,
+    seed_absent_database,
+    snapshot_empty_database,
+)
 from pydantic import TypeAdapter, ValidationError
 
 from terminal_mcp.mcp import output_contracts, task_planning
@@ -18,6 +23,7 @@ from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 # Preserve direct access to the real generators before any function-scoped fixture patches.
 REAL_SUCCESS = output_contracts._success_schema
 REAL_PLANNING = task_planning.task_action_planning_schema
+REAL_METADATA = {model: model.model_json_schema.__func__ for model in immutable_schema_models()}
 
 
 def test_cache_returns_independent_deep_copies_and_is_bounded():
@@ -230,3 +236,20 @@ def test_allowlist_activates_real_pytest_fixtures_and_fresh_mode_restores_origin
     result = subprocess.run(command, cwd=suite, env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed" in result.stdout
+
+
+def test_static_model_metadata_matches_original_for_options_and_independent_copies(
+    reuse_immutable_schema_preparation,
+):
+    for model, original in REAL_METADATA.items():
+        for options in ({}, {"by_alias": False}, {"mode": "serialization"}):
+            expected = original(model, **options)
+            actual = model.model_json_schema(**options)
+            assert actual == expected
+            actual.clear()
+            assert model.model_json_schema(**options) == expected
+
+
+def test_static_model_metadata_fixture_restores_every_original_method():
+    for model, original in REAL_METADATA.items():
+        assert model.model_json_schema.__func__ is original
