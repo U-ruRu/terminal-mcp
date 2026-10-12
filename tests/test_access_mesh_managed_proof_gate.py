@@ -1,5 +1,4 @@
 """Isolated authenticated proof-gate tests. No live server or credentials."""
-import asyncio
 from dataclasses import dataclass
 
 import httpx
@@ -35,7 +34,8 @@ class Routes(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request):
         if request.url.host in self.offline:
             raise httpx.ConnectError("offline fixture", request=request)
-        return await httpx.ASGITransport(app=self.apps[request.url.host]).handle_async_request(request)
+        transport = httpx.ASGITransport(app=self.apps[request.url.host])
+        return await transport.handle_async_request(request)
 
 
 async def setup(tmp_path, name, other, key, routes, client):

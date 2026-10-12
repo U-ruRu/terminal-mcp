@@ -1,5 +1,4 @@
 """Native Access proof enrollment from authenticated managed authority material."""
-import hashlib
 
 import pytest
 
@@ -45,7 +44,6 @@ def test_join_uses_authority_token_automatically_including_main(tmp_path):
     assert bootstrap_fb in fb.code_tags("firstbyte", "2468")
     assert bootstrap_main in main.code_tags("main", "1357")
     assert bootstrap_fb not in fb.code_tags("bacloud", "2468")
-    assert hashlib.sha256(fb._receipt_cipher()._key if hasattr(fb._receipt_cipher(), "_key") else FIRST).digest()
 
     # A lost response/retry must be idempotent and may not create duplicate keys.
     assert not fb.install_managed_proof(
@@ -107,10 +105,10 @@ def test_signed_managed_replica_installs_group_proof_without_operator_env_edit(t
     from functools import partial
 
     from fastapi.testclient import TestClient
-
-    from terminal_mcp.app import create_app
     from test_access_slot_inheritance_http import mesh_config
     from test_fleet_control_hardening import _managed_replica_snapshot
+
+    from terminal_mcp.app import create_app
 
     app = create_app(mesh_config(tmp_path, control="control"))
     with TestClient(app, base_url="https://terminal.example") as client:
@@ -156,11 +154,11 @@ def test_pending_membership_does_not_accept_remote_bootstrap_claim(tmp_path):
 
 
 def test_preexisting_local_persistent_slot_stays_attachable_after_join_leave_and_restart(tmp_path):
+    import asyncio
     from datetime import UTC, datetime
 
     from terminal_mcp.core.access_mesh_grants import AccessSlotEvent, SlotPolicy
     from terminal_mcp.storage.sqlite import SqliteRepository
-    import asyncio
 
     path = tmp_path / "preserved.sqlite3"
     asyncio.run(SqliteRepository(path, tmp_path / "out.sqlite3").initialize())

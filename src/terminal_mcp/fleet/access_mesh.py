@@ -127,8 +127,11 @@ class AccessMeshReplication:
         context = {
             peer.instance_id: (
                 peer.origin, peer.public_key, peer.auth_token,
-                managed_config.local_auth_token if getattr(self.mesh, "managed_trust_enabled", False)
-                else self._bootstrap_config.local_auth_token,
+                (
+                    managed_config.local_auth_token
+                    if getattr(self.mesh, "managed_trust_enabled", False)
+                    else self._bootstrap_config.local_auth_token
+                ),
             )
             for peer in selected
         }
@@ -294,7 +297,10 @@ class AccessMeshReplication:
         end = loop.time() + min(30.0, max(0.0, _budget_seconds))
         negotiation_end = max(loop.time(), end - min(3.0, _budget_seconds * 0.1))
         peers = self.peers
-        if getattr(self.mesh, "managed_trust_enabled", False) and not self.native_trust_status()["ready"]:
+        if (
+            getattr(self.mesh, "managed_trust_enabled", False)
+            and not self.native_trust_status()["ready"]
+        ):
             # An acknowledged managed membership is not yet Native Access
             # enrollment. Retain locally issued Legacy/Persistent sessions
             # while peers are being authenticated. These claims are explicitly

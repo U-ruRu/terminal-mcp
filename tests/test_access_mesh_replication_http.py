@@ -245,7 +245,7 @@ async def test_startup_drains_more_than_one_outbox_page_without_periodic_polling
 
 
 @pytest.mark.asyncio
-async def test_managed_join_auto_proof_preserves_cross_node_attach_with_different_bootstrap(tmp_path):
+async def test_managed_join_auto_proof_cross_node_attach_with_distinct_bootstrap(tmp_path):
     """Actual network proof+reservation+replication+Exec attach from one authority."""
     routes = Routes()
     async with httpx.AsyncClient(transport=routes) as client:
