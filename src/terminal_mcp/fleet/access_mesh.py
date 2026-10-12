@@ -68,6 +68,11 @@ class AccessMeshReplication:
         self._task = None
         self._snapshot_after = {peer.instance_id: "" for peer in config.peers}
         self._last_snapshot_pass = {peer.instance_id: 0.0 for peer in config.peers}
+        # Proof compatibility is separate from Fleet member signature/transport
+        # trust. A green managed topology alone MUST NOT claim Native Access
+        # readiness. Probe state is deliberately rechecked after restart.
+        self._proof_health = {}
+        self._proof_context = {}
         self.peer_health = {
             peer.instance_id: {"status": "degraded", "reason": "catchup_pending"}
             for peer in self.peers
@@ -117,6 +122,20 @@ class AccessMeshReplication:
         new_transport_state = tuple(
             (peer.instance_id, peer.origin, peer.transport) for peer in selected
         )
+        # A changed peer token, URL, public identity or local ingress token
+        # invalidates previously authenticated proof evidence.
+        context = {
+            peer.instance_id: (
+                peer.origin, peer.public_key, peer.auth_token,
+                managed_config.local_auth_token if getattr(self.mesh, "managed_trust_enabled", False)
+                else self._bootstrap_config.local_auth_token,
+            )
+            for peer in selected
+        }
+        for node_id in tuple(self._proof_health):
+            if node_id not in context or self._proof_context.get(node_id) != context[node_id]:
+                self._proof_health.pop(node_id, None)
+        self._proof_context = context
         self.config = replace(
             self._bootstrap_config,
             peers=selected,
@@ -142,6 +161,56 @@ class AccessMeshReplication:
                 )
         if old_transport_state != new_transport_state:
             self._wake.set()
+
+    def native_trust_status(self) -> dict:
+        """Operator-safe native trust readiness, with no tokens or secrets."""
+        if not getattr(self.mesh, "managed_trust_enabled", False):
+            return {"state": "autonomous", "ready": True, "peers": {}}
+        expected = set(self.store.trusted_issuers) - {self.store.local_node_id}
+        actual = {peer.instance_id for peer in self.peers}
+        states = {
+            node_id: self._proof_health.get(node_id, {}).get("state", "pending")
+            for node_id in sorted(expected)
+        }
+        ready = (expected == actual and all(v == "verified" for v in states.values()))
+        return {
+            "state": "ready" if ready else "pending",
+            "ready": ready,
+            "mesh_id": getattr(self.mesh, "managed_trust_mesh_id", None),
+            "peers": states,
+            "missing_transport": sorted(expected - actual),
+        }
+
+    async def verify_peer_proof(self, peer) -> bool:
+        if not getattr(self.mesh, "managed_trust_enabled", False):
+            return True
+        # No cached proof survives a service restart, a topology edit or any
+        # change of the pinned identity/ingress credential.
+        now = asyncio.get_running_loop().time()
+        previous = self._proof_health.get(peer.instance_id, {})
+        if previous.get("state") == "verified" and now - previous.get("checked_at", 0) < 300:
+            return True
+        nonce = secrets.token_hex(16)
+        try:
+            result = await self.request(peer, "proof", {"nonce": nonce})
+            expected = self.store.peer_proof_tag(
+                receiver_id=peer.instance_id,
+                sender_id=self.store.local_node_id,
+                nonce=nonce,
+            )
+            tag = result.get("proof") if isinstance(result, dict) else None
+            valid = (
+                isinstance(tag, str)
+                and len(tag) == len(expected)
+                and secrets.compare_digest(tag, expected)
+                and result.get("ok") is True
+                and result.get("receiver_id") == peer.instance_id
+            )
+            state = "verified" if valid else "proof_mismatch"
+        except Exception:
+            state = "unavailable"
+        self._proof_health[peer.instance_id] = {"state": state, "checked_at": now}
+        return state == "verified"
 
     @property
     def peers(self):
@@ -610,6 +679,10 @@ class AccessMeshReplication:
 
     async def sync_peer(self, peer) -> None:
         try:
+            if not await self.verify_peer_proof(peer):
+                raise AccessMeshError(
+                    "access_mesh_proof_" + self._proof_health[peer.instance_id]["state"]
+                )
             # Periodic paginated snapshots also repair lost ACKs, a restored replica,
             # or peers added after the original issuance/outbox recipient set.
             now = asyncio.get_running_loop().time()
@@ -724,6 +797,26 @@ def build_access_mesh_router(mesh, replication_auth) -> APIRouter:
     def bounded(payload: dict) -> None:
         if len(json.dumps(payload, separators=(",", ":")).encode()) > MAX_WIRE_BYTES:
             raise HTTPException(413, "access mesh payload exceeds byte budget")
+
+    @router.post("/internal/fleet/access-mesh/proof", include_in_schema=False)
+    async def proof(
+        payload: dict,
+        x_terminal_mcp_peer: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ):
+        peer_id = authenticated(x_terminal_mcp_peer, authorization)
+        bounded(payload)
+        if set(payload) != {"nonce"}:
+            raise HTTPException(400, "invalid access mesh proof challenge")
+        try:
+            tag = mesh.store.peer_proof_tag(
+                receiver_id=mesh.store.local_node_id,
+                sender_id=peer_id,
+                nonce=payload["nonce"],
+            )
+        except AccessMeshError as exc:
+            raise HTTPException(400, exc.code) from exc
+        return {"ok": True, "receiver_id": mesh.store.local_node_id, "proof": tag}
 
     @router.post("/internal/fleet/access-mesh/events", include_in_schema=False)
     async def events(

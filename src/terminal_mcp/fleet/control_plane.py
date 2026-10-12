@@ -437,7 +437,11 @@ class ManagedFleetControl:
         ]
 
     async def snapshot(self) -> dict:
-        return await self.store.control_state(include_secrets=False)
+        state = await self.store.control_state(include_secrets=False)
+        access = self.native_access
+        if access is not None and access.replication is not None:
+            state["native_access_trust"] = access.replication.native_trust_status()
+        return state
 
     @staticmethod
     def _resolve_mesh_id(state: dict, mesh_id: str | None) -> str:
