@@ -58,7 +58,7 @@ function NativePolicyForm(props: FormProps) {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
-  const [resetConfirmation, setResetConfirmation] = useState<{ revision: number } | null>(null)
+  const [resetConfirmation, setResetConfirmation] = useState<{ revision: number; parentRevision?: number | null } | null>(null)
   const draft = edited ?? makeDraft(props)
   const conflict = Boolean(edited && edited.base !== policyKey(props.policy, props.revision, props.inheritance))
   const disabled = !props.policySupported || !props.canMutate || Boolean(props.externalBusy) || busy
@@ -93,10 +93,11 @@ function NativePolicyForm(props: FormProps) {
     const confirmation = resetConfirmation
     setResetConfirmation(null)
     if (!confirmation || !props.inheritance?.resetSupported) return
-    if (confirmation.revision !== props.revision) { setNotice(t('slots.managed.conflict')); return }
+    if (confirmation.revision !== props.revision || props.slotId && confirmation.parentRevision !== props.inheritance.parent?.revision) { setNotice(t('slots.managed.conflict')); return }
+    if (props.slotId && (!Number.isSafeInteger(confirmation.parentRevision) || Number(confirmation.parentRevision) < 1)) { setNotice(t('slots.managed.conflict')); return }
     // Inheritance is a server operation, never a client-side copy of parent values.
     void perform(props.slotId
-      ? { action: 'policy', slot_id: props.slotId, expected_revision: confirmation.revision, inherit_policy: true, idempotency_key: newSlotOperationKey() }
+      ? { action: 'policy', slot_id: props.slotId, expected_revision: confirmation.revision, expected_parent_revision: Number(confirmation.parentRevision), inherit_policy: true, idempotency_key: newSlotOperationKey() }
       : { action: 'defaults', expected_revision: confirmation.revision, inherit_policy: true, idempotency_key: newSlotOperationKey() })
   }
 
@@ -120,7 +121,7 @@ function NativePolicyForm(props: FormProps) {
     <IconButtonRow className="server-actions policy-actions">
       <IconButton icon="save" variant="primary" label={t(props.slotId ? 'slots.managed.savePolicy' : 'slots.savePolicy')} disabled={disabled || conflict} busy={busy} onClick={save} />
       <IconButton icon="reset" variant="secondary" label={t('slots.managed.cancel')} disabled={busy || !edited} onClick={() => { setEdited(null); setNotice('') }} />
-      {props.policySupported && props.inheritance?.resetSupported && props.inheritance.mode === 'override' ? <IconButton icon="reset" variant="secondary" label={t('slots.inheritance.reset')} disabled={disabled} onClick={() => setResetConfirmation({ revision: props.revision })} /> : null}
+      {props.policySupported && props.inheritance?.resetSupported && props.inheritance.mode === 'override' ? <IconButton icon="reset" variant="secondary" label={t('slots.inheritance.reset')} disabled={disabled} onClick={() => setResetConfirmation({ revision: props.revision, parentRevision: props.inheritance?.parent?.revision })} /> : null}
     </IconButtonRow>
     {resetConfirmation ? <ConfirmationDialog title={t('slots.inheritance.reset')} subject={props.inheritance?.parent?.id ?? ''} detail={t('slots.inheritance.resetConfirm')} cancelLabel={t('slots.confirmCancel')} confirmLabel={t('slots.inheritance.reset')} confirmIcon="reset" confirmVariant="primary" onCancel={() => setResetConfirmation(null)} onConfirm={reset} /> : null}
   </>
@@ -133,7 +134,7 @@ export function AccessMeshDefaultsControls({ defaults, ...props }: {
   execute: AccessMeshActionExecutor
   refresh: () => void
 }) {
-  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} legacyEnabled={defaults.legacyEnabled} policySupported={Boolean(defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
+  return <div className="policy-controls"><NativePolicyForm {...props} policy={defaults.policy} revision={defaults.revision} inheritance={defaults.inheritance} legacyEnabled={defaults.legacyEnabled} policySupported={Boolean(defaults.managementContractVersion === 2 && defaults.inheritanceSupported && defaults.inheritance?.appliesTo === 'next_window')} /></div>
 }
 
 export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute, refresh }: {
@@ -153,14 +154,16 @@ export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute,
   const startedAt = cycle.startedAt ?? ''
   const durationSeconds = startedAt && cycle.hardExpiresAt ? (Date.parse(cycle.hardExpiresAt) - Date.parse(startedAt)) / 1000 : null
   const duration = windowDraft?.duration ?? durationValue(durationSeconds ?? 0)
-  const active = ['active', 'warning', 'draining'].includes(cycle.state) && durationSeconds !== null
+  const active = slot.managementContractVersion === 2 && ['active', 'warning', 'draining'].includes(cycle.state) && durationSeconds !== null
   const conflict = Boolean(windowDraft && (windowDraft.revision !== slot.revision || windowDraft.startedAt !== startedAt))
   const disabled = !canMutate || Boolean(externalBusy) || busy
 
   const confirmWindow = () => {
+    if (disabled || !active) return
     const seconds = durationSecondsValue(duration)
     const deadline = seconds === null ? NaN : Date.parse(startedAt) + seconds * 1000
     if (seconds === null || seconds <= 0 || !Number.isFinite(deadline) || Math.abs(deadline) > 8640000000000000) { setNotice(t('slots.native.invalidPolicy')); return }
+    if (deadline < Date.parse(cycle.hardExpiresAt ?? '')) { setNotice(t('slots.native.windowExtensionOnly')); return }
     if (conflict) return
     setPendingDeadline({ action: 'deadline', slot_id: slot.slotId, expected_revision: windowDraft?.revision ?? slot.revision, deadline_at: new Date(deadline).toISOString(), idempotency_key: newSlotOperationKey() })
   }
@@ -177,9 +180,9 @@ export function AccessMeshSlotControls({ slot, canMutate, externalBusy, execute,
     finally { busyRef.current = false; setBusy(false) }
   }
   return <div className="slot-subsection slot-policy-controls" aria-label={t('slots.managed.title')}>
-    <NativePolicyForm policySupported={Boolean(slot.inheritanceSupported && slot.inheritance?.appliesTo === 'next_window')} policy={slot.policy} revision={slot.revision} inheritance={slot.inheritance} slotId={slot.slotId} canMutate={canMutate} externalBusy={externalBusy || busy} execute={execute} refresh={refresh} />
+    <NativePolicyForm policySupported={Boolean(slot.managementContractVersion === 2 && slot.inheritanceSupported && slot.inheritance?.appliesTo === 'next_window')} policy={slot.policy} revision={slot.revision} inheritance={slot.inheritance} slotId={slot.slotId} canMutate={canMutate} externalBusy={externalBusy || busy} execute={execute} refresh={refresh} />
     <div className="slot-subsection"><h3>{t('slots.managed.window')}</h3>
-      {cycle.hardExpiresAt ? <dl className="slot-details-grid"><div><dt>{t('slots.managed.opened')}</dt><dd>{cycle.startedAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.managed.deadline')}</dt><dd>{cycle.hardExpiresAt}</dd></div><div><dt>{t('slots.managed.remaining')}</dt><dd>{cycle.remainingSeconds === undefined ? t('common.unavailable') : formatDuration(cycle.remainingSeconds, locale)}</dd></div>
+      {slot.managementContractVersion !== 2 ? <p className="muted">{t('slots.native.sessionStateUnverified')}</p> : cycle.hardExpiresAt ? <dl className="slot-details-grid"><div><dt>{t('slots.managed.opened')}</dt><dd>{cycle.startedAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.managed.deadline')}</dt><dd>{cycle.hardExpiresAt}</dd></div><div><dt>{t('slots.managed.remaining')}</dt><dd>{cycle.remainingSeconds === undefined ? t('common.unavailable') : formatDuration(cycle.remainingSeconds, locale)}</dd></div>
         {slot.windowPolicy ? <><div><dt>{t('slots.managed.duration')}</dt><dd>{formatDuration(slot.windowPolicy.durationSeconds, locale)}</dd></div><div><dt>{t('slots.managed.windowWarning')}</dt><dd>{formatDuration(slot.windowPolicy.warningSeconds, locale)}</dd></div><div><dt>{t('slots.managed.windowDraining')}</dt><dd>{formatDuration(slot.windowPolicy.drainingSeconds, locale)}</dd></div></> : null}
       </dl> : <p className="muted">{t('slots.managed.noWindow')}</p>}
       {active ? <><p className="muted">{t('slots.managed.windowHint')}</p><DurationField label={t('slots.managed.windowDuration')} value={duration} disabled={disabled} onChange={(value) => setWindowDraft({ revision: windowDraft?.revision ?? slot.revision, startedAt: windowDraft?.startedAt ?? startedAt, duration: value })} />

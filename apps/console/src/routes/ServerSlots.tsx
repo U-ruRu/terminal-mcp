@@ -46,6 +46,7 @@ const stateKeys: Record<string, MessageKey> = {
   suspended: 'slots.state.suspended', cooldown: 'slots.state.cooldown', expired: 'slots.state.expired', deleted: 'slots.state.deleted', ended: 'slots.state.ended',
 }
 function codeFor(entry: Entry) {
+  if (entry.slot.managementContractVersion !== 2) return null
   return loadAccessCode(entry.slot.logicalAgentId, entry.slot.codeGeneration ?? 0, window.localStorage, nativeCodeScope(entry.slot.issuerNodeId, entry.slot.slotId), entry.slot.revision)
 }
 function reference(entry: Entry): SlotReference { return { instanceId: entry.instanceId, issuerNodeId: entry.slot.issuerNodeId, slotId: entry.slot.slotId, logicalAgentId: entry.slot.logicalAgentId } }
@@ -61,6 +62,7 @@ async function writeClipboard(value: string): Promise<boolean> {
   finally { element.remove() }
 }
 function timer(entry: Entry, now: number, locale: ReturnType<typeof useI18n>['locale']) {
+  if (entry.slot.managementContractVersion !== 2) return { text: '—', cue: 'idle' }
   const cycle = entry.slot.sessionLifecycle
   if (!cycle.hardExpiresAt || cycle.remainingSeconds === undefined || !['active', 'warning', 'draining'].includes(cycle.state)) return { text: '', cue: 'normal' as const }
   const remaining = Math.max(0, Math.floor(cycle.remainingSeconds - Math.max(0, now - entry.observedAt) / 1000))
@@ -215,9 +217,15 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const pending = instances.filter((item) => relevantIds.has(item.profile.instanceId)).map((item) => ({ instanceId: item.profile.instanceId, name: item.profile.displayName, ...pendingFor(item.profile.instanceId) })).filter((item) => item.value || item.unavailable)
   const finish = (instanceId: string) => { clearSlotOperation(operationScope(instanceId)); updateOperations((value) => value + 1) }
   const hasFreshWriteContext = (instanceId: string) => Boolean(mutateAccessMesh && instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected' && item.profile.metadata.scope.split(/\s+/).includes('terminal:execute')) && reads[instanceId]?.slots && !reads[instanceId]?.slotsError && !reads[instanceId]?.slotsPending && clock - (reads[instanceId]?.observedAt ?? 0) <= 30_000)
-  const canMutate = (instanceId: string) => hasFreshWriteContext(instanceId) && !blocked(instanceId)
+  const supportsMutation = (instanceId: string, request: AccessMeshMutationRequest) => {
+    const target = 'slot_id' in request ? reads[instanceId]?.slots?.find((slot) => slot.slotId === request.slot_id) : reads[instanceId]?.defaults
+    return target?.managementContractVersion === 2 || request.action === 'delete' && !target && reads[instanceId]?.defaults?.managementContractVersion === 2
+  }
+  const canMutate = (instanceId: string, slot?: AccessMeshSlotReadModel) => hasFreshWriteContext(instanceId) && !blocked(instanceId)
+    && (slot ?? reads[instanceId]?.defaults)?.managementContractVersion === 2
   const execute = async (instanceId: string, request: AccessMeshMutationRequest, recover = false): Promise<AccessMeshActionResult> => {
     if (!mutateAccessMesh || lock.current || !hasFreshWriteContext(instanceId) || (!recover && blocked(instanceId)) || !instances.some((item) => item.profile.instanceId === instanceId && item.runtime.authStatus === 'connected')) return { result: { ok: false, code: 'operation_in_progress', payload: {} }, confirmed: false }
+    if (!supportsMutation(instanceId, request)) return { result: { ok: false, code: 'unsupported_management_contract', payload: {} }, confirmed: false }
     if (request.action === 'policy' || request.action === 'defaults') {
       const target = request.action === 'defaults' ? reads[instanceId]?.defaults : reads[instanceId]?.slots?.find((slot) => slot.slotId === request.slot_id)
       if (!target?.inheritanceSupported || target.inheritance?.appliesTo !== 'next_window') return { result: { ok: false, code: 'unsupported_policy_semantics', payload: {} }, confirmed: false }
@@ -328,7 +336,7 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
   const authorityControl = controls[authorityId]
   const authorityRead = reads[authorityId]
   const meshPolicy = authorityControl?.policy ?? meshControl?.policy
-  const meshSupported = Boolean(authorityRead?.defaults?.meshPolicySupported)
+  const meshSupported = Boolean(authorityRead?.defaults?.meshPolicySupported && authorityRead.defaults.managementContractVersion === 2)
   const meshWritable = Boolean(meshSupported && mutateFleetControl && meshAuthority?.runtime.authStatus === 'connected'
     && meshAuthority.profile.metadata.scope.split(/\s+/).includes('terminal:execute') && controlsConfirmed[authorityId] && clock - (controlCache.observedAt[authorityId] ?? 0) <= 30_000
     && authorityControl?.managed && authorityControl.nodeId === authorityControl.controlNodeId
@@ -357,18 +365,22 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
     } finally { lock.current = false; setBusy('') }
   }
   const operationFeedback = <>
+    {[...relevantIds].filter((id) => reads[id]?.defaults && reads[id].defaults.managementContractVersion !== 2
+      || reads[id]?.slots?.some((slot) => slot.managementContractVersion !== 2)).map((id) =>
+      <FeedbackState key={'contract:' + id} variant="partial" title={instances.find((item) => item.profile.instanceId === id)?.profile.displayName ?? id} detail={t('slots.native.managementUpgradeRequired')} />)}
     {!loadAccessMeshSlots || !loadAccessMeshDefaults ? <FeedbackState variant="partial" title={t('slots.native.unsupported')} /> : <div className="slot-context-statuses">{instances.filter((item) => relevantIds.has(item.profile.instanceId)).map((item) => {
       const read = reads[item.profile.instanceId]
       if (!read || (!read.slots && read.slotsPending)) return <p role="status" className="muted" key={item.profile.instanceId}>{item.profile.displayName} · {item.runtime.authStatus === 'connected' ? t('slots.native.loading') : t('slots.liveRequired')}</p>
       const failures = [read.slotsError, read.defaultsError].filter((error, index, values) => error && values.findIndex((value) => value?.kind === error.kind && value?.code === error.code) === index)
       return failures.map((error) => error ? <div className="attention-strip" role="status" key={item.profile.instanceId + ':' + error.kind + ':' + error.code}><strong>{item.profile.displayName}</strong><span>{t(error.kind === 'unsupported' ? 'slots.native.unsupported' : error.kind === 'disabled' ? 'slots.disabled' : error.kind === 'denied' ? 'slots.native.denied' : 'slots.native.failed')} · {error.code}</span><IconButton icon="retry" variant="quiet" label={t('slots.managed.refresh') + ' — ' + item.profile.displayName} disabled={Boolean(busy)} onClick={() => void refreshNative(item.profile.instanceId)} /></div> : null)
     })}</div>}
-    {pending.map((item) => <div className="attention-strip slot-operation-recovery" role="status" key={item.instanceId}><strong>{item.name}</strong><p>{t(item.unavailable ? 'slots.operation.storage' : 'slots.operation.pending')}</p>{item.value?.backend === 'access-mesh' ? <IconButton icon="retry" variant="secondary" label={t('slots.operation.recover')} disabled={Boolean(busy) || !hasFreshWriteContext(item.instanceId)} onClick={() => { const operation = item.value; if (operation?.backend === 'access-mesh') void execute(item.instanceId, operation.request, true).catch(() => undefined) }} /> : null}</div>)}
+    {pending.map((item) => <div className="attention-strip slot-operation-recovery" role="status" key={item.instanceId}><strong>{item.name}</strong><p>{t(item.unavailable ? 'slots.operation.storage' : 'slots.operation.pending')}</p>{item.value?.backend === 'access-mesh' ? <IconButton icon="retry" variant="secondary" label={t('slots.operation.recover')} disabled={Boolean(busy) || !hasFreshWriteContext(item.instanceId) || !supportsMutation(item.instanceId, item.value.request)} onClick={() => { const operation = item.value; if (operation?.backend === 'access-mesh') void execute(item.instanceId, operation.request, true).catch(() => undefined) }} /> : null}</div>)}
     {message ? <div className={'transient-toast' + (toastLeaving ? ' transient-toast-exit' : '')} role="status" aria-live="polite" onPointerDown={(event) => { toastStartX.current = event.clientX }} onPointerUp={(event) => { if (toastStartX.current !== null && Math.abs(event.clientX - toastStartX.current) >= 48) setMessage(''); toastStartX.current = null }} onPointerCancel={() => { toastStartX.current = null }}><span>{message}</span></div> : null}
     {confirmation ? <ConfirmationDialog title={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessCode' : 'slots.delete')} subject={confirmation.publicName} detail={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessConfirm' : 'slots.deleteConfirm')} cancelLabel={t('slots.confirmCancel')} confirmLabel={t(confirmation.kind === 'rotate' ? 'slots.rotateAccessCode' : 'slots.delete')} confirmIcon={confirmation.kind === 'rotate' ? 'rotate' : 'delete'} confirmVariant={confirmation.kind === 'rotate' ? 'primary' : 'destructive'} onCancel={() => setConfirmation(null)} onConfirm={confirm} /> : null}
   </>
   if (activeSessionsOnly) {
     const active = entries.filter((entry) => {
+      if (entry.slot.managementContractVersion !== 2) return false
       if (!['active', 'warning', 'draining', 'stopping'].includes(entry.slot.sessionLifecycle.state)) return false
       const remaining = entry.slot.sessionLifecycle.remainingSeconds
       return remaining !== undefined ? remaining > 0 && remaining - Math.max(0, clock - entry.observedAt) / 1000 > 0
@@ -378,11 +390,11 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       .sort((a, b) => Number(a.kind !== 'mesh') - Number(b.kind !== 'mesh') || a.label.localeCompare(b.label))
     return <>
       {operationFeedback}
-      {!instances.length || active.length === 0 && allRead ? <FeedbackState variant="empty" title={t('fleet.noActiveSharedSessions')} /> : null}
+      {!instances.length || active.length === 0 && allRead && [...relevantIds].every((id) => reads[id]?.defaults?.managementContractVersion === 2 && reads[id]?.slots?.every((slot) => slot.managementContractVersion === 2)) ? <FeedbackState variant="empty" title={t('fleet.noActiveSharedSessions')} /> : null}
       {groups.map((group) => <section className="fleet-session-group" key={group.key} aria-label={group.label}>
         <h3 className="fleet-group-title">{group.label}</h3>
         <div className="slot-grid fleet-slot-grid">{active.filter((entry) => entry.contextKey === group.key).sort((a, b) => a.slot.publicName.localeCompare(b.slot.publicName)).map((entry) => {
-          const saved = codeFor(entry), timing = timer(entry, clock, locale), writable = canMutate(entry.instanceId) && !busy
+          const saved = codeFor(entry), timing = timer(entry, clock, locale), writable = canMutate(entry.instanceId, entry.slot) && !busy
           return <article className={'panel slot-card slot-cue-' + timing.cue} key={entry.slot.issuerNodeId + ':' + entry.slot.slotId}>
             <div className="slot-card-primary">
               <Link className="text-link slot-card-identity" to={href(entry)}><strong>{entry.slot.publicName}</strong></Link>
@@ -419,17 +431,17 @@ export function ServerSlots({ activeSessionsOnly = false, instances, loadFleetCo
       <p className="muted">{t('slots.native.assignedName')}</p><IconButton type="submit" icon="create" variant="primary" label={t('slots.create')} busy={busy === 'create'} disabled={!createReady || Boolean(busy)} />
     </div>{createdEntry && createdCode && createdEntry.instanceId === createInstanceId ? <div className="slot-access-code created-access-row" role="status"><span>{createdEntry.slot.publicName}</span><span className="access-code-copy"><code>{createdCode.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + createdEntry.slot.publicName} onClick={() => void copy(createdEntry)} /></span><p className="muted">{createdCode.expiresAt ? t('slots.native.codeExpiry') + ' ' + createdCode.expiresAt : t('slots.native.codeExpiryUnknown')}</p></div> : null}</form> : null}
     {logicalAgentId && !selected ? <FeedbackState variant="partial" title={t('slots.detailsUnavailable')} detail={t('slots.detailsUnavailableHint')} /> : null}
-    {selected ? <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{selected.slot.publicName}</h3></div><span className={'status server-status slot-session-badge slot-session-' + selected.slot.sessionLifecycle.state}>{t(stateKeys[selected.slot.sessionLifecycle.state] ?? 'slots.state.unknown')}</span></div>
+    {selected ? <article className="panel slot-detail" aria-label={t('title.slotDetail')}><div className="section-heading"><div><p className="eyebrow">{t('slots.accessPublicName')}</p><h3>{selected.slot.publicName}</h3></div><span className={'status server-status slot-session-badge slot-session-' + selected.slot.sessionLifecycle.state}>{t(stateKeys[selected.slot.managementContractVersion === 2 ? selected.slot.sessionLifecycle.state : 'unknown'] ?? 'slots.state.unknown')}</span></div>
       <div className="slot-access-code"><span>{t('slots.accessCodeTitle')}</span>{selectedCode ? <><code>{selectedCode.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + selected.slot.publicName} onClick={() => void copy(selected)} /></> : <span className="muted">{t('slots.accessCodeUnavailable')}</span>}</div>
       {selectedCode ? <p className="muted">{selectedCode.expiresAt ? t('slots.native.codeExpiry') + ' ' + selectedCode.expiresAt : t('slots.native.codeExpiryUnknown')}{selected.slot.codeGeneration === undefined ? ` ${t('slots.native.codeValidationLimited')}` : ''}</p> : null}
       <details className="technical-details"><summary>{t('slots.technicalDetails')}</summary><dl className="slot-details-grid"><div><dt>{t('slots.native.slotId')}</dt><dd><code>{selected.slot.slotId}</code></dd></div><div><dt>{t('slots.logicalAgentId')}</dt><dd><code>{selected.slot.logicalAgentId}</code></dd></div><div><dt>{t('slots.authority')}</dt><dd>{selected.slot.issuerNodeId}</dd></div><div><dt>{t('slots.rawState')}</dt><dd><code>{selected.slot.state}</code></dd></div><div><dt>{t('slots.revision')}</dt><dd>{selected.slot.revision}</dd></div><div><dt>{t('slots.accessGeneration')}</dt><dd>{selected.slot.codeGeneration ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.createdAt')}</dt><dd>{selected.slot.createdAt ?? t('common.unavailable')}</dd></div><div><dt>{t('slots.updatedAt')}</dt><dd>{selected.slot.updatedAt ?? t('common.unavailable')}</dd></div></dl></details>
-      <IconButtonRow className="server-actions"><IconButton icon="rotate" variant="secondary" label={t('slots.rotateAccessCode')} disabled={!canMutate(selected.instanceId) || Boolean(busy) || selected.slot.state === 'deleted'} onClick={() => showConfirmation(selected, 'rotate')} /></IconButtonRow>
+      <IconButtonRow className="server-actions"><IconButton icon="rotate" variant="secondary" label={t('slots.rotateAccessCode')} disabled={!canMutate(selected.instanceId, selected.slot) || Boolean(busy) || selected.slot.state === 'deleted'} onClick={() => showConfirmation(selected, 'rotate')} /></IconButtonRow>
       {selectedInstance?.runtime.authStatus !== 'connected' ? <p className="attention-strip">{t('slots.liveRequired')}</p> : null}
-      <AccessMeshSlotControls key={selected.instanceId + ':' + selected.slot.slotId + ':' + targets} slot={selected.slot} canMutate={canMutate(selected.instanceId) && selected.slot.state !== 'deleted'} externalBusy={Boolean(busy)} execute={(request) => execute(selected.instanceId, request)} refresh={() => void refreshNative(selected.instanceId)} />
+      <AccessMeshSlotControls key={selected.instanceId + ':' + selected.slot.slotId + ':' + targets} slot={selected.slot} canMutate={canMutate(selected.instanceId, selected.slot) && selected.slot.state !== 'deleted'} externalBusy={Boolean(busy)} execute={(request) => execute(selected.instanceId, request)} refresh={() => void refreshNative(selected.instanceId)} />
     </article> : null}
     {!logicalAgentId ? <div className="slot-grid">{entries.map((entry) => {
       const value = codeFor(entry), timing = timer(entry, clock, locale)
-      const state = entry.slot.sessionLifecycle.state, writable = canMutate(entry.instanceId) && entry.slot.state !== 'deleted' && !busy
+      const state = entry.slot.managementContractVersion === 2 ? entry.slot.sessionLifecycle.state : 'unknown', writable = canMutate(entry.instanceId, entry.slot) && entry.slot.state !== 'deleted' && !busy
       return <article className={'panel slot-card slot-cue-' + timing.cue} key={entry.slot.issuerNodeId + ':' + entry.slot.slotId}><div className="slot-card-row"><div className="slot-identity"><Link className="slot-name-link" to={href(entry)} onClick={rememberScroll}><strong>{entry.slot.publicName}</strong></Link><span className={'status server-status slot-session-badge slot-session-' + state}>{t(stateKeys[state] ?? 'slots.state.unknown')}</span></div>
         <span className="slot-code-cell">{value ? <span className="access-code-copy"><code>{value.code}</code><IconButton icon="copy" variant="quiet" label={t('slots.copyAccessCode') + ' — ' + entry.slot.publicName} onClick={() => void copy(entry)} /></span> : <span className="slot-code-unavailable" aria-hidden="true">—</span>}</span>
         <div className="slot-card-actions"><span className={'slot-timer slot-timer-' + timing.cue} role={timing.cue === 'normal' ? undefined : 'status'}>{timing.cue === 'warning' ? <Icon name="warning" /> : timing.cue === 'alert' ? <Icon name="error" /> : null}{timing.text || '\u00a0'}</span>

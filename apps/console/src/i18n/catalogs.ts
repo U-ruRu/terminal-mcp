@@ -1,4 +1,8 @@
 export const en = {
+  "slots.native.windowExtensionOnly": "The current window can only be extended. Ending the current session is a separate operation.",
+  "slots.native.managementUpgradeRequired": "This server does not confirm slot-management contract v2. Slots are read-only and current session state is unverified. Update the server to manage slots.",
+  "slots.native.sessionStateUnverified": "Current session state is unverified on this server version.",
+  "slots.inheritance.server": "Server defaults",
   "connections.serverAvailability": "Server availability",
   "connections.resourceFreshness": "Resource data",
   "connections.configurationReady": "Configuration changes",
@@ -583,6 +587,10 @@ export type MessageKey = keyof typeof en
 export type Catalog = { [K in MessageKey]: string }
 
 export const ru: Catalog = {
+  "slots.native.windowExtensionOnly": "Текущее рабочее окно можно только продлить. Завершение текущей сессии — отдельная операция.",
+  "slots.native.managementUpgradeRequired": "Сервер не подтверждает контракт управления слотами v2. Доступен просмотр слотов; состояние текущей сессии не подтверждено. Для управления обнови сервер.",
+  "slots.native.sessionStateUnverified": "Состояние текущей сессии не подтверждено для этой версии сервера.",
+  "slots.inheritance.server": "Настройки сервера",
   "connections.serverAvailability": "Доступность сервера",
   "connections.resourceFreshness": "Данные ресурсов",
   "connections.configurationReady": "Изменение конфигурации",
@@ -1164,6 +1172,10 @@ export const ru: Catalog = {
 }
 
 export const ka: Catalog = {
+  "slots.native.windowExtensionOnly": "მიმდინარე სამუშაო ფანჯრის მხოლოდ გახანგრძლივებაა შესაძლებელი. სესიის დასრულება ცალკე ოპერაციაა.",
+  "slots.native.managementUpgradeRequired": "სერვერი არ ადასტურებს სლოტების მართვის v2 კონტრაქტს. ხელმისაწვდომია მხოლოდ წაკითხვა; სესიის მდგომარეობა დაუდასტურებელია. მართვისთვის განაახლე სერვერი.",
+  "slots.native.sessionStateUnverified": "სესიის მიმდინარე მდგომარეობა სერვერის ამ ვერსიაზე დაუდასტურებელია.",
+  "slots.inheritance.server": "სერვერის პარამეტრები",
   "connections.serverAvailability": "სერვერის ხელმისაწვდომობა",
   "connections.resourceFreshness": "რესურსების მონაცემები",
   "connections.configurationReady": "კონფიგურაციის ცვლილებები",
@@ -1745,6 +1757,10 @@ export const ka: Catalog = {
 }
 
 export const es: Catalog = {
+  "slots.native.windowExtensionOnly": "La ventana actual solo se puede ampliar. Finalizar la sesión actual es una operación aparte.",
+  "slots.native.managementUpgradeRequired": "El servidor no confirma el contrato v2 de gestión de slots. Solo lectura; el estado de sesión no está verificado. Actualiza el servidor para administrar slots.",
+  "slots.native.sessionStateUnverified": "El estado actual de sesión no está verificado con esta versión del servidor.",
+  "slots.inheritance.server": "Valores del servidor",
   "connections.serverAvailability": "Disponibilidad del servidor",
   "connections.resourceFreshness": "Datos de recursos",
   "connections.configurationReady": "Cambios de configuración",

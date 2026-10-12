@@ -35,7 +35,7 @@ test('legacy markers contain only action and observed metadata, never a replayab
 
 test('inheritance reset persists only the real native request and excludes copied policy or secret receipts', () => {
   const scope = 'isolated-native-reset'
-  beginSlotOperation(scope, { backend: 'access-mesh', request: { action: 'policy', slot_id: 'as_isolated', expected_revision: 4, inherit_policy: true, idempotency_key: 'reset-isolated-4' }, startedAt: '2026-10-12T05:00:00Z', phase: 'pending' })
+  beginSlotOperation(scope, { backend: 'access-mesh', request: { action: 'policy', slot_id: 'as_isolated', expected_revision: 4, expected_parent_revision: 2, inherit_policy: true, idempotency_key: 'reset-isolated-4' }, startedAt: '2026-10-12T05:00:00Z', phase: 'pending' })
   const restored = loadSlotOperation(scope)
   expect(restored).toMatchObject({ request: { action: 'policy', inherit_policy: true, expected_revision: 4 } })
   expect(restored).not.toHaveProperty('request.policy')

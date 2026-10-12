@@ -1,3 +1,4 @@
+import { en } from '../i18n/catalogs'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
@@ -147,7 +148,7 @@ test('return to inheritance is an explicit revision-bound operation and Cancel w
   await userEvent.click(reset)
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Use inherited policy' }))
   await waitFor(() => expect(test.loadSlots).toHaveBeenCalledTimes(2))
-  expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'policy', inherit_policy: true, slot_id: 'as_alpha', expected_revision: 7 })
+  expect(test.mutate.mock.calls[0][1]).toMatchObject({ action: 'policy', inherit_policy: true, expected_parent_revision: 2, slot_id: 'as_alpha', expected_revision: 7 })
   expect(test.mutate.mock.calls[0][1]).not.toHaveProperty('policy')
 })
 
@@ -200,13 +201,41 @@ test('read-only pairing can display fresh slots while all native writes remain d
 })
 
 
-test('old native semantics show slots and codes but never enable a next-session policy write', async () => {
-  const slot = nativeSlot(); slot.inheritanceSupported = undefined
+test('old native semantics retain slot viewing but disable all unsupported management actions', async () => {
+  const slot = nativeSlot(); slot.inheritanceSupported = undefined; slot.managementContractVersion = undefined
   const env = setup(detail, { loadAccessMeshSlots: vi.fn(async () => [structuredClone(slot)]) })
   const input = await screen.findByRole('spinbutton', { name: 'Slot session duration' })
   expect(input).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Save slot policy' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Rotate Access code' })).toBeDisabled()
   expect(screen.getByText(/Update this server to edit next-session policies safely/)).toBeInTheDocument()
   expect(env.mutate).not.toHaveBeenCalled()
+})
+
+
+test('old server defaults never authorize slot creation even when the existing slot list is empty', async () => {
+  const defaults = nativeDefaults(); defaults.managementContractVersion = undefined
+  const env = setup('/servers/alpha/slots', { loadAccessMeshSlots: vi.fn(async () => []), loadAccessMeshDefaults: vi.fn(async () => defaults) })
+  expect(await screen.findByText(/does not confirm slot-management contract v2/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Create slot' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  expect(env.mutate).not.toHaveBeenCalled()
+})
+
+
+test('a lost delete receipt remains recoverable when a fresh v2 read already omits the deleted slot', async () => {
+  const env = setup('/servers/alpha/slots')
+  await screen.findByRole('link', { name: 'Alpha' })
+  env.mutate.mockImplementationOnce(async () => { env.state.slots = []; throw new ConsoleHttpError(0, 'request_timeout') })
+  await userEvent.click(document.querySelector('.slot-more-actions > summary')!)
+  await userEvent.click(screen.getByRole('button', { name: en['slots.delete'] }))
+  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Delete/ }))
+  await waitFor(() => expect(env.mutate).toHaveBeenCalledTimes(1))
+  const recover = await screen.findByRole('button', { name: en['slots.operation.recover'] })
+  await waitFor(() => expect(recover).toBeEnabled())
+  env.mutate.mockResolvedValueOnce({ ok: true, payload: { revision: 4 } })
+  await userEvent.click(recover)
+  await waitFor(() => expect(env.mutate).toHaveBeenCalledTimes(2))
+  expect(env.mutate.mock.calls[1][1]).toEqual(env.mutate.mock.calls[0][1])
+  await waitFor(() => expect(screen.queryByRole('button', { name: en['slots.operation.recover'] })).not.toBeInTheDocument())
 })

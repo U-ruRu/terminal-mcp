@@ -27,12 +27,14 @@ function plain(value: unknown): value is Record<string, unknown> {
 /** Only request metadata belongs here. Neither responses nor connection codes are journaled. */
 function safeRequest(value: unknown): value is AccessMeshMutationRequest {
   if (!plain(value)) return false
-  const allowed = new Set(['action', 'idempotency_key', 'slot_id', 'expected_revision', 'mode', 'policy', 'deadline_at', 'legacy_enabled', 'inherit_policy'])
+  const allowed = new Set(['action', 'idempotency_key', 'slot_id', 'expected_revision', 'mode', 'policy', 'deadline_at', 'legacy_enabled', 'inherit_policy', 'expected_parent_revision'])
   if (Object.keys(value).some((field) => !allowed.has(field))) return false
   if (!['create', 'defaults', 'policy', 'suspend', 'resume', 'delete', 'rotate', 'deadline', 'end'].includes(String(value.action))) return false
   if (typeof value.idempotency_key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(value.idempotency_key)) return false
   if (value.slot_id !== undefined && (typeof value.slot_id !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(value.slot_id))) return false
   if (value.expected_revision !== undefined && (!Number.isSafeInteger(value.expected_revision) || Number(value.expected_revision) < 1)) return false
+  if (value.expected_parent_revision !== undefined && (!Number.isSafeInteger(value.expected_parent_revision) || Number(value.expected_parent_revision) < 1 || value.action !== 'policy' || value.inherit_policy !== true)) return false
+  if (value.action === 'policy' && value.inherit_policy === true && value.expected_parent_revision === undefined) return false
   if (value.inherit_policy !== undefined && (value.inherit_policy !== true || !['defaults', 'policy'].includes(String(value.action)) || value.policy !== undefined)) return false
   if (value.mode !== undefined && value.mode !== 'persistent' && value.mode !== 'legacy') return false
   if (value.deadline_at !== undefined && (typeof value.deadline_at !== 'string' || value.deadline_at.length > 64 || !Number.isFinite(Date.parse(value.deadline_at)))) return false
