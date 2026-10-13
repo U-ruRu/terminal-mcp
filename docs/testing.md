@@ -1,8 +1,13 @@
 # Test workflow and reusable preparation
 
-`python scripts/test.py` provides four levels of checks. Run it using the project's
+`python scripts/test.py` separates component feedback, integration/platform checks,
+complete candidate acceptance and node probes. Run it using the project's
 installed test environment (`.[test,compact]`) and a checkout of the intended source.
 It prints an external `report.json` path; results never disappear into terminal output.
+
+The repository's [AGENTS.md](../AGENTS.md) defines the lightweight agent workflow:
+find and reuse existing behavior checks before adding a named missing regression,
+select the smallest relevant layer and report reused/changed/new coverage.
 
 ## Commands
 
@@ -10,12 +15,22 @@ It prints an external `report.json` path; results never disappear into terminal 
 # Development feedback: public/compact artifact contracts, read/window/version and runner safeguards.
 python scripts/test.py dev
 
-# Component feedback, with documented transitive integration dependencies.
+# Reviewed component checks for this owner only; no global dev or dependency expansion.
 python scripts/test.py component mesh
+python scripts/test.py component capture
+
+# Explicit cross-component feedback. Capture includes the app/auth/commit boundaries.
+python scripts/test.py integration mesh
+python scripts/test.py integration capture
+
+# Explicit Linux shell, Unix IPC and kernel-dependent checks.
+python scripts/test.py platform linux --plan
+python scripts/test.py platform linux
 
 # Inspect affected selection, including committed, staged, unstaged and untracked changes.
 python scripts/test.py dev --changed-from <full-base-sha> --plan
 python scripts/test.py dev --changed-from <full-base-sha>
+python scripts/test.py integration --changed-from <full-base-sha> --plan
 
 # Candidate acceptance: one complete run on an exact, clean source checkout.
 python scripts/test.py full --expected-sha <full-candidate-sha> --output /tmp/tmcp-acceptance-<unique-id>
@@ -25,17 +40,34 @@ python scripts/test.py node --url https://node.example --expected-release <versi
 ```
 
 `component` accepts `auth`, `mesh`, `storage`, `contracts`, `commands`, `slots`,
-`events`, and `deployment`. The complete patterns and dependency graph are in
-`scripts/test_plan.py`; `--plan` prints the actual file list and expansion reason.
-For example Mesh includes auth, storage, contracts and events, including actual TCP,
-lock, persistence and restart tests. Component feedback is not a release gate.
+`events`, `capture`, `tasks`, `agents`, `testing`, `deployment`, and `all`. The source
+owners, reviewed component allowlist, mixed-function tiers and dependency graph are
+in `scripts/test_plan.py`. Unreviewed modules remain in integration until their
+responsibilities are separated. SQLite transaction tests are component checks when
+storage itself is the subject; a POSIX-looking filename is not a platform requirement.
+Integration mode includes requested component checks and their transitive boundaries;
+platform checks remain a separate explicit batch. `--plan` prints exact selectors,
+reasons and deferred integration/platform coverage. None of these modes is a release gate.
 
-Affected selection deliberately favors safety: every application-source change,
-shared contract, auth/Mesh/storage change, generator, installer, dependency lock,
-frontend input, unknown file or deleted test expands to the **entire** test suite.
-Only isolated test-file changes use a smaller selection. Their transitive test-helper
-importers are found with AST analysis. An unresolved graph expands to all tests.
-There is no claim of exact runtime impact inference from file names.
+Affected selection uses declared source owners and transitive test-helper imports.
+Documentation selects current documentation/artifact contracts. A shared/unclassified
+input, dependency lock, deleted test or unresolved import graph expands to every
+reviewed component check, with integration/platform coverage printed separately.
+It does not silently start a full release run. `integration --changed-from` explicitly
+selects the affected integration batch. This is staged feedback, not a proof that
+unselected runtime paths are unaffected. Frontend checks still use the console's
+Vitest/build commands; Python `full` does not run them.
+
+Capture's component mode checks its isolated capture logic. `integration capture`
+adds the real app/auth tests, message binding, final subscription commit and shared
+restart checks. A runtime/lifecycle or trust-policy change needs its corresponding
+integration/platform coverage before complete release acceptance.
+
+Mixed modules select explicit test functions, preserving their parameterization.
+A stale mixed-function declaration blocks the plan. Paths use POSIX separators on
+every host, so a file is not repeated as both `tests\\file.py` and `tests/file.py`.
+An empty feedback plan reports `no_tests_selected` and its deferred coverage; it
+never invokes pytest with no selectors and accidentally runs the default suite.
 
 Development checks include exact generated compact-artifact provenance so a stale
 source hash is caught before the long release run.
@@ -109,9 +141,14 @@ that automatic allowlist activation works and `--fresh-preparation` disables it.
 
 ## Removed tests
 
-**None.** No evidence establishes that a currently collected contract has been retired.
-Names such as `test_v08`, `test_v09` and `test_v010` are not a reason to remove regression
-coverage. The optimization changes preparation rather than dropping assertions.
+The immutable-preparation optimization removed no tests. The later cleanup follows
+the user's current policy: remove guarantees of previous import aliases/signatures
+and retired peer-message scenarios, while keeping current authorization, slot,
+storage and upgrade obligations. Each removal or replacement is recorded in
+[test-scope-cleanup.md](test-scope-cleanup.md). Versioned filenames alone remain
+insufficient evidence of retirement. Native ExecutionPort cases were moved intact
+to a platform module, not deleted. Further mixed modules remain visible in the
+integration/platform batches pending responsibility-focused refactoring.
 
 ## Benchmark protocol
 
