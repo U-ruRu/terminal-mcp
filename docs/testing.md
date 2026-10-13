@@ -1,8 +1,13 @@
 # Test workflow and reusable preparation
 
-`python scripts/test.py` provides four levels of checks. Run it using the project's
+`python scripts/test.py` separates component feedback, integration/platform checks,
+complete candidate acceptance and node probes. Run it using the project's
 installed test environment (`.[test,compact]`) and a checkout of the intended source.
 It prints an external `report.json` path; results never disappear into terminal output.
+
+The repository's [AGENTS.md](../AGENTS.md) defines the lightweight agent workflow:
+find and reuse existing behavior checks before adding a named missing regression,
+select the smallest relevant layer and report reused/changed/new coverage.
 
 ## Commands
 
@@ -10,12 +15,22 @@ It prints an external `report.json` path; results never disappear into terminal 
 # Development feedback: public/compact artifact contracts, read/window/version and runner safeguards.
 python scripts/test.py dev
 
-# Component feedback, with documented transitive integration dependencies.
+# Reviewed component checks for this owner only; no global dev or dependency expansion.
 python scripts/test.py component mesh
+python scripts/test.py component agents
+
+# Explicit cross-component feedback, including the app/auth/commit boundaries.
+python scripts/test.py integration mesh
+python scripts/test.py integration events
+
+# Explicit Linux shell, Unix IPC and kernel-dependent checks.
+python scripts/test.py platform linux --plan
+python scripts/test.py platform linux
 
 # Inspect affected selection, including committed, staged, unstaged and untracked changes.
 python scripts/test.py dev --changed-from <full-base-sha> --plan
 python scripts/test.py dev --changed-from <full-base-sha>
+python scripts/test.py integration --changed-from <full-base-sha> --plan
 
 # Candidate acceptance: one complete run on an exact, clean source checkout.
 python scripts/test.py full --expected-sha <full-candidate-sha> --output /tmp/tmcp-acceptance-<unique-id>
@@ -25,17 +40,58 @@ python scripts/test.py node --url https://node.example --expected-release <versi
 ```
 
 `component` accepts `auth`, `mesh`, `storage`, `contracts`, `commands`, `slots`,
-`events`, and `deployment`. The complete patterns and dependency graph are in
-`scripts/test_plan.py`; `--plan` prints the actual file list and expansion reason.
-For example Mesh includes auth, storage, contracts and events, including actual TCP,
-lock, persistence and restart tests. Component feedback is not a release gate.
+`events`, `tasks`, `agents`, `testing`, `deployment`, and `all`. The source
+owners, reviewed component allowlist, mixed-function tiers and dependency graph are
+in `scripts/test_plan.py`. Unreviewed modules remain in integration until their
+responsibilities are separated. SQLite transaction tests are component checks when
+storage itself is the subject; a POSIX-looking filename is not a platform requirement.
+Integration mode includes requested component checks and their transitive boundaries;
+platform checks remain a separate explicit batch. `--plan` prints exact selectors,
+reasons and deferred integration/platform coverage. None of these modes is a release gate.
 
-Affected selection deliberately favors safety: every application-source change,
-shared contract, auth/Mesh/storage change, generator, installer, dependency lock,
-frontend input, unknown file or deleted test expands to the **entire** test suite.
-Only isolated test-file changes use a smaller selection. Their transitive test-helper
-importers are found with AST analysis. An unresolved graph expands to all tests.
-There is no claim of exact runtime impact inference from file names.
+Affected selection uses declared source owners, direct test imports of source modules
+and transitive test-helper imports. An import can select a consumer whose filename
+does not match the owner's patterns (for example WorkWindowStore or Android scope).
+Source boundary plans also include consumers of the owner's declared ports.
+Documentation selects current documentation/artifact contracts. A shared/unclassified
+input, dependency lock, deleted test or unresolved import graph expands to every
+reviewed component check, with integration/platform coverage printed separately.
+It does not silently start a full release run. `integration --changed-from` explicitly
+selects the affected integration batch. This is staged feedback, not a proof that
+unselected runtime paths are unaffected. Frontend checks still use the console's
+Vitest/build commands; Python `full` does not run them.
+The three dedicated modules under `qa/` are also separate explicit pytest targets
+(50 collected cases in this audit); the default `testpaths` and Python `full` target
+only `tests/`. The layer inventory above describes that existing runner's corpus.
+
+The plan's `routes` records each changed source path, owner or explicit unknown
+status, fallback reason and boundary breadth. Shared auth/storage and managed-session
+policy contracts keep direct component feedback but expose **all** remaining
+integration/platform checks; their dynamic/injected consumers are not narrowed by
+filename guesses. `integration --changed-from` selects that broad non-platform batch
+only when explicitly requested. Native checks stay deferred. Direct source import
+edges are static evidence, not a claim of complete runtime import transitivity.
+
+The M3 source snapshot has 187 tracked files (182 Python modules and five
+assets): 114 have an owner route and 73 use the explicit unknown route. The unreviewed
+families are 20 HTTP adapters, 21 shared application modules, 14 shared core modules,
+two adapters and 16 package/composition modules. Examples are `http/persistent.py`,
+`application/base.py`, `core/orchestration.py`, `adapters/mcp_identity.py` and `app.py`.
+Their full family fallbacks are in `UNKNOWN_SOURCE_FAMILIES`; a new/unmapped source
+also selects every reviewed component check and exposes all boundaries. No module
+silently disappears from affected coverage. The current inventory guard checks
+visible source routes and complete component/integration/platform function coverage.
+
+Subscription capture and its dedicated selectors are deferred on this M3 branch;
+the runtime capture commit is not included. Events still exposes current app/auth,
+binding and subscription-commit boundaries. A runtime/lifecycle or trust-policy
+change needs its corresponding integration/platform coverage before release acceptance.
+
+Mixed modules select explicit test functions, preserving their parameterization.
+A stale mixed-function declaration blocks the plan. Paths use POSIX separators on
+every host, so a file is not repeated as both `tests\\file.py` and `tests/file.py`.
+An empty feedback plan reports `no_tests_selected` and its deferred coverage; it
+never invokes pytest with no selectors and accidentally runs the default suite.
 
 Development checks include exact generated compact-artifact provenance so a stale
 source hash is caught before the long release run.
@@ -52,6 +108,32 @@ requirements passed. It **does not authorize deployment** or certify Mesh rollin
 compatibility. Release approval separately binds the exact source/tree, artifact,
 full report, compatibility evidence, preservation guarantees and operator decision.
 A short node check does not replace any of these.
+
+The scoped cleanup separates the eight listed SQLite/Fleet/auth/agent/session/
+Events/persistent modules. Pure rules, projections, router contracts and own SQLite
+transactions are reviewed component checks; real app/auth/store bridges and native
+shell/filesystem checks have separate physical modules. Extraction reuses assertions
+and inputs. The current `task_context_ttl_seconds` replaces exercising the previous
+`task_lease_seconds` alias. No migration was removed based on a versioned filename.
+
+The historical capture-based inventory and case counts are recorded in
+[test-scope-cleanup.md](test-scope-cleanup.md); they are not collection evidence for
+this M3 transfer. The inventory guard checks the current source and complete
+component/integration/platform function partition without executing those suites.
+Integration includes its requested component checks. Existing managed EventStore
+cases remain component checks. Separate IDs reuse existing loop/assertion inputs.
+
+Actual ASGI lifespan/auth checks need a genuine secure verifier-key file. Windows
+cannot satisfy its POSIX mode check; the audit does not patch stat/permissions or
+claim Linux acceptance. The native neighbor is doubled only in wiring checks that
+do not test processes; native modules retain actual bash. Two symlink checks require
+real creation/atomic replacement and remain platform checks. Preparation allowlists
+retain the two relocated native files' former schema/empty-database reuse.
+
+Affected plans traverse helper edges before intersecting final selectors with
+`test_files(root)`. Consumers stay selected while `conftest.py` and other fixture-only
+modules cannot become final pytest targets. The existing import-plan regression
+covers both layers; no separate safeguard suite was introduced.
 
 ## Isolation, profiling and retention
 
@@ -119,9 +201,14 @@ that automatic allowlist activation works and `--fresh-preparation` disables it.
 
 ## Removed tests
 
-**None.** No evidence establishes that a currently collected contract has been retired.
-Names such as `test_v08`, `test_v09` and `test_v010` are not a reason to remove regression
-coverage. The optimization changes preparation rather than dropping assertions.
+The immutable-preparation optimization removed no tests. The later cleanup follows
+the user's current policy: remove guarantees of previous import aliases/signatures
+and retired peer-message scenarios, while keeping current authorization, slot,
+storage and upgrade obligations. Each removal or replacement is recorded in
+[test-scope-cleanup.md](test-scope-cleanup.md). Versioned filenames alone remain
+insufficient evidence of retirement. Native ExecutionPort cases were moved intact
+to a platform module, not deleted. Further mixed modules remain visible in the
+integration/platform batches pending responsibility-focused refactoring.
 
 ## Benchmark protocol
 

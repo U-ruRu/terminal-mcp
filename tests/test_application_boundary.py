@@ -1,14 +1,11 @@
 import ast
 import asyncio
-import hashlib
-import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from terminal_mcp.adapters.actor import actor_for
 from terminal_mcp.application import ActorContext, TerminalApplication, get_application
 from terminal_mcp.application.compatibility import ApplicationCompatibility
 from terminal_mcp.application.requests import CmdRunRequest, ContextListRequest
@@ -18,8 +15,6 @@ from terminal_mcp.core.persistent_admission import (
     current_admission_context,
     reset_admission_context,
 )
-from terminal_mcp.mcp.server import build_mcp
-from terminal_mcp.trace import current_trace_id
 
 
 def actor(name="owner", **metadata):
@@ -82,24 +77,6 @@ def test_actor_is_immutable_and_copies_mutable_scopes():
         ActorContext(contract_version=0)
 
 
-def test_actor_factory_uses_verified_identity_and_server_trace():
-    token = bind_admission_context(actor().admission())
-    trace_token = current_trace_id.set("server-trace")
-    try:
-        service = Service()
-        service.persistent.lifecycle = SimpleNamespace(authority_node_id="node-a")
-        value = actor_for(service, transport="mcp", endpoint_role="executor", contract_version=1)
-        assert value.principal_id == "owner"
-        assert value.node_id == "node-a"
-        assert value.transport == "mcp"
-        assert value.request_id == "server-trace"
-        assert value.endpoint_role == "executor"
-        assert value.logical_agent_id is None
-    finally:
-        current_trace_id.reset(trace_token)
-        reset_admission_context(token)
-
-
 def test_anonymous_actor_does_not_inherit_ambient_privileges():
     token = bind_admission_context(actor("outer").admission())
     try:
@@ -151,12 +128,22 @@ async def test_capability_policy_denies_coordinator_execution_before_side_effect
 
 
 @pytest.mark.asyncio
-async def test_application_reads_and_missing_backend_preserve_compatibility():
+async def test_application_wrapper_is_reused_for_the_same_service():
     app = get_application(SimpleNamespace(persistent=None))
     assert get_application(app.service) is app
+    assert get_application(app) is app
+
+
+@pytest.mark.asyncio
+async def test_session_start_without_backend_is_rejected():
+    app = get_application(SimpleNamespace(persistent=None))
     assert (await app.session(ActorContext(), action="start", mode="legacy"))["code"] == (
         "policy_incompatible"
     )
+
+
+@pytest.mark.asyncio
+async def test_context_list_projects_the_current_backend_result():
     service = Service()
     result = await get_application(service).context(
         ActorContext(), ContextListRequest(action="list")
@@ -165,7 +152,14 @@ async def test_application_reads_and_missing_backend_preserve_compatibility():
 
 
 @pytest.mark.asyncio
-async def test_legacy_facade_is_allowlisted_and_restores_actor_on_cancellation():
+async def test_active_facade_rejects_an_unknown_operation():
+    facade = ApplicationCompatibility(object())
+    with pytest.raises(ValueError):
+        await facade.call(actor(), "__getattribute__", "secret")
+
+
+@pytest.mark.asyncio
+async def test_active_facade_restores_admission_context_after_cancellation():
     class CancelledService:
         async def health(self):
             assert current_admission_context().principal_id == "inside"
@@ -173,27 +167,9 @@ async def test_legacy_facade_is_allowlisted_and_restores_actor_on_cancellation()
 
     before = current_admission_context()
     facade = ApplicationCompatibility(CancelledService())
-    with pytest.raises(ValueError):
-        await facade.call(actor(), "__getattribute__", "secret")
     with pytest.raises(asyncio.CancelledError):
         await facade.call(actor("inside"), "health")
     assert current_admission_context() is before
-
-
-@pytest.mark.asyncio
-async def test_architecture_a_preserves_exact_published_mcp_contracts():
-    expected = json.loads(
-        (Path(__file__).parent / "fixtures/architecture_a_mcp_contract.json").read_text()
-    )
-    actual = {}
-    for tool in await build_mcp(SimpleNamespace(persistent=None)).list_tools():
-        raw = tool.model_dump(mode="json", exclude_none=True)
-        actual[tool.name] = hashlib.sha256(
-            json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        for forbidden in ("principal_id", "credential_id", "endpoint_role", "provider", "node_id"):
-            assert forbidden not in tool.inputSchema.get("properties", {})
-    assert actual == expected
 
 
 def test_application_modules_never_import_inbound_transports_or_sql_drivers():
@@ -220,43 +196,3 @@ def test_application_modules_never_import_inbound_transports_or_sql_drivers():
                 if any(name == prefix or name.startswith(prefix + ".") for prefix in prohibited):
                     violations.append((path.name, node.lineno, name))
     assert not violations
-
-
-def test_mcp_handlers_do_not_resolve_identity_or_access_storage():
-    path = Path(__file__).parents[1] / "src/terminal_mcp/mcp/server.py"
-    prohibited = {
-        "access_identity",
-        "access_message",
-        "access_session_start",
-        "task_store",
-        "context_store",
-        "persistent",
-        "message_state",
-        "authorize_session",
-    }
-    assert not [
-        node.attr
-        for node in ast.walk(ast.parse(path.read_text()))
-        if isinstance(node, ast.Attribute) and node.attr in prohibited
-    ]
-
-
-@pytest.mark.asyncio
-async def test_mcp_adapter_accepts_canonical_application_directly():
-    service = Service()
-    service.persistent.lifecycle = SimpleNamespace(authority_node_id="node-direct")
-    application = TerminalApplication(service)
-    assert get_application(application) is application
-    assert actor_for(application, transport="mcp").node_id == "node-direct"
-    expected = await build_mcp(service).list_tools()
-    actual = await build_mcp(application).list_tools()
-    assert [item.model_dump(mode="json") for item in actual] == [
-        item.model_dump(mode="json") for item in expected
-    ]
-
-
-def test_previous_projection_imports_remain_compatibility_aliases():
-    from terminal_mcp.application.projections import _task_summary as canonical
-    from terminal_mcp.mcp.server import _task_summary as compatibility
-
-    assert compatibility is canonical

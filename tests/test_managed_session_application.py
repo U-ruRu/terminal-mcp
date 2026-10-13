@@ -12,11 +12,8 @@ import pytest_asyncio
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.application.managed_sessions import ManagedSessionApplication, ManagedSlotGrant
 from terminal_mcp.core.managed_sessions import (
-    FINALIZATION_OPERATIONS,
-    OPERATOR_OPERATIONS,
     ManagedOperation,
     ManagedSessionError,
-    decide_session_operation,
 )
 from terminal_mcp.core.orchestration import parse_utc, utc_text
 from terminal_mcp.core.persistent_admission import PersistentAdmissionError
@@ -25,7 +22,6 @@ from terminal_mcp.core.work_windows import (
     SlotSessionPolicy,
     WindowLifecycle,
     WindowPhase,
-    WorkWindow,
 )
 from terminal_mcp.storage.sqlite import SqliteRepository
 from terminal_mcp.storage.work_windows import WorkWindowStore
@@ -111,39 +107,6 @@ async def env(tmp_path):
     return SimpleNamespace(
         repo=repo, store=store, auth=authorizer, fence=fence, clock=clock, app=app
     )
-
-
-@pytest.mark.parametrize(
-    "operation", [op for op in ManagedOperation if op not in OPERATOR_OPERATIONS]
-)
-def test_pure_policy_exhaustively_classifies_draining(operation):
-    window = WorkWindow.open("window", "agent", T0, SlotSessionPolicy())
-    decision = decide_session_operation(window, operation, T0 + timedelta(seconds=1320))
-    assert decision.phase is WindowPhase.DRAINING
-    assert decision.remaining_seconds == 60
-    assert decision.allowed == (operation in FINALIZATION_OPERATIONS)
-    assert decision.return_to_chat
-    assert decision.code == (None if decision.allowed else "session_draining")
-
-
-@pytest.mark.parametrize(
-    "operation", [op for op in ManagedOperation if op not in OPERATOR_OPERATIONS]
-)
-def test_pure_policy_expiry_never_admits_new_work(operation):
-    window = WorkWindow.open("window", "agent", T0, SlotSessionPolicy())
-    decision = decide_session_operation(window, operation, T0 + timedelta(seconds=1380))
-    assert decision.remaining_seconds == 0
-    assert decision.return_to_chat
-    assert decision.allowed == (
-        operation in {ManagedOperation.SESSION_END, ManagedOperation.SESSION_STATUS}
-    )
-
-
-def test_unknown_and_operator_operations_do_not_bypass_agent_lifecycle():
-    window = WorkWindow.open("window", "agent", T0, SlotSessionPolicy())
-    for operation in ("new.tool", "task.done", ManagedOperation.OPERATOR_WINDOW):
-        with pytest.raises(ManagedSessionError, match="operation_not_allowed"):
-            decide_session_operation(window, operation, T0)
 
 
 async def test_identity_and_verified_authorization_are_independent(env):

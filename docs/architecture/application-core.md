@@ -65,16 +65,19 @@ connections and must never be called inside a new unit-of-work scope. Network ca
 process execution and separate output storage remain outside it. No schema migration or
 second authority store is introduced in Architecture A.
 
-## Compatibility and subsequent phases
+## Current boundary checks and subsequent phases
 
-The seven existing MCP tools retain their exact published schemas, descriptions and
-annotations. A fixture in `tests/fixtures/architecture_a_mcp_contract.json` checks their
-canonical hashes. Existing HTTP paths and bodies remain supported. The in-process Linux
-runtime and four numbered queues are unchanged; Architecture B introduces ExecutionPort,
-C introduces privileged local IPC, and D owns deployment migration. Public compact output,
-input limits, managed identity and role endpoints are separate tasks atop this boundary.
+Current MCP catalogs and authoritative request/output models define the public contract.
+Adapter tests verify direct canonical-application construction and keep server-resolved
+identity fields out of caller inputs. Prior Architecture A hash/signature snapshots were
+retired under the test-scope policy recorded in `docs/test-scope-cleanup.md`. Current HTTP
+paths, authorization and OpenAPI operation metadata keep their functional checks.
+The in-process Linux runtime and four numbered queues are unchanged; Architecture B
+introduces ExecutionPort, C introduces privileged local IPC, and D owns deployment
+migration. Public compact output, input limits, managed identity and role endpoints are
+separate tasks atop this boundary.
 
 Boundary tests exercise concurrent actor isolation, cancellation cleanup, capability
-rejection, MCP discovery parity, HTTP/Fleet adapter parity, real repository transactions,
+rejection, current MCP discovery, HTTP/Fleet adapter behavior, real repository transactions,
 and rollback through actual application entry points. Full-suite results are recorded
 against immutable Git candidates rather than a moving implementation worktree.

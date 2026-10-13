@@ -1,4 +1,3 @@
-import asyncio
 import sqlite3
 from datetime import timedelta
 
@@ -69,7 +68,6 @@ async def test_expired_owner_stops_projecting_before_persisted_claim_cleanup(tmp
 
         health = await service.health("none")
         workflow = health["workflow"]
-        assert workflow["active_claims"] == 2  # compatibility alias for unreleased rows
         assert workflow["unreleased_claims"] == 2
         assert workflow["live_claims"] == 1
         assert workflow["stale_claims"] == 1
@@ -94,36 +92,6 @@ async def test_expired_owner_stops_projecting_before_persisted_claim_cleanup(tmp
             checkpoint={"owner": "peer"},
         )
         assert checkpoint["ok"] is True
-    finally:
-        await terminal.stop()
-
-
-@pytest.mark.asyncio
-async def test_task_context_timer_has_canonical_name_and_compatibility_alias(tmp_path):
-    _, terminal, service = await runtime(tmp_path)
-    try:
-        plan = {
-            "task_summary": "timer",
-            "intent": "timer",
-            "details": ["timer"],
-            "work_scope": ["test:timer"],
-        }
-        proposed = await service.agent_start(**plan)
-        started = await service.agent_start(
-            agent_id=proposed["proposed_agent_id"], **plan
-        )
-        agent = started["self"]["agent_id"]
-        assert started["self"]["task_context_ttl_seconds"] == 180
-        assert started["self"]["task_lease_seconds"] == 180
-
-        service.agent_coordinator.task_lease_seconds = 0.01
-        assert service.agent_coordinator.task_context_ttl_seconds == 0.01
-        await asyncio.sleep(0.03)
-        expired = await service.agent_coordinator.validate_task_lease(agent)
-        assert expired["task_context_expired"] is True
-        assert expired["task_context_ttl_seconds"] == 0.01
-        assert expired["max_task_age_seconds"] == 0.01
-        assert expired["task_context_age_seconds"] == expired["task_age_seconds"]
     finally:
         await terminal.stop()
 

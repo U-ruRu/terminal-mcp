@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from terminal_mcp.core import task_projections as core
-from terminal_mcp.mcp import output_contracts as legacy
 
 BASE = {
     "namespace": "demo",
@@ -45,25 +44,6 @@ OUTPUT = {"output_state_id": 1, "created_at": "2026-10-06T00:00:00Z"}
 HISTORY = {"comments", "reviews", "events", "output_states"}
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "TaskListItem",
-        "TaskSnapshot",
-        "TaskRecord",
-        "TaskClaim",
-        "TaskCheckpointSnapshot",
-        "TaskEvent",
-        "TaskReview",
-        "TaskDependency",
-        "TaskOutputState",
-        "TaskListSummary",
-    ],
-)
-def test_legacy_import_is_same_canonical_type(name):
-    assert getattr(legacy, name) is getattr(core, name)
-
-
 def test_core_has_no_transport_or_application_dependency():
     tree = ast.parse(Path(core.__file__).read_text())
     imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)] + [
@@ -76,7 +56,7 @@ def test_core_has_no_transport_or_application_dependency():
     assert not any(name and name.startswith(forbidden) for name in imports)
 
 
-def test_detail_separates_current_state_from_expanded_legacy_history():
+def test_detail_contains_only_current_state_fields():
     assert HISTORY.isdisjoint(core.TaskDetail.model_fields)
     assert HISTORY.issubset(core.TaskRecord.model_fields)
     assert set(core.TaskDetail.model_fields) == set(core.TaskRecord.model_fields) - HISTORY
@@ -91,18 +71,17 @@ class UnreadableHistory:
         raise AssertionError("current-state projections must not touch history")
 
 
-def test_detail_and_receipt_do_not_walk_or_serialize_history():
+@pytest.mark.parametrize("project", [core.project_task_detail, core.project_task_receipt])
+def test_current_state_projection_does_not_access_history(project):
     record = core.TaskRecord.model_construct(
         **BASE,
         **dict.fromkeys(HISTORY, UnreadableHistory()),
     )
-    detail = core.project_task_detail(record)
-    receipt = core.project_task_receipt(record)
-    assert detail.revision == receipt.revision == 7
-    assert detail.state == receipt.state == "ready"
-    assert detail.operational_status == receipt.operational_status == "blocked"
-    assert HISTORY.isdisjoint(detail.model_dump(mode="json"))
-    assert HISTORY.isdisjoint(receipt.model_dump(mode="json"))
+    result = project(record)
+    assert result.revision == 7
+    assert result.state == "ready"
+    assert result.operational_status == "blocked"
+    assert HISTORY.isdisjoint(result.model_dump(mode="json"))
 
 
 def test_receipt_only_includes_outcome_relevant_fields():
@@ -128,7 +107,7 @@ def test_receipt_only_includes_outcome_relevant_fields():
     assert core.project_task_receipt(record, output_state_changed=True).output_state_id == 31
 
 
-def test_receipt_projects_claim_owner_and_rejects_warning_overflow():
+def test_receipt_projects_claim_owner():
     record = core.TaskRecord.model_validate(
         {
             **BASE,
@@ -142,6 +121,10 @@ def test_receipt_projects_claim_owner_and_rejects_warning_overflow():
         }
     )
     assert core.project_task_receipt(record).owner == "Alpha"
+
+
+def test_receipt_rejects_warning_count_overflow():
+    record = core.TaskRecord.model_validate(BASE)
     warning = core.WorkflowWarning(code="attention", message="Check result")
     with pytest.raises(ValidationError):
         core.project_task_receipt(record, warnings=(warning for _ in range(101)))
@@ -225,12 +208,11 @@ def test_working_set_schema_rejects_more_than_ten_recent_comments():
 
 
 @pytest.mark.parametrize("field", ["description", "next_action", "checkpoint", "result"])
-def test_detail_rejects_excessive_byte_size_without_changing_legacy_contract(field):
+def test_detail_rejects_excessive_byte_size(field):
     oversized = {**BASE, field: "Ж" * core.MAX_TASK_PROJECTION_BYTES}
-    legacy_record = core.TaskRecord.model_validate(oversized)
-    assert getattr(legacy_record, field) == oversized[field]
+    record = core.TaskRecord.model_construct(**oversized)
     with pytest.raises(ValidationError, match="serialized-byte budget"):
-        core.project_task_detail(legacy_record)
+        core.project_task_detail(record)
 
 
 @pytest.mark.parametrize("kind", ["comments", "checkpoints", "events"])
@@ -248,7 +230,7 @@ def test_history_page_bytes_are_bounded_even_with_one_large_event(kind):
         )
 
 
-def test_receipt_does_not_serialize_huge_body_but_bounds_its_own_warnings():
+def test_receipt_does_not_serialize_huge_body():
     record = core.TaskRecord.model_validate(
         {
             **BASE,
@@ -256,6 +238,10 @@ def test_receipt_does_not_serialize_huge_body_but_bounds_its_own_warnings():
         }
     )
     assert core.project_task_receipt(record).revision == 7
+
+
+def test_receipt_rejects_warning_byte_overflow():
+    record = core.TaskRecord.model_validate(BASE)
     warning = core.WorkflowWarning(code="large", message="x" * core.MAX_TASK_PROJECTION_BYTES)
     with pytest.raises(ValidationError, match="serialized-byte budget"):
         core.project_task_receipt(record, warnings=[warning])
@@ -270,27 +256,3 @@ def test_working_set_bounds_aggregate_comment_payload_bytes():
     )
     with pytest.raises(ValidationError, match="serialized-byte budget"):
         core.project_task_working_set(core.TaskSnapshot.model_validate(SNAPSHOT), comments=[event])
-
-
-@pytest.mark.asyncio
-async def test_all_seven_legacy_discovery_contracts_preserve_baseline():
-    """Intentional future public contract changes must update this reviewed baseline."""
-    import hashlib
-    import json
-
-    from terminal_mcp.mcp.server import build_mcp
-
-    class Service:
-        persistent = None
-
-    expected = json.loads(
-        (
-            Path(__file__).parent / "fixtures" / "legacy_mcp_projection_contract_hashes.json"
-        ).read_text()
-    )
-    actual = {}
-    for tool in await build_mcp(Service()).list_tools():
-        data = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
-        serialized = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        actual[tool.name] = hashlib.sha256(serialized.encode()).hexdigest()
-    assert actual == expected

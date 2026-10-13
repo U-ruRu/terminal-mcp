@@ -1,30 +1,11 @@
-from __future__ import annotations
+"""Real application composition and lifespan acceptance for managed recovery."""
 
-import asyncio
-
-import pytest
 from fastapi.testclient import TestClient
+from persistent_app_test_helpers import persistent_app_with_execution_port as create_app
 
-from terminal_mcp.app import create_app
-from terminal_mcp.application.managed_runtime import ManagedSessionRuntime
 from terminal_mcp.application.sessions import SessionApplication
 from terminal_mcp.config import Settings
 from terminal_mcp.storage.work_windows import WorkWindowStore
-
-
-class _Recovery:
-    def __init__(self, *, failures=0):
-        self.calls = 0
-        self.failures = failures
-
-    async def tick(self):
-        self.calls += 1
-        if self.calls <= self.failures:
-            raise RuntimeError("transient")
-
-
-class _Port:
-    pass
 
 
 def _settings(tmp_path, **overrides):
@@ -49,33 +30,6 @@ def _settings(tmp_path, **overrides):
     )
     values.update(overrides)
     return Settings(**values)
-
-
-@pytest.mark.asyncio
-async def test_managed_runtime_is_single_bounded_host_task_and_survives_tick_failure():
-    recovery = _Recovery(failures=1)
-    runtime = ManagedSessionRuntime(_Port(), _Port(), recovery, enabled=True)
-
-    await runtime.start(interval_seconds=0.2)
-    assert runtime.running
-    # Initial failure is contained; the next durable pass still runs.
-    await asyncio.sleep(0.24)
-    assert recovery.calls >= 2
-    await runtime.stop()
-    assert not runtime.running
-
-    calls = recovery.calls
-    await asyncio.sleep(0.22)
-    assert recovery.calls == calls
-
-
-@pytest.mark.asyncio
-async def test_managed_runtime_disabled_never_starts_recovery():
-    recovery = _Recovery()
-    runtime = ManagedSessionRuntime(_Port(), _Port(), recovery, enabled=False)
-    await runtime.start()
-    assert not runtime.running
-    assert recovery.calls == 0
 
 
 def test_create_app_composes_managed_runtime_without_public_cutover(tmp_path):

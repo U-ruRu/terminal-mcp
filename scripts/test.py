@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four levels of Terminal MCP checks with isolated state and exact-source receipts."""
+"""Scoped Terminal MCP feedback and complete release checks with isolated evidence."""
 
 from __future__ import annotations
 
@@ -20,7 +20,14 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from test_plan import COMPONENTS, DEV_TESTS, affected_plan, component_plan
+from test_plan import (
+    COMPONENTS,
+    DEV_TESTS,
+    affected_plan,
+    component_plan,
+    layer_tests,
+    platform_plan,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATHS = {
@@ -161,6 +168,8 @@ def node_check(url: str, expected_release: str, transport=None) -> dict:
 
 
 def run(args: argparse.Namespace, plan: dict, root: Path = ROOT) -> int:
+    if not plan["tests"]:
+        raise ValueError("Empty test selection cannot be passed to pytest")
     sha = git("rev-parse", "HEAD", root=root)
     if args.expected_sha and sha != args.expected_sha:
         raise ValueError("HEAD differs from --expected-sha")
@@ -352,7 +361,9 @@ def _run_isolated(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("dev", "component", "full", "node"))
+    parser.add_argument(
+        "mode", choices=("dev", "component", "integration", "platform", "full", "node")
+    )
     parser.add_argument("components", nargs="*", help="Component names: " + ", ".join(COMPONENTS))
     parser.add_argument(
         "--changed-from", help="Include committed, staged, unstaged and untracked changes"
@@ -398,22 +409,33 @@ def main(argv: list[str] | None = None) -> int:
             if args.changed_from or args.components:
                 raise ValueError("Full acceptance always runs all tests; selectors are forbidden")
             plan = {"scope": "full", "tests": ["tests"], "reasons": ["All tests, no filters"]}
+        elif args.mode == "platform":
+            if args.changed_from:
+                raise ValueError("platform is an explicit linux batch; use --plan to inspect it")
+            plan = platform_plan(ROOT, args.components)
         elif args.changed_from:
             if args.components:
                 raise ValueError("Use component selection or --changed-from, not both")
-            plan = affected_plan(ROOT, changed_paths(args.changed_from))
-        elif args.mode == "component":
-            plan = component_plan(ROOT, args.components)
+            plan = affected_plan(
+                ROOT, changed_paths(args.changed_from), integration=args.mode == "integration"
+            )
+        elif args.mode in {"component", "integration"}:
+            plan = component_plan(ROOT, args.components, integration=args.mode == "integration")
         else:
             if args.components:
                 raise ValueError("dev does not take component names")
             plan = {
                 "scope": "dev",
-                "tests": [p for p in DEV_TESTS if (ROOT / p).is_file()],
+                "tests": layer_tests(
+                    ROOT, [p for p in DEV_TESTS if (ROOT / p).is_file()], "component"
+                ),
                 "reasons": ["Fast feedback only, not release acceptance"],
             }
         if args.plan:
             print(json.dumps(plan, indent=2))
+            return 0
+        if not plan["tests"]:
+            print(json.dumps({"state": "no_tests_selected", "selection": plan}, indent=2))
             return 0
         return run(args, plan)
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:

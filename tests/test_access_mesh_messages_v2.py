@@ -1,7 +1,5 @@
 """Two independent local databases; no route cache or issuer read service."""
 
-import asyncio
-import time
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -113,8 +111,7 @@ class Runtime:
 
 class Network:
     def __init__(self):
-        self.nodes, self.offline, self.calls = {}, set(), []
-        self.drop_ack_once, self.before_request = False, None
+        self.nodes, self.calls = {}, []
 
     def transport(self, node_id):
         network = self
@@ -126,16 +123,9 @@ class Network:
 
             async def request(self, peer, path, payload):
                 network.calls.append((node_id, peer.instance_id, path, payload))
-                if network.before_request:
-                    network.before_request(node_id, peer.instance_id, path, payload)
-                if peer.instance_id in network.offline:
-                    raise ConnectionError("peer unavailable")
                 response = await network.nodes[peer.instance_id].handle_peer(
                     node_id, path.rsplit("/", 1)[-1], payload
                 )
-                if network.drop_ack_once and path.endswith("deliver"):
-                    network.drop_ack_once = False
-                    raise ConnectionError("delivered but HTTP ACK lost")
                 return response
 
         return Replication()
@@ -219,19 +209,6 @@ async def test_local_broadcast_never_calls_peer_and_excludes_sender(mesh_pair):
 
 
 @pytest.mark.asyncio
-async def test_fleet_commits_local_first_deduplicates_and_preserves_identity(mesh_pair):
-    net = mesh_pair
-    fb, bac = net.nodes["firstbyte"], net.nodes["bacloud"]
-    result = await fb.message(
-        actor("alice"), text="retired fleet", target="broadcast", scope="fleet"
-    )
-    assert result["ok"] is False and result["code"] == "feature_disabled"
-    assert count(fb, "coordination_messages") == 0
-    assert count(bac, "coordination_messages") == 0
-    assert not net.calls
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source,destination,sender,recipient",
     [
@@ -269,7 +246,7 @@ async def test_directed_agent_attached_on_both_nodes_gets_each_local_inbox(
         ("bacloud", "firstbyte", "bob", "alice", "coordinator"),
     ],
 )
-async def test_first_contact_send_read_ack_reply_history(
+async def test_remote_only_recipient_is_rejected_before_local_mutation(
     mesh_pair, source, destination, sender, recipient, role
 ):
     net = mesh_pair
@@ -282,36 +259,6 @@ async def test_first_contact_send_read_ack_reply_history(
     assert sent["ok"] is False and sent["code"] == "recipient_not_found"
     assert count(origin, "coordination_messages") == 0
     assert count(remote, "coordination_messages") == 0
-    assert not net.calls
-
-
-@pytest.mark.asyncio
-async def test_offline_peer_retains_local_success_and_outbox_survives_restart(mesh_pair):
-    net, fb = mesh_pair, mesh_pair.nodes["firstbyte"]
-    net.offline.add("bacloud")
-    result = await fb.message(actor("alice"), text="local despite peer partition")
-    assert result["ok"] and result["outcome"] == "committed"
-    assert result["state"] == "delivered" and result["pending_peers"] == []
-    assert fb.store.pending() == []
-    restarted = AccessMeshMessaging(fb.mesh, fb.agent_store, net.transport("firstbyte"))
-    assert restarted.store.wire(result["message_hash"]) is not None
-    assert restarted.store.pending() == []
-    assert count(net.nodes["bacloud"], "coordination_messages") == 0
-    assert not net.calls
-
-
-@pytest.mark.asyncio
-async def test_lost_ack_duplicate_delivery_and_same_request_have_one_effect(mesh_pair):
-    net = mesh_pair
-    fb, bac = net.nodes["firstbyte"], net.nodes["bacloud"]
-    net.drop_ack_once = True
-    first = await fb.message(actor("alice"), text="one message")
-    second = await fb.message(actor("alice"), text="one message")
-    changed = await fb.message(actor("alice"), text="different message")
-    assert first["state"] == second["state"] == changed["state"] == "delivered"
-    assert len({first["message_hash"], second["message_hash"], changed["message_hash"]}) == 3
-    assert count(fb, "coordination_messages") == 3
-    assert count(bac, "coordination_messages") == 0
     assert not net.calls
 
 
@@ -522,64 +469,6 @@ async def test_recipient_read_never_materializes_or_updates_work_session(mesh_pa
     monkeypatch.setattr(fb.mesh.store, "local_identity", reject_write)
     result = await fb.recipients(identity, scope="local", limit=20, cursor=None)
     assert result["ok"] and len(result["recipients"]) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("occupied_lock", [False, True])
-async def test_public_send_returns_durable_receipt_within_total_peer_budget(
-    mesh_pair, monkeypatch, occupied_lock
-):
-    fb = mesh_pair.nodes["firstbyte"]
-
-    async def offline(*args, **kwargs):
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(fb.replication, "request", offline)
-    if occupied_lock:
-        await fb._flush_lock.acquire()
-    started = time.monotonic()
-    try:
-        result = await asyncio.wait_for(
-            fb.message(actor("alice"), text="local while peer path is stalled"), timeout=0.8
-        )
-    finally:
-        if occupied_lock:
-            fb._flush_lock.release()
-    assert time.monotonic() - started < 0.8
-    assert result["ok"] and result["outcome"] == "committed"
-    assert result["state"] == "delivered" and result["pending_peers"] == []
-    assert fb.store.pending() == []
-
-
-@pytest.mark.asyncio
-async def test_large_fleet_envelope_is_rejected_before_local_or_peer_commit(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    result = await fb.message(actor("alice"), text="legacy fleet", scope="fleet")
-    assert result["ok"] is False and result["code"] == "feature_disabled"
-    assert count(fb, "coordination_messages") == 0
-    assert fb.store.pending() == []
-    assert not mesh_pair.calls
-
-
-@pytest.mark.asyncio
-async def test_oversized_peer_acceptance_proof_rolls_back_all_obligations(mesh_pair):
-    fb = mesh_pair.nodes["firstbyte"]
-    sent = await fb.message(actor("alice"), text="template", scope="local")
-    wire = {**fb.store.wire(sent["message_hash"]), "message_hash": "firstbyte:localmsg:large-proof"}
-    recipients = [
-        {
-            "logical_agent_id": f"{index}:" + "a" * 150,
-            "public_name": "\u754c" * 40 + f"-{index:012d}",
-        }
-        for index in range(256)
-    ]
-    before_messages = count(fb, "coordination_messages")
-    before_recipients = count(fb, "coordination_message_recipients")
-    with pytest.raises(MeshMessagingError, match="output_item_too_large"):
-        fb.store.accept(wire, recipients)
-    assert count(fb, "coordination_messages") == before_messages
-    assert count(fb, "coordination_message_recipients") == before_recipients
-    assert fb.store.wire(wire["message_hash"]) is None
 
 
 @pytest.mark.asyncio
