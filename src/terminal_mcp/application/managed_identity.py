@@ -142,7 +142,7 @@ class ManagedProviderResolver:
     ) -> ActorContext:
         if actor.provider is not None and actor.provider != provider:
             raise ManagedSessionError("identity_mismatch")
-        identity = self.registry.resolve(provider, metadata)
+        identity = self.registry.resolve(provider, metadata, principal_id=actor.principal_id)
         route_resolver = (
             getattr(self.router.routes, "resolve_provider_binding", None)
             if self.router.routes is not None
@@ -193,7 +193,7 @@ class ManagedProviderResolver:
         admission.require("terminal:execute")
         if actor.provider is not None and actor.provider != provider:
             raise ManagedSessionError("identity_mismatch")
-        identity = self.registry.resolve(provider, metadata)
+        identity = self.registry.resolve(provider, metadata, principal_id=actor.principal_id)
         if actor.logical_agent_id is not None and actor.logical_agent_id != logical_agent_id:
             raise ManagedSessionError("identity_mismatch")
         route = await self.router.identity_route(logical_agent_id)

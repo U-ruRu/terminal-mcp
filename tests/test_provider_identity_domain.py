@@ -153,3 +153,58 @@ def test_opaque_unicode_identifier_has_deterministic_bounded_digest():
     identity = ProviderIdentity("custom", "пользователь", "диалог")
     assert identity.binding_key == ProviderIdentity("custom", "пользователь", "диалог").binding_key
     assert identity.binding_key.isascii()
+
+
+def test_codex_identity_is_principal_scoped_and_does_not_require_session_or_call():
+    registry = ProviderIdentityRegistry()
+    base = registry.resolve("codex", {"threadId": "thread-a"}, principal_id="oauth-client-a")
+    assert base == ProviderIdentity("codex", "oauth-client-a", "thread-a")
+    for extras in (
+        {"sessionId": "root"},
+        {"callId": "call-1"},
+        {"progressToken": 3},
+        {"sessionId": "other-root", "callId": "call-2", "progressToken": 7},
+        {"openai/userAgent": "fake"},
+    ):
+        assert (
+            registry.resolve(
+                "codex", {"threadId": "thread-a", **extras}, principal_id="oauth-client-a"
+            ).binding_key
+            == base.binding_key
+        )
+    assert (
+        registry.resolve(
+            "codex", {"threadId": "thread-b"}, principal_id="oauth-client-a"
+        ).binding_key
+        != base.binding_key
+    )
+    assert (
+        registry.resolve(
+            "codex", {"threadId": "thread-a"}, principal_id="oauth-client-b"
+        ).binding_key
+        != base.binding_key
+    )
+    assert (
+        registry.resolve("openai", metadata(), principal_id="oauth-client-a").binding_key
+        == registry.resolve("openai", metadata(), principal_id="oauth-client-b").binding_key
+    )
+
+
+@pytest.mark.parametrize("payload", [{}, {"sessionId": "root"}, {"threadId": ""}, {"threadId": []}])
+def test_codex_requires_a_valid_agent_thread(payload):
+    with pytest.raises(ProviderIdentityError, match="identity_metadata_missing"):
+        ProviderIdentityRegistry().resolve("codex", payload, principal_id="verified")
+
+
+def test_codex_requires_verified_principal_and_does_not_accept_forged_subject():
+    registry = ProviderIdentityRegistry()
+    with pytest.raises(ProviderIdentityError, match="persistent_auth_required"):
+        registry.resolve("codex", {"threadId": "thread", "subject": "forged"})
+    with pytest.raises(ProviderIdentityError, match="persistent_auth_required"):
+        registry.resolve("codex", {"threadId": "thread", "openai/subject": "forged"})
+    assert (
+        registry.resolve(
+            "codex", {"threadId": "thread", "subject": "forged"}, principal_id="verified"
+        ).subject
+        == "verified"
+    )

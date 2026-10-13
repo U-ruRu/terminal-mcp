@@ -123,6 +123,12 @@ def test_metadata_extraction_exact_and_missing():
     assert provider_metadata_from_events({"_meta": {"openai/subject": "user"}}) is None
     assert provider_metadata_from_events({"arguments": meta()}) is None
     assert provider_metadata_from_events({}) is None
+    assert provider_metadata_from_events(
+        {"_meta": {"threadId": "thread-a", "progressToken": 2}},
+        principal_id="verified-client",
+    ) == {"threadId": "thread-a"}
+    assert provider_metadata_from_events({"_meta": {"threadId": "thread-a"}}) is None
+    assert provider_metadata_from_events({"_meta": {"sessionId": "root"}}) is None
 
 
 def test_access_subscription_without_verified_binding_is_fail_closed(tmp_path):
@@ -452,3 +458,61 @@ def test_oauth_access_binding_subscribe_and_revocation(tmp_path):
         assert client.portal.call(app.state.mcp_events.access_checker, item)
         client.portal.call(app.state.oauth_store.delete_client, cid)
         assert not client.portal.call(app.state.mcp_events.access_checker, item)
+
+
+def test_codex_native_thread_only_reuses_verified_identity_and_isolates_clients(tmp_path):
+    """One native Codex thread works across Access, Coordinator and MCP Events.
+
+    A different authenticated client cannot claim the prior Access/attach binding.
+    This is a live HTTP/MCP integration case rather than a metadata parser test.
+    """
+    app = create_app(config(tmp_path))
+    receiver = Receiver()
+    app.state.access_events.sender = receiver
+    with TestClient(app, base_url="https://terminal.example") as client:
+        native_meta = {"threadId": "codex-thread-a", "progressToken": 14}
+        issued = tool(client, "access", "session", {"action": "start"}, evidence=native_meta)
+        number = issued["session_number"]
+        slot = app.state.access_mesh.store.numbers.winner(number)
+        logical_agent_id = slot["logical_agent_id"]
+        attached = tool(
+            client,
+            "coordinator",
+            "session",
+            {"session_number": number, "intent": "Native Codex metadata test"},
+            evidence={"threadId": "codex-thread-a"},
+            request_id=55,
+        )
+        assert attached["ok"]
+        resolved = tool(
+            client,
+            "coordinator",
+            "health",
+            {"extended": False},
+            evidence={"threadId": "codex-thread-a", "callId": "ignored-call"},
+            request_id=56,
+        )
+        assert resolved["ok"] and resolved["agent_name"]
+
+        subscribed = subscribe(client, evidence=native_meta)
+        assert "result" in subscribed, subscribed
+        with sqlite3.connect(app.state.settings.database_path) as db:
+            binding = db.execute(
+                "SELECT recipient_agent_id FROM mcp_event_message_bindings WHERE subscription_id=?",
+                (subscribed["result"]["id"],),
+            ).fetchone()
+        assert binding == (logical_agent_id,)
+
+        # Same thread from another verified OAuth client has a distinct connection.
+        other_principal = subscribe(
+            client, evidence={"threadId": "codex-thread-a"}, token="test-bearer-b"
+        )
+        assert "error" in other_principal
+        assert other_principal["error"]["code"] == -32001
+
+        # Root session alone cannot identify which child agent sent a request.
+        missing_thread = subscribe(
+            client, evidence={"sessionId": "shared-root", "progressToken": 42}
+        )
+        assert "error" in missing_thread
+        assert missing_thread["error"]["code"] == -32001

@@ -17,6 +17,7 @@ _OPENAI_META_KEYS = (
     "openai/session",
     "openai/organization",
 )
+_CODEX_IDENTITY_KEY = "threadId"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,12 +38,24 @@ def current_mcp_request_id() -> str | None:
     return None
 
 
-def current_provider_evidence() -> ProviderRequestEvidence | None:
-    """Capture provider identity from server-side MCP request context.
+def provider_evidence_from_meta(raw: Mapping[str, object]) -> ProviderRequestEvidence | None:
+    """Classify known identity fields; this is evidence, not client authentication.
 
-    The MCP client cannot promote this evidence into authorization: admission,
-    AuthFoundation grants and authority fencing are evaluated independently.
+    ChatGPT fields win when both profiles appear to preserve existing bindings.
+    A callId, sessionId, or progressToken alone cannot identify an agent.
     """
+    if not isinstance(raw, Mapping):
+        return None
+    openai = {key: raw[key] for key in _OPENAI_META_KEYS if key in raw}
+    if openai:
+        return ProviderRequestEvidence("openai", openai)
+    if _CODEX_IDENTITY_KEY in raw:
+        return ProviderRequestEvidence("codex", {_CODEX_IDENTITY_KEY: raw[_CODEX_IDENTITY_KEY]})
+    return None
+
+
+def current_provider_evidence() -> ProviderRequestEvidence | None:
+    """Capture request-scoped MCP identity evidence without granting access."""
     try:
         context = request_ctx.get()
     except LookupError:
@@ -51,7 +64,4 @@ def current_provider_evidence() -> ProviderRequestEvidence | None:
     if meta is None:
         return None
     raw = meta.model_dump(exclude_none=True) if hasattr(meta, "model_dump") else dict(meta)
-    evidence = {key: raw[key] for key in _OPENAI_META_KEYS if key in raw}
-    if not evidence:
-        return None
-    return ProviderRequestEvidence("openai", evidence)
+    return provider_evidence_from_meta(raw)
