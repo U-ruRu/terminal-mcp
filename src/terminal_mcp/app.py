@@ -401,11 +401,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application, "coordinator", settings.public_base_url, settings.mode_for("mcp")
     )
 
-    access_mcp = (
-        build_access_mcp(application, public_base_url=settings.public_base_url)
-        if access_mesh
-        else None
-    )
+    # Construct Access after the Events store so get_events can share its
+    # durable agent-scoped inbox rather than introducing a second queue.
+    access_mcp = None
 
     async def mcp_events_access_checker(item):
         """Recheck the same authorization source on every callback delivery."""
@@ -451,6 +449,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.database_path,
         managed_authority_node_id,
         auth_database_path=settings.auth_database_path,
+    )
+    access_mcp = (
+        build_access_mcp(
+            application, event_store=mcp_event_store,
+            public_base_url=settings.public_base_url,
+        )
+        if access_mesh
+        else None
     )
     lifecycle_event_mesh = None
     if access_mesh_replication is not None:

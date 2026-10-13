@@ -313,7 +313,58 @@ class MCPEventsAdapter:
                 return reject(
                     "validation", "unsubscribe_invalid", -32602, "Invalid unsubscribe delivery"
                 )
-            await self.store.unsubscribe_matching(principal, name, callback, arguments)
+            subscriber_id = None
+            if self.endpoint_role == "access":
+                if name == "message.received":
+                    previous = await self.store.message_subscription_binding(
+                        principal, arguments, callback
+                    )
+                    if previous is not None:
+                        # Legacy number-based subscriptions can target an agent
+                        # other than their authenticated subscriber.
+                        subscriber_id = (
+                            previous.get("subscriber_agent_id")
+                            or previous["recipient_agent_id"]
+                        )
+                        metadata = provider_metadata_from_events(
+                            params, principal_id=principal
+                        )
+                        if metadata is not None and self.message_resolver is not None:
+                            admission = current_admission_context()
+                            owner = await self.message_resolver.resolve(
+                                admission, metadata, self.endpoint_role
+                            )
+                            if owner is not None:
+                                subscriber_id = owner.recipient_agent_id
+                    else:
+                        # Idempotent unsubscribe: nothing matching remains for
+                        # this principal, exact event and callback tuple.
+                        self._emit(method, "persistence", "unsubscribed", cid)
+                        return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+                else:
+                    metadata = provider_metadata_from_events(params, principal_id=principal)
+                    admission = current_admission_context()
+                    subscriber = (
+                        await self.message_resolver.resolve(admission, metadata, self.endpoint_role)
+                        if self.message_resolver is not None and metadata is not None
+                        else None
+                    )
+                    if subscriber is not None:
+                        subscriber_id = subscriber.recipient_agent_id
+                if not subscriber_id:
+                    return reject(
+                        "authorization", "subscriber_identity_missing", -32001,
+                        "Established LogicalAgent binding required",
+                    )
+            if subscriber_id is None:
+                # Keep the legacy adapter's principal-only interface for its
+                # internal/test consumers. Public Access always resolves an owner.
+                await self.store.unsubscribe_matching(principal, name, callback, arguments)
+            else:
+                await self.store.unsubscribe_matching(
+                    principal, name, callback, arguments,
+                    subscriber_agent_id=subscriber_id,
+                )
             self._emit(method, "persistence", "unsubscribed", cid)
             return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         binding = None
@@ -386,7 +437,50 @@ class MCPEventsAdapter:
                     "Recipient binding unavailable",
                 )
             self._emit(method, "authorization", "recipient_bound", cid)
+        subscriber_id = binding.recipient_agent_id if binding is not None else None
+        subscriber = None
+        if self.endpoint_role == "access":
+            admission = current_admission_context()
+            metadata = provider_metadata_from_events(params, principal_id=principal)
+            if metadata is not None:
+                try:
+                    subscriber = (
+                        await self.message_resolver.resolve(admission, metadata, self.endpoint_role)
+                        if self.message_resolver is not None
+                        else None
+                    )
+                except Exception:
+                    subscriber = None
+                if subscriber is None:
+                    if binding is None or binding.role != "session_number":
+                        return reject(
+                            "authorization", "subscriber_identity_missing", -32001,
+                            "Established LogicalAgent binding required",
+                        )
+                    # Legacy explicit-number subscriptions also work when this
+                    # credential has no own Access issuer binding. The number
+                    # already determines the authorized recipient LogicalAgent.
+                else:
+                    # The subscribed recipient can differ from the caller.
+                    subscriber_id = subscriber.recipient_agent_id
+            elif subscriber_id is None:
+                return reject(
+                    "authorization", "subscriber_identity_missing", -32001,
+                    "Established LogicalAgent binding required",
+                )
         sub_id = self._id(principal, name, arguments, callback, binding=binding)
+        if subscriber is not None:
+            # Keep an established subscription id on refresh, while preventing a
+            # second LogicalAgent using the same callback tuple from taking it.
+            previous = await self.store.subscription(sub_id)
+            if (
+                previous is not None
+                and previous.get("subscriber_agent_id") is not None
+                and previous["subscriber_agent_id"] != subscriber_id
+            ):
+                sub_id = self._id(
+                    principal, name, arguments, callback, binding=subscriber
+                )
         if method != "events/subscribe":
             return reject("validation", "method_unknown", -32601, "Method not found")
         secret = delivery.get("secret")
@@ -448,6 +542,7 @@ class MCPEventsAdapter:
                 credential_id=admission.credential_id,
                 auth_mode=admission.auth_mode,
                 name=name,
+                subscriber_agent_id=subscriber_id,
                 callback=callback,
                 secret=secret,
                 ttl_ms=ttl_ms,

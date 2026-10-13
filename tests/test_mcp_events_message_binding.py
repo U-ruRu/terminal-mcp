@@ -517,3 +517,228 @@ def test_codex_native_thread_only_reuses_verified_identity_and_isolates_clients(
         )
         assert "error" in missing_thread
         assert missing_thread["error"]["code"] == -32001
+
+
+
+def test_access_lifecycle_subscriptions_and_get_events_use_logical_agent_identity(tmp_path):
+    app = create_app(config(tmp_path))
+    receiver = Receiver()
+    app.state.access_events.sender = receiver
+    with TestClient(app, base_url="https://terminal.example") as client:
+        agent_a, agent_b = meta("owner-a", "conversation-a"), meta("owner-b", "conversation-b")
+        a_code = tool(client, "access", "session", {"action": "start"}, evidence=agent_a)[
+            "session_number"
+        ]
+        b_code = tool(client, "access", "session", {"action": "start"}, evidence=agent_b)[
+            "session_number"
+        ]
+        store = app.state.access_mesh.store
+        a_number = store.numbers.winner(a_code)
+        b_number = store.numbers.winner(b_code)
+        a_id = store.slot(a_number["issuer_id"], a_number["slot_id"]).logical_agent_id
+        b_id = store.slot(b_number["issuer_id"], b_number["slot_id"]).logical_agent_id
+        assert a_id != b_id
+
+        def subscribe_event(event_name, evidence):
+            response = rpc(
+                client, "access", "events/subscribe",
+                {"name": event_name, "arguments": {},
+                 "delivery": {"mode": "webhook", "url": URL, "secret": KEY}},
+                evidence=evidence,
+            )
+            assert "result" in response, response
+            return response["result"]["id"]
+
+        sub_a = subscribe_event("agent.attached", agent_a)
+        sub_b = subscribe_event("session.ended", agent_b)
+        unauth = rpc(
+            client, "access", "events/subscribe",
+            {"name": "agent.inactive", "arguments": {},
+             "delivery": {"mode": "webhook", "url": URL, "secret": KEY}},
+            evidence=meta("not-registered", "elsewhere"),
+        )
+        assert unauth["error"]["code"] == -32001
+
+        a_event, b_event = "evt_" + "a" * 32, "evt_" + "b" * 32
+        path = app.state.mcp_events.store.path
+        timestamp = utc_text()
+        with sqlite3.connect(path) as db:
+            assert db.execute(
+                "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
+                (sub_a,),
+            ).fetchone() == (a_id,)
+            assert db.execute(
+                "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
+                (sub_b,),
+            ).fetchone() == (b_id,)
+            for event_id, event_name, subscriber, name in (
+                (a_event, "agent.attached", sub_a, "A"),
+                (b_event, "session.ended", sub_b, "B"),
+            ):
+                data = {"server": "firstbyte", "agent_name": name}
+                db.execute(
+                    "INSERT INTO mcp_event_records("
+                    "event_id,source_key,name,occurred_at,data_json) VALUES(?,?,?,?,?)",
+                    (event_id, "test:" + event_id, event_name,
+                     timestamp, json.dumps(data)),
+                )
+                db.execute(
+                    "INSERT INTO mcp_event_deliveries("
+                    "event_id,subscription_id,state,next_attempt_at) VALUES(?,?,?,?)",
+                    (event_id, subscriber, "sent", timestamp),
+                )
+
+        first = tool(client, "access", "get_events", {}, evidence=agent_a)
+        assert first["ok"] and [item["eventId"] for item in first["events"]] == [a_event]
+        assert first["events"][0]["data"]["agent_name"] == "A"
+        assert first["events"][0]["read"] is False
+        assert tool(client, "access", "get_events", {}, evidence=agent_a)["events"] == []
+        assert [item["eventId"] for item in tool(
+            client, "access", "get_events", {}, evidence=agent_b
+        )["events"]] == [b_event]
+        assert tool(client, "access", "get_events",
+                    {"event_id": a_event}, evidence=agent_b)["events"] == []
+        by_id = tool(client, "access", "get_events",
+                     {"event_id": a_event}, evidence=agent_a)
+        assert by_id["events"][0]["read"] is True
+        old = tool(client, "access", "get_events",
+                   {"show_read": True}, evidence=agent_a)
+        assert [item["eventId"] for item in old["events"]] == [a_event]
+        with sqlite3.connect(path) as db:
+            assert db.execute(
+                "SELECT state,read_at FROM mcp_event_deliveries WHERE event_id=?",
+                (a_event,),
+            ).fetchone()[0] == "sent"
+            assert db.execute(
+                "SELECT read_at FROM mcp_event_deliveries WHERE event_id=?",
+                (a_event,),
+            ).fetchone()[0] is not None
+
+
+def test_access_get_events_cursor_deduplicates_across_owner_subscriptions(tmp_path):
+    app = create_app(config(tmp_path))
+
+    class MultiCallbackReceiver:
+        async def __call__(self, url, raw_body, headers):
+            assert url in (URL, URL + "/second")
+            payload = json.loads(raw_body)
+            if payload.get("type") == "verification":
+                return 200, json.dumps({"challenge": payload["challenge"]}).encode()
+            return 202, b""
+
+    app.state.access_events.sender = MultiCallbackReceiver()
+    evidence = meta("owner", "same-conversation")
+    with TestClient(app, base_url="https://terminal.example") as client:
+        tool(client, "access", "session", {"action": "start"}, evidence=evidence)
+        payload = {
+            "name": "agent.attached", "arguments": {},
+            "delivery": {"mode": "webhook", "url": URL, "secret": KEY}
+        }
+        response = rpc(client, "access", "events/subscribe", payload, evidence=evidence)
+        assert "result" in response, response
+        sub_id = response["result"]["id"]
+        secondary = rpc(
+            client, "access", "events/subscribe",
+            {
+                "name": "agent.attached", "arguments": {},
+                "delivery": {"mode": "webhook", "url": URL + "/second", "secret": KEY},
+            },
+            evidence=evidence,
+        )
+        assert "result" in secondary, secondary
+        second_sub_id = secondary["result"]["id"]
+        assert second_sub_id != sub_id
+        path = app.state.mcp_events.store.path
+        event_ids = ["evt_" + digit * 32 for digit in "cde"]
+        with sqlite3.connect(path) as db:
+            for index, event_id in enumerate(event_ids):
+                db.execute(
+                    "INSERT INTO mcp_event_records("
+                    "event_id,source_key,name,occurred_at,data_json) VALUES(?,?,?,?,?)",
+                    (event_id, "test:" + event_id, "agent.attached",
+                     f"2026-10-14T02:00:0{index}Z",
+                     json.dumps({"server": "firstbyte", "agent_name": str(index)})),
+                )
+                db.execute(
+                    "INSERT INTO mcp_event_deliveries("
+                    "event_id,subscription_id,next_attempt_at) VALUES(?,?,?)",
+                    (event_id, sub_id, utc_text()),
+                )
+            # Same event has two independent subscriptions owned by one agent.
+            db.execute(
+                "INSERT INTO mcp_event_deliveries("
+                "event_id,subscription_id,next_attempt_at) VALUES(?,?,?)",
+                (event_ids[0], second_sub_id, utc_text()),
+            )
+        first = tool(client, "access", "get_events", {"limit": 1}, evidence=evidence)
+        assert [x["eventId"] for x in first["events"]] == event_ids[:1]
+        with sqlite3.connect(path) as db:
+            assert db.execute(
+                "SELECT COUNT(*) FROM mcp_event_deliveries "
+                "WHERE event_id=? AND read_at IS NOT NULL",
+                (event_ids[0],),
+            ).fetchone()[0] == 2
+        assert first["has_more"] and first["next_cursor"]
+        second = tool(client, "access", "get_events",
+                      {"limit": 1, "cursor": first["next_cursor"]}, evidence=evidence)
+        assert [x["eventId"] for x in second["events"]] == event_ids[1:2]
+        third = tool(client, "access", "get_events",
+                     {"limit": 1, "cursor": second["next_cursor"]}, evidence=evidence)
+        assert [x["eventId"] for x in third["events"]] == event_ids[2:]
+        assert third["has_more"] is False
+        assert tool(client, "access", "get_events", {}, evidence=evidence)["events"] == []
+
+
+def test_number_subscription_owner_is_caller_not_message_recipient(tmp_path):
+    """Routing to a recipient by session number must not replace the subscriber."""
+    app = create_app(config(tmp_path))
+    app.state.access_events.sender = Receiver()
+    evidence_a = meta("owner-a", "session-a")
+    evidence_b = meta("owner-b", "session-b")
+    with TestClient(app, base_url="https://terminal.example") as client:
+        number_a = tool(client, "access", "session", {"action": "start"}, evidence=evidence_a)[
+            "session_number"
+        ]
+        number_b = tool(client, "access", "session", {"action": "start"}, evidence=evidence_b)[
+            "session_number"
+        ]
+        store = app.state.access_mesh.store
+        a_number = store.numbers.winner(number_a)
+        b_number = store.numbers.winner(number_b)
+        id_a = store.slot(a_number["issuer_id"], a_number["slot_id"]).logical_agent_id
+        id_b = store.slot(b_number["issuer_id"], b_number["slot_id"]).logical_agent_id
+        assert id_a != id_b
+        response = rpc(
+            client,
+            "access",
+            "events/subscribe",
+            {
+                "name": "message.received",
+                "arguments": {"session_number": number_a},
+                "delivery": {"mode": "webhook", "url": URL, "secret": KEY},
+            },
+            evidence=evidence_b,
+        )
+        assert "result" in response, response
+        sub_id = response["result"]["id"]
+        with sqlite3.connect(app.state.mcp_events.store.path) as db:
+            row = db.execute(
+                "SELECT s.subscriber_agent_id,b.recipient_agent_id "
+                "FROM mcp_event_subscriptions s JOIN mcp_event_message_bindings b "
+                "ON b.subscription_id=s.id WHERE s.id=?",
+                (sub_id,),
+            ).fetchone()
+        assert row == (id_b, id_a)
+        # An old number-based subscription whose owner field was not stored
+        # must not be reassigned to the recipient during schema backfill.
+        with sqlite3.connect(app.state.mcp_events.store.path) as db:
+            db.execute(
+                "UPDATE mcp_event_subscriptions SET subscriber_agent_id=NULL WHERE id=?",
+                (sub_id,),
+            )
+        client.portal.call(app.state.mcp_events.store.initialize)
+        with sqlite3.connect(app.state.mcp_events.store.path) as db:
+            assert db.execute(
+                "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
+                (sub_id,),
+            ).fetchone() == (None,)

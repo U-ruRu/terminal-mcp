@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 from datetime import timedelta
@@ -202,6 +204,7 @@ class MCPEventStore:
                 CREATE TABLE IF NOT EXISTS mcp_event_subscriptions(
                     id TEXT PRIMARY KEY,
                     principal_id TEXT NOT NULL,
+                    subscriber_agent_id TEXT,
                     credential_id TEXT,
                     auth_mode TEXT,
                     name TEXT NOT NULL,
@@ -237,6 +240,7 @@ class MCPEventStore:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     next_attempt_at TEXT NOT NULL,
                     last_status INTEGER,
+                    read_at TEXT,
                     PRIMARY KEY(event_id,subscription_id)
                 );
                 CREATE INDEX IF NOT EXISTS ix_mcp_event_delivery_due
@@ -326,6 +330,41 @@ class MCPEventStore:
                 )
                 await db.execute("DROP TABLE mcp_event_subscriptions_v1")
                 await db.commit()
+            # Pre-upgrade automatic Access-recipient bindings identify their
+            # subscriber. Explicit session-number subscriptions can target
+            # ANOTHER agent: never infer an unknown owner from that recipient.
+            columns = {
+                row[1]
+                for row in await (
+                    await db.execute("PRAGMA table_info(mcp_event_subscriptions)")
+                ).fetchall()
+            }
+            if "subscriber_agent_id" not in columns:
+                await db.execute(
+                    "ALTER TABLE mcp_event_subscriptions ADD COLUMN subscriber_agent_id TEXT"
+                )
+            delivery_columns = {
+                row[1]
+                for row in await (
+                    await db.execute("PRAGMA table_info(mcp_event_deliveries)")
+                ).fetchall()
+            }
+            if "read_at" not in delivery_columns:
+                await db.execute("ALTER TABLE mcp_event_deliveries ADD COLUMN read_at TEXT")
+            await db.execute(
+                "UPDATE mcp_event_subscriptions SET subscriber_agent_id=("
+                "SELECT recipient_agent_id FROM mcp_event_message_bindings b "
+                "WHERE b.subscription_id=mcp_event_subscriptions.id "
+                "AND b.recipient_role='access'"
+                ") WHERE subscriber_agent_id IS NULL AND name='message.received' "
+                "AND EXISTS (SELECT 1 FROM mcp_event_message_bindings b "
+                "WHERE b.subscription_id=mcp_event_subscriptions.id "
+                "AND b.recipient_role='access')"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_mcp_event_subscriber "
+                "ON mcp_event_subscriptions(subscriber_agent_id,name)"
+            )
             for statement in HOLD_SCHEMA:
                 await db.execute(statement)
             # Finish idempotent schema/claim recovery before the hold transaction.
@@ -858,6 +897,99 @@ class MCPEventStore:
             ).fetchone()
             return dict(row) if row else None
 
+    async def get_events(
+        self,
+        logical_agent_id: str,
+        *,
+        event_id: str | None = None,
+        limit: int = 20,
+        cursor: str | None = None,
+        show_read: bool = False,
+    ) -> dict:
+        """Read and atomically mark one page of this LogicalAgent's event deliveries.
+
+        Transport delivery acknowledgement stays independent of read_at.
+        Per-agent fanout is collapsed to unique eventIds in a single transaction.
+        """
+        key = None
+        if cursor is not None:
+            try:
+                raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+                parts = json.loads(raw)
+                if (
+                    not isinstance(parts, list) or len(parts) != 2
+                    or not all(isinstance(part, str) and part for part in parts)
+                ):
+                    raise ValueError
+                key = (parts[0], parts[1])
+            except (ValueError, TypeError, UnicodeError, binascii.Error):
+                raise ValueError("invalid_event_cursor") from None
+        if event_id is not None and cursor is not None:
+            raise ValueError("event_id_and_cursor_are_exclusive")
+
+        conditions = ["s.subscriber_agent_id=?"]
+        params: list = [logical_agent_id]
+        if event_id is not None:
+            conditions.append("e.event_id=?")
+            params.append(event_id)
+        elif key is not None:
+            conditions.append("(e.occurred_at>? OR (e.occurred_at=? AND e.event_id>?))")
+            params.extend([key[0], key[0], key[1]])
+        if not show_read and event_id is None:
+            conditions.append("d.read_at IS NULL")
+        sql = (
+            "SELECT e.event_id,e.name,e.occurred_at,e.data_json,"
+            "MIN(CASE WHEN d.read_at IS NULL THEN 0 ELSE 1 END) AS previously_read "
+            "FROM mcp_event_records e "
+            "JOIN mcp_event_deliveries d ON d.event_id=e.event_id "
+            "JOIN mcp_event_subscriptions s ON s.id=d.subscription_id "
+            "WHERE " + " AND ".join(conditions) + " GROUP BY e.event_id "
+            "ORDER BY e.occurred_at,e.event_id LIMIT ?"
+        )
+        async with aiosqlite.connect(self.path, timeout=5) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = await (
+                    await db.execute(sql, (*params, 1 if event_id else limit + 1))
+                ).fetchall()
+                selected = rows if event_id else rows[:limit]
+                if selected:
+                    ids = [row["event_id"] for row in selected]
+                    marks = ",".join("?" for _ in ids)
+                    await db.execute(
+                        "UPDATE mcp_event_deliveries SET read_at=? "
+                        f"WHERE event_id IN ({marks}) AND read_at IS NULL "
+                        "AND subscription_id IN("
+                        "SELECT id FROM mcp_event_subscriptions WHERE subscriber_agent_id=?)",
+                        (utc_text(), *ids, logical_agent_id),
+                    )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+
+        output = [
+            {
+                "eventId": row["event_id"],
+                "name": row["name"],
+                "timestamp": row["occurred_at"],
+                "data": public_event_data(row["name"], json.loads(row["data_json"])),
+                "read": bool(row["previously_read"]),
+            }
+            for row in selected
+        ]
+        has_more = bool(event_id is None and len(rows) > limit)
+        last = selected[-1] if has_more else None
+        next_cursor = (
+            base64.urlsafe_b64encode(
+                json.dumps([last["occurred_at"], last["event_id"]], separators=(",", ":")).encode()
+            ).decode().rstrip("=")
+            if last is not None
+            else None
+        )
+        return {"ok": True, "events": output, "next_cursor": next_cursor, "has_more": has_more}
+
     async def verified_recently(self, principal, callback_url):
         async with aiosqlite.connect(self.path, timeout=5) as db:
             row = await (
@@ -875,7 +1007,7 @@ class MCPEventStore:
             db.row_factory = aiosqlite.Row
             row = await (
                 await db.execute(
-                    "SELECT s.id,b.* FROM mcp_event_subscriptions s "
+                    "SELECT s.id,s.subscriber_agent_id,b.* FROM mcp_event_subscriptions s "
                     "JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
                     "WHERE s.principal_id=? AND s.name='message.received' "
                     "AND s.arguments_json=? AND s.callback_url=?",
@@ -892,6 +1024,7 @@ class MCPEventStore:
         credential_id,
         auth_mode,
         name,
+        subscriber_agent_id=None,
         callback,
         secret,
         ttl_ms=None,
@@ -962,11 +1095,26 @@ class MCPEventStore:
                     raise SubscriptionAuthorizationError from None
                 if not authorized:
                     raise SubscriptionAuthorizationError
+            # Prevent another caller using a shared OAuth principal and callback
+            # from silently taking ownership of an existing subscription.
+            existing_owner = await (
+                await db.execute(
+                    "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
+                    (sub_id,),
+                )
+            ).fetchone()
+            if (
+                existing_owner is not None
+                and existing_owner[0] is not None
+                and existing_owner[0] != subscriber_agent_id
+            ):
+                raise RecipientBindingChangedError
             await db.execute(
                 "INSERT INTO mcp_event_subscriptions"
-                "(id,principal_id,credential_id,auth_mode,name,arguments_json,"
+                "(id,principal_id,subscriber_agent_id,credential_id,auth_mode,name,arguments_json,"
                 "callback_url,signing_secret,created_at,expires_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "subscriber_agent_id=excluded.subscriber_agent_id,"
                 "previous_signing_secret=CASE WHEN "
                 "mcp_event_subscriptions.signing_secret!=excluded.signing_secret "
                 "THEN mcp_event_subscriptions.signing_secret "
@@ -980,6 +1128,7 @@ class MCPEventStore:
                 (
                     sub_id,
                     principal,
+                    subscriber_agent_id,
                     credential_id,
                     auth_mode,
                     name,
@@ -1059,7 +1208,9 @@ class MCPEventStore:
             )
             await db.commit()
 
-    async def unsubscribe_matching(self, principal, name, callback, arguments=None):
+    async def unsubscribe_matching(
+        self, principal, name, callback, arguments=None, *, subscriber_agent_id=None
+    ):
         """Idempotent owner-authorized cleanup by the official subscription tuple.
 
         The stored recipient binding may already be revoked/expired. Never
@@ -1071,6 +1222,9 @@ class MCPEventStore:
         )
         arguments_json = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"))
         params = (principal, name, arguments_json, callback)
+        if subscriber_agent_id is not None:
+            selector += " AND subscriber_agent_id=?"
+            params += (subscriber_agent_id,)
         async with aiosqlite.connect(self.path, timeout=5) as db:
             await db.execute("BEGIN IMMEDIATE")
             await release_holds(db, self.node_id, selector, params)
@@ -1085,8 +1239,7 @@ class MCPEventStore:
                 params,
             )
             await db.execute(
-                "DELETE FROM mcp_event_subscriptions WHERE principal_id=? "
-                "AND name=? AND arguments_json=? AND callback_url=?",
+                "DELETE FROM mcp_event_subscriptions WHERE id IN (" + selector + ")",
                 params,
             )
             await db.commit()

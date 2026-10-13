@@ -81,7 +81,7 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
         assert rpc(client, "access", "tools/list", token=False).status_code == 401
-        for role, count in (("access", 1), ("executor", 10), ("coordinator", 8)):
+        for role, count in (("access", 2), ("executor", 10), ("coordinator", 8)):
             result = rpc(client, role, "tools/list")
             assert result.status_code == 200, result.text
             tools = result.json()["result"]["tools"]

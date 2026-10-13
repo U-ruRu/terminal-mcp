@@ -59,6 +59,21 @@ class IssuerSessionInput(StrictRoleInput):
     action: Literal["start", "end"]
 
 
+class GetEventsInput(StrictRoleInput):
+    event_id: Annotated[
+        str | None, Field(pattern=r"^evt_[0-9a-f]{32}$", max_length=36)
+    ] = None
+    limit: Annotated[int, Field(ge=1, le=20)] = 20
+    cursor: Annotated[str | None, Field(min_length=1, max_length=512)] = None
+    show_read: bool = False
+
+    @model_validator(mode="after")
+    def validate_selector(self):
+        if self.event_id is not None and self.cursor is not None:
+            raise ValueError("event_id and cursor are mutually exclusive")
+        return self
+
+
 class MeshCommandReadInput(StrictRoleInput):
     cmd_hash: Hash | None = None
     limit: Annotated[int, Field(ge=1, le=MAX_CMD_READ_LINES)] = DEFAULT_CMD_READ_LINES
@@ -164,6 +179,25 @@ class IssuerEndReceipt(_Strict):
 
 class IssuerOutput(RootModel[IssuerStartReceipt | IssuerEndReceipt | AccessError]):
     __success_type__: ClassVar = IssuerStartReceipt | IssuerEndReceipt
+
+
+class AccessEventItem(_Strict):
+    eventId: str
+    name: Literal["agent.attached", "agent.inactive", "session.ended", "message.received"]
+    timestamp: str
+    data: dict[str, object]
+    read: bool
+
+
+class AccessEventsReceipt(_Strict):
+    ok: Literal[True]
+    events: list[AccessEventItem]
+    next_cursor: str | None
+    has_more: bool
+
+
+class AccessGetEventsOutput(RootModel[AccessEventsReceipt | AccessError]):
+    __success_type__: ClassVar = AccessEventsReceipt
 
 
 class CommandJournalItem(_Strict):

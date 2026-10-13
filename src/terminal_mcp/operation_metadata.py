@@ -128,6 +128,9 @@ def tool_action_effects(role, name, *, mesh=False):
     if role == "legacy":
         return LEGACY_ACTION_EFFECTS[name]
     if role == "access":
+        if name == "get_events":
+            # Reading automatically marks returned events as consumed.
+            return {"consume": effects()}
         return {"start": APPEND_EFFECTS, "status": READ_EFFECTS, "end": DELETE_EFFECTS}
     if name == "session":
         return (
