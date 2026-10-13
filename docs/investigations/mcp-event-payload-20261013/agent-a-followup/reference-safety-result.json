@@ -1,0 +1,11 @@
+{
+  "result": "PASS",
+  "checks": [
+    "hash-pinned official snippet loads",
+    "private callback rejected before request",
+    "known callback and signing key redacted",
+    "capture path pre-reserved before HTTP",
+    "private URL failure preserves not_attempted receipt"
+  ],
+  "public_callback_attempts": 0
+}
