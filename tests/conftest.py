@@ -31,6 +31,7 @@ SCHEMA_PREPARATION_MODULES = frozenset(
         "test_android_slot_public_paths.py",
         "test_console_events.py",
         "test_http_auth.py",
+        "test_http_auth_native.py",
         "test_mcp_events_session_number.py",
         "test_mcp_events_recipient_holds.py",
         "test_mcp_events_fleet_lifecycle.py",
@@ -47,6 +48,7 @@ SCHEMA_PREPARATION_MODULES = frozenset(
 EMPTY_DB_PREPARATION_MODULES = frozenset(
     {
         "test_agents.py",
+        "test_agents_native.py",
         "test_agent_intent_freshness.py",
         "test_task_coordination.py",
         "test_task_atomic_ownership_v2.py",

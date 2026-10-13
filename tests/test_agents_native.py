@@ -1,0 +1,300 @@
+"""Agent command attribution, cancellation and gates across real Linux execution."""
+
+import asyncio
+import re
+import sqlite3
+
+import pytest
+from agent_test_helpers import native_runtime as runtime
+from agent_test_helpers import register, wait_finished
+
+from terminal_mcp.core.orchestration import public_agent_name
+from terminal_mcp.core.service import TerminalService
+from terminal_mcp.storage.agents import AgentStore
+from terminal_mcp.storage.sqlite import SqliteRepository
+from terminal_mcp.terminal.linux import LinuxTerminalAdapter
+
+
+@pytest.mark.asyncio
+async def test_activity_refresh_expiry_and_reregistration(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    started = await register(service, "TTL test", "Observe", ["repo:tests"])
+    agent_id = started["self"]["agent_id"]
+    before = (await AgentStore(repo.path).get_session(agent_id))["last_activity_at"]
+    await terminal.start()
+    await asyncio.sleep(0.01)
+    health = await service.health("none")
+    assert health["ok"] is True
+    after = (await AgentStore(repo.path).get_session(agent_id))["last_activity_at"]
+    assert after == before
+
+    service.agent_coordinator.ttl_seconds = 0.01
+    await asyncio.sleep(0.03)
+    expired = await service.run("printf stale", agent_id=agent_id, task_scope="none")
+    assert expired["session_expired"] is True
+    assert expired["registration_required"] is True
+    fresh = await register(service, "TTL test", "Continue", ["repo:tests"])
+    assert fresh["self"]["agent_id"] != agent_id
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_command_attribution_recent_order_and_global_read(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    started = await register(service, "Attribution", "Run commands", ["repo:tests"])
+    agent_id = started["self"]["agent_id"]
+    first = await service.run("printf 'one\\n'", agent_id=agent_id, task_scope="none")
+    await wait_finished(service, agent_id, first["cmd_hash"])
+    second = await service.recovery("printf 'two\\n'", agent_id=agent_id)
+    recent = await AgentStore(repo.path).recent_commands(agent_id, 3)
+    assert [item["command_hash"] for item in recent[:2]] == [second["cmd_hash"], first["cmd_hash"]]
+    assert recent[0]["preview"] == "printf 'two\\n'"
+    global_read = await service.read(None, 20, 0)
+    agent_name = public_agent_name(agent_id)
+    assert any(f"{agent_name} {first['cmd_hash']}" in line for line in global_read["lines"])
+    assert any(f"{agent_name} {second['cmd_hash']}" in line for line in global_read["lines"])
+    assert all(agent_id not in line for line in global_read["lines"])
+    busy = await service.run("sleep 30", agent_id=agent_id, task_scope="none")
+    await asyncio.sleep(0.03)
+    cancelled = await service.cancel(busy["cmd_hash"], agent_id=agent_id)
+    assert cancelled["ok"] is True
+    assert (await service.read(busy["cmd_hash"], agent_id=agent_id))["status"] == "cancelled"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_multi_agent_overlap_compact_limits_and_persistence(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    a = await register(service, "Implement storage changes", "Edit SQLite schema", ["repo:storage"])
+    aid = a["self"]["agent_id"]
+    command = await service.run("printf 'agent-a\\n'", agent_id=aid, task_scope="none")
+    await wait_finished(service, aid, command["cmd_hash"])
+
+    b = await register(service, "Review MCP", "Inspect active agent", ["repo:mcp"])
+    bid = b["self"]["agent_id"]
+    seen = next(item for item in b["active"] if item["name"] == public_agent_name(aid))
+    assert seen["intent"] == "Edit SQLite schema"
+    assert "recent_commands" not in seen
+    with_commands = await service.agents(bid, show_commands=True)
+    seen_commands = next(
+        item for item in with_commands["active"] if item["name"] == public_agent_name(aid)
+    )
+    assert seen_commands["recent_commands"][0]["command_hash"] == command["cmd_hash"]
+    overlap = await service.coordinate(bid, step=1, intent="Edit storage adapter")
+    assert overlap["ok"] is True
+    b_overview = await service.agents(bid)
+    assert b_overview["overlaps"] is None
+    assert b_overview["self"]["work_scope"] == ["repo:mcp"]
+
+    global_read = await service.read(None, 20, 0)
+    assert any(
+        f"{public_agent_name(aid)} {command['cmd_hash']}" in line for line in global_read["lines"]
+    )
+    assert len(b_overview["active"]) <= 8
+    assert all("recent_commands" not in item for item in b_overview["active"])
+    detailed_commands = await service.agents(bid, show_commands=True)
+    assert all(len(item.get("recent_commands", [])) <= 3 for item in detailed_commands["active"])
+
+    await terminal.stop()
+    repo2 = SqliteRepository(repo.path)
+    await repo2.initialize()
+    terminal2 = LinuxTerminalAdapter(repo2, "/bin/bash", tmp_path, 0.1)
+    service2 = TerminalService(repo2, terminal2, 5000)
+    persisted = await service2.agents(bid)
+    assert persisted["ok"] is True
+    assert persisted["self"]["name"] == public_agent_name(bid)
+    assert "agent_id" not in persisted["self"]
+    await terminal2.stop()
+
+
+@pytest.mark.asyncio
+async def test_run_requires_fresh_task_context_and_coordinate_refreshes_it(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    started = await register(service, "Lease test", "Initial task", ["repo:tests"])
+    agent_id = started["self"]["agent_id"]
+    assert started["self"]["task_context_ttl_seconds"] == 180
+    service.agent_coordinator.task_context_ttl_seconds = 0.01
+    await asyncio.sleep(0.03)
+    blocked = await service.run("printf stale", agent_id=agent_id, task_scope="none")
+    assert blocked["ok"] is False
+    assert blocked["task_context_expired"] is True
+    assert blocked["task_context_ttl_seconds"] == 0.01
+    assert "coordinate" in blocked["error"]
+    service.agent_coordinator.task_context_ttl_seconds = 1
+    refreshed = await service.coordinate(agent_id, step=1, intent="Refreshed task")
+    assert refreshed["ok"] is True
+    submitted = await service.run("printf 'fresh\\n'", agent_id=agent_id, task_scope="none")
+    assert submitted["ok"] is True
+    finished = await wait_finished(service, agent_id, submitted["cmd_hash"])
+    assert finished["status"] == "completed"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_command_attribution_is_persisted(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    result = await service.recovery("printf 'anonymous-recovery\\n'")
+    assert result["agent_name"] == "anonymous"
+    global_read = await service.read(None, 20, 0)
+    assert any(f"anonymous {result['cmd_hash']}" in line for line in global_read["lines"])
+    with sqlite3.connect(repo.path) as db:
+        owner = db.execute(
+            "SELECT agent_id FROM command_agent_attribution WHERE command_hash=?",
+            (result["cmd_hash"],),
+        ).fetchone()[0]
+    assert owner == "anonymous"
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_run_and_read_use_compact_context_and_agents_exposes_awareness(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    first = await register(service, "First", "Observe peer", ["repo:first"])
+    first_id = first["self"]["agent_id"]
+    second = await register(service, "Second", "Run peer command", ["repo:second"])
+    second_id = second["self"]["agent_id"]
+    second_name = public_agent_name(second_id)
+
+    first_command = await service.run("printf 'first\n'", agent_id=first_id, task_scope="none")
+    assert "active_agents" not in first_command
+    overview = await service.agents(first_id)
+    peer = next(item for item in overview["active"] if item["name"] == second_name)
+    assert peer["intent"] == "Run peer command"
+    assert second_id not in str(peer)
+    await wait_finished(service, first_id, first_command["cmd_hash"])
+
+    peer_run = await service.run(
+        "sleep 0.2; printf 'peer\n'", agent_id=second_id, task_scope="none"
+    )
+    for _ in range(100):
+        peer_command = await repo.get(peer_run["cmd_hash"])
+        if peer_command and peer_command.status == "running":
+            break
+        await asyncio.sleep(0.01)
+    assert peer_command.status == "running"
+
+    own_run = await service.run("printf 'own\n'", agent_id=first_id, task_scope="none")
+    assert "active_agents" not in own_run
+    command_overview = await service.agents(first_id, show_commands=True)
+    peer = next(item for item in command_overview["active"] if item["name"] == second_name)
+    assert peer["recent_commands"][0]["command_hash"] == peer_run["cmd_hash"]
+    assert second_id not in str(peer)
+    assert peer["recent_commands"][0]["preview"].startswith("sleep 0.2")
+
+    own_read = await service.read(first_command["cmd_hash"], agent_id=first_id)
+    assert "active_agents" not in own_read
+
+    await wait_finished(service, second_id, peer_run["cmd_hash"])
+    finished_overview = await service.agents(first_id, show_commands=True)
+    peer = next(item for item in finished_overview["active"] if item["name"] == second_name)
+    assert peer["recent_commands"][0]["command_hash"] == peer_run["cmd_hash"]
+    assert peer["recent_commands"][0]["status"] == "completed"
+
+    await service.agent_finish(second_id)
+    lifecycle = await service.agents(first_id, target=second_name, show_commands=True)
+    assert lifecycle["sessions"][0]["status"] == "finished"
+    assert lifecycle["sessions"][0]["name"] == second_name
+
+    await wait_finished(service, first_id, own_run["cmd_hash"])
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_agent_actions_refresh_session_without_refreshing_task_context(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    started = await register(service, "TTL refresh", "Initial intent", ["repo:tests"])
+    agent_id = started["self"]["agent_id"]
+    store = AgentStore(repo.path)
+
+    session0 = await store.get_session(agent_id)
+    task0 = await store.latest_task_at(agent_id)
+
+    await asyncio.sleep(0.01)
+    overview = await service.agents(agent_id)
+    assert overview["ok"] is True
+    session1 = await store.get_session(agent_id)
+    assert session1["last_activity_at"] > session0["last_activity_at"]
+    assert await store.latest_task_at(agent_id) == task0
+
+    await asyncio.sleep(0.01)
+    missing = await service.read("deadbeef", agent_id=agent_id)
+    assert missing["status"] == "not_found"
+    session2 = await store.get_session(agent_id)
+    assert session2["last_activity_at"] > session1["last_activity_at"]
+    assert await store.latest_task_at(agent_id) == task0
+
+    await asyncio.sleep(0.01)
+    recovery = await service.recovery("printf 'ttl-recovery\n'", agent_id=agent_id)
+    assert recovery["ok"] is True
+    session3 = await store.get_session(agent_id)
+    assert session3["last_activity_at"] > session2["last_activity_at"]
+    assert await store.latest_task_at(agent_id) == task0
+
+    await asyncio.sleep(0.01)
+    cancelled = await service.cancel("deadbeef", agent_id=agent_id)
+    assert cancelled["ok"] is False
+    session4 = await store.get_session(agent_id)
+    assert session4["last_activity_at"] > session3["last_activity_at"]
+    assert await store.latest_task_at(agent_id) == task0
+
+    await asyncio.sleep(0.01)
+    task = await service.coordinate(agent_id, step=1, intent="New short intent")
+    assert task["ok"] is True
+    session5 = await store.get_session(agent_id)
+    task5 = await store.latest_task_at(agent_id)
+    assert session5["last_activity_at"] > session4["last_activity_at"]
+    assert task5 > task0
+    await terminal.stop()
+
+
+@pytest.mark.asyncio
+async def test_direct_message_delivery_blocks_run_until_ack(tmp_path):
+    repo, terminal, service = await runtime(tmp_path)
+    sender = await register(service, "Sender", "Coordinate", details=["Coordinate", "Test"])
+    receiver = await register(service, "Receiver", "Implement", details=["Implement", "Test"])
+    sender_id = sender["self"]["agent_id"]
+    receiver_id = receiver["self"]["agent_id"]
+    receiver_name = public_agent_name(receiver_id)
+    sender_name = public_agent_name(sender_id)
+
+    sent = await service.message(
+        sender_id,
+        text="Storage is mine; take the MCP contract.",
+        target=receiver_name,
+    )
+    assert sent["ok"] is True
+    assert sent["delivered_to"] == [receiver_name]
+    assert re.fullmatch(r"[0-9a-f]{8}", sent["message_hash"])
+    message_hash = sent["message_hash"]
+
+    read = await service.read("deadbeef", agent_id=receiver_id)
+    assert any(
+        message_hash in line
+        and sender_name in line
+        and "→ you:" in line
+        and f"ack: message({message_hash})" in line
+        for line in read["pending_messages"]
+    )
+
+    health = await service.health("none", agent_id=receiver_id)
+    assert any(message_hash in line for line in health["pending_messages"])
+
+    recovery = await service.recovery("printf 'emergency\n'", agent_id=receiver_id)
+    assert recovery["ok"] is True
+    assert any(message_hash in line for line in recovery["pending_messages"])
+
+    blocked = await service.run("printf 'must-not-run\n'", agent_id=receiver_id, task_scope="none")
+    assert blocked["ok"] is False
+    assert blocked["coordination_message_pending"] is True
+    assert blocked["cmd_hash"] is None
+    assert any(message_hash in line for line in blocked["pending_messages"])
+
+    ack = await service.message(receiver_id, message_hash=message_hash)
+    assert ack["ok"] is True
+    assert ack["read_by"] == [receiver_name]
+    assert ack.get("pending_messages", []) == []
+
+    submitted = await service.run("printf 'after-ack\n'", agent_id=receiver_id, task_scope="none")
+    assert submitted["ok"] is True
+    await wait_finished(service, receiver_id, submitted["cmd_hash"])
+    await terminal.stop()

@@ -47,6 +47,8 @@ COMPONENTS = {
         "*role*",
         "*mcp*",
         "*compact*",
+        "*schema*",
+        "*openapi*",
     ),
     "commands": (
         "*command*",
@@ -59,6 +61,7 @@ COMPONENTS = {
         "*service*",
         "*fencing*",
         "*lease*",
+        "*persistent_backend_admission*",
     ),
     "slots": (
         "*slot*",
@@ -103,6 +106,10 @@ COMPONENT_MODULES = frozenset(
         "test_access_mesh_message_application.py",
         "test_access_mesh_message_storage.py",
         "test_agent_context_freshness.py",
+        "test_agent_identity_values.py",
+        "test_agent_expiry_policy.py",
+        "test_agent_scope_values.py",
+        "test_agent_store_identity.py",
         "test_adapter_actor_context.py",
         "test_android_slot_read_scope_qa.py",
         "test_application_boundary.py",
@@ -110,6 +117,8 @@ COMPONENT_MODULES = frozenset(
         "test_application_fleet_boundaries.py",
         "test_application_operator_mesh.py",
         "test_auth_foundation.py",
+        "test_auth_config.py",
+        "test_auth_path_policy.py",
         "test_backup_manifest.py",
         "test_command_run_fast_path.py",
         "test_compact_contracts.py",
@@ -118,21 +127,33 @@ COMPONENT_MODULES = frozenset(
         "test_fleet_control_http.py",
         "test_fleet_identity.py",
         "test_fleet_storage.py",
-        "test_fleet_v1_source.py",
+        "test_fleet_protocol.py",
+        "test_fleet_node_meta_storage.py",
+        "test_fleet_v1_source_router.py",
+        "test_fleet_source_settings.py",
         "test_fleet_v1_source_query.py",
         "test_host_resources.py",
         "test_managed_session_policy.py",
+        "test_managed_session_runtime.py",
+        "test_http_actions_schema.py",
         "test_mcp_callback_html_metadata.py",
         "test_mcp_application_adapter.py",
         "test_mcp_callback_response_metadata.py",
         "test_mcp_events_callback_diagnostics_mike3.py",
         "test_mcp_events_diagnostics_opt_in.py",
+        "test_mcp_events_managed_storage.py",
         "test_mcp_input_bounds.py",
         "test_mcp_output_contracts.py",
         "test_mcp_provider_evidence.py",
         "test_mesh_bootstrap_auth_isolation_401.py",
         "test_output_retention.py",
+        "test_oauth_store_refresh.py",
         "test_persistent_agent_storage.py",
+        "test_persistent_backend_admission.py",
+        "test_persistent_console_projection.py",
+        "test_persistent_idempotency_storage.py",
+        "test_persistent_installer_defaults.py",
+        "test_persistent_session_policy.py",
         "test_preparation.py",
         "test_provider_identity_domain.py",
         "test_public_error_boundaries.py",
@@ -163,15 +184,18 @@ PLATFORM_MODULES = frozenset(
         "test_access_mesh_repeat_end_qa.py",
         "test_access_mesh_session_restart_contract.py",
         "test_agent_intent_freshness.py",
-        "test_agents.py",
+        "test_agents_native.py",
         "test_cancel_reconciler_real_process.py",
         "test_execution_ipc.py",
         "test_execution_port_native.py",
         "test_fleet_control_writer_trace.py",
-        "test_http_auth.py",
+        "test_http_auth_native.py",
         "test_installer.py",
         "test_installer_staging_isolation.py",
         "test_persistent_http.py",
+        "test_persistent_recovery_native.py",
+        "test_sqlite_main_health_symlink.py",
+        "test_service_sqlite_health_symlink.py",
         "test_queue.py",
         "test_runtime_finalization.py",
         "test_service.py",
@@ -209,23 +233,6 @@ MIXED_TEST_LAYERS = {
     },
     "test_execution_topology.py": {
         "platform": ("test_legacy_installer_refuses_split_update_before_mutation",),
-    },
-    "test_sqlite_main_health.py": {
-        "integration": (
-            "test_main_db_corruption_propagates_to_public_service_health",
-            "test_public_health_journal_failure_stays_failed_closed",
-            "test_public_health_failed_workflow_sql_marks_storage_failed",
-            "test_public_health_rechecks_database_after_symlink_target_switch",
-            "test_public_health_budget_timeout_keeps_complete_failure_contract",
-        ),
-    },
-    "test_fleet_v1_source.py": {
-        "integration": (
-            "test_source_wraps_persistent_events_and_complete_snapshot",
-            "test_source_generation_mismatch_and_retention_gap_require_reset",
-            "test_source_projects_persistent_attachment_presence_and_obligation",
-            "test_source_event_replay_enriches_logical_agent_with_authoritative_public_name",
-        ),
     },
 }
 INTEGRATION_EXTRAS = {
@@ -422,7 +429,9 @@ def platform_plan(root: Path, names: list[str]) -> dict:
         "scope": "platform",
         "platform": "linux",
         "tests": layer_tests(root, test_files(root), "platform"),
-        "reasons": ["Declared Linux shell/IPC/kernel checks; no full acceptance receipt"],
+        "reasons": [
+            "Declared Linux shell/IPC/kernel/filesystem checks; no full acceptance receipt"
+        ],
     }
 
 
@@ -526,7 +535,7 @@ def affected_plan(root: Path, changed: list[str], *, integration: bool = False) 
                 todo.append(importer)
                 dependency = "affected source" if path in source_roots else "changed test helper"
                 reasons.append(f"{path} -> {importer}: imports {dependency}")
-    files = sorted(selected)
+    files = sorted(selected.intersection(all_tests))
     boundary_files = set(files)
     if all_boundaries:
         boundary_files.update(all_tests)
@@ -544,7 +553,7 @@ def affected_plan(root: Path, changed: list[str], *, integration: bool = False) 
             if importer not in boundary_files:
                 boundary_files.add(importer)
                 todo.append(importer)
-    boundary_files = sorted(boundary_files)
+    boundary_files = sorted(boundary_files.intersection(all_tests))
     layer = "integration" if integration else "component"
     tests = layer_tests(root, boundary_files if integration else files, layer)
     return {

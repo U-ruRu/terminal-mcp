@@ -191,7 +191,7 @@ current whole inventory was collected without executing it (18.36 seconds).
 Full/native execution and broad integration acceptance remain deferred. Windows
 import placeholders are still not native acceptance evidence.
 
-Prioritized remaining mixed responsibilities:
+Backlog recorded at packet two (closed by the completion packet below):
 
 | Priority | Module | Concrete split |
 |---|---|---|
@@ -207,3 +207,67 @@ Prioritized remaining mixed responsibilities:
 Current admission/drain/adoption, migration and data-preservation branches still
 exist in runtime. Their versioned/legacy names are not retirement evidence; no
 such case was deleted in this follow-up.
+
+## Completion of the eight-module backlog
+
+The third packet starts from immutable `b0e81dc`; both earlier review branches are
+preserved. All eight named modules are physically separated. This closes the agreed
+backlog; other repository modules are not claimed to be entirely atomic.
+
+| Original module | Reviewed component responsibilities | Remaining real boundary |
+|---|---|---|
+| `sqlite_main_health` | Repository integrity/cache/cancellation/real SQLite worker cleanup (10). | Four Service/journal/workflow checks; Service+symlink and repository+symlink checks. |
+| `fleet_v1_source` | Protocol (3), own node metadata (4), fake-port router (2), Settings (3). | Four snapshots/replays across runtime, journal, metadata and auth stores. |
+| `http_auth` | Settings (1), middleware paths/scopes (19), own OAuthStore refresh race (1), router/DTO schemas (15). | Twelve real HTTP/auth cases, two actual app OpenAPI cases, two native command/recovery cases. |
+| `agents` | Identity/preview (5), expiry (2), scope (4), own AgentStore uniqueness (1). | Fifteen Service/storage/history/admission cases; eight actual bash/queue/cancellation cases. |
+| `managed_runtime_composition` | Three recovery-loop lifecycle checks with neighboring ports doubled. | Two actual app composition/lifespan checks. |
+| `mcp_events_managed_live` | Ten EventStore callback/dedup/authority/inactivity cases over its own current SQLite database. | One actual ASGI auth/diagnostic-redaction ingress check. |
+| `persistent_b_fencing` | Settings thresholds (5), backend scope admission (1), own idempotency/schema transitions (4). | Nine store/scheduler/lifecycle/permit/fence cases with a forbidden native neighbor; one actual bash recovery+attribution case. |
+| `persistent_c_rollout` | Five admission-policy alternatives, six installer/example declarations, one console projection with neighboring ports doubled. | Five actual HTTP/app policy/persistence/next-arm/existing-session-drain boundaries. |
+
+Integration remains where propagation across the real boundary is the subject:
+committed permit versus queue claim; session epoch versus materialization/end;
+journal/database failure versus public health; authoritative auth identity versus
+source replay; or route/lifespan policy versus persistence. Doubling those owners
+would remove that boundary. Native recovery/run/read/cancellation requires the real
+shell/process port. Target identity requires actual symlink replacement. These are
+explicit integration/platform scenarios, not hidden component checks.
+
+The existing MemoryExecutionPort is reused as a forbidden native neighbor in
+non-process persistent wiring. Rule/value/schema checks do not create the real app.
+Console enrichment retains the old 16 slots and output/concurrency assertions with
+backend/task/audit ports doubled. Native files retain shell bodies and inherit only
+their former preparation allowlist entries; migration/generator files are not cached.
+
+Structural proof: 21 SQLite/Fleet functions are exact AST relocations; four compound
+functions preserve every original assertion/exception check in separate duties.
+Root's four modules retain 21 exact AST functions and seven more with only the native
+constructor replaced by scheduler+forbidden port; seven others split old inputs and
+obligations. The bearer function retains 95/98 assertions exactly; three coordinate
+assertions use the same 160/161 inputs in parameterization. Actual app route/version/
+consequential metadata, OAuth PKCE/revocation/credential authority and session/data
+guards remain. The task-lease alias dependency is replaced by current context TTL,
+used by core AgentCoordinator admission/expiry; stale/refresh behavior is unchanged.
+No current scenario was removed in this packet.
+
+Collection: 271 modules, 1833 functions, 254 parameterized functions, 3044 cases.
+The 75 extra IDs since packet two are existing assertion/loop inputs: 51 auth/agent,
+seven SQLite/Fleet and 17 root-owned cases. Partition: 1175 component, 1679 remaining
+integration, 190 platform. Capture stays 15/28; Events component grows 40 to 50 by
+exposing ten existing EventStore cases. QA/frontend remains separate as documented.
+
+Scoped Windows results: auth/agent component 48 passed/3.57 s; SQLite/Fleet component
+22/3.06 s; root component plus memory-port fencing 44/9.05 s; actual portable
+Service/Fleet/OpenAPI integration nine/5.22 s; existing selector safeguards 53/1.15 s.
+Complete collection only took 9.11 s. Full and all shell/symlink acceptance are deferred.
+
+The broader 17-case root wiring probe yielded 11 passed and six failures before the
+scenario assertions: actual AuthFoundation startup rejects Windows verifier-key mode
+as insecure. Those six need Linux secure-file semantics. No mode/stat shim, auth
+bypass or runtime patch was applied. Nine passing fencing cases overlap the 44-case
+run and must not be added as independent coverage.
+
+Review's helper-selector issue is closed: graph traversal remains; final targets are
+intersected with actual test files. The existing direct-source/transitive-helper test
+now traverses an uncollected conftest and checks proper targets in both layers,
+without adding cases.

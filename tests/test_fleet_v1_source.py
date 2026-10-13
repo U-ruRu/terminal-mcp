@@ -1,83 +1,14 @@
+"""Fleet source integration over real runtime, journal, node metadata and auth stores."""
+
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 
 from terminal_mcp.auth.foundation import AuthFoundationStore
-from terminal_mcp.fleet.protocol import (
-    FLEET_PROTOCOL_MAJOR,
-    FleetProtocolError,
-    canonical_event_id,
-    validate_capabilities,
-    validate_protocol_major,
-)
+from terminal_mcp.fleet.protocol import canonical_event_id
 from terminal_mcp.fleet.source import FleetSourceService
 from terminal_mcp.fleet.source_meta import FleetNodeMetaStore
-from terminal_mcp.http.fleet_v1 import build_fleet_v1_source_router
 from terminal_mcp.storage.events import EventJournalStore
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
-
-
-def test_protocol_validation_and_event_id_are_deterministic():
-    first = canonical_event_id("fleet-a", "node-a", "abc123", 7)
-    second = canonical_event_id("fleet-a", "node-a", "abc123", 7)
-
-    assert first == second
-    assert len(first) == 64
-    assert validate_protocol_major(FLEET_PROTOCOL_MAJOR) == 1
-    assert validate_capabilities(["fleet.source.v1", "fleet.source.v1"]) == ("fleet.source.v1",)
-
-    with pytest.raises(FleetProtocolError, match="unsupported"):
-        validate_protocol_major(2)
-    with pytest.raises(FleetProtocolError, match="invalid fleet capability"):
-        validate_capabilities(["bad capability"])
-
-
-@pytest.mark.asyncio
-async def test_node_meta_persists_and_rotates_generation_on_runtime_regression(tmp_path):
-    path = tmp_path / "fleet-node-meta.sqlite3"
-    store = FleetNodeMetaStore(path, fleet_id="fleet-a", node_id="node-a")
-    first = await store.initialize()
-    assert first.served_high_water == 0
-    assert store.sqlite_diagnostics.role == "fleet_node_meta"
-
-    advanced, rotated = await store.observe_journal(11)
-    assert rotated is False
-    assert advanced.source_stream_generation == first.source_stream_generation
-    assert advanced.served_high_water == 11
-
-    restarted = FleetNodeMetaStore(path, fleet_id="fleet-a", node_id="node-a")
-    stable = await restarted.initialize()
-    assert stable.source_stream_generation == first.source_stream_generation
-    assert stable.served_high_water == 11
-
-    reset, rotated = await restarted.observe_journal(3)
-    assert rotated is True
-    assert reset.source_stream_generation != first.source_stream_generation
-    assert reset.served_high_water == 3
-
-    replacement = FleetNodeMetaStore(path, fleet_id="fleet-a", node_id="node-b")
-    with pytest.raises(RuntimeError, match="does not match"):
-        await replacement.initialize()
-
-
-@pytest.mark.asyncio
-async def test_node_meta_concurrent_stable_observations_do_not_contend(tmp_path):
-    import asyncio
-
-    path = tmp_path / "fleet-node-meta.sqlite3"
-    store = FleetNodeMetaStore(path, fleet_id="fleet-a", node_id="node-a")
-    await store.initialize()
-    advanced, rotated = await store.observe_journal(23)
-    assert rotated is False
-
-    results = await asyncio.gather(*(store.observe_journal(23) for _ in range(100)))
-
-    assert all(not item[1] for item in results)
-    assert all(item[0].served_high_water == 23 for item in results)
-    assert all(
-        item[0].source_stream_generation == advanced.source_stream_generation for item in results
-    )
 
 
 @pytest.mark.asyncio
@@ -169,103 +100,6 @@ async def test_source_generation_mismatch_and_retention_gap_require_reset(tmp_pa
     assert gap["gap"] is True
     assert gap["reset_required"] is True
     assert gap["reset_reason"] == "retention_gap"
-
-
-class _Peer:
-    instance_id = "peer-a"
-
-
-class _Replication:
-    def authenticate(self, peer_id, authorization):
-        if peer_id == "peer-a" and authorization == "Bearer token":
-            return _Peer()
-        return None
-
-
-class _Source:
-    async def manifest(self):
-        return {"protocol_major": 1}
-
-    async def events(self, **kwargs):
-        return {"events": [], **kwargs}
-
-    async def snapshot(self):
-        return {"replace": True}
-
-
-@pytest.mark.asyncio
-async def test_source_http_surface_reuses_fleet_peer_authentication():
-    app = FastAPI()
-    app.include_router(build_fleet_v1_source_router(_Source(), _Replication()))
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        unauthorized = await client.get("/internal/fleet/v1/source/manifest")
-        assert unauthorized.status_code == 401
-
-        headers = {
-            "x-terminal-mcp-peer": "peer-a",
-            "authorization": "Bearer token",
-        }
-        manifest = await client.get("/internal/fleet/v1/source/manifest", headers=headers)
-        assert manifest.status_code == 200
-        assert manifest.json()["protocol_major"] == 1
-
-        events = await client.get(
-            "/internal/fleet/v1/source/events",
-            headers=headers,
-            params={"since": 4, "limit": 17, "source_stream_generation": "gen-a"},
-        )
-        assert events.status_code == 200
-        assert events.json()["since"] == 4
-        assert events.json()["limit"] == 17
-        assert events.json()["source_stream_generation"] == "gen-a"
-
-
-def test_fleet_v1_source_settings_are_default_off_and_validate_identity(tmp_path, monkeypatch):
-    from pydantic import ValidationError
-
-    from terminal_mcp.config import Settings
-
-    for key in (
-        "TERMINAL_MCP_FLEET_V1_SOURCE_ENABLED",
-        "TERMINAL_MCP_FLEET_V1_AUTHORITY_ENABLED",
-        "TERMINAL_MCP_FLEET_V1_PROJECTION_ENABLED",
-        "TERMINAL_MCP_FLEET_V1_PUBLIC_ENABLED",
-        "TERMINAL_MCP_FLEET_ID",
-        "TERMINAL_MCP_FLEET_INSTANCE_ID",
-        "TERMINAL_MCP_FLEET_NODE_ID",
-        "TERMINAL_MCP_FLEET_SIGNING_PRIVATE_KEY",
-        "TERMINAL_MCP_FLEET_PEERS_JSON",
-        "TERMINAL_MCP_FLEET_NODE_META_PATH",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
-    defaults = Settings(_env_file=None, database_path=tmp_path / "runtime.sqlite3")
-    assert defaults.fleet_v1_source_enabled is False
-    assert defaults.fleet_id == ""
-    assert defaults.fleet_node_id == ""
-    assert defaults.effective_fleet_node_meta_path() == tmp_path / "fleet-node-meta.sqlite3"
-
-    with pytest.raises(ValidationError, match="fleet_id is required"):
-        Settings(
-            _env_file=None,
-            fleet_v1_source_enabled=True,
-            fleet_instance_id="node-a",
-            fleet_signing_private_key="placeholder",
-        )
-
-    enabled = Settings(
-        _env_file=None,
-        database_path=tmp_path / "runtime.sqlite3",
-        fleet_v1_source_enabled=True,
-        fleet_id="fleet-a",
-        fleet_instance_id="legacy-node-a",
-        fleet_node_id="node-a",
-        fleet_signing_private_key="placeholder",
-        fleet_node_meta_path=tmp_path / "node-meta.sqlite3",
-    )
-    assert enabled.effective_fleet_node_id() == "node-a"
-    assert enabled.effective_fleet_node_meta_path() == tmp_path / "node-meta.sqlite3"
 
 
 @pytest.mark.asyncio

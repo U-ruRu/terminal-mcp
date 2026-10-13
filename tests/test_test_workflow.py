@@ -236,9 +236,10 @@ def test_direct_source_imports_select_other_named_owner_and_helper_consumers(tmp
     write(tmp_path, "tests/test_subscribe_capture.py")
     write(
         tmp_path,
-        "tests/test_other_owner.py",
+        "tests/conftest.py",
         "from terminal_mcp.mcp.subscribe_capture import Capture\n",
     )
+    write(tmp_path, "tests/test_other_owner.py", "from conftest import Capture\n")
     write(tmp_path, "tests/test_indirect.py", "from test_other_owner import Capture\n")
     write(tmp_path, "tests/test_unrelated.py")
     plan = test_plan.affected_plan(tmp_path, [source])
@@ -248,6 +249,8 @@ def test_direct_source_imports_select_other_named_owner_and_helper_consumers(tmp
         "tests/test_subscribe_capture.py",
     ]
     assert any("imports affected source" in reason for reason in plan["reasons"])
+    integration = test_plan.affected_plan(tmp_path, [source], integration=True)
+    assert integration["tests"] == plan["tests"]
 
 
 def test_shared_store_changes_keep_direct_feedback_and_expose_all_boundaries(tmp_path):

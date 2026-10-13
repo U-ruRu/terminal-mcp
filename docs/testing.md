@@ -109,6 +109,32 @@ compatibility. Release approval separately binds the exact source/tree, artifact
 full report, compatibility evidence, preservation guarantees and operator decision.
 A short node check does not replace any of these.
 
+The scoped cleanup separates the eight listed SQLite/Fleet/auth/agent/session/
+Events/persistent modules. Pure rules, projections, router contracts and own SQLite
+transactions are reviewed component checks; real app/auth/store bridges and native
+shell/filesystem checks have separate physical modules. Extraction reuses assertions
+and inputs. The current `task_context_ttl_seconds` replaces exercising the previous
+`task_lease_seconds` alias. No migration was removed based on a versioned filename.
+
+Current Python inventory: 271 modules, 1833 functions and 3044 collected cases.
+The disjoint partition is 1175 component, 1679 remaining integration and 190 platform.
+Integration includes its requested component checks. Capture stays 15 component /
+28 explicit integration cases; Events component is 50 after promoting ten existing
+managed EventStore cases. Full cardinality grew because existing loops/assertion
+groups received atomic IDs, not new inputs.
+
+Actual ASGI lifespan/auth checks need a genuine secure verifier-key file. Windows
+cannot satisfy its POSIX mode check; the audit does not patch stat/permissions or
+claim Linux acceptance. The native neighbor is doubled only in wiring checks that
+do not test processes; native modules retain actual bash. Two symlink checks require
+real creation/atomic replacement and remain platform checks. Preparation allowlists
+retain the two relocated native files' former schema/empty-database reuse.
+
+Affected plans traverse helper edges before intersecting final selectors with
+`test_files(root)`. Consumers stay selected while `conftest.py` and other fixture-only
+modules cannot become final pytest targets. The existing import-plan regression
+covers both layers; no separate safeguard suite was introduced.
+
 ## Isolation, profiling and retention
 
 Every run has separate temporary SQLite databases, runtime config, output, working
