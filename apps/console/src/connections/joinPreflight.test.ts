@@ -9,14 +9,17 @@ test('same-fleet compatible autonomous node may be joined', () => {
   expect(joinPreflightError(standalone, authority)).toBeNull()
 })
 
-test('reject cross-fleet or contract mismatch before enrollment or any topology write', () => {
-  expect(joinPreflightError(standaloneControl('gamma'), authority)).toBe('fleet_id_mismatch')
+test('different namespace needs a capable target, not a matching public identifier', () => {
+  expect(joinPreflightError({ ...standaloneControl('gamma'), namespaceTransitionSupported: true }, authority)).toBeNull()
+  expect(joinPreflightError(standaloneControl('gamma'), authority)).toBe('namespace_transition_unsupported')
   expect(joinPreflightError({ ...standaloneControl('gamma'), fleetId: authority.fleetId, schemaVersion: 2 }, authority)).toBe('management_contract_mismatch')
 })
 
-test('foreign managed controller is not safe to rehome even with no own mesh membership', () => {
+test('self controlled standalone remains autonomous despite historical managed flag', () => {
   const selfManaged = { ...meshControl('gamma'), nodeId: 'gamma', controlNodeId: 'gamma', mesh: undefined, meshes: [], nodes: [] }
-  expect(joinPreflightError(selfManaged, authority)).toBe('already_managed_by_other_authority')
+  expect(joinPreflightError(selfManaged, authority)).toBeNull()
+  const controllerWithMembers = { ...selfManaged, nodes: meshControl('gamma').nodes }
+  expect(joinPreflightError(controllerWithMembers, authority)).toBe('already_managed_by_other_authority')
 })
 
 test('foreign managed follower requires coordinated transfer despite shared fleet', () => {

@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import hashlib
 import hmac
@@ -54,6 +55,7 @@ from terminal_mcp.fleet.event_mesh import LifecycleEventMesh, build_lifecycle_ev
 from terminal_mcp.fleet.message_event_mesh import build_message_event_router
 from terminal_mcp.fleet.projection import FleetProjectionService
 from terminal_mcp.fleet.projection_storage import FleetProjectionStore
+from terminal_mcp.fleet.namespace import finish_namespace_transition
 from terminal_mcp.fleet.protocol import AUTHORITY_CAPABILITIES, SOURCE_CAPABILITIES
 from terminal_mcp.fleet.replication import FleetReplicationService
 from terminal_mcp.fleet.source import FleetSourceService
@@ -310,12 +312,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         enabled=settings.persistent_agents_enabled,
     )
 
+    async def sync_namespace(namespace: str | None = None) -> None:
+        accepted = await asyncio.to_thread(finish_namespace_transition, settings)
+        if accepted is None:
+            return
+        if namespace is not None and accepted != namespace:
+            raise RuntimeError("namespace_transition_identity_mismatch")
+        for metadata in (fleet_node_meta, fleet_projection, fleet_control):
+            if metadata is not None:
+                metadata.fleet_id = accepted
+
     managed_fleet_control = (
         ManagedFleetControl(
             fleet_control,
             fleet_config,
             persistent_policy_controller,
             public_base_url=settings.public_base_url,
+            namespace_sync=sync_namespace,
             runtime_targets=(
                 fleet_replication,
                 fleet_projection_service,
@@ -515,6 +528,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fresh_identity_install = assert_identity_isolated(
             settings.database_path, settings.auth_database_path
         )
+        # Finish an authenticated, committed Join/Detach interrupted before
+        # its config/metadata write, before identity checks initialise stores.
+        await sync_namespace()
         events.start()
         await runtime.start()
         await metrics.start()

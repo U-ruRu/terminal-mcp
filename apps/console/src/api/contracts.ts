@@ -682,6 +682,7 @@ export function decodeManagedFleetControl(value: unknown): import('./models').Ma
   })
   return {
     nativeAccessTrust,
+    namespaceTransitionSupported: raw.namespace_transition_supported === true,
     schemaVersion: integer(raw.schema_version, '$.control.schema_version'),
     fleetId: string(raw.fleet_id, '$.control.fleet_id'),
     nodeId: string(raw.node_id, '$.control.node_id'),
