@@ -16,7 +16,7 @@ from terminal_mcp.core.persistent_admission import (
     reset_admission_context,
 )
 from terminal_mcp.mcp.event_server import MCPEventsAdapter
-from terminal_mcp.mcp.event_store import MCPEventStore
+from terminal_mcp.mcp.event_store import MCPEventStore, public_event_data
 from terminal_mcp.mcp.event_webhooks import (
     CallbackEndpointError,
     post_signed,
@@ -30,6 +30,29 @@ from terminal_mcp.storage.sqlite import SqliteRepository
 NODE = "secondary-test"
 CALLBACK = "https://receiver.example.test/mcp-events"
 SECRET = "whsec_" + base64.b64encode(b"x" * 32).decode()
+
+
+@pytest.mark.parametrize(
+    ("name", "extra", "expected"),
+    [
+        ("agent.attached", {"logical_agent_id": "secret", "session_epoch": 9},
+         {"server": NODE, "agent_name": "Alpha"}),
+        ("agent.inactive", {"observation": "absent", "message_id": "wrong"},
+         {"server": NODE, "agent_name": "Alpha"}),
+        ("session.ended", {"reason": "manual", "observation_time": "unknown"},
+         {"server": NODE, "agent_name": "Alpha"}),
+        ("session.ended", {"reason": "expired"},
+         {"server": NODE, "agent_name": "Alpha", "reason": "expired"}),
+        ("message.received", {"timestamp": "duplicate", "logical_agent_id": "secret",
+                              "session_epoch": 9, "text": "unknown"},
+         {"server": NODE, "sender": "Bravo", "recipient": "Alpha",
+          "message_id": "msg-1", "text": "unknown"}),
+    ],
+)
+def test_compact_public_event_data_keeps_content_without_private_metadata(name, extra, expected):
+    record = {"server": NODE, "agent_name": "Alpha", "sender": "Bravo",
+              "recipient": "Alpha", "message_id": "msg-1", "text": "full text", **extra}
+    assert public_event_data(name, record) == expected
 
 
 @pytest.fixture
@@ -123,7 +146,12 @@ async def test_strict_idle_single_shot_and_rearm_after_real_activity(context):
     assert not _records(path, "agent.inactive")
     await events.pump(now=limit + timedelta(microseconds=1))
     await events.pump(now=limit + timedelta(seconds=50))
-    assert len(_records(path, "agent.inactive")) == 1
+    first_id = _records(path, "agent.inactive")[0]["event_id"]
+    # A process restart must not create another notification for the same idle period.
+    events = MCPEventStore(path, NODE)
+    await events.initialize()
+    await events.pump(now=limit + timedelta(seconds=50))
+    assert [row["event_id"] for row in _records(path, "agent.inactive")] == [first_id]
     new_activity = utc_text(limit + timedelta(seconds=51))
     await agents.touch(agent_id, new_activity)
     await events.pump(now=limit + timedelta(seconds=230))
@@ -270,8 +298,22 @@ async def test_subscription_challenge_refresh_unsubscribe_and_persistence(contex
         assert (await events.subscription(sub_id))["principal_id"] == "test-user"
         await _agent(agents)
         await events.pump()
+        awaiting = await events.due_deliveries()
+        assert len(awaiting) == 1
+        first_event_id = awaiting[0]["event_id"]
+        # Update runs the repository migration and starts a fresh Events instance.
+        await SqliteRepository(path).initialize()
+        events = MCPEventStore(path, NODE)
+        await events.initialize()
+        restored = await events.subscription(sub_id)
+        assert restored["callback_url"] == CALLBACK
+        assert restored["signing_secret"] == SECRET
+        assert restored["arguments_json"] == "{}"
+        assert restored["expires_at"] is not None
+        adapter = MCPEventsAdapter(None, events, sender=receiver, access_checker=access_allowed)
         await adapter.deliver_due()
         assert len(receiver.requests) == 3
+        assert receiver.requests[2][1]["eventId"] == first_event_id
         delivery = receiver.requests[2][1]
         assert delivery["eventId"].startswith("evt_")
         assert delivery["data"] == {"agent_name": "Alpha", "server": NODE}
@@ -312,6 +354,8 @@ async def test_webhook_signature_and_stable_event_id(context):
         await adapter.deliver_due()
         _, payload, headers = receiver.requests[-1]
         assert headers["webhook-id"] == payload["eventId"]
+        assert set(payload) == {"eventId", "name", "timestamp", "data"}
+        assert payload["data"] == {"server": NODE, "agent_name": "Alpha"}
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         signature = hmac.new(
             b"x" * 32,
@@ -676,8 +720,11 @@ async def test_revoked_subscription_denied_before_network_delivery(context):
     await _agent(agents)
     await store.pump()
     access = False
+    store = MCPEventStore(path, NODE)
+    await store.initialize()
+    adapter = MCPEventsAdapter(None, store, sender=delivered, access_checker=guard)
     await adapter.deliver_due()
-    assert len(delivered.requests) == 1  # no event exfiltrated after revoke
+    assert len(delivered.requests) == 1  # restart cannot restore revoked access
     # Both durable subscription creation and delivery revalidate access.
     assert checks == [("test-user", "bearer:test")] * 2
     assert await store.subscription(sub) is None

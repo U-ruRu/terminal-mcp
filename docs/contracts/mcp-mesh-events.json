@@ -115,8 +115,7 @@
                   },
                   "required": [
                     "agent_name",
-                    "server",
-                    "reason"
+                    "server"
                   ],
                   "type": "object"
                 },
@@ -306,8 +305,7 @@
                 "sender",
                 "recipient",
                 "message_id",
-                "text",
-                "timestamp"
+                "text"
               ],
               "type": "object"
             },

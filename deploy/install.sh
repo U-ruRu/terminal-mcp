@@ -146,6 +146,8 @@ ensure_env_defaults(){
   [ -f "$ENV_FILE" ] || return 0
   ensure_env(){ key=$1; value=$2; grep -q "^${key}=" "$ENV_FILE" || printf '%s="%s"\n' "$key" "$value" >>"$ENV_FILE"; }
   ensure_console_origins
+  # Upgrades must keep using the same durable runtime SQLite file across release swaps.
+  ensure_env TERMINAL_MCP_DATABASE_PATH "$DATA/terminal-mcp.sqlite3"
   ensure_env TERMINAL_MCP_OUTPUT_CACHE_PATH "$CACHE/output.sqlite3"
   ensure_env TERMINAL_MCP_AUTH_DATABASE_PATH "$DATA/auth.sqlite3"
   ensure_env TERMINAL_MCP_OAUTH_REQUIRED_SCOPES "${TERMINAL_MCP_OAUTH_REQUIRED_SCOPES:-terminal:read terminal:execute}"

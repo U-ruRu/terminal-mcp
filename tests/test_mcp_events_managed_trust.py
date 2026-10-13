@@ -159,8 +159,7 @@ async def test_message_callback_envelope_and_remote_join_backfill(tmp_path, remo
 
         async def callback(url, body, headers):
             payload = json.loads(body)
-            assert set(payload) == {"eventId", "name", "timestamp", "data", "cursor"}
-            assert payload["cursor"] is None
+            assert set(payload) == {"eventId", "name", "timestamp", "data"}
             assert payload["eventId"] == headers["webhook-id"] == imported[0][0]
             assert headers["X-MCP-Subscription-Id"] == "private"
             expected = hmac.new(
@@ -175,7 +174,6 @@ async def test_message_callback_envelope_and_remote_join_backfill(tmp_path, remo
                 "recipient": "Alpha",
                 "message_id": wire["message_hash"],
                 "text": wire["text"],
-                "timestamp": wire["created_at"],
             }
             schema = next(
                 event["payloadSchema"]

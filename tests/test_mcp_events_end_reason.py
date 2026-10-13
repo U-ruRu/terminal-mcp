@@ -88,7 +88,7 @@ def test_deadline_candidate_requires_actual_elapsed_deadline(stored):
 def test_reason_schema_changes_only_session_ended():
     events = {row["name"]: row for row in event_catalog()["events"]}
     ended = events["session.ended"]["payloadSchema"]
-    assert "reason" in ended["required"]
+    assert "reason" not in ended["required"]
     assert ended["properties"]["reason"]["type"] == "string"
     for name in ("agent.attached", "agent.inactive", "message.received"):
         assert "reason" not in events[name]["payloadSchema"]["properties"]
@@ -96,7 +96,7 @@ def test_reason_schema_changes_only_session_ended():
     for reason in ("manual", "expired", "SlotSuspended", "unknown"):
         validator.validate({"agent_name": "Alpha-1 - Worker", "server": "firstbyte",
                             "reason": reason})
-    assert list(validator.iter_errors({"agent_name": "Alpha-1", "server": "firstbyte"}))
+    validator.validate({"agent_name": "Alpha-1", "server": "firstbyte"})
 
 
 @pytest.mark.asyncio

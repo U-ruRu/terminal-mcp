@@ -25,6 +25,7 @@ from terminal_mcp.mcp.event_store import (
     RecipientBindingChangedError,
     SubscriptionAuthorizationError,
     event_catalog,
+    public_event_data,
 )
 from terminal_mcp.mcp.event_webhooks import (
     CallbackEndpointError,
@@ -166,8 +167,7 @@ class MCPEventsAdapter:
                 "eventId": item["event_id"],
                 "name": item["name"],
                 "timestamp": item["occurred_at"],
-                "data": json.loads(item["data_json"]),
-                "cursor": None,
+                "data": public_event_data(item["name"], json.loads(item["data_json"])),
             }
             status = None
             try:

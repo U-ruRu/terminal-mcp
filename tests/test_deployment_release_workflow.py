@@ -242,6 +242,39 @@ def test_plan_status_are_read_only(operation):
     assert before == sorted(str(p) for p in node.root.rglob("*"))
 
 
+@pytest.mark.parametrize("custom_path", [False, True])
+def test_update_env_keeps_durable_events_database_path(tmp_path, custom_path):
+    """Execute the real updater's env-preservation function in a temp sandbox."""
+    import subprocess
+
+    installer = (Path(__file__).resolve().parents[1] / "deploy/install.sh").read_text()
+    function = (
+        "ensure_env_defaults(){"
+        + installer.split("ensure_env_defaults(){", 1)[1].split("\n}\n", 1)[0]
+        + "\n}\n"
+    )
+    env_file = tmp_path / "terminal-mcp.env"
+    original = tmp_path / "custom.sqlite3" if custom_path else None
+    env_file.write_text(
+        'TERMINAL_MCP_DATABASE_PATH="' + str(original) + '"\n'
+        if original else 'TERMINAL_MCP_HOST="127.0.0.1"\n'
+    )
+    command = (
+        'set -e\nENV_FILE="$1"\nDATA="$2"\nCACHE="$3"\n'
+        "ensure_console_origins(){ :; }\n" + function + "\nensure_env_defaults\n"
+    )
+    for _ in range(2):  # Retain the same location across consecutive updates.
+        subprocess.run(
+            ["bash", "-c", command, "--", str(env_file), str(tmp_path / "data"),
+             str(tmp_path / "cache")],
+            check=True, capture_output=True, text=True,
+        )
+    location = str(original or (tmp_path / "data/terminal-mcp.sqlite3"))
+    assert env_file.read_text().count(
+        'TERMINAL_MCP_DATABASE_PATH="' + location + '"'
+    ) == 1
+
+
 @pytest.mark.parametrize("initial", [False, True])
 def test_install_update_and_idempotent_apply(tmp_path, initial):
     bundle, approval, pin = bundle_fixture(tmp_path)

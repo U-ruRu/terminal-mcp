@@ -34,6 +34,28 @@ INACTIVE_AFTER_SECONDS = 180
 MAX_DELIVERY_ATTEMPTS = 5
 
 
+def public_event_data(name: str, data: dict) -> dict:
+    """Expose only the public event contract; keep storage/Mesh identity intact.
+
+    Older stored or Mesh events may contain redundant timestamps and private
+    routing metadata. Webhook consumers only need one server label and the
+    event-specific public fields.
+    """
+    if name == "message.received":
+        fields = ("server", "sender", "recipient", "message_id", "text")
+        return {field: data[field] for field in fields if field in data}
+    if name in ("agent.attached", "agent.inactive", "session.ended"):
+        result = {field: data[field] for field in ("server", "agent_name") if field in data}
+        if name == "session.ended":
+            reason = data.get("reason")
+            if isinstance(reason, str) and reason.strip().lower() not in (
+                "", "manual", "absent", "unknown"
+            ):
+                result["reason"] = reason
+        return result
+    return {}
+
+
 def event_catalog():
     data = {
         "type": "object",
@@ -58,7 +80,7 @@ def event_catalog():
                 ),
             },
         },
-        "required": [*data["required"], "reason"],
+        "required": data["required"],
     }
     private_message = {
         "type": "object",
@@ -76,7 +98,6 @@ def event_catalog():
             "recipient",
             "message_id",
             "text",
-            "timestamp",
         ],
         "additionalProperties": False,
     }
@@ -673,8 +694,23 @@ class MCPEventStore:
                     )
                     for row in managed
                 )
+                inactive_state = dict(
+                    await (
+                        await db.execute(
+                            "SELECT subject_key,last_notified_activity FROM mcp_event_inactivity"
+                        )
+                    ).fetchall()
+                )
                 for subject_key, activity, name in subjects:
                     if (current - parse_utc(activity)).total_seconds() <= INACTIVE_AFTER_SECONDS:
+                        # A real activity boundary re-arms the next idle period.
+                        if subject_key in inactive_state:
+                            await db.execute(
+                                "DELETE FROM mcp_event_inactivity WHERE subject_key=?",
+                                (subject_key,),
+                            )
+                        continue
+                    if inactive_state.get(subject_key) == activity:
                         continue
                     await self._insert_event(
                         db,
@@ -682,6 +718,12 @@ class MCPEventStore:
                         name="agent.inactive",
                         occurred_at=stamp,
                         data={"agent_name": name, "server": self.node_id},
+                    )
+                    await db.execute(
+                        "INSERT INTO mcp_event_inactivity(subject_key,last_notified_activity)"
+                        " VALUES(?,?) ON CONFLICT(subject_key) DO UPDATE SET "
+                        "last_notified_activity=excluded.last_notified_activity",
+                        (subject_key, activity),
                     )
                 # Map event + subscription only when the event occurred during
                 # the subscription lifetime; no retroactive unsolicited delivery.
