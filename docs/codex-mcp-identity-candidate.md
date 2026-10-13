@@ -36,9 +36,9 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -q -p no:cacheprovi
   tests/test_mcp_events_message_binding.py \
   tests/test_managed_identity_authority.py \
   tests/test_access_mesh_identity_history_qa.py \
-  -k 'not test_access_issue_other_connector_attach_subscribe_and_local_delivery'
+  tests/test_mcp_events_qa_golf3_revocation.py
 ```
 
-Result: **114 passed, 1 deselected**. The single deselected unrelated existing Events test expects `timestamp` under `data`, while the published compact Events contract puts the timestamp at event top level. Running it as part of the unfiltered selection produced `KeyError: timestamp`. It should be reconciled by the Events owner and is not a Codex identity contract change.
+Result: **120 passed, 0 deselected** in seven relevant test modules. Updated both stale Events assertions to require `timestamp` in the top-level webhook envelope and to reject the redundant `data.timestamp`. The earlier failing test now passes, retaining its end-to-end delivery, recipient isolation and retry assertions; the other test preserves its signed webhook/revocation checks. No production compact Events contract changed.
 
 Ruff lint on touched files and `git diff --check` passed. No full regression, real hosted-plugin E2E, or deployment acceptance has been performed.

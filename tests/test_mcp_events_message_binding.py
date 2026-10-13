@@ -272,7 +272,8 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
         assert delivered["data"]["message_id"] == message_id
         assert delivered["data"]["text"] == "private message to A only"
         assert delivered["data"]["sender"] and delivered["data"]["recipient"]
-        assert delivered["data"]["timestamp"]
+        assert delivered["timestamp"]
+        assert "timestamp" not in delivered["data"]
         with sqlite3.connect(app.state.settings.database_path) as db:
             status = db.execute(
                 "SELECT read_at,replied_at,seen_count FROM coordination_message_recipients "

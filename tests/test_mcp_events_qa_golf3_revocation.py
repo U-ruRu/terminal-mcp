@@ -343,7 +343,8 @@ def test_native_access_attach_message_and_signed_callback_independent(tmp_path):
         assert event["data"]["text"] == text_value
         assert event["data"]["server"] == "secondary-qa"
         assert event["data"]["message_id"].startswith("secondary-qa:localmsg:")
-        assert event["data"]["timestamp"] and event["data"]["recipient"]
+        assert event["timestamp"] and event["data"]["recipient"]
+        assert "timestamp" not in event["data"]
         assert event["data"]["sender"]
         frames = [(b, h) for b, h in sink.frames if json.loads(b).get("name") == "message.received"]
         assert len(frames) == 1
