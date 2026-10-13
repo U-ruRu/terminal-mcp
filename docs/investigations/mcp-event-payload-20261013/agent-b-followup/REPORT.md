@@ -6,7 +6,14 @@ in the adjacent `agent-a-followup` directory (published peer candidate
 `1dcd7cd114f9dc4cdbae804eaa12d00c5c7a6d12`). Operator-specific records are intentionally
 kept outside Git; this directory contains environment-neutral evidence only.
 
-## Result
+## Latest live result
+
+The later real Work controls succeeded; fresh dot controls reproduced the missing injected
+result. See [LIVE-RESULT.md](LIVE-RESULT.md) for the completed experiment and its evidence
+limits. The sections below preserve the earlier differential-review checkpoint; statements
+about pending receiver setup describe that earlier phase and are superseded by the live result.
+
+## Earlier differential-review result
 
 The current native sender and the documented OpenAI sender produced **identical event
 body bytes and the five required application headers** in all three differential cases
