@@ -24,11 +24,11 @@ function control(id: string, authority: string, meshId: string, namespace: strin
     nativeAccessTrust: { state: 'ready', ready: true, meshId, peers: {}, missingTransport: [] } }
 }
 
-test.each([[true, false], [true, true], [false, false]])('Switch confirms autonomous target before cross-namespace Join, supported=%s, interruption=%s', async (supported, interrupt) => {
+test.each([[true, false, true], [true, true, true], [false, false, true], [true, false, false]])('Switch confirms autonomous target before cross-namespace Join, supported=%s, interruption=%s, compatible=%s', async (supported, interrupt, compatible) => {
   let phase = 'source'
   const writes: string[] = []
   const get = async (id: string) => {
-    if (id === 'gamma') return control(id, 'gamma', 'mesh-other', 'other-namespace', phase === 'joined' ? ['gamma', 'beta'] : ['gamma'])
+    if (id === 'gamma') return { ...control(id, 'gamma', 'mesh-other', 'other-namespace', phase === 'joined' ? ['gamma', 'beta'] : ['gamma']), schemaVersion: compatible ? 3 : 2 }
     if (id === 'alpha') return control(id, 'alpha', 'mesh-prod', 'source-namespace', phase === 'source' ? ['alpha', 'beta'] : ['alpha'])
     if (phase === 'source') return { ...control(id, 'alpha', 'mesh-prod', 'source-namespace', ['alpha', 'beta']), namespaceTransitionSupported: supported }
     if (phase === 'joined') return control(id, 'gamma', 'mesh-other', 'other-namespace', ['gamma', 'beta'])
@@ -62,8 +62,8 @@ test.each([[true, false], [true, true], [false, false]])('Switch confirms autono
   await waitFor(() => expect(within(betaCard()).getByRole('button', { name: 'Destination' })).toBeEnabled())
   await userEvent.click(within(betaCard()).getByRole('button', { name: 'Destination' }))
   await userEvent.click(within(betaCard()).getByRole('button', { name: en['connections.applyMembership'] }))
-  if (!supported) {
-    await waitFor(() => expect(betaCard()).toHaveTextContent('namespace_transition_unsupported'))
+  if (!supported || !compatible) {
+    await waitFor(() => expect(betaCard()).toHaveTextContent(compatible ? 'namespace_transition_unsupported' : 'management_contract_mismatch'))
     expect(writes).toEqual([])
     expect(readMeshHandoff(localStorage, 'beta')).toBeNull()
     return

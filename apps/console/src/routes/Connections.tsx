@@ -766,6 +766,11 @@ export function Connections({ servers = [], diagnostics }: { servers?: FleetServ
         || !destination.meshes.some((mesh) => mesh.meshId === targetMeshId && mesh.adopted)) {
         return { ok: false, error: 'enrollment_identity_changed' }
       }
+      // A switch must establish Join compatibility before releasing membership.
+      // addToMesh repeats this check against fresh reads after Detach.
+      if (local.schemaVersion !== destination.schemaVersion) {
+        return { ok: false, code: 'management_contract_mismatch', error: 'management_contract_mismatch' }
+      }
       if (local.fleetId !== destination.fleetId && !local.namespaceTransitionSupported) {
         return { ok: false, error: 'namespace_transition_unsupported' }
       }
