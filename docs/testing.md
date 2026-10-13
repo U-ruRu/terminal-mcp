@@ -17,11 +17,11 @@ python scripts/test.py dev
 
 # Reviewed component checks for this owner only; no global dev or dependency expansion.
 python scripts/test.py component mesh
-python scripts/test.py component capture
+python scripts/test.py component agents
 
-# Explicit cross-component feedback. Capture includes the app/auth/commit boundaries.
+# Explicit cross-component feedback, including the app/auth/commit boundaries.
 python scripts/test.py integration mesh
-python scripts/test.py integration capture
+python scripts/test.py integration events
 
 # Explicit Linux shell, Unix IPC and kernel-dependent checks.
 python scripts/test.py platform linux --plan
@@ -40,7 +40,7 @@ python scripts/test.py node --url https://node.example --expected-release <versi
 ```
 
 `component` accepts `auth`, `mesh`, `storage`, `contracts`, `commands`, `slots`,
-`events`, `capture`, `tasks`, `agents`, `testing`, `deployment`, and `all`. The source
+`events`, `tasks`, `agents`, `testing`, `deployment`, and `all`. The source
 owners, reviewed component allowlist, mixed-function tiers and dependency graph are
 in `scripts/test_plan.py`. Unreviewed modules remain in integration until their
 responsibilities are separated. SQLite transaction tests are component checks when
@@ -72,8 +72,8 @@ filename guesses. `integration --changed-from` selects that broad non-platform b
 only when explicitly requested. Native checks stay deferred. Direct source import
 edges are static evidence, not a claim of complete runtime import transitivity.
 
-The reviewed source snapshot has 188 tracked files (183 Python modules and five
-assets): 115 have an owner route and 73 use the explicit unknown route. The unreviewed
+The M3 source snapshot has 187 tracked files (182 Python modules and five
+assets): 114 have an owner route and 73 use the explicit unknown route. The unreviewed
 families are 20 HTTP adapters, 21 shared application modules, 14 shared core modules,
 two adapters and 16 package/composition modules. Examples are `http/persistent.py`,
 `application/base.py`, `core/orchestration.py`, `adapters/mcp_identity.py` and `app.py`.
@@ -82,10 +82,10 @@ also selects every reviewed component check and exposes all boundaries. No modul
 silently disappears from affected coverage. The current inventory guard checks
 visible source routes and complete component/integration/platform function coverage.
 
-Capture's component mode checks its isolated capture logic. `integration capture`
-adds the real app/auth tests, message binding, final subscription commit and shared
-restart checks. A runtime/lifecycle or trust-policy change needs its corresponding
-integration/platform coverage before complete release acceptance.
+Subscription capture and its dedicated selectors are deferred on this M3 branch;
+the runtime capture commit is not included. Events still exposes current app/auth,
+binding and subscription-commit boundaries. A runtime/lifecycle or trust-policy
+change needs its corresponding integration/platform coverage before release acceptance.
 
 Mixed modules select explicit test functions, preserving their parameterization.
 A stale mixed-function declaration blocks the plan. Paths use POSIX separators on
@@ -116,12 +116,12 @@ shell/filesystem checks have separate physical modules. Extraction reuses assert
 and inputs. The current `task_context_ttl_seconds` replaces exercising the previous
 `task_lease_seconds` alias. No migration was removed based on a versioned filename.
 
-Current Python inventory: 271 modules, 1833 functions and 3044 collected cases.
-The disjoint partition is 1175 component, 1679 remaining integration and 190 platform.
-Integration includes its requested component checks. Capture stays 15 component /
-28 explicit integration cases; Events component is 50 after promoting ten existing
-managed EventStore cases. Full cardinality grew because existing loops/assertion
-groups received atomic IDs, not new inputs.
+The historical capture-based inventory and case counts are recorded in
+[test-scope-cleanup.md](test-scope-cleanup.md); they are not collection evidence for
+this M3 transfer. The inventory guard checks the current source and complete
+component/integration/platform function partition without executing those suites.
+Integration includes its requested component checks. Existing managed EventStore
+cases remain component checks. Separate IDs reuse existing loop/assertion inputs.
 
 Actual ASGI lifespan/auth checks need a genuine secure verifier-key file. Windows
 cannot satisfy its POSIX mode check; the audit does not patch stat/permissions or

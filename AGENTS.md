@@ -33,13 +33,13 @@ function you changed. The existing runner keeps reports/state isolated; use its
 installed Linux environment (`.[test,compact]`). Examples:
 
 ```sh
-# Isolated subscription capture logic.
-python scripts/test.py component capture --plan
-python scripts/test.py component capture
+# Isolated Events storage and projection logic.
+python scripts/test.py component events --plan
+python scripts/test.py component events
 
 # Its actual app/auth/binding/commit/restart boundaries, when those are relevant.
-python scripts/test.py integration capture --plan
-python scripts/test.py integration capture
+python scripts/test.py integration events --plan
+python scripts/test.py integration events
 
 # Declared owners and helper consumers for an existing change.
 python scripts/test.py dev --changed-from <base-sha> --plan

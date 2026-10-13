@@ -130,16 +130,16 @@ def test_component_selection_does_not_repeat_development_checks(tmp_path):
     assert plan["tests"] == ["tests/test_public_errors.py", "tests/test_version.py"]
 
 
-def test_events_selection_includes_capture_and_app_binding(tmp_path):
-    write(tmp_path, "tests/test_subscribe_capture.py")
-    write(tmp_path, "tests/test_subscribe_capture_app.py")
+def test_events_selection_keeps_storage_and_app_binding_separate(tmp_path):
+    write(tmp_path, "tests/test_mcp_events_managed_storage.py")
+    write(tmp_path, "tests/test_mcp_events_message_binding.py")
     component = test_plan.component_plan(tmp_path, ["events"])
-    assert component["tests"] == ["tests/test_subscribe_capture.py"]
-    assert component["deferred"]["integration"] == ["tests/test_subscribe_capture_app.py"]
+    assert component["tests"] == ["tests/test_mcp_events_managed_storage.py"]
+    assert component["deferred"]["integration"] == ["tests/test_mcp_events_message_binding.py"]
     integration = test_plan.component_plan(tmp_path, ["events"], integration=True)
     assert integration["tests"] == [
-        "tests/test_subscribe_capture.py",
-        "tests/test_subscribe_capture_app.py",
+        "tests/test_mcp_events_managed_storage.py",
+        "tests/test_mcp_events_message_binding.py",
     ]
 
 
@@ -165,7 +165,7 @@ def test_affected_selection_normalizes_native_paths_and_helper_consumers(tmp_pat
 def test_documentation_change_selects_current_docs_without_global_runtime_checks(tmp_path):
     write(tmp_path, "tests/test_documentation_contract.py", "def test_docs(): pass\n")
     write(tmp_path, "tests/test_public_errors.py", "def test_errors(): pass\n")
-    plan = test_plan.affected_plan(tmp_path, ["docs/subscription-capture.md"])
+    plan = test_plan.affected_plan(tmp_path, ["docs/testing.md"])
     assert plan["tests"] == ["tests/test_documentation_contract.py"]
     assert plan["deferred"] == {"integration": [], "platform": []}
 
@@ -181,19 +181,19 @@ def test_agent_instructions_select_docs_and_workflow_checks(tmp_path):
     ]
 
 
-def test_capture_source_keeps_app_and_commit_boundaries_explicit(tmp_path):
+def test_events_source_keeps_app_and_commit_boundaries_explicit(tmp_path):
     for name in [
-        "subscribe_capture",
-        "subscribe_capture_app",
+        "mcp_events_managed_storage",
+        "mcp_events_managed_live",
         "mcp_events_message_binding",
         "mcp_events_subscription_commit_charlie3",
         "access_mesh_shared_restart",
         "public_errors",
     ]:
         write(tmp_path, "tests/test_" + name + ".py")
-    plan = test_plan.affected_plan(tmp_path, ["src/terminal_mcp/mcp/subscribe_capture.py"])
-    assert plan["tests"] == ["tests/test_subscribe_capture.py"]
-    assert "tests/test_subscribe_capture_app.py" in plan["deferred"]["integration"]
+    plan = test_plan.affected_plan(tmp_path, ["src/terminal_mcp/mcp/event_server.py"])
+    assert plan["tests"] == ["tests/test_mcp_events_managed_storage.py"]
+    assert "tests/test_mcp_events_managed_live.py" in plan["deferred"]["integration"]
     assert (
         "tests/test_mcp_events_subscription_commit_charlie3.py" in plan["deferred"]["integration"]
     )
@@ -203,7 +203,12 @@ def test_capture_source_keeps_app_and_commit_boundaries_explicit(tmp_path):
 @pytest.mark.parametrize(
     "path,kind,owners,boundaries",
     [
-        (r"src\terminal_mcp\mcp\subscribe_capture.py", "owner", ["capture"], "consumers"),
+        (
+            r"src\terminal_mcp\core\read_contract.py",
+            "owner",
+            ["contracts", "commands"],
+            "consumers",
+        ),
         ("src/terminal_mcp/storage/work_windows.py", "owner", ["storage"], "all"),
         ("src/terminal_mcp/http/new_route.py", "unknown", [], "all"),
         ("src/terminal_mcp/application/base.py", "unknown", [], "all"),
@@ -224,29 +229,29 @@ def test_direct_source_imports_select_other_named_owner_and_helper_consumers(tmp
         "COMPONENT_MODULES",
         frozenset(
             {
-                "test_subscribe_capture.py",
+                "test_read_contract.py",
                 "test_other_owner.py",
                 "test_indirect.py",
                 "test_unrelated.py",
             }
         ),
     )
-    source = "src/terminal_mcp/mcp/subscribe_capture.py"
-    write(tmp_path, source, "class Capture: pass\n")
-    write(tmp_path, "tests/test_subscribe_capture.py")
+    source = "src/terminal_mcp/core/read_contract.py"
+    write(tmp_path, source, "class ReadContract: pass\n")
+    write(tmp_path, "tests/test_read_contract.py")
     write(
         tmp_path,
         "tests/conftest.py",
-        "from terminal_mcp.mcp.subscribe_capture import Capture\n",
+        "from terminal_mcp.core.read_contract import ReadContract\n",
     )
-    write(tmp_path, "tests/test_other_owner.py", "from conftest import Capture\n")
-    write(tmp_path, "tests/test_indirect.py", "from test_other_owner import Capture\n")
+    write(tmp_path, "tests/test_other_owner.py", "from conftest import ReadContract\n")
+    write(tmp_path, "tests/test_indirect.py", "from test_other_owner import ReadContract\n")
     write(tmp_path, "tests/test_unrelated.py")
     plan = test_plan.affected_plan(tmp_path, [source])
     assert plan["tests"] == [
         "tests/test_indirect.py",
         "tests/test_other_owner.py",
-        "tests/test_subscribe_capture.py",
+        "tests/test_read_contract.py",
     ]
     assert any("imports affected source" in reason for reason in plan["reasons"])
     integration = test_plan.affected_plan(tmp_path, [source], integration=True)
@@ -275,10 +280,10 @@ def test_shared_store_changes_keep_direct_feedback_and_expose_all_boundaries(tmp
 
 
 def test_source_contract_boundaries_include_consuming_owners(tmp_path):
-    write(tmp_path, "tests/test_subscribe_capture.py")
+    write(tmp_path, "tests/test_mcp_events_managed_storage.py")
     write(tmp_path, "tests/test_work_window_domain.py")
     plan = test_plan.affected_plan(tmp_path, ["src/terminal_mcp/mcp/event_server.py"])
-    assert plan["tests"] == ["tests/test_subscribe_capture.py"]
+    assert plan["tests"] == ["tests/test_mcp_events_managed_storage.py"]
     assert "tests/test_work_window_domain.py" in plan["deferred"]["integration"]
 
 
@@ -391,6 +396,7 @@ def test_isolated_runs_do_not_inherit_runtime_or_pytest_filters(tmp_path, monkey
         ["full", "--changed-from", "HEAD", "--plan"],
         ["dev", "--expected-sha", "main", "--plan"],
         ["component", "invalid", "--plan"],
+        ["component", "capture", "--plan"],
         ["node"],
         ["dev", "--timeout", "0", "--plan"],
         ["platform", "windows", "--plan"],

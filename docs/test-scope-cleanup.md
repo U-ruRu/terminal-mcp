@@ -13,6 +13,9 @@ that a currently supported behavior is obsolete.
 
 ## Selection results
 
+The counts and original capture-based selectors below are historical evidence for
+the original packets. The M3 transfer notes at the end describe the current branch.
+
 Counts below come from pytest collection, not full test execution. Parameterized
 cases are retained. The Windows inventory used import-only `pwd`/`fcntl` placeholders;
 it is not Linux/native acceptance evidence.
@@ -108,11 +111,8 @@ testing receipt logic does not depend on the host's `ver` command.
 Run the existing installed Linux test environment (`.[test,compact]`):
 
 ```sh
-python scripts/test.py component capture --plan
-python scripts/test.py component capture
-python scripts/test.py integration capture --plan
-python scripts/test.py integration capture
 python scripts/test.py component events --plan
+python scripts/test.py integration events --plan
 python scripts/test.py dev --changed-from <base-sha> --plan
 python scripts/test.py integration --changed-from <base-sha> --plan
 python scripts/test.py platform linux --plan
@@ -271,3 +271,28 @@ Review's helper-selector issue is closed: graph traversal remains; final targets
 intersected with actual test files. The existing direct-source/transitive-helper test
 now traverses an uncollected conftest and checks proper targets in both layers,
 without adding cases.
+
+## M3-only integration transfer
+
+Integration base: `b6b0605d893444ccce50089c6a865891fb63d8f8` on
+`integration/M3-functional-candidate`. The original fixed candidate
+`b59a5d9af482edc8811c8368dc6785b64780ade5` is preserved on its original branch.
+Only the three cleanup packets `f784db9`, `b0e81dc`, `5c4a943` and the existing
+one-line `bearer_client` fixture fix were cherry-picked. There were no conflicts.
+Runtime, frontend, installer and dependency files match the M3 base.
+
+The separate `fe66ea6` subscription-capture change is excluded. Its runtime,
+documentation and two dedicated test modules are absent on this branch. Dedicated
+capture owner patterns, allowlist, integration extras and source-consumer edges are
+deferred with that feature; no existing M3 behavior test is skipped or removed.
+Events still exposes its current storage, app and subscription-commit boundaries.
+
+Six existing workflow checks keep their selection/import/boundary assertions but
+use the current Events/Read owners and documentation instead of capture fixtures.
+The existing invalid-command parameter table adds one case to verify that the
+deferred capture component is rejected. No capture runtime is mocked into existence.
+Capture examples are replaced with current Events/Agents commands. The earlier
+collection totals in this document remain historical, not M3 acceptance evidence.
+Static current inventory: 269 test modules, 1818 test functions; 187 source files
+(182 Python modules and five assets), with 114 owner routes and 73 explicit unknown
+routes. No full suite or full collection was run for this transfer.

@@ -73,8 +73,7 @@ COMPONENTS = {
         "*android*",
         "*session*",
     ),
-    "events": ("*event*", "*message*", "*subscribe_capture*"),
-    "capture": ("*subscribe_capture*",),
+    "events": ("*event*", "*message*"),
     "tasks": ("*task*", "*claim*"),
     "agents": ("*agent*", "*context*", "*live_claim*"),
     "testing": ("*test_workflow*", "*preparation*"),
@@ -167,7 +166,6 @@ COMPONENT_MODULES = frozenset(
         "test_sqlite_main_health.py",
         "test_sqlite_observability.py",
         "test_sqlite_posix_lock_preservation.py",
-        "test_subscribe_capture.py",
         "test_task_projection_core.py",
         "test_task_storage.py",
         "test_test_workflow.py",
@@ -235,17 +233,10 @@ MIXED_TEST_LAYERS = {
         "platform": ("test_legacy_installer_refuses_split_update_before_mutation",),
     },
 }
-INTEGRATION_EXTRAS = {
-    "capture": (
-        "tests/test_mcp_events_message_binding.py",
-        "tests/test_mcp_events_subscription_commit_charlie3.py",
-        "tests/test_access_mesh_shared_restart.py",
-    ),
-}
+INTEGRATION_EXTRAS = {}
 # Order matters: specific owners precede shared/feature-wide boundaries.
 SOURCE_COMPONENTS = (
-    ("src/terminal_mcp/mcp/subscribe_capture.py", ("capture",)),
-    ("src/terminal_mcp/mcp/event_server.py", ("events", "capture")),
+    ("src/terminal_mcp/mcp/event_server.py", ("events",)),
     ("src/terminal_mcp/mcp/event*.py", ("events",)),
     ("src/terminal_mcp/mcp/message_binding.py", ("events",)),
     ("src/terminal_mcp/core/public_errors.py", ("contracts",)),
@@ -326,7 +317,7 @@ def source_route(path: str) -> dict:
 def source_boundary_owners(owners: set[str]) -> set[str]:
     """Affected source contracts include owners that consume them, then their ports."""
     consumers = set(owners)
-    dependencies = {**DEPENDENCIES, "capture": ("auth", "storage", "events")}
+    dependencies = DEPENDENCIES
     todo = list(owners)
     while todo:
         changed_owner = todo.pop()
