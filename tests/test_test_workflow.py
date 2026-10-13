@@ -200,6 +200,112 @@ def test_capture_source_keeps_app_and_commit_boundaries_explicit(tmp_path):
     assert "tests/test_public_errors.py" not in plan["tests"]
 
 
+@pytest.mark.parametrize(
+    "path,kind,owners,boundaries",
+    [
+        (r"src\terminal_mcp\mcp\subscribe_capture.py", "owner", ["capture"], "consumers"),
+        ("src/terminal_mcp/storage/work_windows.py", "owner", ["storage"], "all"),
+        ("src/terminal_mcp/http/new_route.py", "unknown", [], "all"),
+        ("src/terminal_mcp/application/base.py", "unknown", [], "all"),
+    ],
+)
+def test_source_routes_expose_owner_or_safe_unknown(path, kind, owners, boundaries):
+    route = test_plan.source_route(path)
+    assert route["path"] == path.replace("\\", "/")
+    assert route["kind"] == kind
+    assert route["owners"] == owners
+    assert route["boundaries"] == boundaries
+    assert route["reason"]
+
+
+def test_direct_source_imports_select_other_named_owner_and_helper_consumers(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        test_plan,
+        "COMPONENT_MODULES",
+        frozenset(
+            {
+                "test_subscribe_capture.py",
+                "test_other_owner.py",
+                "test_indirect.py",
+                "test_unrelated.py",
+            }
+        ),
+    )
+    source = "src/terminal_mcp/mcp/subscribe_capture.py"
+    write(tmp_path, source, "class Capture: pass\n")
+    write(tmp_path, "tests/test_subscribe_capture.py")
+    write(
+        tmp_path,
+        "tests/test_other_owner.py",
+        "from terminal_mcp.mcp.subscribe_capture import Capture\n",
+    )
+    write(tmp_path, "tests/test_indirect.py", "from test_other_owner import Capture\n")
+    write(tmp_path, "tests/test_unrelated.py")
+    plan = test_plan.affected_plan(tmp_path, [source])
+    assert plan["tests"] == [
+        "tests/test_indirect.py",
+        "tests/test_other_owner.py",
+        "tests/test_subscribe_capture.py",
+    ]
+    assert any("imports affected source" in reason for reason in plan["reasons"])
+
+
+def test_shared_store_changes_keep_direct_feedback_and_expose_all_boundaries(tmp_path):
+    source = "src/terminal_mcp/storage/work_windows.py"
+    write(tmp_path, source, "class WorkWindowStore: pass\n")
+    write(
+        tmp_path,
+        "tests/test_work_window_store.py",
+        "from terminal_mcp.storage.work_windows import WorkWindowStore\n",
+    )
+    write(tmp_path, "tests/test_task_storage.py")
+    write(tmp_path, "tests/test_read_contract.py")
+    write(tmp_path, "tests/test_execution_port_native.py")
+    plan = test_plan.affected_plan(tmp_path, [source])
+    assert plan["tests"] == ["tests/test_task_storage.py"]
+    assert "tests/test_work_window_store.py" in plan["deferred"]["integration"]
+    assert "tests/test_read_contract.py" in plan["deferred"]["integration"]
+    assert plan["deferred"]["platform"] == ["tests/test_execution_port_native.py"]
+    explicit = test_plan.affected_plan(tmp_path, [source], integration=True)
+    assert "tests/test_work_window_store.py" in explicit["tests"]
+    assert "tests/test_execution_port_native.py" not in explicit["tests"]
+
+
+def test_source_contract_boundaries_include_consuming_owners(tmp_path):
+    write(tmp_path, "tests/test_subscribe_capture.py")
+    write(tmp_path, "tests/test_work_window_domain.py")
+    plan = test_plan.affected_plan(tmp_path, ["src/terminal_mcp/mcp/event_server.py"])
+    assert plan["tests"] == ["tests/test_subscribe_capture.py"]
+    assert "tests/test_work_window_domain.py" in plan["deferred"]["integration"]
+
+
+def test_current_source_inventory_has_visible_routes_and_no_missing_test_layer():
+    root = SCRIPTS.parent
+    for source in (root / "src").rglob("*"):
+        if source.is_file() and "__pycache__" not in source.parts:
+            route = test_plan.source_route(source.relative_to(root).as_posix())
+            assert route["kind"] in {"owner", "unknown"}
+            assert route["owners"] or route["boundaries"] == "all"
+    files = test_plan.test_files(root)
+    index = {relative: test_plan.test_functions(root, relative) for relative in files}
+
+    def functions(selectors):
+        return {
+            relative + "::" + function
+            for selector in selectors
+            for relative in [selector.split("::")[0]]
+            for function in index[relative]
+            if "::" not in selector or relative + "::" + function == selector
+        }
+
+    component = functions(test_plan.component_plan(root, ["all"])["tests"])
+    integration = functions(test_plan.component_plan(root, ["all"], integration=True)["tests"])
+    platform = functions(test_plan.platform_plan(root, ["linux"])["tests"])
+    assert not platform & (component | integration)
+    assert component <= integration
+    assert integration | platform == functions(files)
+
+
 def test_platform_tests_cannot_enter_component_or_integration_feedback(tmp_path):
     write(tmp_path, "tests/test_read_contract.py")
     write(tmp_path, "tests/test_execution_port_native.py")

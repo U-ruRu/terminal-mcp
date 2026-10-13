@@ -49,7 +49,10 @@ Integration mode includes requested component checks and their transitive bounda
 platform checks remain a separate explicit batch. `--plan` prints exact selectors,
 reasons and deferred integration/platform coverage. None of these modes is a release gate.
 
-Affected selection uses declared source owners and transitive test-helper imports.
+Affected selection uses declared source owners, direct test imports of source modules
+and transitive test-helper imports. An import can select a consumer whose filename
+does not match the owner's patterns (for example WorkWindowStore or Android scope).
+Source boundary plans also include consumers of the owner's declared ports.
 Documentation selects current documentation/artifact contracts. A shared/unclassified
 input, dependency lock, deleted test or unresolved import graph expands to every
 reviewed component check, with integration/platform coverage printed separately.
@@ -57,6 +60,27 @@ It does not silently start a full release run. `integration --changed-from` expl
 selects the affected integration batch. This is staged feedback, not a proof that
 unselected runtime paths are unaffected. Frontend checks still use the console's
 Vitest/build commands; Python `full` does not run them.
+The three dedicated modules under `qa/` are also separate explicit pytest targets
+(50 collected cases in this audit); the default `testpaths` and Python `full` target
+only `tests/`. The layer inventory above describes that existing runner's corpus.
+
+The plan's `routes` records each changed source path, owner or explicit unknown
+status, fallback reason and boundary breadth. Shared auth/storage and managed-session
+policy contracts keep direct component feedback but expose **all** remaining
+integration/platform checks; their dynamic/injected consumers are not narrowed by
+filename guesses. `integration --changed-from` selects that broad non-platform batch
+only when explicitly requested. Native checks stay deferred. Direct source import
+edges are static evidence, not a claim of complete runtime import transitivity.
+
+The reviewed source snapshot has 188 tracked files (183 Python modules and five
+assets): 115 have an owner route and 73 use the explicit unknown route. The unreviewed
+families are 20 HTTP adapters, 21 shared application modules, 14 shared core modules,
+two adapters and 16 package/composition modules. Examples are `http/persistent.py`,
+`application/base.py`, `core/orchestration.py`, `adapters/mcp_identity.py` and `app.py`.
+Their full family fallbacks are in `UNKNOWN_SOURCE_FAMILIES`; a new/unmapped source
+also selects every reviewed component check and exposes all boundaries. No module
+silently disappears from affected coverage. The current inventory guard checks
+visible source routes and complete component/integration/platform function coverage.
 
 Capture's component mode checks its isolated capture logic. `integration capture`
 adds the real app/auth tests, message binding, final subscription commit and shared

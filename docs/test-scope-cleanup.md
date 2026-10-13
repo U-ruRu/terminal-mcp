@@ -144,3 +144,66 @@ migration. Other mixed modules remain in the visible integration/platform batche
 they are not claimed to be entirely atomic. Future promotion to component feedback
 requires separating their real boundaries first. No full receipt or release-policy
 exception is fabricated to turn narrow diagnostic evidence into release approval.
+
+## Follow-up packet from `f784db9`
+
+The first packet remains unchanged on `codex/atomic-test-selection`. This child
+branch fixes concrete affected-selection omissions and separates one current
+policy responsibility; it adds no runner modes or runtime changes.
+
+Before this follow-up, `storage/work_windows.py` missed its directly importing
+`test_work_window_store.py` (CAS, principal isolation and rollback), and
+`auth/middleware.py` missed `test_android_slot_read_scope_qa.py`. The existing AST
+import graph now includes direct source-to-test edges before following helper
+consumers. The four Android middleware cases use no app/process/store and are
+reviewed auth component checks. Shared storage/auth/lifecycle contracts show all
+non-platform/native boundaries; direct feedback remains separate. Unknown source
+families are documented in `testing.md` and appear with a reason in each plan.
+
+Three existing pure `decide_session_operation` functions moved from
+`test_managed_session_application.py` to `test_managed_session_policy.py`. The two
+28-operation parameter tables and function bodies are AST-identical. The third
+test's three existing bad inputs now have separate pytest IDs instead of a loop:
+57 collected cases become 59, with **zero new policy scenarios**. It imports only
+the core policy/window values; application, authorization, storage, adoption and
+recovery tests retain their original bodies. Closest WorkWindow tests check phase
+thresholds; these reused checks cover the complementary operation-admission rule.
+
+Five public Service health functions in `test_sqlite_main_health` and four real
+runtime/journal/auth projection functions in `test_fleet_v1_source` are declared
+integration instead of component. Their bodies remain unchanged. Storage integrity
+and pure protocol/meta/router checks remain component selectors. Physical separation
+of those mixed modules is the first remaining cleanup priority.
+
+Collection only: 245 modules, 1786 functions, 245 parameterized functions and 2969
+cases. The disjoint case partition is 1086 reviewed component cases,
+1670 remaining integration cases and 213 platform cases. The integration mode
+includes selected component cases, so those totals must not be added to an
+integration plan that already includes them. Capture still selects 15 component
+or 28 explicit integration cases; Events component stays at 40. The ten-case
+increase since the first packet is two IDs for the existing policy inputs and
+eight targeted selector regression cases, not additional behavioral variants.
+
+Scoped verification: 59 reused policy cases passed in 0.19 seconds. Selection,
+policy and Android scope checks together passed 116 cases in 1.65 seconds. The
+updated documentation and source-route matrix passed 45 cases in 1.22 seconds. The
+current whole inventory was collected without executing it (18.36 seconds).
+Full/native execution and broad integration acceptance remain deferred. Windows
+import placeholders are still not native acceptance evidence.
+
+Prioritized remaining mixed responsibilities:
+
+| Priority | Module | Concrete split |
+|---|---|---|
+| 1 | `test_sqlite_main_health` | Repository integrity/cache/timeout versus five Service health/journal/coordinator integrations. |
+| 1 | `test_fleet_v1_source` | Protocol, node-meta storage and router double versus persistent snapshot/event replay with real auth/runtime stores. |
+| 2 | `test_http_auth` | Middleware path/scope, atomic OAuthStore refresh race, OpenAPI adapter and real command execution. |
+| 2 | `test_managed_runtime_composition` | Two fake-recovery coordinator tests versus two real `create_app` wiring tests. |
+| 2 | `test_mcp_events_managed_live` | Seeded event-store projection versus `test_actual_asgi_subscribe_no_auth_reports_stage_and_no_secrets`. |
+| 2 | `test_agents` | Identity, preview, expiry and scope functions versus service/storage and actual bash behavior. |
+| 3 | `test_persistent_b_fencing` | Settings thresholds and mocked admission versus real permit/store/fence/recovery. Pre-spawn cancellation alone is not a native process test. |
+| 3 | `test_persistent_c_rollout` | Current admission policy, installer configuration preservation and application lifecycle/console wiring. |
+
+Current admission/drain/adoption, migration and data-preservation branches still
+exist in runtime. Their versioned/legacy names are not retirement evidence; no
+such case was deleted in this follow-up.
