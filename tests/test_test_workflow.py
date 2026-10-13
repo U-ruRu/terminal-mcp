@@ -387,6 +387,9 @@ def test_isolated_runs_do_not_inherit_runtime_or_pytest_filters(tmp_path, monkey
     for name in workflow.STATE_PATHS:
         assert a["TERMINAL_MCP_" + name] != b["TERMINAL_MCP_" + name]
     assert a["PYTHONHASHSEED"] == "0"
+    assert a["TMPDIR"] == str(first)
+    assert b["TMPDIR"] == str(second)
+    assert all(a[name] == str(first) for name in ("TMP", "TEMP"))
 
 
 @pytest.mark.parametrize(
@@ -491,6 +494,74 @@ def test_receipt_binds_exact_clean_full_success(
     assert receipt["dirty"] is bool(dirty)
     assert len(receipt["files"]["junit.xml"]) == 64
     assert receipt["tests"]["collected"] == 1
+    assert receipt["state_retained"] is False
+    assert not Path(receipt["state_dir"]).exists()
+
+
+@pytest.mark.parametrize(
+    "outcome,keep_state,expected",
+    [
+        ("failed", False, 1),
+        ("timeout", False, 124),
+        ("error", False, None),
+        ("failed", True, 1),
+    ],
+)
+def test_runner_cleanup_on_failures_and_keep_state(
+    tmp_path, monkeypatch, outcome, keep_state, expected
+):
+    sha = "2" * 40
+    output = tmp_path / "report"
+    captured = {}
+    monkeypatch.setattr(workflow, "git", lambda *a, **kw: "" if a[0] == "status" else sha)
+    monkeypatch.setattr(workflow.metadata, "distributions", lambda: [])
+
+    def execute(command, *, env, stdout, **kwargs):
+        state = Path(env["TERMINAL_MCP_DATABASE_PATH"]).parents[1]
+        captured["state"] = state
+        captured["command"] = command
+        (state / "test.sqlite3").write_bytes(b"diagnostics")
+        stdout.write("fake test output\n")
+        (output / "junit.xml").write_text("<testsuites/>\n")
+        if outcome == "timeout":
+            raise workflow.subprocess.TimeoutExpired(command, 2)
+        if outcome == "error":
+            raise RuntimeError("unexpected runner failure")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(workflow.subprocess, "run", execute)
+    args = argparse.Namespace(
+        expected_sha=sha,
+        mode="dev",
+        allow_dirty=False,
+        output=str(output),
+        timeout=2,
+        sample=False,
+        keep_state=keep_state,
+        fresh_preparation=False,
+    )
+    plan = {"scope": "dev", "tests": ["tests/test_example.py"]}
+    if outcome == "error":
+        with pytest.raises(RuntimeError, match="unexpected runner failure"):
+            workflow.run(args, plan, root=tmp_path)
+        report = json.loads((output / "report.json").read_text())
+        assert report["state"] == "error"
+        assert report["error_type"] == "RuntimeError"
+        assert report["full_test_evidence_eligible"] is False
+        assert report["state_retained"] is False
+    else:
+        assert workflow.run(args, plan, root=tmp_path) == expected
+        report = json.loads((output / "report.json").read_text())
+        assert report["exit_code"] == expected
+        assert report["state_retained"] is keep_state
+
+    assert captured["state"].exists() is keep_state
+    if keep_state:
+        assert "tmp_path_retention_policy=all" in captured["command"]
+        workflow.shutil.rmtree(captured["state"])
+    else:
+        assert "tmp_path_retention_policy=all" not in captured["command"]
+    assert (output / "pytest.log").is_file()
 
 
 def test_live_probe_is_read_only_and_compares_release():

@@ -274,8 +274,12 @@ without adding cases.
 
 ## M3-only integration transfer
 
-Integration base: `b6b0605d893444ccce50089c6a865891fb63d8f8` on
-`integration/M3-functional-candidate`. The original fixed candidate
+Initial integration base: `b6b0605d893444ccce50089c6a865891fb63d8f8` on
+`integration/M3-functional-candidate`. The target now also includes the separately
+accepted PR #4 cleanup commit `1fe0a5c62db8d693680ce5bb10dbc6ac7c874b9e`.
+It was merged into the feature branch without conflicts; the published history
+is preserved. Cleanup on every outcome, explicit diagnostic retention and the new
+selection guards remain together. The original fixed candidate
 `b59a5d9af482edc8811c8368dc6785b64780ade5` is preserved on its original branch.
 Only the three cleanup packets `f784db9`, `b0e81dc`, `5c4a943` and the existing
 one-line `bearer_client` fixture fix were cherry-picked. There were no conflicts.
