@@ -2,6 +2,7 @@
 
 import time
 
+from auth_http_test_helpers import bearer_client as bearer_client
 from auth_http_test_helpers import bearer_session as bearer_session
 
 
