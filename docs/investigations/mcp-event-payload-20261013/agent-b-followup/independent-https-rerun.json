@@ -1,0 +1,253 @@
+{
+  "result": "PASS",
+  "captured_at": "2026-10-13T05:41:11.513763+00:00",
+  "scope": "real loopback TLS with fixture-only address mapping; no production callback",
+  "production_mutations": false,
+  "live_model_visibility_proven": false,
+  "subject_git_sha": "b6b0605d893444ccce50089c6a865891fb63d8f8",
+  "sender_source_sha256": "43720d32a3bbb3059c8668f727efa30130dd000ae30f31511fb90e19d2db3659",
+  "cases": [
+    "single_ASCII",
+    "Unicode_quotes_newline",
+    "two_due_events_two_requests"
+  ],
+  "request_count": 6,
+  "comparisons": [
+    {
+      "eventId": "evt_fixture_1",
+      "body_bytes": 290,
+      "body_sha256": "4c7f1e59feeec5bcbcccb9b84015e321e0bfe46c8107eb791716a62748aff29c",
+      "body_and_application_headers_identical": true,
+      "python_only_headers": [
+        "accept-encoding"
+      ],
+      "node_only_headers": [
+        "connection"
+      ]
+    },
+    {
+      "eventId": "evt_fixture_2",
+      "body_bytes": 345,
+      "body_sha256": "53a6b42d8e83eeccc2e54a8a5e8710848b55908a5383ab870b22ce4e76876403",
+      "body_and_application_headers_identical": true,
+      "python_only_headers": [
+        "accept-encoding"
+      ],
+      "node_only_headers": [
+        "connection"
+      ]
+    },
+    {
+      "eventId": "evt_fixture_3",
+      "body_bytes": 302,
+      "body_sha256": "227e7e3d4ac2bce8ec1967ec7f85ec91c919f045b8421e468787275fe96a6a5e",
+      "body_and_application_headers_identical": true,
+      "python_only_headers": [
+        "accept-encoding"
+      ],
+      "node_only_headers": [
+        "connection"
+      ]
+    }
+  ],
+  "public_signers": {
+    "result": "PASS",
+    "count": 3,
+    "results": [
+      {
+        "accepted": true,
+        "status": 200
+      },
+      {
+        "accepted": true,
+        "status": 200
+      },
+      {
+        "accepted": true,
+        "status": 200
+      }
+    ],
+    "official_function_sha256": "cce5bb64edda00e3101c307ffbdd78e3e8370a396245ad7e815e693e86d7cf86",
+    "hookdeck_function_sha256": "dbd0ef18655a17dd6041ea0b1ffc021dc4751d00114c2c81684725ae048d091d",
+    "recly_functions_sha256": "1f0c5b7891fb27e9dd16ca4f16f436ff3a3a8a6fc36460ec836462d18dcc2ec8",
+    "public_signature_comparisons": "Hookdeck and Recly equal official standardwebhooks for each exact body"
+  },
+  "native_receipts": [
+    {
+      "eventId": "evt_fixture_1",
+      "status": 200
+    },
+    {
+      "eventId": "evt_fixture_2",
+      "status": 200
+    },
+    {
+      "eventId": "evt_fixture_3",
+      "status": 200
+    }
+  ],
+  "captures": [
+    {
+      "sender": "Terminal MCP",
+      "request": {
+        "method": "POST",
+        "host": "receiver.tmcp-fixture.invalid",
+        "path": "/events",
+        "headers": {
+          "host": "receiver.tmcp-fixture.invalid:35935",
+          "accept-encoding": "identity",
+          "content-length": "290",
+          "content-type": "application/json",
+          "webhook-id": "evt_fixture_1",
+          "webhook-timestamp": "1791870070",
+          "webhook-signature": "<redacted:verified>",
+          "x-mcp-subscription-id": "sub_fixture"
+        },
+        "body_utf8": "{\"eventId\":\"evt_fixture_1\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:41:10.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:msg:1\",\"text\":\"single ASCII control\",\"timestamp\":\"2026-10-13T05:41:10.000Z\"},\"cursor\":null}",
+        "body_sha256": "4c7f1e59feeec5bcbcccb9b84015e321e0bfe46c8107eb791716a62748aff29c"
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "{}",
+        "origin": "isolated_loopback_fixture"
+      },
+      "tls_version": "TLSv1.3",
+      "signature_verified": true
+    },
+    {
+      "sender": "Terminal MCP",
+      "request": {
+        "method": "POST",
+        "host": "receiver.tmcp-fixture.invalid",
+        "path": "/events",
+        "headers": {
+          "host": "receiver.tmcp-fixture.invalid:35935",
+          "accept-encoding": "identity",
+          "content-length": "345",
+          "content-type": "application/json",
+          "webhook-id": "evt_fixture_2",
+          "webhook-timestamp": "1791870070",
+          "webhook-signature": "<redacted:verified>",
+          "x-mcp-subscription-id": "sub_fixture"
+        },
+        "body_utf8": "{\"eventId\":\"evt_fixture_2\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:41:10.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:msg:2\",\"text\":\"Кавычки \\\"тест\\\", перенос\\nстроки, Unicode ✓ 😀\",\"timestamp\":\"2026-10-13T05:41:10.000Z\"},\"cursor\":null}",
+        "body_sha256": "53a6b42d8e83eeccc2e54a8a5e8710848b55908a5383ab870b22ce4e76876403"
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "{}",
+        "origin": "isolated_loopback_fixture"
+      },
+      "tls_version": "TLSv1.3",
+      "signature_verified": true
+    },
+    {
+      "sender": "Terminal MCP",
+      "request": {
+        "method": "POST",
+        "host": "receiver.tmcp-fixture.invalid",
+        "path": "/events",
+        "headers": {
+          "host": "receiver.tmcp-fixture.invalid:35935",
+          "accept-encoding": "identity",
+          "content-length": "302",
+          "content-type": "application/json",
+          "webhook-id": "evt_fixture_3",
+          "webhook-timestamp": "1791870070",
+          "webhook-signature": "<redacted:verified>",
+          "x-mcp-subscription-id": "sub_fixture"
+        },
+        "body_utf8": "{\"eventId\":\"evt_fixture_3\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:41:10.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:msg:3\",\"text\":\"batch-second / slash \\\\ tab\\tend\",\"timestamp\":\"2026-10-13T05:41:10.000Z\"},\"cursor\":null}",
+        "body_sha256": "227e7e3d4ac2bce8ec1967ec7f85ec91c919f045b8421e468787275fe96a6a5e"
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "{}",
+        "origin": "isolated_loopback_fixture"
+      },
+      "tls_version": "TLSv1.3",
+      "signature_verified": true
+    },
+    {
+      "sender": "OpenAI documented Node sendEvent",
+      "request": {
+        "method": "POST",
+        "host": "receiver.tmcp-fixture.invalid",
+        "path": "/events",
+        "headers": {
+          "content-type": "application/json",
+          "webhook-id": "evt_fixture_1",
+          "webhook-timestamp": "1791870070",
+          "webhook-signature": "<redacted:verified>",
+          "x-mcp-subscription-id": "sub_fixture",
+          "content-length": "290",
+          "host": "receiver.tmcp-fixture.invalid:35935",
+          "connection": "close"
+        },
+        "body_utf8": "{\"eventId\":\"evt_fixture_1\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:41:10.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:msg:1\",\"text\":\"single ASCII control\",\"timestamp\":\"2026-10-13T05:41:10.000Z\"},\"cursor\":null}",
+        "body_sha256": "4c7f1e59feeec5bcbcccb9b84015e321e0bfe46c8107eb791716a62748aff29c"
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "{}",
+        "origin": "isolated_loopback_fixture"
+      },
+      "tls_version": "TLSv1.3",
+      "signature_verified": true
+    },
+    {
+      "sender": "OpenAI documented Node sendEvent",
+      "request": {
+        "method": "POST",
+        "host": "receiver.tmcp-fixture.invalid",
+        "path": "/events",
+        "headers": {
+          "content-type": "application/json",
+          "webhook-id": "evt_fixture_2",
+          "webhook-timestamp": "1791870070",
+          "webhook-signature": "<redacted:verified>",
+          "x-mcp-subscription-id": "sub_fixture",
+          "content-length": "345",
+          "host": "receiver.tmcp-fixture.invalid:35935",
+          "connection": "close"
+        },
+        "body_utf8": "{\"eventId\":\"evt_fixture_2\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:41:10.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:msg:2\",\"text\":\"Кавычки \\\"тест\\\", перенос\\nстроки, Unicode ✓ 😀\",\"timestamp\":\"2026-10-13T05:41:10.000Z\"},\"cursor\":null}",
+        "body_sha256": "53a6b42d8e83eeccc2e54a8a5e8710848b55908a5383ab870b22ce4e76876403"
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "{}",
+        "origin": "isolated_loopback_fixture"
+      },
+      "tls_version": "TLSv1.3",
+      "signature_verified": true
+    },
+    {
+      "sender": "OpenAI documented Node sendEvent",
+      "request": {
+        "method": "POST",
+        "host": "receiver.tmcp-fixture.invalid",
+        "path": "/events",
+        "headers": {
+          "content-type": "application/json",
+          "webhook-id": "evt_fixture_3",
+          "webhook-timestamp": "1791870070",
+          "webhook-signature": "<redacted:verified>",
+          "x-mcp-subscription-id": "sub_fixture",
+          "content-length": "302",
+          "host": "receiver.tmcp-fixture.invalid:35935",
+          "connection": "close"
+        },
+        "body_utf8": "{\"eventId\":\"evt_fixture_3\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:41:10.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:msg:3\",\"text\":\"batch-second / slash \\\\ tab\\tend\",\"timestamp\":\"2026-10-13T05:41:10.000Z\"},\"cursor\":null}",
+        "body_sha256": "227e7e3d4ac2bce8ec1967ec7f85ec91c919f045b8421e468787275fe96a6a5e"
+      },
+      "response": {
+        "status": 200,
+        "body_utf8": "{}",
+        "origin": "isolated_loopback_fixture"
+      },
+      "tls_version": "TLSv1.3",
+      "signature_verified": true
+    }
+  ]
+}

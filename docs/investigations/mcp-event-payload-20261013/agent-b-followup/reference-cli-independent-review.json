@@ -1,0 +1,34 @@
+{
+  "reviewer": "independent-reviewer",
+  "reviewed_at": "2026-10-13T05:46:13.420370+00:00",
+  "subject_sha256": "d222029f3f0a5e74f31d02872506f538b7b7f38e2b8e693eaede4c3bec326d4d",
+  "checks": [
+    {
+      "case": "existing_capture",
+      "result": "PASS",
+      "outcome": "not_attempted",
+      "automatic_retry": false
+    },
+    {
+      "case": "private_address",
+      "result": "PASS",
+      "outcome": "not_attempted",
+      "automatic_retry": false
+    },
+    {
+      "case": "non_null_cursor",
+      "result": "PASS",
+      "outcome": "not_attempted",
+      "automatic_retry": false
+    },
+    {
+      "case": "missing_timezone",
+      "result": "PASS",
+      "outcome": "not_attempted",
+      "automatic_retry": false
+    }
+  ],
+  "live_callback_attempts": 0,
+  "production_credentials_used": false,
+  "limit": "Offline CLI preflight only; authorization of any future live call is separately required."
+}

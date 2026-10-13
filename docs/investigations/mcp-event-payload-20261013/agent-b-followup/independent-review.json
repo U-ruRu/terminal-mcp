@@ -1,0 +1,12 @@
+{
+  "reviewer": "independent-reviewer",
+  "producer": "primary-reviewer",
+  "reviewed_at": "2026-10-13T05:41:11.749769+00:00",
+  "script_snapshot_sha256": {
+    "reference_sender.mjs": "3eff73dbbfb908ba8d20978923c20498cd4c617391455db237bf0190b4d6e1e6",
+    "https_fixture.py": "976c0ef356d8bb4401f4cccee02d011c4440f50ab524d8aec0007d1e4d3f529b",
+    "fixture_senders.mjs": "55da1ebf7216a12dc0b4da478063e7346ec92c38834b39e3c62af777930e57c7"
+  },
+  "result_file": "independent-https-rerun.json",
+  "scope": "independent execution, actual loopback TLS; no production callbacks/credentials; no model visibility proof"
+}
