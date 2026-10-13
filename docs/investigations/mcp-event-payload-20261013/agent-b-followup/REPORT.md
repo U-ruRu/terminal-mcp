@@ -181,3 +181,20 @@ six message-data fields. The peer verdict and exact evidence hashes are preserve
 `1dcd7cd114f9dc4cdbae804eaa12d00c5c7a6d12`. Both reviewers distinguish real local TLS
 acceptance from payload visibility in a live model. The later vendor-reference paragraph
 was also directly checked against its primary documentation by this reviewer.
+
+## Later transport-default cross-check
+
+The primary reviewer added one short test of the reviewed Upstash `signWebhook` and
+`postSigned` function bodies with real Node `fetch` and a loopback TLS receiver, at peer
+commit `90d574e658b70ffd0335a6d2500d10c15b38d748`. This reviewer read the harness and
+receipt and recomputed its captured-body digest, size, identifier correspondence and six
+data fields. This later execution was not repeated by the independent reviewer.
+
+Unlike the original safe HTTPS adapter, real Node fetch added `User-Agent: node`,
+`Accept: */*`, `Accept-Language: *`, `Sec-Fetch-Mode: cors`,
+`Accept-Encoding: br, gzip, deflate` and `Connection: keep-alive`.
+The event body and required application headers/signature remained correct. This limits
+any claim that only two transport headers differ: that was true of the first two selected
+transport adapters, not of all public clients. Causal influence on the platform is still
+unmeasured. No production header patch was made and no live callback was attempted.
+The review receipt is `upstash-fetch-review.json`.

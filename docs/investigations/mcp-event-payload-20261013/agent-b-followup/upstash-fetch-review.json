@@ -1,0 +1,18 @@
+{
+  "reviewed_at": "2026-10-13T06:02:10.767793+00:00",
+  "reviewer": "independent-reviewer",
+  "subject_peer_sha": "90d574e658b70ffd0335a6d2500d10c15b38d748",
+  "capture_sha256": "d53834016431b69e61ea23bf1e2ab3d6bd3c2c42b8a610c1ecd9dda276791e35",
+  "harness_sha256": "ade8f2da8d45ca1ef39055a7b091b712c5372a25878f8c4cd9fe0aad031bb40b",
+  "verdict": "ACCEPTED_WITH_SCOPE_LIMITS",
+  "checked": [
+    "Reviewed selected source-function execution and local-only harness",
+    "Recomputed actual captured UTF-8 body digest and Content-Length",
+    "Checked event/header identifiers and six data fields",
+    "Observed genuine Node fetch additional transport headers",
+    "Confirmed synthetic TLS receipt is not a ChatGPT receipt"
+  ],
+  "execution_repeated_by_reviewer": false,
+  "live_model_visibility_proven": false,
+  "limit": "Transport defaults are fixture-specific. Platform influence of header differences is unknown; no live reference callback authorized."
+}
