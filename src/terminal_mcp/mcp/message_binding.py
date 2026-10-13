@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import aiosqlite
 from mcp.types import RequestParams
 
+from terminal_mcp.adapters.mcp_identity import provider_evidence_from_meta
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError
 from terminal_mcp.core.orchestration import utc_text
@@ -30,7 +31,9 @@ class MessageSubscriber:
     role: str
 
 
-def provider_metadata_from_events(params: object) -> dict[str, str] | None:
+def provider_metadata_from_events(
+    params: object, *, principal_id: str | None = None
+) -> dict[str, str] | None:
     """Validate standard MCP request _meta; never accept identity as arguments.
 
     This metadata is an input to the existing Access Mesh binding lookup, not
@@ -45,15 +48,17 @@ def provider_metadata_from_events(params: object) -> dict[str, str] | None:
     try:
         meta = RequestParams.Meta.model_validate(raw)
         dumped = meta.model_dump(exclude_none=True)
-        evidence = {
-            name: dumped[name]
-            for name in ("openai/subject", "openai/session", "openai/organization")
-            if name in dumped
-        }
-        ProviderIdentityRegistry().resolve("openai", evidence)
+        evidence = provider_evidence_from_meta(dumped)
+        if evidence is None:
+            return None
+        # Validate the same normalized identity as tools and Access Mesh.
+        # The principal comes only from the authenticated HTTP admission.
+        ProviderIdentityRegistry().resolve(
+            evidence.provider, evidence.metadata, principal_id=principal_id
+        )
     except (TypeError, ValueError, ProviderIdentityError):
         return None
-    return evidence
+    return dict(evidence.metadata)
 
 
 class MeshMessageSubscriberResolver:
@@ -113,12 +118,15 @@ class MeshMessageSubscriberResolver:
             or endpoint_role not in {"access", "executor", "coordinator"}
         ):
             return None
+        evidence = provider_evidence_from_meta(provider_metadata)
+        if evidence is None:
+            return None
         actor = ActorContext.from_admission(
             admission,
             node_id=self.mesh.store.local_node_id,
             endpoint_role=endpoint_role,
-            provider="openai",
-            provider_metadata=provider_metadata,
+            provider=evidence.provider,
+            provider_metadata=evidence.metadata,
         )
         try:
             # Same exact key derivation used by AccessMesh.attach on the role.

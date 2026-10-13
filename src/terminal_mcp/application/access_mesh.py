@@ -230,7 +230,9 @@ class AccessMeshApplication:
         if not actor.principal_id or not actor.provider or not actor.provider_metadata:
             raise AccessMeshError("identity_metadata_missing")
         try:
-            identity = self.registry.resolve(actor.provider, actor.provider_metadata)
+            identity = self.registry.resolve(
+                actor.provider, actor.provider_metadata, principal_id=actor.principal_id
+            )
         except ProviderIdentityError as exc:
             raise AccessMeshError(exc.code) from exc
         scope = [

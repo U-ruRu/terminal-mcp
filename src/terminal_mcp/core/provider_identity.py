@@ -127,10 +127,45 @@ OPENAI_IDENTITY_ADAPTER = MetadataIdentityAdapter(
 )
 
 
-class ProviderIdentityRegistry:
-    """Explicit allowlist; no provider sniffing or identity invention on failure."""
+@dataclass(frozen=True, slots=True)
+class PrincipalThreadIdentityAdapter:
+    """Bind untrusted thread evidence to the separately authenticated principal.
 
-    def __init__(self, adapters: tuple[ProviderIdentityAdapter, ...] = (OPENAI_IDENTITY_ADAPTER,)):
+    The server's verified principal is mandatory. Root-session, per-call and
+    progress-token metadata must not affect this binding.
+    """
+
+    provider: str
+    thread_key: str
+
+    def resolve(
+        self, metadata: Mapping[str, object], *, principal_id: str | None = None
+    ) -> ProviderIdentity:
+        if principal_id is None:
+            raise ProviderIdentityError("persistent_auth_required")
+        if not isinstance(metadata, Mapping):
+            raise ProviderIdentityError("identity_metadata_missing")
+        subject = _identifier(principal_id)
+        thread = _identifier(metadata.get(self.thread_key))
+        assert subject is not None and thread is not None
+        return ProviderIdentity(self.provider, subject, thread)
+
+
+# Codex app-server may supply threadId alone; sessionId/callId are optional
+# context and never participate in the identity. This is evidence, not auth.
+CODEX_IDENTITY_ADAPTER = PrincipalThreadIdentityAdapter("codex", "threadId")
+
+
+class ProviderIdentityRegistry:
+    """Explicit source namespace allowlist; metadata cannot grant permissions."""
+
+    def __init__(
+        self,
+        adapters: tuple[ProviderIdentityAdapter, ...] = (
+            OPENAI_IDENTITY_ADAPTER,
+            CODEX_IDENTITY_ADAPTER,
+        ),
+    ):
         configured: dict[str, ProviderIdentityAdapter] = {}
         for adapter in adapters:
             if not isinstance(adapter, ProviderIdentityAdapter):
@@ -143,11 +178,22 @@ class ProviderIdentityRegistry:
             configured[provider] = adapter
         self._adapters = MappingProxyType(configured)
 
-    def resolve(self, provider: str, metadata: Mapping[str, object]) -> ProviderIdentity:
+    def resolve(
+        self,
+        provider: str,
+        metadata: Mapping[str, object],
+        *,
+        principal_id: str | None = None,
+    ) -> ProviderIdentity:
         adapter = self._adapters.get(provider)
         if adapter is None:
             raise ProviderIdentityError("identity_provider_unsupported")
-        identity = adapter.resolve(metadata)
+        # Retain the existing public adapter protocol: third-party metadata
+        # adapters accept only metadata. Principal-backed adapters opt in.
+        if isinstance(adapter, PrincipalThreadIdentityAdapter):
+            identity = adapter.resolve(metadata, principal_id=principal_id)
+        else:
+            identity = adapter.resolve(metadata)
         if not isinstance(identity, ProviderIdentity) or identity.provider != provider:
             raise ProviderIdentityError("identity_adapter_invalid")
         return identity

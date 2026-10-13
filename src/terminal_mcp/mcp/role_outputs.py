@@ -19,6 +19,7 @@ from pydantic import (
 )
 
 from terminal_mcp.adapters.mcp_identity import current_provider_evidence
+from terminal_mcp.core.persistent_admission import current_admission_context
 from terminal_mcp.core.provider_identity import ProviderIdentityRegistry
 from terminal_mcp.core.public_errors import (
     ErrorOutcome,
@@ -88,7 +89,12 @@ def session_provider_fingerprint() -> dict | None:
     if evidence is None:
         return None
     try:
-        identity = ProviderIdentityRegistry().resolve(evidence.provider, evidence.metadata)
+        admission = current_admission_context()
+        identity = ProviderIdentityRegistry().resolve(
+            evidence.provider,
+            evidence.metadata,
+            principal_id=admission.principal_id if admission is not None else None,
+        )
         return {
             "provider": identity.provider,
             "binding_key": identity.binding_key,

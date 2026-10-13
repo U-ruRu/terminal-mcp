@@ -594,13 +594,15 @@ async def _health_identity(application, actor) -> dict:
     fields = sorted(
         key
         for key in actor.provider_metadata
-        if key in {"openai/subject", "openai/session", "openai/organization"}
+        if key in {"openai/subject", "openai/session", "openai/organization", "threadId"}
     )
     diagnostic = {"provider": actor.provider, "metadata_fields": fields, "status": "missing"}
     if actor.provider is None or not actor.provider_metadata:
         return diagnostic
     try:
-        evidence = ProviderIdentityRegistry().resolve(actor.provider, actor.provider_metadata)
+        evidence = ProviderIdentityRegistry().resolve(
+            actor.provider, actor.provider_metadata, principal_id=actor.principal_id
+        )
         diagnostic["binding_key"] = evidence.binding_key
         diagnostic["subject_fingerprint"] = hashlib.sha256(
             ("subject:" + evidence.subject).encode()

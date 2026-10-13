@@ -320,7 +320,9 @@ class MCPEventsAdapter:
         refresh_existing = False
         if name == "message.received":
             admission = current_admission_context()
-            provider_meta = provider_metadata_from_events(params)
+            provider_meta = provider_metadata_from_events(
+                params, principal_id=admission.principal_id if admission is not None else None
+            )
             existing = (
                 await self.store.message_subscription_binding(principal, arguments, callback)
                 if number is not None else None
