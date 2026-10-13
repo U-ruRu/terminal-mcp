@@ -186,6 +186,20 @@
           "sha256": "17adfbb52b20e2709c87b9e85b62522f935485330fee2a18eb81f1edd47ac57a"
         }
       ]
+    },
+    {
+      "url": "https://upstash.com/docs/redis/sdks/agentkit/mcp-events",
+      "sha256": "63ac1112ade73eae91935d75fa8f523713089fca6e6a4f948b9f3a4e55ef17c9",
+      "bytes": 406198,
+      "kind": "vendor_documentation",
+      "retrieved_at": "2026-10-13T05:53:20.534184+00:00"
+    },
+    {
+      "url": "https://upstash.com/blog/mcp-tasks-and-events",
+      "sha256": "360641b96d706e89cfb9ff562d33f514689881852e022101601cdece0d9653ae",
+      "bytes": 232208,
+      "kind": "vendor_documentation",
+      "retrieved_at": "2026-10-13T05:53:20.667625+00:00"
     }
   ],
   "node_dependencies": {

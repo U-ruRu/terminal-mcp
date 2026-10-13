@@ -1,0 +1,27 @@
+{
+  "reviewed_at": "2026-10-13T05:53:20.281891+00:00",
+  "reviewer": "primary-investigator",
+  "subject": "independent investigator report and receipts",
+  "verdict": "ACCEPTED_WITH_EXPLICIT_SCOPE_LIMITS",
+  "files": {
+    "REPORT.md": "64547cdbfbacd8dc50c021c0ae26417b0ca905dd72ff247e5440e8d3e1bc07a8",
+    "independent-https-rerun.json": "64fe93c106a4b2164d4ce84be0bcde0514b7b1aad4b8458af2368724c275247d",
+    "independent-review.json": "dc1b9f6abeca949b7607f10dcf41ea4b86eff860bafaac45618ffd46b2b4fac7",
+    "reference-cli-independent-review.json": "938b63da79ef2b6055731d5fbbc978e8e139ded431e7e4f8a2e7185427b61d2b"
+  },
+  "checked": [
+    "read complete peer report",
+    "recomputed body SHA256 for all six TLS captures",
+    "matched eventId to webhook-id",
+    "verified six application data fields per event",
+    "distinct independent rerun and later CLI review snapshots",
+    "real loopback TLS separated from live callback",
+    "Codex capability blocker separated from Work payload observation"
+  ],
+  "limits": [
+    "No fresh Work payload result confirmed in this review",
+    "IP/DNS/socket test facades do not prove production SSRF policy",
+    "Historical Work success is a receiver narrative without recovered raw tool block",
+    "No live reference sender is authorized"
+  ]
+}
