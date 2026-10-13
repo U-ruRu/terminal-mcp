@@ -102,6 +102,31 @@ Node отправляет те же три event objects. Итого шесть 
 результат проверки HMAC и ответы локального приёмника. **Его HTTP 200 — синтетический ответ,
 не ответ ChatGPT.** В JSON прямо записано `live_model_visibility_proven:false`.
 
+## Отдельный контроль штатного Node fetch из Upstash
+
+После основного сравнения выполнен ещё один локальный TLS POST: выбранные просмотренные
+тела `signWebhook` и `postSigned` из Upstash использовали настоящий Node 22 `fetch`.
+Преобразования TypeScript-сигнатур и базовые helpers выполнены только в тестовом harness;
+сервер Upstash, Redis и QStash не запускались. `upstash-fetch-result.json` сохраняет снимок.
+Входной исходник проверяется по закреплённому SHA256; адрес получателя строго loopback,
+сертификат проверяется временным CA, один запрос, рабочие секреты не используются.
+
+В этом пути наблюдаются дополнительные транспортные заголовки: `User-Agent: node`,
+`Accept: */*`, `Accept-Language: *`, `Sec-Fetch-Mode: cors`,
+`Accept-Encoding: br, gzip, deflate`, `Connection: keep-alive`.
+Тело, `Content-Length` и подпись проверены приёмником и корректны.
+**Утверждение о двух отличающихся заголовках относится только к первоначальным шести
+запросам с нашим безопасным HTTPS-адаптером, а не ко всем внешним транспортам.**
+Причинное влияние этих дополнительных заголовков на dot пока не проверено.
+
+Повторить дополнительный one-shot после подготовки sources:
+
+```sh
+node "$D/upstash_fetch_fixture.mjs" \
+  /tmp/tmcp-events-reviewed-sources/upstash/agentkit/packages/mcp-toolkit/src/events/webhooks.ts \
+  /tmp/tmcp-events-upstash-fetch.json
+```
+
 ## Дополнительная диагностическая утилита
 
 `reference_sender.mjs` подготовлен для потенциального согласованного one-shot опыта, но

@@ -22,6 +22,7 @@ wanted = {
     "hookdeck/mcp-events-bridge/src/core/sign.ts",
     "rokrokss/recly/experiments/dot-probe/probe.mjs",
     "openai-mcp-events.md",
+    "upstash/agentkit/packages/mcp-toolkit/src/events/webhooks.ts",
 }
 for source in manifest["sources"]:
     entries = (

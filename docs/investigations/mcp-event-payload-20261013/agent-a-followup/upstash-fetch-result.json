@@ -1,0 +1,37 @@
+{
+  "result": "PASS",
+  "captured_at": "2026-10-13T05:56:33.291Z",
+  "scope": "selected reviewed Upstash function bodies, actual Node fetch over local TLS; helpers supplied by fixture",
+  "public_source_sha256": "1e4137cd989afccc7fd9bd27df0b1f5c37b585e274a43aae9d863e5d15bc2d4d",
+  "functions": {
+    "status": 200,
+    "sign_body_sha256": "b92c9c46a73f997266602c4e55bca6aa0cdbed4895bdadfe5bfb3d1bfc5832a2",
+    "post_body_sha256": "80cbc897e095a7ea60af33c2e290df630aa56d36aa7fb558e45e43440993a65d"
+  },
+  "capture": {
+    "headers": {
+      "host": "127.0.0.1:35767",
+      "connection": "keep-alive",
+      "content-type": "application/json",
+      "x-mcp-subscription-id": "sub_fixture",
+      "webhook-id": "evt_fetch_fixture",
+      "webhook-timestamp": "1791870993",
+      "webhook-signature": "<redacted:verified>",
+      "accept": "*/*",
+      "accept-language": "*",
+      "sec-fetch-mode": "cors",
+      "user-agent": "node",
+      "accept-encoding": "br, gzip, deflate",
+      "content-length": "340"
+    },
+    "body_utf8": "{\"eventId\":\"evt_fetch_fixture\",\"name\":\"message.received\",\"timestamp\":\"2026-10-13T05:56:33.000Z\",\"data\":{\"server\":\"fixture\",\"sender\":\"Fixture-Sender\",\"recipient\":\"Fixture-Recipient\",\"message_id\":\"fixture:fetch\",\"text\":\"Кавычки \\\"тест\\\", перенос\\nстроки ✓ 😀\",\"timestamp\":\"2026-10-13T05:56:33.000Z\"},\"cursor\":null}",
+    "body_sha256": "f0dc7b1f0f41df6166b5081fea973c0dba5086630e32aaee87f4aeaedf7263cd",
+    "tls_version": "TLSv1.3"
+  },
+  "response": {
+    "status": 200,
+    "origin": "local_fixture"
+  },
+  "live_model_visibility_proven": false,
+  "production_callbacks": 0
+}
