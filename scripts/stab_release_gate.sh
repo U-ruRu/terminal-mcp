@@ -48,7 +48,18 @@ else
   out="$(realpath -e "$out")"
 fi
 case "$out/" in "$repo/"*) echo "BLOCKED: gate artifacts must stay outside source checkout" >&2; exit 2 ;; esac
-mkdir -p "$out/tmp"
+# Use a private short-lived path: long release artifact names can break Unix sockets.
+gate_tmp="$(mktemp -d /tmp/tmcp-gate-data-XXXXXXXX)"
+# Preserve release receipts/logs; discard all test temp files, including tempfile roots.
+# To diagnose a specific failed gate, explicitly set TMCP_GATE_KEEP_TEST_STATE=1.
+cleanup_gate_tmp() {
+  if [[ "${TMCP_GATE_KEEP_TEST_STATE:-0}" != "1" ]]; then
+    rm -rf --one-file-system -- "$gate_tmp"
+  else
+    echo "preserved_test_tmp=$gate_tmp"
+  fi
+}
+trap cleanup_gate_tmp EXIT
 exec > >(tee "$out/driver.log") 2>&1
 
 echo "mode=$mode collect_only=$collect"
@@ -56,6 +67,7 @@ echo "source_repo=$repo"
 echo "source_sha=$actual_sha"
 echo "started_utc=$(date -u +%FT%TZ)"
 echo "output=$out"
+echo "test_tmp=$gate_tmp"
 echo "python=$python_bin"
 env PYTHONNOUSERSITE=1 "$python_bin" -c 'import sys,sqlite3,pytest; print("python_version="+sys.version.split()[0]); print("sqlite_abi="+sqlite3.sqlite_version); print("pytest_version="+pytest.__version__)' | tee "$out/runtime.txt"
 sqlite_abi="$(env PYTHONNOUSERSITE=1 "$python_bin" -c 'import sqlite3; print(sqlite3.sqlite_version)')"
@@ -112,11 +124,11 @@ export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 export TMPDIR="$out/tmp"
 export PYTEST_ADDOPTS=""
 cd "$repo"
-pytest_flags=(-p no:cacheprovider -q -ra --tb=short "--basetemp=$out/tmp/pytest")
+pytest_flags=(-p no:cacheprovider -q -ra --tb=short "--basetemp=$gate_tmp/pytest")
 if (( collect )); then pytest_flags+=(--collect-only); fi
 echo "run=timeout 420s $python_bin -m pytest [${#targets[@]} existing test modules]"
 set +e
-timeout --signal=TERM --kill-after=10s 420s "$python_bin" -m pytest "${pytest_flags[@]}" "${targets[@]}" 2>&1 | tee "$out/pytest.log"
+timeout --signal=TERM --kill-after=10s 420s env TMPDIR="$gate_tmp" TMP="$gate_tmp" TEMP="$gate_tmp" "$python_bin" -m pytest "${pytest_flags[@]}" "${targets[@]}" 2>&1 | tee "$out/pytest.log"
 rc=${PIPESTATUS[0]}
 set -e
 after_sha="$(git -C "$repo" rev-parse HEAD)"

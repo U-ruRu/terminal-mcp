@@ -66,9 +66,19 @@ A fixture or helper invoked inside the test body remains part of pytest's call p
 `--sample` enables a 50 ms read-only stack sampler. Samples from different threads
 may overlap and are not additive elapsed time. Use identical instrumentation for
 comparisons. `--fresh-preparation` exercises the original preparation paths without
-selecting fewer tests. `--keep-state` retains successful run data for diagnosis;
-otherwise only that run's successful temporary state is removed. Failed or timed-out
-run state is retained, and existing report directories are never overwritten.
+selecting fewer tests. `--keep-state` retains the complete run state for diagnosis;
+otherwise the isolated test-state directory is removed after every run (pass, fail or
+timeout).
+Pytest removes passed tests' tmp_path files at teardown. The runner directs TMPDIR,
+TMP and TEMP into the isolated test state, then removes that entire state on completion.
+Use
+`--keep-state` only for an explicit debugging run; it preserves per-test directories.
+Structured receipts, JUnit XML, profiles and pytest logs remain in the separate report
+directory after cleanup, and existing report directories are never overwritten.
+The source-only release gate (scripts/stab_release_gate.sh) cleans its isolated pytest
+and tempfile directories after any completed gate, keeping driver.log, pytest.log,
+runtime.txt and RESULT.txt. Set TMCP_GATE_KEEP_TEST_STATE=1 explicitly to preserve
+a gate's test databases for incident reproduction.
 
 The `node` command uses the supported HTTPX client and performs only `GET /health/live`
 with bounded timeouts. It verifies liveness and the public release string, rejects URL

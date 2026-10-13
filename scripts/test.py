@@ -79,6 +79,10 @@ def isolate(root: Path, data: Path, output: Path) -> dict[str, str]:
             "PYTHONPATH": os.pathsep.join((str(root / "src"), str(root / "scripts"))),
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",
+            # Capture any tempfile.TemporaryDirectory/mkdtemp calls in the isolated run.
+            "TMPDIR": str(data),
+            "TMP": str(data),
+            "TEMP": str(data),
             "TMCP_PROFILE_PATH": str(output / "profile.json"),
             "TMCP_PREPARATION_STATS_PATH": str(output / "preparation.json"),
         }
@@ -174,6 +178,42 @@ def run(args: argparse.Namespace, plan: dict, root: Path = ROOT) -> int:
         output.mkdir(parents=True, exist_ok=False)
     # Test state has short, private paths for real Unix sockets and separate SQLite files.
     data = Path(tempfile.mkdtemp(prefix="tmcp-tests-"))
+    try:
+        return _run_isolated(args, plan, root, sha, dirty, output, data)
+    except BaseException as exc:
+        # Keep a usable receipt if the runner crashes outside normal pytest result handling.
+        receipt_path = output / "report.json"
+        if receipt_path.is_file():
+            try:
+                receipt = json.loads(receipt_path.read_text())
+                receipt.update(
+                    state="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
+                    finished_at=dt.datetime.now(dt.UTC).isoformat(),
+                    error_type=type(exc).__name__,
+                    full_test_evidence_eligible=False,
+                    state_retained=bool(args.keep_state),
+                    verdict="failed",
+                )
+                receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+            except (OSError, ValueError):
+                pass
+        raise
+    finally:
+        # Cleanup applies to pass, fail, timeout, exceptions and KeyboardInterrupt.
+        # Report files live outside data; retain test databases only on explicit opt-in.
+        if not args.keep_state:
+            shutil.rmtree(data)
+
+
+def _run_isolated(
+    args: argparse.Namespace,
+    plan: dict,
+    root: Path,
+    sha: str,
+    dirty: str,
+    output: Path,
+    data: Path,
+) -> int:
     env = isolate(root, data, output)
     env["TMCP_PROFILE_SAMPLE"] = "1" if args.sample else "0"
     command = [
@@ -191,6 +231,9 @@ def run(args: argparse.Namespace, plan: dict, root: Path = ROOT) -> int:
 
     if args.fresh_preparation:
         command.append("--fresh-preparation")
+    if args.keep_state:
+        # Explicit diagnostics must preserve pytest per-test files, too.
+        command.extend(("-o", "tmp_path_retention_policy=all"))
 
     def now():
         return dt.datetime.now(dt.UTC).isoformat()
@@ -267,10 +310,7 @@ def run(args: argparse.Namespace, plan: dict, root: Path = ROOT) -> int:
         and not full_test_evidence_eligible
     ):
         exit_code = 4
-    retained = True
-    if exit_code == 0 and not args.keep_state:
-        shutil.rmtree(data)
-        retained = False
+    retained = bool(args.keep_state)
     report.update(
         state="completed" if exit_code != 124 else "timeout",
         exit_code=exit_code,
@@ -330,7 +370,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument(
-        "--keep-state", action="store_true", help="Keep successful run state for diagnostics"
+        "--keep-state",
+        action="store_true",
+        help="Preserve isolated test databases on any outcome for debugging",
     )
     parser.add_argument(
         "--sample", action="store_true", help="Include a read-only frame sampler in the profile"
