@@ -1,0 +1,321 @@
+{
+  "access_mesh": true,
+  "contract_version": 1,
+  "roles": {
+    "access": {
+      "endpoint": "/terminal-mcp/access/v1/mcp",
+      "tools": [
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "session",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "ad65cbe81e04672c5b25d30bc67d46d42967016c971c82a158bf9be6b3f5da18",
+          "runtime_output_digest": "c7e8dabf7d2d08af4fa160a434733c0d8cbb3aa90ca90fcba40e32ed35c64d63"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "get_events",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "bb540a5a6f35027a9698b1418e2786abbd8f6af7c4e14d8109681052ddb50519",
+          "runtime_output_digest": "2b4ec4289a48c7a8b6cded14512404a76430a60ff04782244ae14675bed11d94"
+        }
+      ]
+    },
+    "coordinator": {
+      "endpoint": "/terminal-mcp/coordinator/v1/mcp",
+      "tools": [
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "session",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
+          "runtime_output_digest": "b760ea6cb86ba05037a655b9cb3418e4a0a3bb17a5b8a27d2f9ff09c070a3c07"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "task_get",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "1ec60342dc6d68a475187132f78f7711791d0e7acccf4f7dd1994572d59c42fe",
+          "runtime_output_digest": "e435c757accaaf882ac54947a75bdf15bdf0175027c46b94b0e6c757d305e6fa"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "task_list",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
+          "runtime_output_digest": "b69647ba6a614931ad3fadac2e761cf9afce91e3badc95519278ec5e5f7290e7"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "task_manage",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "dac0417375adab7c6951517317975ac95efb2bbad9f309957b9cad399408ff8d",
+          "runtime_output_digest": "8315433084e0cd8cf0d51026d43606fdee03972ca01afb815d789b3b80d1705f"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "task_graph",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "809e8474ffcd4d62a05127feb7e46a4150668886bd382cd9a68ac6171c511fb6",
+          "runtime_output_digest": "a77634d5e8b7fb61d74385374a276e64fd1a615a328de07d5db7466c25f70a37"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "agent_observe",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "81581d2ab243c53902f1e33d6bd27df82a28a7f40f3bb979cdf3bdd02b265535",
+          "runtime_output_digest": "3c0b19dd2261ee357c72829d3a365340e11f1dfa7177a470daf04ce20acd43d5"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "message",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+          "runtime_output_digest": "7820762f16b6d382d68bb3f1c5901e75bfe07403b0335b56705b52c1242319f6"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "health",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "17d38729a6c5ad31ec824d4f99e2da4af4ff1d8e423af3894a90ec180d5c72eb",
+          "runtime_output_digest": "5e5e2309f0a40b526675b91a86ed3cf1f6a4f9f5ce4fbf70e285ee434119a9e4"
+        }
+      ]
+    },
+    "executor": {
+      "endpoint": "/terminal-mcp/executor/v1/mcp",
+      "tools": [
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "session",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "aeb829dd18cc8eeb9cc5031eae5f8de062f17357084a9e122943b71371182f6e",
+          "runtime_output_digest": "b760ea6cb86ba05037a655b9cb3418e4a0a3bb17a5b8a27d2f9ff09c070a3c07"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "task_list",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "f519aae8458859a2de6bf5278d47628e89da00dfdb9877328cf86711c8175f6b",
+          "runtime_output_digest": "b69647ba6a614931ad3fadac2e761cf9afce91e3badc95519278ec5e5f7290e7"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "name": "command_run",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "390368c4b1e019241027cc9e6f81be36a7d8bc0f1a681d91a9a148ac2a917f34",
+          "runtime_output_digest": "e4fd539aaf5e270310687d6be1017c6ae4be4dbbb7913706b59e5bd167ba87b9"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "name": "command_read",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "6caae35abafd494d83e6ac8491a7018504df059cad5539697582a8f95c236693",
+          "runtime_output_digest": "0fc3dd3295ace336a4b64464c6a046c97476860442c123e76805f1eac470bc62"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "command_cancel",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "ce6a6cfd03abc5e58c257830b53ead6a8c0ee92904e04122fab8a6060215f17e",
+          "runtime_output_digest": "4d0c0d1a077b8090f043dccdf60659f88df7e8bf5eecde42548cf03bef6c0ae3"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "name": "command_recovery",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "f3d4ddec602554f8b7ff9dde905d4234add388b7c5d7546f488a75b13bbd1c4f",
+          "runtime_output_digest": "4d0c0d1a077b8090f043dccdf60659f88df7e8bf5eecde42548cf03bef6c0ae3"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "task_claim",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "4b41ec52fee1ae5723990c059501c3a2d5d4a332d9eb746dca0906884bdf4252",
+          "runtime_output_digest": "d7d6d69d4dd78edd4d43f1b116ad00449cb54e21ad6f53d82f6fe34f6adb8beb"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "task_state",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "7d6cff95da5f4468fe451627d70490c1ffa40cd27755e9f531dfbc0a66acce1d",
+          "runtime_output_digest": "cee11de4a8466be1505a7a27726879c5273db7d2f4476c659e6d8c7878edab88"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "task_comment",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "947fa128f5f553c22321bd7d86845b374dac515d1dcd97a0146c4652493e9039",
+          "runtime_output_digest": "097732bcc089a4bd8473301b87b0706f48e3fc72e187fe35e8dba3f8fcdaa2d1"
+        },
+        {
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "name": "message",
+          "planning_input_bytes": 17,
+          "planning_input_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "planning_output_bytes": 17,
+          "planning_output_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+          "runtime_input_digest": "6ca151e55605b1fa0b4b7a1c7ea0034d6016e47aff8982e710c167d669f3f2f7",
+          "runtime_output_digest": "7820762f16b6d382d68bb3f1c5901e75bfe07403b0335b56705b52c1242319f6"
+        }
+      ]
+    }
+  }
+}

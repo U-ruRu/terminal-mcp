@@ -87,18 +87,11 @@ def test_access_endpoints_auth_metadata_and_exact_role_catalogs(tmp_path):
             tools = result.json()["result"]["tools"]
             assert len(tools) == count
             for tool in tools:
-                schema = tool["inputSchema"]
-                assert schema["type"] == "object"
-                if role in {"executor", "coordinator"} and tool["name"] == "session":
-                    assert "required" not in schema
-                    assert "allOf" in schema
-                    assert schema["properties"]["action"]["enum"] == ["attach", "intent"]
-                elif role == "executor" and tool["name"] == "task_state":
-                    # The public state mutation has precisely three required inputs.
-                    assert set(schema["required"]) == {"namespace", "task_id", "state"}
-                    assert set(schema["properties"]) == {"namespace", "task_id", "state"}
-                else:
-                    assert "required" not in schema
+                assert tool["inputSchema"] == {"type": "object"}
+                assert tool["outputSchema"] == {"type": "object"}
+                assert "Arguments" in tool["description"]
+                assert "Returns" in tool["description"]
+                assert "Errors" in tool["description"]
             public = client.get(f"/.well-known/oauth-protected-resource/terminal-mcp/{role}/v1/mcp")
             assert public.status_code == 200
             assert public.json()["resource"].endswith(f"/terminal-mcp/{role}/v1/mcp")

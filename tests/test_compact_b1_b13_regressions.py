@@ -72,21 +72,17 @@ def allows_transport(role, tool, args):
     return Draft202012Validator(item(role, tool)["inputSchema"]).is_valid(args)
 
 
-def test_B11_all_19_transport_schemas_are_nonblocking_but_server_strict_is_preserved():
-    assert sum(len(tools) for tools in FUTURE.values()) == 19
+def test_B11_all_20_transport_schemas_are_nonblocking_but_server_strict_is_preserved():
+    assert sum(len(tools) for tools in FUTURE.values()) == 20
     for role, tools in FUTURE.items():
         for name, entry in tools.items():
             public = entry["inputSchema"]
             exact = SOURCE[f"{role}.{name}"]["inputSchema"]
-            assert public["type"] == "object"
-            assert public.get("additionalProperties") is True
-            assert not public.get("required")
-            assert set(public["properties"]) == set(exact.get("properties", {}))
-            assert all(field == {} for field in public["properties"].values())
-            assert "oneOf" not in public and "anyOf" not in public and "allOf" not in public
-            assert "$defs" not in public
-            assert "Transport" in public["description"]
-            assert "server" in entry["description"].lower()
+            assert public == {"type": "object"}
+            assert entry["outputSchema"] == {"type": "object"}
+            assert "Arguments" in entry["description"]
+            assert "Returns" in entry["description"]
+            assert "Errors" in entry["description"]
             Draft202012Validator.check_schema(public)
             Draft202012Validator.check_schema(exact)
             assert allows_transport(role, name, {"made_up_field": ["text", False]})

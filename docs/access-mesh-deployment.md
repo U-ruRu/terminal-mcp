@@ -4,7 +4,7 @@ Release contract: **0.14.4**. This procedure targets **FirstByte and BacLOUD onl
 
 ## 1. Freeze the candidate and prepare recovery
 
-Freeze one immutable release SHA after integrating runtime, task ownership/receipts, messaging, metadata and documentation. Run the complete regression suite, Ruff and the repository privacy check on that SHA. Verify the packaged `dist/terminal-operations.skill` matches both source files and the effective schema manifest exposes Access1/Executor10/Coordinator8.
+Freeze one immutable release SHA after integrating runtime, task ownership/receipts, messaging, metadata and documentation. Run the complete regression suite, Ruff and the repository privacy check on that SHA. Verify the packaged `dist/terminal-operations.skill` matches both source files and the effective schema manifest exposes Access2/Executor10/Coordinator8.
 
 Record each target's current version/SHA, active release path, deployment mode, service units, config ownership, public origins and current health. Stage release files separately from the active release. Preserve permissions for `/etc/terminal-mcp/terminal-mcp.env` and all secret-bearing configuration; keep secrets out of command output and evidence attachments.
 
@@ -55,7 +55,7 @@ Use independent trusted connector identities for independent agents. Use disposa
 
 | Area | Native checks on FirstByte and BacLOUD |
 | --- | --- |
-| Discovery | Access1, Executor10, Coordinator8 at the exact three paths; permissive input planning, strict runtime repair, real annotations/action matrix and bounded outputs. |
+| Discovery | Access2, Executor10, Coordinator8 at the exact three paths; object-only input/output schemas, strict runtime repair, real annotations/action matrix and bounded outputs. |
 | Both issuers | Create a legacy slot from each Access; operator-provision and activate persistent; attach the returned issuer/session number once to both roles/nodes. Same code digits from different issuers resolve independently. Wrong issuer, code or binding fails before effects. |
 | Lifecycle | Duration/cooldown/rearm; warning/draining; deadline shortening/extension; end; suspend/resume; rotate/delete; new local epoch and exact execution/claim cleanup. Test a short disposable policy instead of modifying production agents. |
 | Task ownership | Claim preserves ready; explicit state enters in_progress; release and expiry preserve each explicit state/checkpoint/result. Legacy releases at end; persistent release_on_end behavior is explicit. Stale revision/owner, repeated cleanup and successor-claim races leave correct ownership and atomic receipts. |

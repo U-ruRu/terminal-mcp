@@ -21,7 +21,9 @@ from jsonschema import Draft202012Validator
 from terminal_mcp.mcp.access import build_access_mcp
 from terminal_mcp.mcp.access_contracts import (
     AttachInput,
+    GetEventsInput,
     IssuerSessionInput,
+    MeshAgentObserveInput,
     MeshCommandReadInput,
     MeshMessageInput,
     MeshTaskCommentInput,
@@ -46,6 +48,8 @@ SOURCE_FILES = (
     "src/terminal_mcp/mcp/schema_manifest.py",
     "src/terminal_mcp/application/task_requests.py",
     "src/terminal_mcp/core/public_errors.py",
+    "src/terminal_mcp/mcp/input_admission.py",
+    "src/terminal_mcp/mcp/agent_contracts.py",
     "scripts/build_compact_catalogs.py",
     "pyproject.toml",
 )
@@ -535,24 +539,27 @@ def output_summary(schema: dict) -> str:
     return " | ".join(entries)
 
 
-def contract_models(role: str) -> dict[str, type]:
+def contract_models(role: str, *, mesh: bool = True) -> dict[str, type]:
     if role == "access":
-        return {"session": IssuerSessionInput}
+        return {"session": IssuerSessionInput, "get_events": GetEventsInput}
     models = {name: model for (r, name), model in ROLE_TOOL_MODELS.items() if r == role}
-    models["session"] = AttachInput
-    models["message"] = MeshMessageInput
-    if role == "executor":
-        models["command_read"] = MeshCommandReadInput
-        models["task_comment"] = MeshTaskCommentInput
+    if mesh:
+        models["session"] = AttachInput
+        models["message"] = MeshMessageInput
+        if role == "coordinator":
+            models["agent_observe"] = MeshAgentObserveInput
+        if role == "executor":
+            models["command_read"] = MeshCommandReadInput
+            models["task_comment"] = MeshTaskCommentInput
     return models
 
 
-def servers() -> dict:
-    mesh = SimpleNamespace(persistent=None, access_mesh=object())
+def servers(*, mesh: bool = True) -> dict:
+    service = SimpleNamespace(persistent=None, access_mesh=object() if mesh else None)
     return {
-        "access": build_access_mcp(SimpleNamespace(service=mesh)),
-        "executor": build_role_mcp(mesh, "executor"),
-        "coordinator": build_role_mcp(mesh, "coordinator"),
+        "access": build_access_mcp(SimpleNamespace(service=service), publish_agent_contract=False),
+        "executor": build_role_mcp(service, "executor", publish_agent_contract=False),
+        "coordinator": build_role_mcp(service, "coordinator", publish_agent_contract=False),
     }
 
 
@@ -661,26 +668,8 @@ def action_contracts(role: str, name: str, properties: dict) -> tuple[list[str],
 
 
 def transport_input_schema(strict_schema: dict, effective_before: dict) -> dict:
-    """Advertise field names, not business assertions. All validation reaches the server.
-
-    MCP tools require an object schema; a non-object JSON RPC arguments payload
-    can still be rejected at the protocol layer. Unknown keys must pass through.
-    """
-    properties = strict_schema.get("properties", {})
-    output = {
-        "type": "object",
-        "description": (
-            "Transport envelope only. Every named argument is advisory; server "
-            "validates strict types, required fields, action restrictions and bounds "
-            "and returns bounded structured errors."
-        ),
-        "properties": {name: {} for name in properties},
-        "additionalProperties": True,
-    }
-    matrix = effective_before.get("x-terminal-mcp-action-matrix")
-    if matrix is not None:
-        output["x-terminal-mcp-action-matrix"] = copy.deepcopy(matrix)
-    return output
+    """Only MCP's object envelope is public. Runtime validators remain authoritative."""
+    return {"type": "object"}
 
 
 def compile_tool(
@@ -708,25 +697,22 @@ def compile_tool(
     # object envelope is advisory. Strict input stays in the source sidecar
     # and remains exactly the existing FastMCP runtime boundary.
     published["inputSchema"] = transport_input_schema(strict_input, item["inputSchema"])
-    # Keep the existing SDK-compatible flat outputSchema; exact nested output
-    # is a separately published, checked fallback and visible in coverage.
+    published["outputSchema"] = {"type": "object"}
+    # Precise runtime output models remain the authoritative checked sidecar.
     action_lines, action_coverage = action_contracts(role, item["name"], props)
     local_defs = renderer.definitions()
     lines = [
         item.get("description") or "",
-        "The public inputSchema is a permissive transport envelope (names only); "
-        "all conditions below are enforced by the server with compact structured errors.",
-        "Arguments (field? means optional; Type? means nullable): "
+        "Arguments (field? optional; Type? nullable): "
         + ("; ".join(fields) if fields else "(none)")
         + ".",
-        "The server rejects unknown fields, invalid types, values, bounds and alternatives.",
     ]
     if local_defs:
-        lines.append("Referenced input types: " + "; ".join(local_defs) + ".")
+        lines.append("Types used by " + item["name"] + " only: " + "; ".join(local_defs) + ".")
     if action_lines:
-        lines.append("Server action field policy: " + "; ".join(action_lines) + ".")
+        lines.append("rules (per action): " + "; ".join(action_lines) + ".")
     if conds:
-        lines.append("Conditions: " + "; ".join(conds) + ".")
+        lines.append("rules (schema): " + "; ".join(conds) + ".")
     if notes:
         # Distinguish per-action post-schema runtime gates from general rules;
         # keep each source anchor in the generated coverage provenance.
@@ -734,11 +720,13 @@ def compile_tool(
             (f"action={note['action']}: " if note.get("action") else "") + note["text"]
             for note in notes
         ]
-        lines.append("Runtime rules: " + "; ".join(rendered_rules) + ".")
+        lines.append("rules (server): " + "; ".join(rendered_rules) + ".")
     lines.append("Returns: " + output_summary(strict_output) + ".")
     lines.append(
-        "Errors: input_validation_failed is a structured public error; "
-        "see exact strict output schema fallback for error shapes/codes."
+        "Errors: input_validation_failed (types, fields, values, conditions); "
+        "input_admission_failed (oversize/complex input); unchanged authorization and "
+        "domain errors in error.code. Validation failures return structuredContent "
+        "{ok:false,error:{code,reason,path,expected?},outcome:not_committed}."
     )
     published["description"] = "\n".join(lines)
     strict = {"inputSchema": strict_input, "outputSchema": strict_output}
@@ -772,13 +760,13 @@ def compile_tool(
     return published, strict, coverage
 
 
-async def generate() -> tuple[dict, dict, dict, dict]:
+async def generate(*, mesh: bool = True) -> tuple[dict, dict, dict, dict]:
     sources, after, coverage, before = {}, {}, {}, {}
     notes = _annotations()
-    built = servers()
+    built = servers(mesh=mesh)
     for role in ROLE_NAMES:
         server = built[role]
-        names = contract_models(role)
+        names = contract_models(role, mesh=mesh)
         base_tools = [
             t.model_dump(mode="json", by_alias=True, exclude_none=True)
             for t in await server.list_tools()

@@ -81,10 +81,10 @@ def test_primary_docs_include_exact_public_contracts() -> None:
     legacy = _tool_names("src/terminal_mcp/mcp/server.py")
     access = _tool_names("src/terminal_mcp/mcp/access.py")
     assert legacy == ("session", "observe", "message", "task", "cmd", "context", "health")
-    assert access == ("session",)
+    assert access == ("session", "get_events")
     assert len(EXECUTOR_TOOLS) == 10 and len(COORDINATOR_TOOLS) == 8
     manifest = json.loads(
-        (ROOT / "src/terminal_mcp/mcp/access_mesh_schema_baselines_v2.json").read_text()
+        (ROOT / "src/terminal_mcp/mcp/access_mesh_schema_baselines_knowledge_v1.json").read_text()
     )
     roles = {"access": access, "executor": EXECUTOR_TOOLS, "coordinator": COORDINATOR_TOOLS}
     for path in CURRENT_DOCS:
@@ -97,7 +97,7 @@ def test_primary_docs_include_exact_public_contracts() -> None:
             assert manifest["roles"][role]["endpoint"] == endpoint
             assert tuple(tool["name"] for tool in manifest["roles"][role]["tools"]) == expected
         assert "attach-only" in text, path
-        assert "permissive planning schemas" in text, path
+        assert "object-only agent schemas" in text, path
         assert "Planned public contracts" not in text, path
 
 

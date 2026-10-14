@@ -7,102 +7,28 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Start an Access session and obtain its four-digit session_number, or end the current session.\nThe public inputSchema is a permissive transport envelope (names only); all conditions below are enforced by the server with compact structured errors.\nArguments (field? means optional; Type? means nullable): action:\"start\"|\"end\".\nThe server rejects unknown fields, invalid types, values, bounds and alternatives.\nRuntime rules: start issues a four-digit session_number; end ends the shared access cycle.\nReturns: IssuerStartReceipt{ok:true,session_number:string} | IssuerEndReceipt{ok:true} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,cmd_hash?:union}.\nErrors: input_validation_failed is a structured public error; see exact strict output schema fallback for error shapes/codes.",
+      "description": "Start an Access session and obtain its four-digit session_number, or end the current session.\nArguments (field? optional; Type? nullable): action:\"start\"|\"end\".\nrules (server): start issues a four-digit session_number; end ends the shared access cycle.\nReturns: IssuerStartReceipt{ok:true,session_number:string} | IssuerEndReceipt{ok:true} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,outcome?:union,cmd_hash?:union}.\nErrors: input_validation_failed (types, fields, values, conditions); input_admission_failed (oversize/complex input); unchanged authorization and domain errors in error.code. Validation failures return structuredContent {ok:false,error:{code,reason,path,expected?},outcome:not_committed}.",
       "inputSchema": {
-        "additionalProperties": true,
-        "description": "Transport envelope only. Every named argument is advisory; server validates strict types, required fields, action restrictions and bounds and returns bounded structured errors.",
-        "properties": {
-          "action": {}
-        },
-        "type": "object",
-        "x-terminal-mcp-action-matrix": {
-          "end": {
-            "destructiveHint": true,
-            "idempotentHint": true,
-            "openWorldHint": false,
-            "readOnlyHint": false,
-            "x-openai-isConsequential": true
-          },
-          "start": {
-            "destructiveHint": false,
-            "idempotentHint": false,
-            "openWorldHint": false,
-            "readOnlyHint": false,
-            "x-openai-isConsequential": true
-          },
-          "status": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": false,
-            "readOnlyHint": true,
-            "x-openai-isConsequential": false
-          }
-        }
+        "type": "object"
       },
       "name": "session",
       "outputSchema": {
-        "properties": {
-          "cmd_hash": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "error": {
-            "type": "object"
-          },
-          "intent_warning": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "messages": {
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "messages_remaining": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "ok": {
-            "type": "boolean"
-          },
-          "postcommit_warning": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "provider_identity": {
-            "type": [
-              "null",
-              "object"
-            ]
-          },
-          "return_to_chat": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "session_number": {
-            "type": "string"
-          },
-          "warnings": {
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "ok"
-        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Read this agent's unconsumed MCP Events, oldest first, and mark returned events read. With event_id, return one owned event even if read; show_read=true includes previously read events. No agent ID or subscription ID is needed: identity comes from the Access binding.\nArguments (field? optional; Type? nullable): event_id?:string(0..36) (pattern=\"^evt_[0-9a-f]{32}$\")? (default=null); limit?:int (>=1; <=20; default=20); cursor?:string(1..512)? (default=null); show_read?:boolean (default=false).\nrules (server): event_id and cursor are mutually exclusive; event_id selects one owned event even if already read; without event_id, consume up to limit (1..20) events, ordered oldest first.\nReturns: AccessEventsReceipt{ok:true,events:array,next_cursor:union,has_more:boolean} | RoleFailure{messages_remaining?:union,messages?:union,warnings?:union,postcommit_warning?:union,return_to_chat?:union,intent_warning?:union,ok:false,provider_identity?:union,error:RoleErrorBody,outcome?:union,cmd_hash?:union}.\nErrors: input_validation_failed (types, fields, values, conditions); input_admission_failed (oversize/complex input); unchanged authorization and domain errors in error.code. Validation failures return structuredContent {ok:false,error:{code,reason,path,expected?},outcome:not_committed}.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "get_events",
+      "outputSchema": {
         "type": "object"
       }
     }

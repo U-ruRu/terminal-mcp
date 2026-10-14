@@ -14,7 +14,9 @@ def test_all_role_outputs_are_flat_and_budgeted():
         (Path(__file__).parent / "fixtures/role_output_planning_bytes.json").read_text()
     )
     for role in ("executor", "coordinator"):
-        server = build_role_mcp(SimpleNamespace(persistent=None), role)
+        server = build_role_mcp(
+            SimpleNamespace(persistent=None), role, publish_agent_contract=False
+        )
         for tool in server._tool_manager.list_tools():
             schema = tool.output_schema
             Draft202012Validator.check_schema(schema)
@@ -47,7 +49,9 @@ async def test_planning_projection_preserves_strict_runtime_validation(monkeypat
         return {"ok": True, "tasks": [], "next_cursor": None}
 
     monkeypatch.setattr(roles, "_task_list", valid)
-    server = build_role_mcp(SimpleNamespace(persistent=None), "executor")
+    server = build_role_mcp(
+        SimpleNamespace(persistent=None), "executor", publish_agent_contract=False
+    )
     tool = server._tool_manager.get_tool("task_list")
     result = await tool.run({}, convert_result=True)
     assert result.isError is False

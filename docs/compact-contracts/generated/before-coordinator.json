@@ -116,6 +116,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -226,6 +232,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [
@@ -345,6 +357,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [
@@ -2833,6 +2851,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -2968,6 +2992,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -3078,6 +3108,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [
@@ -3283,6 +3319,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -3411,6 +3453,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [

@@ -102,21 +102,22 @@ def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
     with TestClient(app, base_url="https://terminal.example") as client:
         tools = rpc(client, "executor", "tools/list").json()["result"]["tools"]
         state_schema = next(item["inputSchema"] for item in tools if item["name"] == "task_state")
-        assert set(state_schema["properties"]) == {"namespace", "task_id", "state"}
-        assert set(state_schema["required"]) == {"namespace", "task_id", "state"}
-        assert "qa" in state_schema["properties"]["state"].get("enum", [])
+        assert state_schema == {"type": "object"}
+        assert "state" in next(
+            item["description"] for item in tools if item["name"] == "task_state"
+        )
         started = call(
             client, "access", "session", {"action": "start"}, conversation="state-creator"
         )
         number = started["session_number"]
         creator_id = app.state.access_mesh.store.numbers.winner(number)["logical_agent_id"]
         binding = {"session_number": number}
-        assert call(
-            client, "executor", "session", binding, conversation="state-creator"
-        ) == {"ok": True}
-        assert call(
-            client, "coordinator", "session", binding, conversation="state-creator"
-        ) == {"ok": True}
+        assert call(client, "executor", "session", binding, conversation="state-creator") == {
+            "ok": True
+        }
+        assert call(client, "coordinator", "session", binding, conversation="state-creator") == {
+            "ok": True
+        }
         dependency = call(
             client,
             "coordinator",
@@ -150,9 +151,7 @@ def test_executor_task_state_mcp_has_three_fields_and_minimal_result(tmp_path):
             app.state.service.task_store.get_task, "qa-mcp", "open-dependency"
         )
         assert dependency_row["state"] == "ready"
-        other = call(
-            client, "access", "session", {"action": "start"}, conversation="state-other"
-        )
+        other = call(client, "access", "session", {"action": "start"}, conversation="state-other")
         other_id = app.state.access_mesh.store.numbers.winner(other["session_number"])[
             "logical_agent_id"
         ]
@@ -317,7 +316,7 @@ def test_mesh_task_comment_public_minimal_success_and_duplicate(tmp_path):
             assert accepted == {"ok": True}
         catalog = rpc(client, "executor", "tools/list").json()["result"]["tools"]
         schema = next(x["inputSchema"] for x in catalog if x["name"] == "task_comment")
-        assert "expected_revision" not in schema["properties"]
+        assert schema == {"type": "object"}
 
 
 @pytest.mark.asyncio

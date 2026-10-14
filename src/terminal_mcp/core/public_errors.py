@@ -48,7 +48,8 @@ def _catalog() -> Mapping[str, ErrorSpec]:
             "validation",
             "repair",
             """
-            validation_error input_validation_failed invalid_request invalid_command invalid_queue
+            validation_error input_validation_failed input_admission_failed invalid_request
+            invalid_command invalid_queue
             invalid_mode invalid_state invalid_session_number invalid_session_attempt
             invalid_session_timestamp invalid_intent
             invalid_message_mode invalid_task_scope invalid_task_target invalid_cursor
@@ -287,6 +288,7 @@ def _catalog() -> Mapping[str, ErrorSpec]:
         ),
         "validation_error": "Correct the indicated request fields.",
         "input_validation_failed": "Correct the indicated request field.",
+        "input_admission_failed": "Reduce the input size or complexity and retry.",
         "identity_metadata_missing": (
             "The connector must supply openai/subject and openai/session in MCP request metadata."
         ),
@@ -469,8 +471,10 @@ class PublicError(_BoundedValue):
             )
         if (self.reason is None) != (self.path is None):
             raise ValueError("reason and path must be supplied together")
-        if self.reason is not None and self.code != "input_validation_failed":
-            raise ValueError("reason/path apply only to input_validation_failed")
+        if self.reason is not None and self.code not in {
+            "input_validation_failed", "input_admission_failed"
+        }:
+            raise ValueError("reason/path apply only to input validation/admission failures")
         expected_type = (
             CoordinationRepair
             if self.code in {"coordination_alert", "coordination_ack_required"}
@@ -497,7 +501,7 @@ PUBLIC_FIELDS = frozenset(
     resource_context cooperative candidate_ref input_refs output_refs checkpoint result
     blocker_reason force force_reason release_reason claim_intent comment_text relation_kind
     related_namespace related_task_id expected_revision dimensions verdict
-    evidence note archive_note isolation_hint history_kind extended
+    evidence note archive_note isolation_hint history_kind extended event_id show_read
 """.split()
 )
 

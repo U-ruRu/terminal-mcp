@@ -354,6 +354,7 @@ class RoleErrorBody(_Strict):
     retry: RecoveryAction
     reason: str | None = None
     path: str | None = None
+    expected: str | None = Field(default=None, max_length=96)
     return_to_chat: bool | None = None
 
 
@@ -361,6 +362,7 @@ class RoleFailure(OperationNotices):
     ok: Literal[False]
     provider_identity: ProviderFingerprint | None = None
     error: RoleErrorBody
+    outcome: ErrorOutcome | None = None
     cmd_hash: str | None = Field(default=None, min_length=1, max_length=128)
 
 
@@ -387,9 +389,28 @@ def role_error_result(raw: dict) -> CallToolResult:
         for key, value in canonical.items()
         if key not in {"ok", "error", "cmd_hash", "_meta"} | notice_keys
     }
+    input_failure = canonical["code"] in {"input_validation_failed", "input_admission_failed"}
+    if input_failure:
+        issues = (canonical.get("details") or {}).get("validation_errors") or []
+        if issues:
+            first = issues[0]
+            expectation = first.get("expected")
+            if not expectation and first.get("error_class") == "missing":
+                expectation = "required"
+            if not expectation:
+                expectation = {
+                    "int_type": "integer",
+                    "string_type": "string",
+                    "bool_type": "boolean",
+                    "list_type": "array",
+                    "dict_type": "object",
+                }.get(first.get("error_class"))
+            if expectation:
+                body["expected"] = expectation
     data = RoleFailure(
         ok=False,
         error=RoleErrorBody.model_validate(body),
+        outcome="not_committed" if input_failure else None,
         provider_identity=session_provider_fingerprint(),
         **{key: canonical[key] for key in notice_keys | {"cmd_hash"} if key in canonical},
     ).model_dump(mode="json", exclude_none=True)

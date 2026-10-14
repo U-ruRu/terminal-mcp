@@ -8,7 +8,7 @@ In 0.14.4 both Executor and Coordinator publish `session` with required `session
 
 Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
-Access catalog: `session`.
+Access catalog: `session`, `get_events`.
 
 Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
@@ -44,7 +44,7 @@ The action-specific runtime schema exposes `request_id` for `task.create`. Its r
 
 ## Planning and runtime validation
 
-Planning inputs are **permissive planning schemas**: a flat callable surface, meaningful descriptions, action-field visibility and constraint annotations. The original strict request schema is retained under `x-runtime-schema` or equivalent per-field/action annotations. Unknown arguments, wrong types, missing required fields and cross-field violations reach runtime validation and return structured errors before mutation.
+Inputs and outputs publish **object-only agent schemas** ({"type":"object"}); per-tool descriptions document arguments, nullable fields, defaults, action rules, return shapes and public errors. Existing strict Pydantic validators remain authoritative before all mutations. input_validation_failed and input_admission_failed return structuredContent with error.code/reason/path/expected and outcome:not_committed. TERMINAL_MCP_AGENT_SCHEMA_MODE=legacy restores former discovery without data changes. The precise strict models are in the offline strict-contracts.json sidecar.
 
 Task create and archive preserve both their ordinary fields and formal conditions. Create requires `namespace` and `isolation_hint`; `state=done` also requires a non-null result. Archive requires `namespace`, `task_id` and `archive_note` or `note`. Disallowed state/property combinations are not made valid by permissive planning.
 

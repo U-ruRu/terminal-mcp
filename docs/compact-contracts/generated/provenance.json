@@ -3,7 +3,8 @@
   "rkb_sha": "e721d0bea8d47ef042d429f8651783cc5708efbe",
   "roles": {
     "access": [
-      "session"
+      "session",
+      "get_events"
     ],
     "coordinator": [
       "session",
@@ -29,19 +30,21 @@
     ]
   },
   "source_sha256": {
-    "pyproject.toml": "a939a6a39f329de24060ad9f44e4afd8fa8bedb35beb4e82fa4645201e9d24c9",
-    "scripts/build_compact_catalogs.py": "728ed6dbc6fa18119113e6cb55d80d0b2aff582550f6f358a86e158c2c6492ec",
+    "pyproject.toml": "fcac968b1ca6822e7a5b1d38bb71ef3cfb5c28be2bbb202e4fdb3a44d09f9b2b",
+    "scripts/build_compact_catalogs.py": "fa88ad00693adafccbcdc471a9ce4566675a308ae7bea743edffd22546082b05",
     "src/terminal_mcp/application/task_requests.py": "6472afbb7b6af075c8a9340d9dbf14bfab0fe4b7e713b0b0d499eba3bb16b1e9",
-    "src/terminal_mcp/core/public_errors.py": "f5401b33828592f543121fabc393db232e287ff3822a926c9d09573c1834b627",
-    "src/terminal_mcp/mcp/access.py": "c6a19a0992983d42609602ff3704dc48265d3512b5ac4112fd959f4eade7c3de",
-    "src/terminal_mcp/mcp/access_contracts.py": "060757c0dbfe12b4f1bcf6f1513268592eaabf1b3c90be1e13964830ef98d0e6",
-    "src/terminal_mcp/mcp/compact_annotations.json": "e9678b867ecbe42eafdb3762387bc28a019d7ba70bd7cf917cf5fe4996a09d6b",
-    "src/terminal_mcp/mcp/compact_contracts.py": "d4eee01603a7d371d14c817d6fd4e7917d9dbdb16e87cb7ef98ebde47bdc2c6f",
+    "src/terminal_mcp/core/public_errors.py": "175685c09571afc375b9b71e8e137be46638b28db6e660c881cda6b380dbc613",
+    "src/terminal_mcp/mcp/access.py": "3f51772558e25989096e728332a6bbc71d74c56cb0da19b8bdc0004d50eac1b6",
+    "src/terminal_mcp/mcp/access_contracts.py": "340e8501ffae70ca783303c2e67442ff91f9024d30ace38c1bc9cca6597f202e",
+    "src/terminal_mcp/mcp/agent_contracts.py": "75035c30947cdbc72f39883ce1721507c0c00bd84f239e9ffe48e8f1ca21ef29",
+    "src/terminal_mcp/mcp/compact_annotations.json": "4afce909e20d51e6a227e8d3b2f39ef71e75833979c10424ff420cdba7523528",
+    "src/terminal_mcp/mcp/compact_contracts.py": "080e4a9cf3e148b306e4efd608eeb5999350ef236a95c4dd579b11fb7b5359fe",
+    "src/terminal_mcp/mcp/input_admission.py": "c60487c100661584aebb7750e88c971dd204dac5b2afcd3282cdadc3111908f9",
     "src/terminal_mcp/mcp/output_contracts.py": "875cf63218a98c26b1a42911cceb41b916f469e2ef601cbf11b5f13d41452249",
     "src/terminal_mcp/mcp/output_planning.py": "36c0985dac32fdcba90b51ac00c8e27fd9caf07dfef478be38ea042c2619feb5",
-    "src/terminal_mcp/mcp/role_contracts.py": "4750752d5a7716f275ed4b96078188c7d329cb915988fa334d1e223eb4eeb95f",
-    "src/terminal_mcp/mcp/role_outputs.py": "f4204e59c9b5f630e989b24d187d83690754e39842fb00a0f17bb4cee8f4dc3a",
-    "src/terminal_mcp/mcp/roles.py": "a54c644683f54218dabbbaacf6159fcafd2720fd8bfee5acd68108e1583e5a4e",
+    "src/terminal_mcp/mcp/role_contracts.py": "44b447fbcc71327aaf5bca3a54af5ffacd349a77a62656042295fb186d8785e2",
+    "src/terminal_mcp/mcp/role_outputs.py": "15d82a5f34ea1a356684cfd95813354d9c90e9c20f6cd64a6490503dce672248",
+    "src/terminal_mcp/mcp/roles.py": "619c7842addf8c41050136085e84025247d7b1282e562d00322ce530bc52cc2e",
     "src/terminal_mcp/mcp/schema_manifest.py": "f3c6224bdc08068dea59ce60f10a52e47bb42ea8a447f15f5577f73a91146038",
     "src/terminal_mcp/mcp/server.py": "405362f53c16c936c566541bbbe8828ff03a8eb2316906bbd414df607de6192f",
     "src/terminal_mcp/mcp/task_contract.py": "719b1834732d6161ce60c9a331affc12945740fc1dd090760ccae51b7d9f33c9",

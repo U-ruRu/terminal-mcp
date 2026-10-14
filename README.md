@@ -16,7 +16,7 @@ Native Access Events: [public session-number message routing](docs/mcp-events-se
 
 Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
-Access catalog: `session`.
+Access catalog: `session`, `get_events`.
 
 Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
@@ -58,7 +58,7 @@ Inbox, history и ACK используют локальные данные. Noti
 
 ## Runtime contract и диагностика
 
-Inputs use **permissive planning schemas**. Обязательность, типы, bounds и action-specific правила проверяются runtime до мутации. Полные условия create/archive сохраняются в аннотациях task planning. Runtime output models остаются строгими.
+Inputs and outputs publish **object-only agent schemas** ({"type":"object"}); per-tool descriptions document arguments, nullable fields, defaults, action rules, return shapes and public errors. Existing strict Pydantic validators remain authoritative before all mutations. input_validation_failed and input_admission_failed return structuredContent with error.code/reason/path/expected and outcome:not_committed. TERMINAL_MCP_AGENT_SCHEMA_MODE=legacy restores former discovery without data changes. The precise strict models are in the offline strict-contracts.json sidecar.
 
 Handled application errors: MCP `isError: false`, `structuredContent.ok: false`, объект `error` с `code`, `details`, `outcome`, `retry`. Текстовый fallback содержит тот же JSON. `ok=true` в health подтверждает сбор диагностики; здоровье описывают `healthy`, `status` и компоненты. Coordinator `health` доступен до attach. Секреты и raw provider identifiers исключены из публичной диагностики.
 

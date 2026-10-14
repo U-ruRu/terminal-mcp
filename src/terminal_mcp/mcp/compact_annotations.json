@@ -8,16 +8,16 @@
   ],
   "executor.session": [
     {
-      "text": "attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle",
+      "text": "attach-only work session lifecycle: action=attach requires a four-digit session_number (leading zeros allowed) and optionally nonblank intent; action=intent requires nonblank intent and forbids session_number; intent refresh keeps the existing attachment",
       "source": "src/terminal_mcp/mcp/access_contracts.py",
-      "anchor": "class AttachInput"
+      "anchor": "def action_fields(self):"
     }
   ],
   "coordinator.session": [
     {
-      "text": "attach-only; session_number is mandatory and may have leading zeros; attachment binds the local work cycle",
+      "text": "attach-only work session lifecycle: action=attach requires a four-digit session_number (leading zeros allowed) and optionally nonblank intent; action=intent requires nonblank intent and forbids session_number; intent refresh keeps the existing attachment",
       "source": "src/terminal_mcp/mcp/access_contracts.py",
-      "anchor": "class AttachInput"
+      "anchor": "def action_fields(self):"
     }
   ],
   "executor.task_list": [
@@ -162,6 +162,13 @@
       "text": "any admitted agent may set valid workflow state, including on a task claimed by someone else. expected_revision does not guard state writes via content CAS; content revision is unchanged, live claims persist, and repeated state assignment emits no event.",
       "source": "src/terminal_mcp/core/tasks.py",
       "anchor": "async def _action_state("
+    }
+  ],
+  "access.get_events": [
+    {
+      "text": "event_id and cursor are mutually exclusive; event_id selects one owned event even if already read; without event_id, consume up to limit (1..20) events, ordered oldest first",
+      "source": "src/terminal_mcp/mcp/access_contracts.py",
+      "anchor": "def validate_selector(self):"
     }
   ]
 }

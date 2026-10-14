@@ -1,38 +1,55 @@
-# Terminal MCP compact contracts (offline generator)
+# Terminal MCP — agent-facing compact contracts
 
-This directory holds reproducible **future** tools/list catalogues for Access (1), Executor (10) and Coordinator (8). The generated candidate has **not** been installed on any live server. The corrected design and B1–B13 evidence are in **QA-REMEDIATION-ECHO3-20261010.md**. Original QA-BRAVO3-20261010.md remains the immutable, independently authored BLOCKING report for the preceding candidate.
+Access (2 tools), Executor (10), and Coordinator (8) publish identical public
+input/output schemas: `{"type":"object"}`. Calls still pass the original
+flat argument object directly. Names, annotations and tool availability stay
+unchanged. This source change is not deployed to any running server.
 
-## Build and validate
+## Build and drift checks
 
-From the repository root in Python 3.11+:
+From the repository root, install `.[compact,test]`, then run:
 
-    python -m pip install -e '.[compact,test]'
-    python scripts/build_compact_catalogs.py --write
-    python scripts/build_compact_catalogs.py --check
-    pytest -q tests/test_compact_contracts.py tests/test_compact_bravo3_independent.py tests/test_compact_b1_b13_regressions.py
+```bash
+python scripts/build_compact_catalogs.py --write
+python scripts/build_compact_catalogs.py --check
+pytest -q tests/test_agent_object_contract.py tests/test_compact_contracts.py
+```
 
-The build uses actual in-repository FastMCP tool definitions and existing strict Pydantic request/output models, without starting HTTP or changing deployed publication. The generator and annotator are in src/terminal_mcp/mcp/compact_contracts.py and compact_annotations.json. These belong to Terminal MCP. Structural traversal, safe abbreviation, fail-closed exact fallback and type closure derive from RKB V4 compiler (research-knowledge-base SHA e721d0bea8d47ef042d429f8651783cc5708efbe); no RKB domain contracts or TSCG dependency was copied.
+The offline compiler renders `Arguments`, `rules`, `Returns`, `Errors`, and
+tool-local `Types used by` from existing FastMCP and strict Pydantic contracts.
+Source-anchored runtime rules cover conditionals absent from JSON Schema.
+The builder emits ten JSON review artifacts under `generated/`, plus the
+packaged runtime `src/terminal_mcp/mcp/agent_catalogs.json`. Its `--check`
+mode fails if any artifact, field, model digest, annotation or source changes.
 
-The builder is deterministic. --check independently rebuilds the 10 JSON artifacts and exits nonzero when a tracked generated artifact is missing or differs. Generated/provenance.json records source, annotation and generator SHA-256. Runtime annotations have source path and anchor checks. The generator also guards canonical operation roster drift. Tests verify a deliberate stale artifact and a source drift cause failure.
+## What each artifact contains
 
-## Transport schema versus strict server contract
+- `catalog-*.json`: agent descriptions and exact object-only public schemas.
+- `before-*.json`: the previous public discovery representation for comparison.
+- `strict-contracts.json`: unchanged authoritative inputs and outputs for 20 tools.
+- `coverage.json`: field, model, condition, action and source-anchor evidence.
+- `metrics.json`: UTF-8 and tokenizer costs before and after.
+- `provenance.json`: source hashes and compiler identity.
 
-- generated/catalog-access.json, catalog-executor.json, catalog-coordinator.json: full **future** result objects, including names, descriptions, output schemas and original tool annotations.
-- generated/before-access.json, before-executor.json, before-coordinator.json: exact published-in-process **baseline** tool definitions from the QA-parent checkout including corrected local description strings.
-- generated/strict-contracts.json: **unchanged** authoritative Pydantic model JSON Schemas for all 19 inputs and outputs. Its file SHA-256 matches the prior Bravo-3 QA source artifact. This is a **review sidecar**, not the transport inputSchema to be sent to a prevalidating client.
-- generated/coverage.json: every tool's model, field roster, strict input/output digest, nullable/conditional rules, source-linked runtime annotations, action-specific allowed/required/forbidden fields and exact fallback.
-- generated/metrics.json: entire before/after tools/list bytes, characters, pinned tiktoken 0.12.0 / cl100k_base tokens, plus per-tool/component contributions and shares.
-- generated/provenance.json: generator, reference RKB SHA and digest of relevant source.
-- qa-echo3-wire-metrics.json: **complete** HTTP and result JSON-RPC error sizes from the 23-case isolated MCP replay.
+At startup `agent_contracts.py` reads the small packaged catalog and checks
+all current input/output model hashes, original descriptions and tool rosters.
+The complete compiler and `jsonschema` are not required by the running server.
+Mesh and native role catalogs are both bundled.
 
-The **public** inputSchema is an object transport envelope: known argument names each have empty schema, unknown fields are allowed, no client-side value/required/action constraints. Strict server validation remains intact and returns compact public errors. The **description** now explicitly enumerates fields/types/default/nulls/conditions and per-action whitelists/non-null required values, and retains exact fallback where abbreviated equivalence is not proven. Action-model descriptions are generated from canonical source models rather than manually maintained lists.
+## Runtime and rollback
 
-The public outputSchema remains the already accepted flat projection. The exact nested result/error models remain in the sidecar; future independent review and live tests must cover the difference.
+Only discovery is generic. Existing strict validation, identity, authorization,
+session isolation, domain operations and successful response shapes remain.
+A bounded input admission gate rejects pathological JSON before domain work.
+Expected validation failures are ordinary MCP results (`isError:false`) with
+`structuredContent` containing `ok:false`, `error.code`, `error.reason`,
+`error.path`, optional `error.expected` and `outcome:"not_committed"`.
+Use `input_validation_failed` for invalid argument contracts and
+`input_admission_failed` for payload complexity/size.
 
-## Verification and limitations
+Set `TERMINAL_MCP_AGENT_SCHEMA_MODE=legacy` for the previous discovery
+representation on the next service start, without data migration. Server
+rollout and rollback are controlled separately, starting on Secondary.
 
-The prior independent Bravo-3 source checks and MCP-wire replay are preserved; the test updates only replace obsolete assumptions about client-side strict schema validation. The isolated test installs the proposed descriptions/input schemas **in memory** on an unexposed create_app instance and verifies all 19 tools/list records match the generated catalogue before making HTTP calls.
-
-Current published/live servers are unchanged. The remaining live gate is a fresh ChatGPT connector A/B test: malformed-but-object arguments must reach the server, responses must stay compact **including pre-tool failure presentation**, tool selection must remain correct, and all authorized successful operations still need verification. The MCP object transport format cannot prevent a client from enforcing additional private rules, nor can offline tests measure live ChatGPT token billing. Future accepted changes in unrelated output schemas require regenerating the catalogue on that later integrated SHA.
-
-OAuth, Events, active release branches and deployments are outside this task.
+Historical Bravo-3 and Echo-3 QA records remain unchanged as evidence of
+earlier candidates; the old 19-tool metrics are not current release metrics.

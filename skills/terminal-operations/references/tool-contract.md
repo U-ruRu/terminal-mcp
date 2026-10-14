@@ -4,7 +4,7 @@ Version: **0.14.4**. Access Mesh V2. Both Executor and Coordinator `session` too
 
 Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
-Access catalog: `session`.
+Access catalog: `session`, `get_events`.
 
 Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
@@ -154,7 +154,7 @@ Kind is set at creation. Defaults affect subsequent issuance; per-slot policy co
 
 ## Validation, errors and repeats
 
-Inputs use permissive planning schemas; strict runtime types, bounds and action conditions remain authoritative. Planning annotations preserve all create/archive constraints. The effective catalog/schema/effect baseline is access_mesh_schema_baselines_v2.json. Most planning inputs are below 8 KiB; full task_manage has a 40 KiB ceiling, outputs below 2 KiB.
+Inputs and outputs publish **object-only agent schemas** ({"type":"object"}); per-tool descriptions document arguments, nullable fields, defaults, action rules, return shapes and public errors. Existing strict Pydantic validators remain authoritative before all mutations. input_validation_failed and input_admission_failed return structuredContent with error.code/reason/path/expected and outcome:not_committed. TERMINAL_MCP_AGENT_SCHEMA_MODE=legacy restores former discovery without data changes. The precise strict models are in the offline strict-contracts.json sidecar.
 
 Handled application errors use MCP isError:false, ok:false and a structured error object. Read code/details/outcome/retry/reason/path; JSON text and structuredContent agree. Reconcile unknown outcomes before side-effecting retry. A committed-but-queued message is not a failed local send.
 

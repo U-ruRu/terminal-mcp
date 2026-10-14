@@ -52,11 +52,11 @@ def _model_valid(model, data):
         return False
 
 
-def test_all_19_exact_effective_tools_and_artifacts(compiled):
-    expected_counts = {"access": 1, "executor": 10, "coordinator": 8}
+def test_all_20_exact_effective_tools_and_artifacts(compiled):
+    expected_counts = {"access": 2, "executor": 10, "coordinator": 8}
     assert {role: len(compiled["after"][role]["tools"]) for role in c.ROLE_NAMES} == expected_counts
     assert sorted(compiled["coverage"]) == sorted(compiled["strict"])
-    assert len(compiled["coverage"]) == 19
+    assert len(compiled["coverage"]) == 20
     for role in c.ROLE_NAMES:
         before = compiled["before"][role]["tools"]
         after = compiled["after"][role]["tools"]
@@ -65,11 +65,9 @@ def test_all_19_exact_effective_tools_and_artifacts(compiled):
         assert _load("before-" + role + ".json") == compiled["before"][role]
         for old, new in zip(before, after, strict=True):
             assert old["annotations"] == new["annotations"]
-            assert old["outputSchema"] == new["outputSchema"]
+            assert new["outputSchema"] == {"type": "object"}
+            assert new["inputSchema"] == {"type": "object"}
             assert old["description"] in new["description"]
-            assert new["inputSchema"].get("x-terminal-mcp-action-matrix") == old["inputSchema"].get(
-                "x-terminal-mcp-action-matrix"
-            )
     assert _load("strict-contracts.json") == compiled["strict"]
     assert _load("coverage.json") == compiled["coverage"]
     assert _load("provenance.json") == compiled["provenance"]
@@ -345,4 +343,4 @@ def test_builder_matches_application_actual_effective_catalogue(tmp_path, compil
             t.model_dump(mode="json", by_alias=True, exclude_none=True)
             for t in asyncio.run(server.list_tools())
         ]
-        assert actual == compiled["before"][role]["tools"], role
+        assert actual == compiled["after"][role]["tools"], role

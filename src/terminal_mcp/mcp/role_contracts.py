@@ -677,6 +677,34 @@ def install_role_input_contract(mcp, role: str, *, overrides=None) -> None:
         tool.parameters = planning_schema(model)
 
 
+# Diagnostic-only maps for Pydantic whole-object validators. They do not
+# decide admission: the original validator has already rejected the request.
+# All texts below are fixed server literals, never client-provided values.
+_CONDITIONAL_ERROR_HINTS = {
+    "session_number is required for attach": (
+        "session_number",
+        "four-digit string",
+        "Provide session_number for attach.",
+    ),
+    "intent is required for refresh": (
+        "intent",
+        "nonblank string",
+        "Provide intent for intent refresh.",
+    ),
+    "intent refresh uses the existing connector binding": (
+        "session_number",
+        "omit for action=intent",
+        "Omit session_number on intent refresh.",
+    ),
+    "intent must contain text": ("intent", "nonblank string", "Provide nonblank intent."),
+    "event_id and cursor are mutually exclusive": (
+        "cursor",
+        "omit cursor or event_id",
+        "Use only one event selector.",
+    ),
+}
+
+
 def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, object]:
     issue = exc.errors(include_url=False, include_input=False)[0]
     error_type = str(issue.get("type") or "")
@@ -694,6 +722,14 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
     else:
         reason = "constraint_violation"
 
+    hint = next(
+        (
+            value
+            for suffix, value in _CONDITIONAL_ERROR_HINTS.items()
+            if error_type == "value_error" and not location and message.endswith(suffix)
+        ),
+        None,
+    )
     if location:
         path = ".".join(
             str(part) if part in PUBLIC_FIELDS or type(part) is int else "*" for part in location
@@ -724,12 +760,15 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
             if candidate in message:
                 path = candidate
                 break
+    if hint is not None:
+        path = hint[0]
     repair = bounded_validation_error(exc).details
     if isinstance(repair, ValidationRepair) and not location and path != "$":
         issues = list(repair.validation_errors)
-        issues[0] = issues[0].model_copy(
-            update={"path": path, "description": f"Provide {path} for this action."}
-        )
+        fields = {"path": path, "description": f"Correct {path} for this action."}
+        if hint is not None:
+            fields.update(description=hint[2], expected=hint[1])
+        issues[0] = issues[0].model_copy(update=fields)
         repair = ValidationRepair(validation_errors=tuple(issues))
     return public_error(
         "input_validation_failed", reason=reason, path=path, details=repair
@@ -737,6 +776,11 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
 
 
 def validate_boundary(boundary: RuntimeBoundary, model: type[StrictRoleInput]):
+    from terminal_mcp.mcp.input_admission import admit_arguments
+
+    admission = admit_arguments(boundary.raw_arguments)
+    if admission is not None:
+        return None, admission
     try:
         return model.model_validate(boundary.raw_arguments), None
     except ValidationError as exc:

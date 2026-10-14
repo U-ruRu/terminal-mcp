@@ -116,6 +116,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -235,6 +241,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -334,6 +346,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [
@@ -511,6 +529,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "output_bytes": {
             "type": [
@@ -693,6 +717,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "output_bytes": {
             "type": [
@@ -891,6 +921,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "output_bytes": {
             "type": [
               "integer",
@@ -1056,6 +1092,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -1169,6 +1211,12 @@
           "ok": {
             "type": "boolean"
           },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "postcommit_warning": {
             "type": [
               "null",
@@ -1279,6 +1327,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [
@@ -1477,6 +1531,12 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "postcommit_warning": {
             "type": [

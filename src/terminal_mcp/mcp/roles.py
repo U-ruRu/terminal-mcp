@@ -654,6 +654,8 @@ def build_role_mcp(
     role: RoleName,
     public_base_url: str = "http://127.0.0.1:8080",
     auth_mode: str = "none",
+    *,
+    publish_agent_contract: bool = True,
 ):
     if role not in ROLE_TOOLS:
         raise ValueError("unsupported MCP endpoint role")
@@ -1189,6 +1191,18 @@ def build_role_mcp(
     from terminal_mcp.operation_metadata import install_action_metadata
 
     install_action_metadata(mcp, role, mesh=bool(mesh))
+    if publish_agent_contract:
+        from terminal_mcp.mcp.agent_contracts import install_agent_contract
+
+        install_agent_contract(
+            mcp,
+            role,
+            {
+                name: input_overrides.get((role, name), ROLE_TOOL_MODELS[(role, name)])
+                for name in ROLE_TOOLS[role]
+            },
+            mesh=bool(mesh),
+        )
     mcp.role_schema_contract = role_schema_contract(role)
     if mesh:
         from terminal_mcp.mcp.role_contracts import (

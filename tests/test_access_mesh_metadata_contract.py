@@ -1,15 +1,13 @@
 import json
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
-from jsonschema import ValidationError as JsonSchemaValidationError
 from test_access_mesh_mcp_runtime import call, rpc, settings
 
 from terminal_mcp.app import create_app
 from terminal_mcp.mcp.schema_manifest import mesh_schema_manifest
-from terminal_mcp.operation_metadata import MUTATING_ACTIONS, READ_ONLY_ACTIONS
+from terminal_mcp.operation_metadata import MUTATING_ACTIONS, READ_ONLY_ACTIONS, tool_action_effects
 
 
 def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
@@ -19,11 +17,11 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
     }
     actual = mesh_schema_manifest(servers)
     baseline = json.loads(
-        Path("src/terminal_mcp/mcp/access_mesh_schema_baselines_v2.json").read_text()
+        Path("src/terminal_mcp/mcp/access_mesh_schema_baselines_knowledge_v1.json").read_text()
     )
     assert actual == baseline
     for role, data in actual["roles"].items():
-        assert len(data["tools"]) == {"access": 1, "executor": 10, "coordinator": 8}[role]
+        assert len(data["tools"]) == {"access": 2, "executor": 10, "coordinator": 8}[role]
         for tool in data["tools"]:
             # task_manage carries the complete action-specific strict schemas as
             # annotations. Its reviewed 40 KiB cap preserves every conditional.
@@ -34,20 +32,9 @@ def test_three_effective_role_contracts_match_reviewed_manifest(tmp_path):
         for tool in server._tool_manager.list_tools():
             schema = tool.parameters
             Draft202012Validator.check_schema(schema)
-            if role in {"executor", "coordinator"} and tool.name == "session":
-                # The public connector must know the Access Code is mandatory,
-                # and that only attachment (never lifecycle mutation) is valid.
-                assert "required" not in schema
-                assert schema["properties"]["action"]["enum"] == ["attach", "intent"]
-                assert schema["properties"]["session_number"]["type"] == "string"
-                assert "issuer_node_id" not in schema["properties"]
-                assert "allOf" in schema
-            elif role == "executor" and tool.name == "task_state":
-                assert set(schema["required"]) == {"namespace", "task_id", "state"}
-                assert "allOf" not in schema
-            else:
-                assert "required" not in schema and "allOf" not in schema
-            matrix = schema["x-terminal-mcp-action-matrix"]
+            assert schema == {"type": "object"}
+            assert tool.output_schema == {"type": "object"}
+            matrix = tool_action_effects(role, tool.name, mesh=True)
             assert tool.annotations.readOnlyHint is all(
                 row["readOnlyHint"] for row in matrix.values()
             )
@@ -110,11 +97,10 @@ def test_executor_and_coordinator_publish_identical_attach_and_intent_session_sc
         {"action": "intent"},
         {"action": "intent", "intent": "Inspect fixture", "session_number": "0427"},
         {"action": "start", "session_number": "0427"},
-        {"action": "end", "session_number": "0427"},
-        {"action": "detach", "session_number": "0427"},
         {"action": "attach", "session_number": "abc"},
     ):
-        with pytest.raises(JsonSchemaValidationError):
-            validator.validate(invalid)
+        # Protocol's object envelope deliberately leaves strict validation to the server.
+        validator.validate(invalid)
+    assert schema == {"type": "object"}
     assert "Attach this connector once" in coordinator.description
     assert "Before any domain write" in coordinator.description

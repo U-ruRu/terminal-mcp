@@ -22,7 +22,12 @@ def _service():
 
 
 def _tool_map(role):
-    return {item.name: item for item in build_role_mcp(_service(), role)._tool_manager.list_tools()}
+    return {
+        item.name: item
+        for item in build_role_mcp(
+            _service(), role, publish_agent_contract=False
+        )._tool_manager.list_tools()
+    }
 
 
 def test_role_catalogs_are_exact_and_identity_free():

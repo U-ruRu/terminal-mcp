@@ -6,7 +6,7 @@ Current application version: **0.14.4**. Durable runtime schema: **25**. Access 
 
 Access endpoint: `/terminal-mcp/access/v1/mcp`.
 
-Access catalog: `session`.
+Access catalog: `session`, `get_events`.
 
 Executor endpoint: `/terminal-mcp/executor/v1/mcp`.
 
@@ -112,7 +112,7 @@ Per-slot policy controls duration/cooldown/rearm/warning/draining/release-on-end
 
 ## Planning, outputs and effect metadata
 
-Inputs use **permissive planning schemas**, with strict runtime validation before mutation. Task planning exposes all action fields, including create/archive conditional requirements, while keeping exact formal constraints in annotations. Output planning is flat/coarse; strict success/error models remain server-side. Handled failures use `isError:false`, `ok:false`, structured `error` and an equivalent JSON text fallback.
+Inputs and outputs publish **object-only agent schemas** ({"type":"object"}); per-tool descriptions document arguments, nullable fields, defaults, action rules, return shapes and public errors. Existing strict Pydantic validators remain authoritative before all mutations. input_validation_failed and input_admission_failed return structuredContent with error.code/reason/path/expected and outcome:not_committed. TERMINAL_MCP_AGENT_SCHEMA_MODE=legacy restores former discovery without data changes. The precise strict models are in the offline strict-contracts.json sidecar.
 
 `access_mesh_schema_baselines_v2.json` freezes effective catalogs, schema hashes/byte counts and tool annotations. Most role planning inputs are below 8 KiB; the complete task_manage action schema has an explicit 40 KiB ceiling. Output planning is below 2 KiB. Action metadata describes actual read/mutate/destructive/idempotent effects: attach is idempotent and non-destructive; shell/recovery is open-world and non-idempotent; task create with generated identity is not broadly idempotent. Mixed tools publish their most consequential action plus the action matrix. OpenAPI `x-openai-isConsequential` follows the same operation-level semantics.
 

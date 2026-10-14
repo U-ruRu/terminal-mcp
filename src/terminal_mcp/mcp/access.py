@@ -25,7 +25,8 @@ from terminal_mcp.mcp.role_outputs import install_role_output_contract
 
 
 def build_access_mcp(
-    application, *, event_store=None, public_base_url: str = "http://127.0.0.1:8080"
+    application, *, event_store=None, public_base_url: str = "http://127.0.0.1:8080",
+    publish_agent_contract: bool = True,
 ):
     parsed = urlparse(public_base_url)
     mcp = FastMCP(
@@ -132,6 +133,12 @@ def build_access_mcp(
     from terminal_mcp.operation_metadata import install_action_metadata
 
     install_action_metadata(mcp, "access", mesh=True)
+    if publish_agent_contract:
+        from terminal_mcp.mcp.agent_contracts import install_agent_contract
+
+        install_agent_contract(
+            mcp, "access", {"session": IssuerSessionInput, "get_events": GetEventsInput}
+        )
     from terminal_mcp.mcp.role_contracts import schema_digest, serialized_schema
 
     mcp.role_schema_contract = {

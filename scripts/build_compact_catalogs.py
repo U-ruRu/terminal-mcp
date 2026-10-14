@@ -17,6 +17,7 @@ from terminal_mcp.mcp.compact_contracts import (  # noqa: E402
     build,
     dump,
     encoded,
+    generate,
 )
 
 
@@ -151,13 +152,43 @@ def main() -> int:
     g.add_argument("--check", action="store_true")
     args = p.parse_args()
     expected = outputs()
+    # The runtime only needs small description/hash metadata; generated sidecars
+    # remain offline review artifacts and are deliberately not loaded by FastMCP.
+    import asyncio
+
+    catalog = {}
+    generated = build()
+    native_before, native_after, _, native_coverage = asyncio.run(generate(mesh=False))
+    for role in ROLE_NAMES:
+        variants = [(role, generated["before"], generated["after"], generated["coverage"])]
+        if role != "access":
+            variants.append((role + "_native", native_before, native_after, native_coverage))
+        for catalog_role, before, after, coverage in variants:
+            catalog[catalog_role] = {}
+            for item in after[role]["tools"]:
+                key = role + "." + item["name"]
+                catalog[catalog_role][item["name"]] = {
+                    "description": item["description"],
+                    "base_description": next(
+                        previous["description"]
+                        for previous in before[role]["tools"]
+                        if previous["name"] == item["name"]
+                    ),
+                    "strict_input_sha256": coverage[key]["strict_input_sha256"],
+                    "strict_output_sha256": coverage[key]["strict_output_sha256"],
+                }
+    catalog_path = REPO / "src/terminal_mcp/mcp/agent_catalogs.json"
+    catalog_bytes = dump(catalog)
     if args.write:
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         for filename, payload in expected.items():
             (ARTIFACTS / filename).write_bytes(payload)
-        print(f"Generated {len(expected)} files in {ARTIFACTS}")
+        catalog_path.write_bytes(catalog_bytes)
+        print(f"Generated {len(expected)} files in {ARTIFACTS} and packaged agent_catalogs.json")
     else:
         stale = check_artifacts(ARTIFACTS, expected)
+        if not catalog_path.is_file() or catalog_path.read_bytes() != catalog_bytes:
+            stale.append("src/terminal_mcp/mcp/agent_catalogs.json")
         if stale:
             print("STALE / MISSING compact contracts: " + ", ".join(stale), file=sys.stderr)
             return 1

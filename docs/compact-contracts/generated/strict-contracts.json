@@ -1,4 +1,643 @@
 {
+  "access.get_events": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "event_id": {
+          "anyOf": [
+            {
+              "maxLength": 36,
+              "pattern": "^evt_[0-9a-f]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Id"
+        },
+        "limit": {
+          "default": 20,
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "show_read": {
+          "default": false,
+          "title": "Show Read",
+          "type": "boolean"
+        }
+      },
+      "title": "GetEventsInput",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "AccessEventItem": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": true,
+              "title": "Data",
+              "type": "object"
+            },
+            "eventId": {
+              "title": "Eventid",
+              "type": "string"
+            },
+            "name": {
+              "enum": [
+                "agent.attached",
+                "agent.inactive",
+                "session.ended",
+                "message.received"
+              ],
+              "title": "Name",
+              "type": "string"
+            },
+            "read": {
+              "title": "Read",
+              "type": "boolean"
+            },
+            "timestamp": {
+              "title": "Timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "eventId",
+            "name",
+            "timestamp",
+            "data",
+            "read"
+          ],
+          "title": "AccessEventItem",
+          "type": "object"
+        },
+        "AccessEventsReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "items": {
+                "$ref": "#/$defs/AccessEventItem"
+              },
+              "title": "Events",
+              "type": "array"
+            },
+            "has_more": {
+              "title": "Has More",
+              "type": "boolean"
+            },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Cursor"
+            },
+            "ok": {
+              "const": true,
+              "title": "Ok",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok",
+            "events",
+            "next_cursor",
+            "has_more"
+          ],
+          "title": "AccessEventsReceipt",
+          "type": "object"
+        },
+        "ConflictRepair": {
+          "additionalProperties": false,
+          "properties": {
+            "current_revision": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Revision"
+            },
+            "current_state": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ready",
+                    "in_progress",
+                    "qa",
+                    "blocked",
+                    "deferred",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current State"
+            }
+          },
+          "title": "ConflictRepair",
+          "type": "object"
+        },
+        "IncomingMessage": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "title": "Id",
+              "type": "string"
+            },
+            "requirements": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ack",
+                    "reply"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requirements"
+            },
+            "sender": {
+              "title": "Sender",
+              "type": "string"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "sender",
+            "text"
+          ],
+          "title": "IncomingMessage",
+          "type": "object"
+        },
+        "JsonPayload": {
+          "$ref": "#/$defs/JsonValue",
+          "description": "Native JSON extension value, bounded by its enclosing public projection.",
+          "title": "JsonPayload"
+        },
+        "JsonValue": {},
+        "ProviderFingerprint": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_key": {
+              "title": "Binding Key",
+              "type": "string"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "session_fingerprint": {
+              "title": "Session Fingerprint",
+              "type": "string"
+            },
+            "subject_fingerprint": {
+              "title": "Subject Fingerprint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "binding_key",
+            "subject_fingerprint",
+            "session_fingerprint"
+          ],
+          "title": "ProviderFingerprint",
+          "type": "object"
+        },
+        "RetryRepair": {
+          "additionalProperties": false,
+          "properties": {
+            "retry_after_ms": {
+              "maximum": 3600000,
+              "minimum": 1,
+              "title": "Retry After Ms",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "retry_after_ms"
+          ],
+          "title": "RetryRepair",
+          "type": "object"
+        },
+        "RoleErrorBody": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "details": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ValidationRepair"
+                },
+                {
+                  "$ref": "#/$defs/ConflictRepair"
+                },
+                {
+                  "$ref": "#/$defs/RetryRepair"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Details"
+            },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "not_committed",
+                "committed",
+                "unknown"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Path"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "retry": {
+              "enum": [
+                "repair",
+                "reauthenticate",
+                "reconcile",
+                "retry",
+                "start_session",
+                "stop"
+              ],
+              "title": "Retry",
+              "type": "string"
+            },
+            "return_to_chat": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Return To Chat"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "outcome",
+            "retry"
+          ],
+          "title": "RoleErrorBody",
+          "type": "object"
+        },
+        "RoleFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "cmd_hash": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Hash"
+            },
+            "error": {
+              "$ref": "#/$defs/RoleErrorBody"
+            },
+            "intent_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Intent Warning"
+            },
+            "messages": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/IncomingMessage"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Messages"
+            },
+            "messages_remaining": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Incoming entries omitted from this bounded operation preview; read message history with its continuation cursor. Not an ACK/delivery counter.",
+              "title": "Messages Remaining"
+            },
+            "ok": {
+              "const": false,
+              "title": "Ok",
+              "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
+            },
+            "postcommit_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Postcommit Warning"
+            },
+            "provider_identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProviderFingerprint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "return_to_chat": {
+              "anyOf": [
+                {
+                  "const": true,
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Return To Chat"
+            },
+            "warnings": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/WorkflowWarning"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Warnings"
+            }
+          },
+          "required": [
+            "ok",
+            "error"
+          ],
+          "title": "RoleFailure",
+          "type": "object"
+        },
+        "ValidationIssue": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "maxLength": 160,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            },
+            "error_class": {
+              "maxLength": 48,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "title": "Error Class",
+              "type": "string"
+            },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
+            "path": {
+              "maxLength": 160,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error_class",
+            "path",
+            "description"
+          ],
+          "title": "ValidationIssue",
+          "type": "object"
+        },
+        "ValidationRepair": {
+          "additionalProperties": false,
+          "properties": {
+            "validation_errors": {
+              "items": {
+                "$ref": "#/$defs/ValidationIssue"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "title": "Validation Errors",
+              "type": "array"
+            }
+          },
+          "required": [
+            "validation_errors"
+          ],
+          "title": "ValidationRepair",
+          "type": "object"
+        },
+        "WorkflowWarning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JsonPayload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "severity": {
+              "default": "warning",
+              "title": "Severity",
+              "type": "string"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Id"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "WorkflowWarning",
+          "type": "object"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AccessEventsReceipt"
+        },
+        {
+          "$ref": "#/$defs/RoleFailure"
+        }
+      ],
+      "title": "RootModel[Union[AccessEventsReceipt, RoleFailure]]"
+    }
+  },
   "access.session": {
     "inputSchema": {
       "additionalProperties": false,
@@ -214,6 +853,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -351,6 +1003,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -540,8 +1209,48 @@
   "coordinator.agent_observe": {
     "inputSchema": {
       "additionalProperties": false,
-      "properties": {},
-      "title": "AgentObserveInput",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "include_inactive": {
+          "default": false,
+          "title": "Include Inactive",
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "logical_agent_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logical Agent Id"
+        }
+      },
+      "title": "MeshAgentObserveInput",
       "type": "object"
     },
     "outputSchema": {
@@ -888,6 +1597,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -1025,6 +1747,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -1710,6 +2449,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -1847,6 +2599,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -3786,6 +4555,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -3923,6 +4705,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -4421,6 +5220,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -4558,6 +5370,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -5431,6 +6260,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -5568,6 +6410,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -6604,6 +7463,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -6741,6 +7613,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -7322,6 +8211,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -7459,6 +8361,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -8663,6 +9582,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -8800,6 +9732,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -11533,6 +12482,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -11670,6 +12632,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -13405,6 +14384,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -13542,6 +14534,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -15590,6 +16599,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -15727,6 +16749,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -16308,6 +17347,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -16445,6 +17497,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -18381,6 +19450,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -18518,6 +19600,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -19016,6 +20115,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -19153,6 +20265,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -19593,6 +20722,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -19730,6 +20872,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -20244,6 +21403,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -20381,6 +21553,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -20930,6 +22119,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -21067,6 +22269,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
@@ -21597,6 +22816,19 @@
               "default": null,
               "title": "Details"
             },
+            "expected": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -21734,6 +22966,23 @@
               "const": false,
               "title": "Ok",
               "type": "boolean"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_committed",
+                    "committed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
             },
             "postcommit_warning": {
               "anyOf": [
