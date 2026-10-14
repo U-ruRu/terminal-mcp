@@ -139,6 +139,7 @@ def event_catalog():
                         else {}
                     ),
                     "additionalProperties": False,
+                    **({"required": ["session_number"]} if name == "message.received" else {}),
                 },
                 "payloadSchema": (
                     private_message
@@ -360,6 +361,13 @@ class MCPEventStore:
                 "AND EXISTS (SELECT 1 FROM mcp_event_message_bindings b "
                 "WHERE b.subscription_id=mcp_event_subscriptions.id "
                 "AND b.recipient_role='access')"
+            )
+            # Historical lifecycle subscriptions were agent-scoped.
+            # Preserve their IDs and callbacks, but restore global scope.
+            await db.execute(
+                "UPDATE mcp_event_subscriptions SET subscriber_agent_id=NULL "
+                "WHERE name IN ('agent.attached','agent.inactive','session.ended') "
+                "AND subscriber_agent_id IS NOT NULL"
             )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_mcp_event_subscriber "
@@ -901,6 +909,7 @@ class MCPEventStore:
         self,
         logical_agent_id: str,
         *,
+        principal_id: str | None = None,
         event_id: str | None = None,
         limit: int = 20,
         cursor: str | None = None,
@@ -927,8 +936,30 @@ class MCPEventStore:
         if event_id is not None and cursor is not None:
             raise ValueError("event_id_and_cursor_are_exclusive")
 
-        conditions = ["s.subscriber_agent_id=?"]
-        params: list = [logical_agent_id]
+        # Agent-bound message subscriptions and principal-scoped global lifecycle
+        # subscriptions share one inbox. Global events are consumed once for the
+        # authenticated principal, not once per LogicalAgent.
+        if principal_id is None:
+            owner_selector = "subscriber_agent_id=?"
+            qualified_owner_selector = "s.subscriber_agent_id=?"
+            params: list = [logical_agent_id]
+            mark_params: list = [logical_agent_id]
+        else:
+            owner_selector = (
+                "(subscriber_agent_id=? OR "
+                "(subscriber_agent_id IS NULL AND name IN "
+                "('agent.attached','agent.inactive','session.ended'))) "
+                "AND principal_id=?"
+            )
+            qualified_owner_selector = (
+                "(s.subscriber_agent_id=? OR "
+                "(s.subscriber_agent_id IS NULL AND s.name IN "
+                "('agent.attached','agent.inactive','session.ended'))) "
+                "AND s.principal_id=?"
+            )
+            params = [logical_agent_id, principal_id]
+            mark_params = [logical_agent_id, principal_id]
+        conditions = [qualified_owner_selector]
         if event_id is not None:
             conditions.append("e.event_id=?")
             params.append(event_id)
@@ -961,8 +992,8 @@ class MCPEventStore:
                         "UPDATE mcp_event_deliveries SET read_at=? "
                         f"WHERE event_id IN ({marks}) AND read_at IS NULL "
                         "AND subscription_id IN("
-                        "SELECT id FROM mcp_event_subscriptions WHERE subscriber_agent_id=?)",
-                        (utc_text(), *ids, logical_agent_id),
+                        "SELECT id FROM mcp_event_subscriptions WHERE " + owner_selector + ")",
+                        (utc_text(), *ids, *mark_params),
                     )
                 await db.commit()
             except BaseException:
@@ -1107,6 +1138,10 @@ class MCPEventStore:
                 existing_owner is not None
                 and existing_owner[0] is not None
                 and existing_owner[0] != subscriber_agent_id
+                and not (
+                    name in {"agent.attached", "agent.inactive", "session.ended"}
+                    and subscriber_agent_id is None
+                )
             ):
                 raise RecipientBindingChangedError
             await db.execute(

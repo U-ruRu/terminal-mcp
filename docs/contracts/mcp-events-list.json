@@ -113,6 +113,9 @@
             "type": "string"
           }
         },
+        "required": [
+          "session_number"
+        ],
         "type": "object"
       },
       "name": "message.received",

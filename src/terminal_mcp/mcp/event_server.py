@@ -18,6 +18,7 @@ from terminal_mcp.mcp.event_diagnostics import (
     emit,
     emit_callback_probe,
     emit_failure,
+    emit_metadata_shape,
 )
 from terminal_mcp.mcp.event_store import (
     EVENT_NAMES,
@@ -275,18 +276,29 @@ class MCPEventsAdapter:
                 "Authenticated principal required",
             )
         self._emit(method, "authorization", "accepted", cid)
+        emit_metadata_shape(method, params, cid, enabled=self.detailed_logging)
         if not isinstance(params, dict):
             return reject("validation", "invalid_parameters", -32602, "Invalid parameters")
         name = params.get("name")
         arguments = params.get("arguments")
         delivery = params.get("delivery")
         number = arguments.get("session_number") if isinstance(arguments, dict) else None
-        valid_arguments = arguments == {} or (
-            name == "message.received"
-            and isinstance(arguments, dict)
-            and set(arguments) == {"session_number"}
-            and isinstance(number, str)
-            and re.fullmatch(r"[0-9]{4}", number) is not None
+        valid_arguments = (
+            isinstance(arguments, dict)
+            and (
+                (
+                    name == "message.received"
+                    and (
+                        (
+                            set(arguments) == {"session_number"}
+                            and isinstance(number, str)
+                            and re.fullmatch(r"[0-9]{4}", number) is not None
+                        )
+                        or (method == "events/unsubscribe" and arguments == {})
+                    )
+                )
+                or (name != "message.received" and arguments == {})
+            )
         )
         if name not in EVENT_NAMES or not valid_arguments or not isinstance(delivery, dict):
             return reject(
@@ -326,36 +338,15 @@ class MCPEventsAdapter:
                             previous.get("subscriber_agent_id")
                             or previous["recipient_agent_id"]
                         )
-                        metadata = provider_metadata_from_events(
-                            params, principal_id=principal
-                        )
-                        if metadata is not None and self.message_resolver is not None:
-                            admission = current_admission_context()
-                            owner = await self.message_resolver.resolve(
-                                admission, metadata, self.endpoint_role
-                            )
-                            if owner is not None:
-                                subscriber_id = owner.recipient_agent_id
+                        # Removal relies on the authenticated subscription tuple
+                        # and its stored owner, never on optional platform _meta.
                     else:
                         # Idempotent unsubscribe: nothing matching remains for
                         # this principal, exact event and callback tuple.
                         self._emit(method, "persistence", "unsubscribed", cid)
                         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
-                else:
-                    metadata = provider_metadata_from_events(params, principal_id=principal)
-                    admission = current_admission_context()
-                    subscriber = (
-                        await self.message_resolver.resolve(admission, metadata, self.endpoint_role)
-                        if self.message_resolver is not None and metadata is not None
-                        else None
-                    )
-                    if subscriber is not None:
-                        subscriber_id = subscriber.recipient_agent_id
-                if not subscriber_id:
-                    return reject(
-                        "authorization", "subscriber_identity_missing", -32001,
-                        "Established LogicalAgent binding required",
-                    )
+                # Lifecycle subscriptions are global for every agent on the
+                # selected server/fleet and require no provider agent identity.
             if subscriber_id is None:
                 # Keep the legacy adapter's principal-only interface for its
                 # internal/test consumers. Public Access always resolves an owner.
@@ -371,20 +362,9 @@ class MCPEventsAdapter:
         refresh_existing = False
         if name == "message.received":
             admission = current_admission_context()
-            provider_meta = provider_metadata_from_events(
-                params, principal_id=admission.principal_id if admission is not None else None
+            existing = await self.store.message_subscription_binding(
+                principal, arguments, callback
             )
-            existing = (
-                await self.store.message_subscription_binding(principal, arguments, callback)
-                if number is not None else None
-            )
-            if existing is None and number is None and provider_meta is None:
-                return reject(
-                    "authorization",
-                    "identity_metadata_missing",
-                    -32001,
-                    "Bound recipient metadata required",
-                )
             if self.message_resolver is None:
                 return reject(
                     "authorization",
@@ -412,15 +392,9 @@ class MCPEventsAdapter:
                         role=existing["recipient_role"],
                     )
                     refresh_existing = True
-                elif number is not None:
+                else:
                     binding = await self.message_resolver.resolve_number(
                         admission, number, self.endpoint_role
-                    )
-                else:
-                    binding = await self.message_resolver.resolve(
-                        admission,
-                        provider_meta,
-                        self.endpoint_role,
                     )
             except Exception:
                 return reject(
@@ -439,7 +413,7 @@ class MCPEventsAdapter:
             self._emit(method, "authorization", "recipient_bound", cid)
         subscriber_id = binding.recipient_agent_id if binding is not None else None
         subscriber = None
-        if self.endpoint_role == "access":
+        if self.endpoint_role == "access" and name == "message.received":
             admission = current_admission_context()
             metadata = provider_metadata_from_events(params, principal_id=principal)
             if metadata is not None:
