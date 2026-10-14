@@ -184,19 +184,17 @@ def test_agent_instructions_select_docs_and_workflow_checks(tmp_path):
 def test_events_source_keeps_app_and_commit_boundaries_explicit(tmp_path):
     for name in [
         "mcp_events_managed_storage",
-        "mcp_events_managed_live",
+        "mcp_events_session_number",
         "mcp_events_message_binding",
-        "mcp_events_subscription_commit_charlie3",
+        "mcp_events_message_binding",
         "access_mesh_shared_restart",
         "public_errors",
     ]:
         write(tmp_path, "tests/test_" + name + ".py")
     plan = test_plan.affected_plan(tmp_path, ["src/terminal_mcp/mcp/event_server.py"])
     assert plan["tests"] == ["tests/test_mcp_events_managed_storage.py"]
-    assert "tests/test_mcp_events_managed_live.py" in plan["deferred"]["integration"]
-    assert (
-        "tests/test_mcp_events_subscription_commit_charlie3.py" in plan["deferred"]["integration"]
-    )
+    assert "tests/test_mcp_events_session_number.py" in plan["deferred"]["integration"]
+    assert "tests/test_mcp_events_message_binding.py" in plan["deferred"]["integration"]
     assert "tests/test_public_errors.py" not in plan["tests"]
 
 

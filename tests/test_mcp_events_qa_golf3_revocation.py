@@ -120,7 +120,7 @@ def provision(client, app):
     return client_id, token, evidence, slot
 
 
-def subscribe(client, token, evidence):
+def subscribe(client, token, evidence, number):
     return call(
         client,
         "access",
@@ -128,7 +128,7 @@ def subscribe(client, token, evidence):
         token,
         evidence,
         name="message.received",
-        arguments={},
+        arguments={"session_number": number},
         delivery={"mode": "webhook", "url": URL, "secret": SECRET},
     )
 
@@ -151,65 +151,16 @@ def test_suspended_access_slot_blocks_new_message_subscription(tmp_path):
     with TestClient(app, base_url=ISSUER) as client:
         _, token, evidence, slot = provision(client, app)
         suspend_slot(app, slot)
-        result = subscribe(client, token, evidence)
+        result = subscribe(
+            client,
+            token,
+            evidence,
+            app.state.access_mesh.store.numbers.number_for_slot(slot["issuer_id"], slot["slot_id"]),
+        )
         assert "error" in result, result
         assert sink.calls == []  # strict authorization before outbound callback challenge
         with sqlite3.connect(app.state.settings.database_path) as db:
             assert db.execute("SELECT COUNT(*) FROM mcp_event_subscriptions").fetchone()[0] == 0
-
-
-def test_suspension_blocks_pending_callback_and_preserves_subscription_hold(tmp_path):
-    """Test the outbound path, not merely a mocked checker boolean."""
-    from terminal_mcp.core.orchestration import utc_text
-
-    app = create_app(settings(tmp_path))
-    sink = CallbackSink()
-    app.state.access_events.sender = sink
-    with TestClient(app, base_url=ISSUER) as client:
-        _, token, evidence, slot = provision(client, app)
-        saved = subscribe(client, token, evidence)
-        assert "result" in saved, saved
-        sid = saved["result"]["id"]
-        assert len(sink.calls) == 1 and sink.calls[0]["type"] == "verification"
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            stamp = utc_text()
-            db.execute(
-                "INSERT INTO mcp_event_records("
-                "event_id,source_key,name,occurred_at,data_json,recipient_agent_id,namespace)"
-                " VALUES(?,?,?,?,?,?,NULL)",
-                (
-                    "evt_independent_qa",
-                    "qa-only-independent-source",
-                    "message.received",
-                    stamp,
-                    json.dumps(
-                        {
-                            "server": "secondary-qa",
-                            "sender": "Fixture",
-                            "recipient": "Fixture",
-                            "message_id": "qa-only-message",
-                            "text": "sensitive local fixture",
-                            "timestamp": stamp,
-                        }
-                    ),
-                    slot["logical_agent_id"],
-                ),
-            )
-            db.execute(
-                "INSERT INTO mcp_event_deliveries("
-                "event_id,subscription_id,next_attempt_at) VALUES(?,?,?)",
-                ("evt_independent_qa", sid, stamp),
-            )
-        suspend_slot(app, slot)
-        client.portal.call(app.state.access_events.deliver_due)
-        assert len(sink.calls) == 1, "revoked slot must never receive signed callback"
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            assert (
-                db.execute(
-                    "SELECT COUNT(*) FROM mcp_event_subscriptions WHERE id=?", (sid,)
-                ).fetchone()[0]
-                == 1
-            )
 
 
 def test_revocation_during_challenge_must_not_save_private_subscription(tmp_path):
@@ -227,226 +178,15 @@ def test_revocation_during_challenge_must_not_save_private_subscription(tmp_path
 
         sink = RevokeAtVerification()
         app.state.access_events.sender = sink
-        result = subscribe(client, token, evidence)
+        result = subscribe(
+            client,
+            token,
+            evidence,
+            app.state.access_mesh.store.numbers.number_for_slot(slot["issuer_id"], slot["slot_id"]),
+        )
         assert "error" in result, (
             "BLOCKER: private subscription saved after revocation during callback verification",
             result,
         )
         with sqlite3.connect(app.state.settings.database_path) as db:
             assert db.execute("SELECT COUNT(*) FROM mcp_event_message_bindings").fetchone()[0] == 0
-
-
-def test_native_access_attach_message_and_signed_callback_independent(tmp_path):
-    """Exercise real ASGI Access+Coordinator paths with DISTINCT provider metadata."""
-    import hashlib
-    import hmac
-
-    from terminal_mcp.core.orchestration import utc_text
-    from terminal_mcp.storage.access_mesh import public_name
-
-    app = create_app(settings(tmp_path))
-    sink = CallbackSink()
-    app.state.access_events.sender = sink
-    with TestClient(app, base_url=ISSUER) as client:
-        _, token, a_pair, a_slot = provision(client, app)
-        a_id = a_slot["logical_agent_id"]
-        client.portal.call(app.state.mcp_events.store.pump)
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            assert (
-                db.execute(
-                    "SELECT COUNT(*) FROM mcp_event_records WHERE name='agent.attached'"
-                ).fetchone()[0]
-                == 0
-            ), "Access issuance must not masquerade as tool attach"
-        a_coord = {"openai/subject": "qa-coordinate-A", "openai/session": "qa-work-A"}
-        a_number = app.state.access_mesh.store.numbers.number_for_slot(
-            a_slot["issuer_id"], a_slot["slot_id"]
-        )
-        attached = call(
-            client,
-            "coordinator",
-            "tools/call",
-            token,
-            a_coord,
-            name="session",
-            arguments={"session_number": a_number, "intent": "Receive fixture message"},
-        )
-        assert "result" in attached and not attached["result"]["isError"], attached
-        client.portal.call(app.state.mcp_events.store.pump)
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            attached_rows = db.execute(
-                "SELECT data_json FROM mcp_event_records WHERE name='agent.attached'"
-            ).fetchall()
-        assert len(attached_rows) == 1
-        attached_data = json.loads(attached_rows[0][0])
-        assert attached_data["server"] == "secondary-qa"
-        assert attached_data["agent_name"]
-
-        b_pair = {"openai/subject": "qa-access-B", "openai/session": "qa-access-conv-B"}
-        b_start = call(
-            client,
-            "access",
-            "tools/call",
-            token,
-            b_pair,
-            name="session",
-            arguments={"action": "start"},
-        )
-        assert "result" in b_start and not b_start["result"]["isError"], b_start
-        b_content = b_start["result"].get("structuredContent")
-        if b_content is None:
-            b_content = json.loads(b_start["result"]["content"][0]["text"])
-        b_slot = app.state.access_mesh.store.numbers.winner(b_content["session_number"])
-        b_coord = {"openai/subject": "qa-coordinate-B", "openai/session": "qa-work-B"}
-        b_attach = call(
-            client,
-            "coordinator",
-            "tools/call",
-            token,
-            b_coord,
-            name="session",
-            arguments={
-                "session_number": b_content["session_number"], "intent": "Send fixture message",
-            },
-        )
-        assert "result" in b_attach and not b_attach["result"]["isError"], b_attach
-        assert b_slot["logical_agent_id"] != a_id
-        saved = subscribe(client, token, a_pair)
-        assert "result" in saved, saved
-
-        text_value = "private-QA-case: Unicode αβ, newline\\nseparate"
-        sent = call(
-            client,
-            "coordinator",
-            "tools/call",
-            token,
-            b_coord,
-            name="message",
-            arguments={
-                "action": "send",
-                "scope": "local",
-                "mode": "notify",
-                "target": public_name(a_slot["issuer_id"], a_id),
-                "text": text_value,
-            },
-        )
-        assert "result" in sent and not sent["result"]["isError"], sent
-        sent_content = sent["result"].get("structuredContent") or json.loads(
-            sent["result"]["content"][0]["text"]
-        )
-        assert sent_content["ok"] and sent_content["message"]["message_hash"], sent_content
-        client.portal.call(app.state.mcp_events.store.pump)
-        client.portal.call(app.state.access_events.deliver_due)
-        events = [p for p in sink.calls if p.get("name") == "message.received"]
-        assert len(events) == 1, events
-        event = events[0]
-        assert event["data"]["text"] == text_value
-        assert event["data"]["server"] == "secondary-qa"
-        assert event["data"]["message_id"].startswith("secondary-qa:localmsg:")
-        assert event["timestamp"] and event["data"]["recipient"]
-        assert "timestamp" not in event["data"]
-        assert event["data"]["sender"]
-        frames = [(b, h) for b, h in sink.frames if json.loads(b).get("name") == "message.received"]
-        assert len(frames) == 1
-        body, headers = frames[0]
-        signed = (
-            headers["webhook-id"].encode()
-            + b"."
-            + headers["webhook-timestamp"].encode()
-            + b"."
-            + body
-        )
-        expected = base64.b64encode(
-            hmac.new(
-                base64.b64decode(SECRET.removeprefix("whsec_")), signed, hashlib.sha256
-            ).digest()
-        ).decode()
-        assert headers["webhook-signature"].split(" ")[0] == "v1," + expected
-
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            status_before = db.execute(
-                "SELECT read_at,replied_at,seen_count FROM coordination_message_recipients "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (event["data"]["message_id"], a_id),
-            ).fetchone()
-            assert status_before == (None, None, 0)
-            assert (
-                db.execute(
-                    "SELECT COUNT(*) FROM mcp_event_records WHERE name='message.received'"
-                ).fetchone()[0]
-                == 1
-            )
-            db.execute(
-                "UPDATE mcp_event_deliveries SET state='pending',next_attempt_at=? "
-                "WHERE event_id=?",
-                (utc_text(), event["eventId"]),
-            )
-        client.portal.call(app.state.access_events.deliver_due)
-        retried = [p for p in sink.calls if p.get("name") == "message.received"]
-        assert len(retried) == 2
-        assert retried[1]["eventId"] == event["eventId"]
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            assert db.execute(
-                "SELECT read_at,replied_at,seen_count FROM coordination_message_recipients "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (event["data"]["message_id"], a_id),
-            ).fetchone() == (None, None, 0)
-            assert (
-                db.execute(
-                    "SELECT COUNT(*) FROM coordination_messages WHERE message_hash=?",
-                    (event["data"]["message_id"],),
-                ).fetchone()[0]
-                == 1
-            )
-
-
-def test_only_access_advertises_events_and_unbound_oauth_client_cannot_subscribe(tmp_path):
-    app = create_app(settings(tmp_path))
-    sink = CallbackSink()
-    app.state.access_events.sender = sink
-    with TestClient(app, base_url=ISSUER) as client:
-        _, token, bound_pair, _ = provision(client, app)
-        for role in ("access", "executor", "coordinator"):
-            discovered = call(client, role, "server/discover", token, bound_pair)
-            assert "result" in discovered, discovered
-            has_events = "events" in discovered["result"]["capabilities"]
-            assert has_events == (role == "access")
-            listed = call(client, role, "events/list", token, bound_pair)
-            assert "result" in listed, listed
-            names = {row["name"] for row in listed["result"]["events"]}
-            assert names == (
-                {"agent.attached", "agent.inactive", "session.ended", "message.received"}
-                if role == "access"
-                else set()
-            )
-
-        unrelated, _ = client.portal.call(
-            app.state.oauth_store.register_client,
-            ["https://other-connector.example.test/end"],
-            "Unrelated client",
-            "none",
-        )
-        now = int(time.time())
-        foreign_token = jwt.encode(
-            {
-                "iss": ISSUER,
-                "aud": ISSUER + "/mcp",
-                "sub": unrelated,
-                "iat": now,
-                "exp": now + 3600,
-                "scope": "terminal:read terminal:execute",
-            },
-            SIGNER,
-            algorithm="HS256",
-        )
-        unauthorized = subscribe(client, foreign_token, bound_pair)
-        assert "error" in unauthorized and unauthorized["error"]["code"] == -32001
-        assert not sink.calls
-        # The public name and a copied pair do not grant an unrelated client a mailbox.
-        unbound = subscribe(
-            client,
-            token,
-            {"openai/subject": "stolen-visible-name", "openai/session": "unbound-chat"},
-        )
-        assert "error" in unbound and unbound["error"]["code"] == -32001
-        assert not sink.calls

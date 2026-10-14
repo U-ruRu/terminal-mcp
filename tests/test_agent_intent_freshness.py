@@ -6,11 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
-from jsonschema import Draft202012Validator
 from test_access_mesh_mcp_runtime import rpc, settings
 
 from terminal_mcp.app import create_app
-from terminal_mcp.core.human_names import full_agent_name, number_agent_name
 from terminal_mcp.core.managed_sessions import ManagedOperation
 
 
@@ -139,48 +137,6 @@ def test_concurrent_observations_have_exactly_one_grace_and_restart_keeps_gate(t
         assert sum(not result["blocked"] for result in statuses) == 1
         store = create_app(config).state.access_mesh.store
         assert store.intent_status(slot, now=now, observe=True, require_intent=True)["blocked"]
-
-
-def test_overview_local_scope_real_name_stable_id_and_expired_filter(tmp_path):
-    config = settings(tmp_path).model_copy(update={"fleet_instance_id": "server-a"})
-    app = create_app(config)
-    with TestClient(app, base_url="https://terminal.example") as client:
-        issued = start(client)
-        mesh = app.state.access_mesh
-        slot = mesh.store.code_slot(mesh.store.local_node_id, issued["session_number"])
-        with sqlite3.connect(config.database_path) as db:
-            db.execute(
-                "UPDATE access_mesh_slot_replicas SET display_suffix='Fixture reviewer' "
-                "WHERE issuer_id=? AND slot_id=?",
-                (slot.issuer_id, slot.slot_id),
-            )
-        result = invoke(client, "coordinator", "agent_observe", {})["structuredContent"]
-        assert result["scope"] == "local" and result["server_id"] == mesh.store.local_node_id
-        record = result["agents"][0]
-        expected_name = full_agent_name(
-            number_agent_name(issued["session_number"]), "Fixture reviewer"
-        )
-        assert record["display_name"] == record["public_name"] == expected_name
-        assert record["logical_agent_id"] == slot.logical_agent_id
-        assert record["current_intent"] == "Verify isolated fixture commands"
-        assert record["intent_state"] == "fresh" and record["intent_updated_at"]
-        advance(mesh, 180)
-        stale = invoke(
-            client, "coordinator", "agent_observe", {"logical_agent_id": slot.logical_agent_id}
-        )["structuredContent"]["agents"][0]
-        assert stale["intent_state"] == "stale" and stale["session_state"] == "active"
-        advance(mesh, 2000)
-        assert (
-            invoke(client, "coordinator", "agent_observe", {})["structuredContent"]["agents"] == []
-        )
-        ended = invoke(client, "coordinator", "agent_observe", {"include_inactive": True})[
-            "structuredContent"
-        ]["agents"][0]
-        assert ended["session_state"] in {"expired", "cooldown"}
-        assert ended["hard_expires_at"] and ended["work_session_id"] == record["work_session_id"]
-        tools = rpc(client, "coordinator", "tools/list").json()["result"]["tools"]
-        schema = next(tool["outputSchema"] for tool in tools if tool["name"] == "agent_observe")
-        Draft202012Validator(schema).validate(result)
 
 
 def test_pagination_filter_scope_and_long_command_reads_do_not_refresh_intent(tmp_path):

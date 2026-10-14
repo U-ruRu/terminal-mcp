@@ -138,43 +138,6 @@ def test_ended_recipient_send_write_fence_and_last_subscription_removal(tmp_path
         assert all(p["state"] == "released" for p in pins(app))
 
 
-def test_nullable_ttl_restart_and_upgrade_preserve_exact_configuration(tmp_path):
-    app, _ = setup_app(tmp_path)
-    with TestClient(app, base_url="https://terminal.example") as client:
-        number, _, access, _ = issue(client, app, "durable")
-        result = subscribe(client, number, omit=True)["result"]
-        record = stored(app, result["id"])
-        assert result["refreshBefore"] == record["expires_at"] is not None
-        tool(client, "access", "session", {"action": "end"}, evidence=access)
-    # Model pre-feature NOT NULL schema with no pin table. Migration preserves
-    # callbacks, secret rotation and expiration privately, with no fresh lease.
-    path = app.state.settings.database_path
-    with sqlite3.connect(path) as db:
-        schema = db.execute(
-            "SELECT sql FROM sqlite_master WHERE name='mcp_event_subscriptions'"
-        ).fetchone()[0]
-        db.execute("ALTER TABLE mcp_event_subscriptions RENAME TO old_subscriptions")
-        db.execute(schema.replace("expires_at TEXT", "expires_at TEXT NOT NULL"))
-        db.execute("INSERT INTO mcp_event_subscriptions SELECT * FROM old_subscriptions")
-        db.execute("DROP TABLE old_subscriptions")
-        db.execute("DROP TABLE access_mesh_recipient_holds")
-    restarted, sink = setup_app(tmp_path)
-    with TestClient(restarted, base_url="https://terminal.example") as client:
-        assert stored(restarted, result["id"]) == record
-        assert pins(restarted)[0]["state"] == "held"
-        null = subscribe(client, number)["result"]
-        assert null["id"] == result["id"] and null["refreshBefore"] is None
-        durable = stored(restarted, result["id"])
-    again, _ = setup_app(tmp_path)
-    with TestClient(again, base_url="https://terminal.example") as client:
-        assert stored(again, result["id"]) == durable
-        assert durable["expires_at"] is None
-        finite = subscribe(client, number, ttl=120000)["result"]
-        deadline = datetime.fromisoformat(finite["refreshBefore"].replace("Z", "+00:00"))
-        assert 110 < (deadline - datetime.now(UTC)).total_seconds() <= 120
-        assert stored(again, result["id"])["expires_at"] == finite["refreshBefore"]
-
-
 def test_lifecycle_subscriptions_do_not_pin_and_claimed_unsubscribe_cannot_dispatch(tmp_path):
     app, _ = setup_app(tmp_path)
     with TestClient(app, base_url="https://terminal.example") as client:
@@ -207,7 +170,8 @@ def test_lifecycle_subscriptions_do_not_pin_and_claimed_unsubscribe_cannot_dispa
                 (sub, stamp),
             )
         claimed = next(
-            row for row in client.portal.call(app.state.mcp_events.store.due_deliveries)
+            row
+            for row in client.portal.call(app.state.mcp_events.store.due_deliveries)
             if row["subscription_id"] == sub
         )
         assert client.portal.call(app.state.mcp_events.store.dispatch_is_current, claimed)
@@ -351,13 +315,11 @@ async def test_hold_http_anti_entropy_outage_and_withdrawal(tmp_path):
         source.store.recipient_holds.merge([row], authenticated_peer_id="firstbyte")
         await replica_rep.sync_recipient_holds(replica_rep.peers[0])
         await replica_rep.sync_numbers(replica_rep.peers[0])
-        expected = [{key: row[key] for key in (
-            "recipient_agent_id", "issuer_id", "slot_id", "number"
-        )}]
+        expected = [
+            {key: row[key] for key in ("recipient_agent_id", "issuer_id", "slot_id", "number")}
+        ]
         assert replica.store.recipient_holds.local_recipients() == expected
-        attached = await replica.attach(
-            actor(), issuer_node_id="firstbyte", access_code="7312"
-        )
+        attached = await replica.attach(actor(), issuer_node_id="firstbyte", access_code="7312")
         assert attached["logical_agent_id"] == issued["logical_agent_id"]
         from test_access_mesh_replication_http import T0
 

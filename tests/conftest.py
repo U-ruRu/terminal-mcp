@@ -37,7 +37,6 @@ SCHEMA_PREPARATION_MODULES = frozenset(
         "test_mcp_events_fleet_lifecycle.py",
         "test_mcp_events_global_held_recipients.py",
         "test_mcp_events_message_binding.py",
-        "test_mcp_events_subscription_commit_charlie3.py",
         "test_qa_complete_task_mcp_e2e.py",
         "test_task_qa_public_state.py",
         "test_v010.py",
@@ -72,6 +71,22 @@ EMPTY_DB_PREPARATION_MODULES = frozenset(
         "test_compact_response_independent.py",
     }
 )
+
+
+def pytest_sessionstart(session):
+    """Prevent a live Terminal MCP service environment from changing test fixtures.
+
+    Integration tests set their own configuration or use monkeypatch. Reading the
+    installed service's env would silently replace their isolated Settings.
+    Only the pytest child process is affected, never the running server.
+    Set TMCP_TEST_INHERIT_SERVER_ENV=1 to explicitly test inherited configuration.
+    """
+    del session
+    if os.environ.get("TMCP_TEST_INHERIT_SERVER_ENV") == "1":
+        return
+    for key in tuple(os.environ):
+        if key.startswith("TERMINAL_MCP_"):
+            os.environ.pop(key, None)
 
 
 def pytest_addoption(parser):

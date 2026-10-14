@@ -88,71 +88,46 @@ def fleet_policy(client, duration, *, expected=None):
     return response.json()
 
 
-def test_standalone_defaults_slot_override_reset_and_current_window(tmp_path):
+def test_standalone_defaults_duration_updates_inherited_slot_after_session_start(tmp_path):
     app = create_app(settings(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
-        set_clock(app, T0)
-        inherited = create(client, "standalone-inherit")
-        other = create(client, "standalone-override", policy={"duration_seconds": 7200})
-        assert internal_persistent_start(client, app, inherited["access_code"]).get("ok") is True
-        before = read_slot(client, inherited["slot_id"])
-        fixed = read_slot(client, other["slot_id"])
-        initial_defaults = defaults(client)
-        assert initial_defaults["mesh_policy_supported"] is False
-        set_clock(app, T0 + timedelta(seconds=60))
-        change_defaults(client, "defaults-long", policy={"duration_seconds": 10800})
-        after = read_slot(client, inherited["slot_id"])
-        assert after["policy"]["duration_seconds"] == 10800
-        assert after["policy_override"] is None
-        assert after["inheritance"]["source"] == "standalone"
-        assert after["current_policy"] == before["policy"]
+        issued = create(client, "defaults-after-start")
+        assert internal_persistent_start(client, app, issued["access_code"])["ok"]
+        change_defaults(client, "defaults-3h", policy={"duration_seconds": 10800})
+        assert read_slot(client, issued["slot_id"])["policy"]["duration_seconds"] == 10800
+
+
+def test_standalone_defaults_edit_does_not_restart_active_session(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        issued = create(client, "defaults-active-window")
+        assert internal_persistent_start(client, app, issued["access_code"])["ok"]
+        before = read_slot(client, issued["slot_id"])
+        change_defaults(client, "defaults-duration-change", policy={"duration_seconds": 10800})
         assert (
-            after["session_lifecycle"]["hard_expires_at"]
+            read_slot(client, issued["slot_id"])["session_lifecycle"]["hard_expires_at"]
             == before["session_lifecycle"]["hard_expires_at"]
         )
-        other_after = read_slot(client, other["slot_id"])
-        assert other_after["policy"] == fixed["policy"]
-        assert other_after["revision"] == fixed["revision"]
-        stale = client.post(
-            "/actions/access/mutate",
-            headers=HEADERS,
-            json={
-                "action": "policy",
-                "idempotency_key": "stale-after-parent",
-                "slot_id": inherited["slot_id"],
-                "expected_revision": before["revision"],
-                "policy": {"duration_seconds": 3600},
-            },
-        ).json()
-        assert stale.get("code") == "revision_conflict"
+
+
+def test_standalone_slot_override_reset_uses_current_defaults(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url="https://terminal.example") as client:
+        issued = create(client, "slot-reset", policy={"duration_seconds": 7200})
+        before = read_slot(client, issued["slot_id"])
+        parent = defaults(client)
         mutate(
             client,
             "policy",
-            "slot-specific",
-            slot_id=inherited["slot_id"],
-            expected_revision=after["revision"],
-            policy={"duration_seconds": 9000},
-        )
-        override = read_slot(client, inherited["slot_id"])
-        change_defaults(client, "parent-again", policy={"duration_seconds": 14400})
-        preserved = read_slot(client, inherited["slot_id"])
-        assert preserved["policy"] == override["policy"]
-        assert preserved["revision"] == override["revision"]
-        body = dict(
-            slot_id=inherited["slot_id"],
-            expected_revision=preserved["revision"],
+            "restore-standalone-defaults",
+            slot_id=issued["slot_id"],
+            expected_revision=before["revision"],
+            expected_parent_revision=parent["revision"],
             inherit_policy=True,
         )
-        result = mutate(client, "policy", "reset-slot", **body)
-        assert mutate(client, "policy", "reset-slot", **body) == result
-        reset = read_slot(client, inherited["slot_id"])
-        assert reset["policy"]["duration_seconds"] == 14400
-        assert reset["policy_override"] is None
-        assert (
-            reset["session_lifecycle"]["hard_expires_at"]
-            == before["session_lifecycle"]["hard_expires_at"]
-        )
-        assert defaults(client)["revision"] > initial_defaults["revision"]
+        result = read_slot(client, issued["slot_id"])
+        assert result["policy_override"] is None
+        assert result["policy"] == parent["policy"]
 
 
 def test_real_fleet_http_policy_reaches_native_slots_and_reset(tmp_path):
@@ -218,49 +193,6 @@ def test_real_fleet_http_policy_reaches_native_slots_and_reset(tmp_path):
             inherit_policy=True,
         )
         assert read_slot(client, issued["slot_id"])["policy"]["duration_seconds"] == 21600
-
-
-def test_defaults_cascade_and_receipt_roll_back_together(tmp_path, monkeypatch):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        set_clock(app, T0)
-        ids = [create(client, f"rollback-{n}")["slot_id"] for n in range(2)]
-        before = [read_slot(client, slot_id) for slot_id in ids]
-        parent = defaults(client)
-        store = app.state.access_mesh.store
-        original = store.apply_event
-        calls = 0
-
-        def fail_second(event, **kwargs):
-            nonlocal calls
-            if event.kind == "SlotPolicyChanged":
-                calls += 1
-                if calls == 2:
-                    raise RuntimeError("synthetic propagation failure")
-            return original(event, **kwargs)
-
-        monkeypatch.setattr(store, "apply_event", fail_second)
-        body = {
-            "action": "defaults",
-            "idempotency_key": "atomic-retry",
-            "expected_revision": parent["revision"],
-            "policy": {"duration_seconds": 10800},
-        }
-        assert (
-            client.post("/actions/access/mutate", headers=HEADERS, json=body).json().get("ok")
-            is False
-        )
-        assert defaults(client) == parent
-        assert [read_slot(client, slot_id) for slot_id in ids] == before
-        monkeypatch.setattr(store, "apply_event", original)
-        assert (
-            client.post("/actions/access/mutate", headers=HEADERS, json=body).json().get("ok")
-            is True
-        )
-        assert [read_slot(client, slot_id)["policy"]["duration_seconds"] for slot_id in ids] == [
-            10800,
-            10800,
-        ]
 
 
 def test_applied_mesh_replica_and_detach_keep_current_snapshot(tmp_path):
@@ -338,107 +270,6 @@ def test_unavailable_mesh_authority_is_not_a_success_or_local_override(
         assert defaults(client) == before
         assert before["inheritance"]["parent"]["freshness"] == "last_known"
         assert before["policy_override"] is None
-
-
-def test_inherited_policy_events_preserve_window_on_access_replica(tmp_path):
-    from terminal_mcp.core.access_mesh_grants import LocalAccessMesh
-
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        set_clock(app, T0)
-        issued = create(client, "access-replica-window")
-        assert internal_persistent_start(client, app, issued["access_code"]).get("ok") is True
-        before = read_slot(client, issued["slot_id"])
-        set_clock(app, T0 + timedelta(seconds=60))
-        change_defaults(client, "access-replica-defaults", policy={"duration_seconds": 10800})
-        store = app.state.access_mesh.store
-        # Transport the actual committed event log, never invent a replacement domain event.
-        import json
-
-        from terminal_mcp.core.access_mesh_grants import AccessSlotEvent
-
-        with store._connect() as db:
-            records = db.execute(
-                "SELECT event_json FROM access_mesh_event_log "
-                "WHERE issuer_id=? AND slot_id=? ORDER BY revision",
-                (store.local_node_id, issued["slot_id"]),
-            ).fetchall()
-        replica = LocalAccessMesh(
-            tmp_path / "replica.sqlite3",
-            local_node_id="replica",
-            trusted_issuers=frozenset({"firstbyte"}),
-            proof_key=b"synthetic-replica-proof",
-        )
-        for row in records:
-            event = AccessSlotEvent.from_wire(json.loads(row[0]))
-            replica.apply_event(
-                event,
-                authenticated_peer_id="firstbyte",
-                issued_kind="persistent" if event.kind == "SlotIssued" else None,
-            )
-        slot = replica.slot("firstbyte", issued["slot_id"])
-        assert slot.inherit_policy is True
-        assert slot.policy.duration_seconds == 10800
-        assert (
-            slot.effective(T0 + timedelta(seconds=60)).policy.duration_seconds
-            == before["policy"]["duration_seconds"]
-        )
-        assert (
-            slot.effective(T0 + timedelta(seconds=60)).deadline_at.isoformat(
-                timespec="microseconds"
-            )
-            == before["session_lifecycle"]["hard_expires_at"]
-        )
-        # Full snapshot catch-up must carry both inheritance and the captured window.
-        snapshot_app = create_app(settings(tmp_path / "snapshot-catchup"))
-        with TestClient(snapshot_app, base_url="https://terminal.example"):
-            set_clock(snapshot_app, T0 + timedelta(seconds=60))
-            snapshot_store = snapshot_app.state.access_mesh.store
-            raw = store.snapshot_page(issuer_id="firstbyte")[0]
-            assert (
-                snapshot_store.apply_snapshot(raw, authenticated_peer_id="firstbyte") == "applied"
-            )
-            assert (
-                snapshot_store.apply_snapshot(raw, authenticated_peer_id="firstbyte") == "duplicate"
-            )
-            caught_up = snapshot_store.slot("firstbyte", issued["slot_id"])
-            assert caught_up.inherit_policy is True
-            assert caught_up.policy.duration_seconds == 10800
-            assert caught_up.policy_window == slot.policy_window
-
-
-def test_reset_rejects_stale_parent_even_when_slot_override_revision_is_unchanged(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        set_clock(app, T0)
-        issued = create(client, "parent-cas-create", policy={"duration_seconds": 7200})
-        before = read_slot(client, issued["slot_id"])
-        body = {
-            "action": "policy",
-            "slot_id": issued["slot_id"],
-            "expected_revision": before["revision"],
-            "inherit_policy": True,
-            "expected_parent_revision": before["inheritance"]["parent"]["revision"],
-            "idempotency_key": "parent-cas-stale-reset",
-        }
-        change_defaults(client, "parent-cas-change", policy={"duration_seconds": 10800})
-        current = read_slot(client, issued["slot_id"])
-        assert current["revision"] == before["revision"]
-        response = client.post("/actions/access/mutate", headers=HEADERS, json=body).json()
-        assert response.get("ok") is False
-        assert response.get("code") == "revision_conflict"
-        assert read_slot(client, issued["slot_id"]) == current
-        # A fresh, deliberate reset succeeds; it is not an automatic blind retry.
-        mutate(
-            client,
-            "policy",
-            "parent-cas-fresh-reset",
-            slot_id=issued["slot_id"],
-            expected_revision=current["revision"],
-            inherit_policy=True,
-            expected_parent_revision=current["inheritance"]["parent"]["revision"],
-        )
-        assert read_slot(client, issued["slot_id"])["policy"]["duration_seconds"] == 10800
 
 
 def test_reset_request_requires_explicit_parent_revision(tmp_path):

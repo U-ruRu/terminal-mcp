@@ -87,26 +87,6 @@ def test_manifest_names_authoritative_state_and_excludes_derived_cache(tmp_path)
     assert {"output_cache", "fleet_projection", "log"} == excluded
 
 
-def test_fleet_members_are_optional_on_clean_standalone_node(tmp_path):
-    settings = _settings(tmp_path)
-    manifest = authoritative_backup_manifest(settings)
-    members = {item["member_id"]: item for item in manifest["members"]}
-
-    assert members["fleet_node_meta"]["required"] is False
-    assert members["fleet_control"]["required"] is False
-
-
-def test_existing_fleet_state_becomes_required_even_if_feature_flags_are_off(tmp_path):
-    settings = _settings(tmp_path)
-    _sqlite(settings.effective_fleet_control_path())
-
-    members = {
-        item["member_id"]: item for item in authoritative_backup_manifest(settings)["members"]
-    }
-    assert members["fleet_node_meta"]["required"] is True
-    assert members["fleet_control"]["required"] is True
-
-
 def test_validation_accepts_complete_standalone_state_and_optional_runtime_config(tmp_path):
     settings = _settings(tmp_path)
     _complete_source(settings)

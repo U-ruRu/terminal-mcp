@@ -10,12 +10,34 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
-from test_mcp_events_managed_live import _settings
 
 from terminal_mcp.app import create_app
+from terminal_mcp.config import Settings
 from terminal_mcp.mcp import event_diagnostics, event_webhooks
 from terminal_mcp.mcp.event_server import MCPEventsAdapter
 from terminal_mcp.runtime import RuntimeConfig, RuntimeConfigProvider
+
+
+def _settings(tmp_path):
+    return Settings(
+        database_path=tmp_path / "web.db",
+        auth_database_path=tmp_path / "auth.db",
+        runtime_config_path=tmp_path / "runtime.env",
+        log_path=tmp_path / "runtime.log",
+        metrics_port=0,
+        fleet_v1_source_enabled=False,
+        fleet_v1_authority_enabled=False,
+        fleet_v1_projection_enabled=False,
+        fleet_v1_public_enabled=False,
+        persistent_agents_enabled=False,
+        legacy_agent_admission_enabled=True,
+        cwd=tmp_path,
+        public_base_url="https://example.test",
+        auth_mode="bearer",
+        bearer_tokens="safe-test-credential",
+        mcp_auth_mode="",
+        actions_auth_mode="",
+    )
 
 
 @pytest.mark.asyncio
@@ -271,6 +293,7 @@ async def test_stale_dispatch_gate_keeps_retry_state_and_never_calls_callback(ca
     assert attempts == [("PRIVATE_EVENT", "PRIVATE_SUBSCRIPTION", None)] * 2
     assert "tmcp_events_diag" not in caplog.text
     assert "tmcp_events_error" not in caplog.text
+
 
 def test_metadata_shape_logging_is_switchable_and_never_exposes_values(caplog):
     probe = event_diagnostics.emit_metadata_shape
