@@ -146,7 +146,7 @@ async def test_structural_errors_reach_authoritative_validator():
     tools = _tool_map("executor")
     cases = (
         ("command_run", {}, "missing_required", "command"),
-        ("command_cancel", {"cmd_hash": "x", "bogus": 1}, "unexpected_field", "*"),
+        ("command_cancel", {"cmd_hash": "x", "bogus": 1}, "unexpected_field", "bogus"),
         ("message", {"action": "reply", "text": "hello"}, "constraint_violation", "message_hash"),
     )
     for name, args, reason, path in cases:
@@ -163,6 +163,64 @@ async def test_structural_errors_reach_authoritative_validator():
         assert error["details"]["validation_errors"]
         assert json.loads(result.content[0].text) == payload
         assert len(json.dumps(payload, separators=(",", ":")).encode()) < 1024
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_state", ["invalid", 42, None])
+async def test_task_state_invalid_input_has_structured_repair_and_no_domain_call(
+    monkeypatch, bad_state
+):
+    from terminal_mcp.application.api import TerminalApplication
+
+    async def forbidden_task(*args, **kwargs):
+        raise AssertionError("Malformed state reached the domain mutation")
+
+    monkeypatch.setattr(TerminalApplication, "task", forbidden_task)
+    result = await _tool_map("executor")["task_state"].run(
+        {"namespace": "smoke", "task_id": "T-1", "state": bad_state},
+        convert_result=True,
+    )
+    assert result.isError is False
+    data = result.structuredContent
+    assert data["ok"] is False
+    assert data["outcome"] == "not_committed"
+    error = data["error"]
+    assert error["code"] == "input_validation_failed"
+    assert error["reason"] == "invalid_value"
+    assert error["path"] == "state"
+    assert error["expected"] == "one of: ready|in_progress|qa|blocked|deferred|done"
+    assert error["details"]["validation_errors"][0]["expected"] == error["expected"]
+    assert json.loads(result.content[0].text) == data
+
+
+@pytest.mark.asyncio
+async def test_invalid_literal_and_unknown_keys_are_actionable_and_bounded():
+    tools = _tool_map("executor")
+    result = await tools["task_list"].run({"lane": "not_a_lane"}, convert_result=True)
+    assert result.structuredContent["error"]["code"] == "input_validation_failed"
+    assert result.structuredContent["error"]["path"] == "lane"
+    assert result.structuredContent["error"]["expected"] == (
+        "one of: implementation|review|release|integration|general"
+    )
+
+    result = await tools["command_run"].run(
+        {"command": "printf must_not_run", "unexpected_option": True}, convert_result=True
+    )
+    assert result.structuredContent["error"]["path"] == "unexpected_option"
+    assert result.structuredContent["error"]["details"]["validation_errors"][0]["path"] == (
+        "unexpected_option"
+    )
+
+    # Arbitrary long/malformed field names are masked; never echo caller values.
+    secret_key = "UNTRUSTED_" + "S" * 200
+    result = await tools["command_run"].run(
+        {"command": "printf must_not_run", secret_key: "TOKEN_SHOULD_NOT_LEAK"},
+        convert_result=True,
+    )
+    wire = json.dumps(result.structuredContent)
+    assert result.structuredContent["error"]["path"] == "*"
+    assert secret_key not in wire
+    assert "TOKEN_SHOULD_NOT_LEAK" not in wire
 
 
 def test_compact_health_matches_closed_role_output_contract():

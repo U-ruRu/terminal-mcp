@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
@@ -705,6 +706,53 @@ _CONDITIONAL_ERROR_HINTS = {
 }
 
 
+# Only strict Pydantic extra_forbidden errors may identify unexpected input keys.
+# Reveal bounded identifier segments, never arbitrary key text or rejected values.
+_SAFE_UNKNOWN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+_SAFE_CHOICE = re.compile(r"'([A-Za-z0-9_.:-]{1,48})'")
+
+
+def _validation_path(location: tuple, error_type: str) -> str:
+    parts = []
+    for part in location[:12]:
+        if type(part) is int:
+            parts.append(str(part) if 0 <= part <= 9999 else "*")
+        elif isinstance(part, str) and (
+            part in PUBLIC_FIELDS
+            or (error_type == "extra_forbidden" and _SAFE_UNKNOWN_KEY.fullmatch(part))
+        ):
+            parts.append(part)
+        else:
+            parts.append("*")
+    result = ".".join(parts) or "$"
+    return result if len(result) <= 160 else "*"
+
+
+def _declared_values_expected(issue: dict) -> str | None:
+    """Return bounded choices from schema-owned Pydantic enum/literal context."""
+    if issue.get("type") not in {"literal_error", "enum"}:
+        return None
+    ctx = issue.get("ctx")
+    declared = ctx.get("expected") if isinstance(ctx, dict) else None
+    if not isinstance(declared, str):
+        return "a declared value"
+    choices = _SAFE_CHOICE.findall(declared)
+    if not choices:
+        return "a declared value"
+    result = "one of: " + "|".join(choices)
+    if len(result) <= 96:
+        return result
+    result = "one of: "
+    for index, choice in enumerate(choices):
+        remaining = len(choices) - index - 1
+        candidate = result + ("|" if index else "") + choice
+        suffix = f" (+{remaining} more)" if remaining else ""
+        if len(candidate + suffix) > 96:
+            return result.rstrip("|") + f" (+{len(choices) - index} more)"
+        result = candidate
+    return result
+
+
 def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, object]:
     issue = exc.errors(include_url=False, include_input=False)[0]
     error_type = str(issue.get("type") or "")
@@ -731,9 +779,7 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
         None,
     )
     if location:
-        path = ".".join(
-            str(part) if part in PUBLIC_FIELDS or type(part) is int else "*" for part in location
-        )
+        path = _validation_path(location, error_type)
     else:
         path = "$"
         for candidate in (
@@ -763,12 +809,24 @@ def validation_error(exc: ValidationError, raw: dict[str, object]) -> dict[str, 
     if hint is not None:
         path = hint[0]
     repair = bounded_validation_error(exc).details
-    if isinstance(repair, ValidationRepair) and not location and path != "$":
+    if isinstance(repair, ValidationRepair):
         issues = list(repair.validation_errors)
-        fields = {"path": path, "description": f"Correct {path} for this action."}
-        if hint is not None:
-            fields.update(description=hint[2], expected=hint[1])
-        issues[0] = issues[0].model_copy(update=fields)
+        # Keep nested repair paths aligned with the top-level public path.
+        for index, (entry, record) in enumerate(
+            zip(exc.errors(include_url=False, include_input=False), issues, strict=False)
+        ):
+            updates = {}
+            if entry.get("type") == "extra_forbidden":
+                updates["path"] = _validation_path(tuple(entry.get("loc") or ()), "extra_forbidden")
+            expected = _declared_values_expected(entry)
+            if expected is not None:
+                updates["expected"] = expected
+            if index == 0 and not location and path != "$":
+                updates.update(path=path, description=f"Correct {path} for this action.")
+                if hint is not None:
+                    updates.update(description=hint[2], expected=hint[1])
+            if updates:
+                issues[index] = record.model_copy(update=updates)
         repair = ValidationRepair(validation_errors=tuple(issues))
     return public_error(
         "input_validation_failed", reason=reason, path=path, details=repair

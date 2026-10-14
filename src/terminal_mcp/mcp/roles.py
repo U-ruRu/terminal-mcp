@@ -865,16 +865,6 @@ def build_role_mcp(
             description=ROLE_TOOL_DESCRIPTIONS[(role, "task_state")],
         )
         async def task_state(boundary: RuntimeBoundary) -> dict:
-            # Invalid workflow values are a domain error, not a generic
-            # transport validation failure. Other malformed fields still
-            # pass through the strict boundary validator below.
-            arguments = boundary.raw_arguments
-            if "state" in arguments and (
-                type(arguments["state"]) is not str
-                or arguments["state"]
-                not in {"ready", "in_progress", "qa", "blocked", "deferred", "done"}
-            ):
-                return public_error("invalid_state").as_dict()
             request, failure = _validate(boundary, role, "task_state")
             if failure is not None:
                 return failure

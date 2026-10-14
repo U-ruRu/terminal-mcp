@@ -234,9 +234,7 @@ def test_isolated_mcp_wire_20_invalid_and_many_valid(tmp_path):
             role, name = key.split(".", 1)
             err, bytes_http, bytes_result = rpc(client, role, name, invalid, i * 2)
             assert err.get("ok") is False, (key, err)
-            assert err["error"]["code"] == (
-                "invalid_state" if key == "executor.task_state" else "input_validation_failed"
-            ), (key, err)
+            assert err["error"]["code"] == "input_validation_failed", (key, err)
             assert "inputSchema" not in json.dumps(err), (key, err)
             assert bytes_result < 3000, (key, bytes_result)
             error_rows.append(

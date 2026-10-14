@@ -482,7 +482,7 @@ def test_coordinator_create_update_public_minimal_results(tmp_path):
         assert duplicate["error"]["code"] == "duplicate_task"
 
 
-def test_public_task_state_invalid_value_returns_invalid_state_not_generic_validation(tmp_path):
+def test_public_task_state_invalid_value_reports_input_validation_and_keeps_domain_errors(tmp_path):
     from fastapi.testclient import TestClient
     from test_access_mesh_mcp_runtime import call, settings
 
@@ -500,7 +500,13 @@ def test_public_task_state_invalid_value_returns_invalid_state_not_generic_valid
                 {"namespace": "any", "task_id": "missing", "state": state},
             )
             assert failure["ok"] is False
-            assert failure["error"]["code"] == "invalid_state", failure
+            assert failure["error"]["code"] == "input_validation_failed", failure
+            assert failure["error"]["reason"] == "invalid_value", failure
+            assert failure["error"]["path"] == "state", failure
+            assert failure["error"]["expected"] == (
+                "one of: ready|in_progress|qa|blocked|deferred|done"
+            )
+            assert failure["outcome"] == "not_committed"
         missing = call(
             client,
             "executor",
