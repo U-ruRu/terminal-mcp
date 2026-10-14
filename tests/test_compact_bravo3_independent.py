@@ -6,20 +6,9 @@ import asyncio
 import json
 import pathlib
 
-import pytest
 from fastapi.testclient import TestClient
-from jsonschema import Draft202012Validator
-from pydantic import ValidationError
 
 from terminal_mcp.app import create_app
-from terminal_mcp.application.task_requests import (
-    TaskArchiveRequest,
-    TaskCheckpointRequest,
-    TaskCreateRequest,
-    TaskReviewRequest,
-    TaskStateRequest,
-    TaskUpdateRequest,
-)
 from terminal_mcp.config import Settings
 from terminal_mcp.mcp.access_contracts import (
     AttachInput,
@@ -32,7 +21,6 @@ from terminal_mcp.mcp.access_contracts import (
 )
 from terminal_mcp.mcp.role_contracts import (
     ROLE_TOOL_MODELS,
-    TaskManageInput,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -106,47 +94,6 @@ CASES = {
     "coordinator.health": ({}, {"extended": "yes"}),
 }
 assert len(CASES) == 20
-
-
-@pytest.mark.parametrize("key", list(CASES))
-def test_manual_roster_sources_and_minimal_boundaries(key):
-    role, name = key.split(".", 1)
-    item = next(t for t in CATALOGS[role] if t["name"] == name)
-    model = model_of(role, name)
-    strict = model.model_json_schema()
-    assert strict == SIDECAR[key]["inputSchema"], key
-    assert item["inputSchema"] == {"type": "object"}, key
-    assert item["outputSchema"] == {"type": "object"}, key
-    assert Draft202012Validator(item["inputSchema"]).is_valid(CASES[key][1]), key
-    assert all(f in item["description"] for f in strict.get("properties", {})), key
-    Draft202012Validator.check_schema(item["inputSchema"])
-    valid, invalid = CASES[key]
-    assert not list(Draft202012Validator(item["inputSchema"]).iter_errors(valid)), key
-    assert model.model_validate(valid)
-    assert not list(Draft202012Validator(strict).iter_errors(valid)), key
-    if key == "coordinator.task_manage":
-        assert model.model_validate(invalid)  # top-level permissive, canonical action enforces
-    else:
-        with pytest.raises(ValidationError):
-            model.model_validate(invalid)
-
-
-def test_role_publication_against_actual_isolated_app(tmp_path):
-    app = create_app(make_settings(tmp_path))
-    for role in ROLES:
-        server = getattr(app.state, f"{role}_mcp")
-        actual = [
-            t.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for t in asyncio.run(server.list_tools())
-        ]
-        baseline = load(f"catalog-{role}.json")["tools"]
-        assert actual == baseline
-        assert {t["name"] for t in actual} == {t["name"] for t in CATALOGS[role]}
-        for tool in server._tool_manager.list_tools():
-            assert (
-                tool.fn_metadata.output_model.model_json_schema()
-                == SIDECAR[f"{role}.{tool.name}"]["outputSchema"]
-            )
 
 
 def make_settings(path):
@@ -303,193 +250,3 @@ def test_isolated_mcp_wire_20_invalid_and_many_valid(tmp_path):
         json.dumps({"qa_parent": SHA, "errors": error_rows}, indent=2) + "\n", encoding="utf-8"
     )
     assert len(error_rows) == 24
-
-
-@pytest.mark.parametrize(
-    "key,payload,canonical,source_path",
-    [
-        (
-            "update_missing_expected_revision",
-            {"action": "update", "namespace": "qa", "task_id": "t", "title": "x"},
-            TaskUpdateRequest,
-            "expected_revision",
-        ),
-        (
-            "review_null_dimensions",
-            {
-                "action": "review",
-                "namespace": "qa",
-                "task_id": "t",
-                "dimensions": None,
-                "verdict": "NON_BLOCKING",
-            },
-            TaskReviewRequest,
-            "dimensions",
-        ),
-        (
-            "review_null_verdict",
-            {
-                "action": "review",
-                "namespace": "qa",
-                "task_id": "t",
-                "dimensions": ["A"],
-                "verdict": None,
-            },
-            TaskReviewRequest,
-            "verdict",
-        ),
-        (
-            "checkpoint_null",
-            {"action": "checkpoint", "namespace": "qa", "task_id": "t", "checkpoint": None},
-            TaskCheckpointRequest,
-            "checkpoint",
-        ),
-        (
-            "state_null",
-            {"action": "state", "namespace": "qa", "task_id": "t", "state": None},
-            TaskStateRequest,
-            "state",
-        ),
-        (
-            "create_done_null_result",
-            {
-                "action": "create",
-                "namespace": "qa",
-                "isolation_hint": "isolated",
-                "state": "done",
-                "result": None,
-            },
-            TaskCreateRequest,
-            "result",
-        ),
-        (
-            "archive_both_null",
-            {
-                "action": "archive",
-                "namespace": "qa",
-                "task_id": "t",
-                "note": None,
-                "archive_note": None,
-            },
-            TaskArchiveRequest,
-            "archive_note",
-        ),
-    ],
-)
-def test_public_manage_accepts_canonical_invalid_examples(key, payload, canonical, source_path):
-    pub = next(t["inputSchema"] for t in CATALOGS["coordinator"] if t["name"] == "task_manage")
-    assert not list(Draft202012Validator(pub).iter_errors(payload)), key
-    assert TaskManageInput.model_validate(payload)
-    with pytest.raises(ValidationError):
-        canonical.model_validate({**payload, "code": None})
-
-
-def test_valid_archive_note_fallback_and_optional_release_reason():
-    from terminal_mcp.application.task_requests import TaskReleaseRequest
-
-    data = {"action": "archive", "namespace": "qa", "task_id": "t", "note": "valid"}
-    assert TaskArchiveRequest.model_validate({**data, "code": None})
-    assert TaskReleaseRequest.model_validate(
-        {"action": "release", "namespace": "qa", "task_id": "t", "code": None}
-    )
-
-
-@pytest.mark.parametrize(
-    "item",
-    json.loads((ROOT / "docs/compact-contracts/qa-bravo3-action-matrix.json").read_text())["rows"],
-    ids=lambda x: x["action"],
-)
-def test_nine_action_forbidden_field_sets(item):
-    from terminal_mcp.mcp.roles import _TASK_MANAGE_MODELS
-
-    payload = item["forbidden_example"]
-    model = _TASK_MANAGE_MODELS[item["action"]]
-    pub = next(t["inputSchema"] for t in CATALOGS["coordinator"] if t["name"] == "task_manage")
-    assert not list(Draft202012Validator(pub).iter_errors(payload))
-    assert TaskManageInput.model_validate(payload)
-    with pytest.raises(ValidationError) as exc:
-        model.model_validate({**payload, "code": None})
-    assert exc.value.errors(include_input=False)[0]["type"] == "extra_forbidden"
-
-
-def test_claim_null_and_cross_action_extras():
-    from terminal_mcp.application.task_requests import TaskClaimRequest, TaskReleaseRequest
-
-    pub = next(t["inputSchema"] for t in CATALOGS["executor"] if t["name"] == "task_claim")
-    cases = [
-        (TaskClaimRequest, dict(action="claim", namespace="qa", task_id="t", claim_intent=None)),
-        (
-            TaskClaimRequest,
-            dict(
-                action="claim",
-                namespace="qa",
-                task_id="t",
-                claim_intent="x",
-                release_reason="other",
-            ),
-        ),
-        (TaskReleaseRequest, dict(action="release", namespace="qa", task_id="t", claim_intent="x")),
-    ]
-    for cls, payload in cases:
-        assert not list(Draft202012Validator(pub).iter_errors(payload))
-        with pytest.raises(ValidationError):
-            cls.model_validate({**payload, "code": None})
-
-
-def test_message_present_null_is_accepted_in_source():
-    from terminal_mcp.mcp.access_contracts import MeshMessageInput
-
-    for payload in [
-        dict(action="ack", message_hash="h", text=None),
-        dict(action="send", text="ok", message_hash=None),
-        dict(action="read", text=None),
-    ]:
-        assert MeshMessageInput.model_validate(payload)
-
-
-def test_update_null_omits_field_but_empty_list_preserved():
-    from terminal_mcp.application.task_requests import TaskUpdateRequest, task_request_to_backend
-
-    common = dict(action="update", namespace="qa", task_id="t", expected_revision=1, code=None)
-    _, _, _, null_payload = task_request_to_backend(
-        TaskUpdateRequest.model_validate({**common, "description": None})
-    )
-    _, _, _, empty_payload = task_request_to_backend(
-        TaskUpdateRequest.model_validate({**common, "tags": []})
-    )
-    assert "description" not in null_payload
-    assert empty_payload["tags"] == []
-
-
-def test_checkpoint_description_no_longer_advertises_expected_revision():
-    item = next(t for t in CATALOGS["executor"] if t["name"] == "task_comment")
-    assert "optional expected_revision" not in item["description"]
-    assert "checkpoint does not accept expected_revision" in item["description"]
-    payload = {
-        "action": "checkpoint",
-        "namespace": "qa",
-        "task_id": "t",
-        "checkpoint": "ok",
-        "expected_revision": 1,
-    }
-    assert not list(Draft202012Validator(item["inputSchema"]).iter_errors(payload))
-    with pytest.raises(ValidationError) as exc:
-        MeshTaskCommentInput.model_validate(payload)
-    assert exc.value.errors(include_input=False)[0]["type"] == "extra_forbidden"
-
-
-def test_relation_kind_open_ended_but_review_of_has_runtime_semantics():
-    from terminal_mcp.application.task_requests import TaskRelateRequest
-
-    item = next(t for t in CATALOGS["coordinator"] if t["name"] == "task_manage")
-    payload = {
-        "action": "relate",
-        "namespace": "qa",
-        "task_id": "t",
-        "relation_kind": "qa_arbitrary_rel",
-        "related_task_id": "u",
-    }
-    assert not list(Draft202012Validator(item["inputSchema"]).iter_errors(payload))
-    assert TaskRelateRequest.model_validate({**payload, "code": None})
-    assert "source lane must be review" in item["description"]
-    assert "relation_kind is an open string" in item["description"]

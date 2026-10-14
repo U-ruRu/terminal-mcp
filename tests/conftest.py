@@ -37,7 +37,6 @@ SCHEMA_PREPARATION_MODULES = frozenset(
         "test_mcp_events_fleet_lifecycle.py",
         "test_mcp_events_global_held_recipients.py",
         "test_mcp_events_message_binding.py",
-        "test_qa_complete_task_mcp_e2e.py",
         "test_task_qa_public_state.py",
         "test_v010.py",
         "test_v010_workflow_model.py",

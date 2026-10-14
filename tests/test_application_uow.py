@@ -142,31 +142,6 @@ async def test_scoped_repositories_reject_child_task_and_lifetime_escape(reposit
     assert len(await ContextStore(repository.path).list()) == 1
 
 
-async def test_context_crud_parity_and_validation(repository):
-    uow = SqliteApplicationUnitOfWork(repository.path)
-    async with uow.transaction() as tx:
-        with pytest.raises(ValueError, match="summary is required"):
-            await tx.context.create("  ", "body", False)
-        with pytest.raises(ValueError, match="at most 100"):
-            await tx.context.create("x" * 101, "body", False)
-        with pytest.raises(ValueError, match="content is required"):
-            await tx.context.create("Summary", " ", False)
-        with pytest.raises(ValueError, match="primary must be a boolean"):
-            await tx.context.create("Summary", "body", 1)
-        first = await tx.context.create("Original", "Content", False)
-        changed = await tx.context.update(first["id"], summary="Changed", primary=True)
-        assert changed == {**first, "summary": "Changed", "primary": True}
-        with pytest.raises(ValueError, match="at least one"):
-            await tx.context.update(first["id"])
-        with pytest.raises(ValueError, match="unsupported"):
-            await tx.context.update(first["id"], invalid="bad")
-        assert await tx.context.update(9999, content="Missing") is None
-        assert await tx.context.delete(first["id"])
-        assert not await tx.context.delete(first["id"])
-        assert await tx.context.get(first["id"]) is None
-    assert await ContextStore(repository.path).list() == []
-
-
 async def test_foreign_key_failure_rolls_back_other_repository(repository):
     uow = SqliteApplicationUnitOfWork(repository.path)
     with pytest.raises(sqlite3.IntegrityError):

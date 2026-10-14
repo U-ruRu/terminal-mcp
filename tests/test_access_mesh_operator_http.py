@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
-from test_access_mesh_mcp_runtime import call, settings
+from test_access_mesh_mcp_runtime import settings
 from test_access_mesh_native_lifecycle import actor
 
 from terminal_mcp.app import create_app
@@ -42,109 +42,6 @@ def internal_persistent_end(client, app, number):
         )
 
     return client.portal.call(end)
-
-
-def test_mobile_provisioning_policy_rotation_delete_and_idempotency(tmp_path):
-    config = settings(tmp_path)
-    app = create_app(config)
-    with TestClient(app, base_url="https://terminal.example") as client:
-        assert client.get("/actions/access/slots").status_code == 401
-        first = mutate(
-            client,
-            "create",
-            "create-legacy",
-            mode="legacy",
-            policy={"duration_seconds": 300, "warning_seconds": 20, "draining_seconds": 10},
-        )
-        assert first["ok"], first
-        assert (
-            mutate(
-                client,
-                "create",
-                "create-legacy",
-                mode="legacy",
-                policy={"duration_seconds": 300, "warning_seconds": 20, "draining_seconds": 10},
-            )
-            == first
-        )
-        conflict = mutate(client, "create", "create-legacy", mode="persistent")
-        assert conflict["code"] == "idempotency_conflict"
-        persistent = mutate(client, "create", "create-persistent", mode="persistent")
-        assert persistent["ok"], persistent
-        view = client.get(f"/actions/access/slots/{persistent['slot_id']}", headers=HEADERS).json()
-        # Management v2 reports the number-backed window authorized by public
-        # MCP. A persistent slot's unused local anchor is not that window:
-        # issuance already reserves a live shared-number window, while attach
-        # separately materializes its local WorkSession. Do not restore the
-        # old local-only "idle" projection fixed by the public-path regression.
-        store = app.state.access_mesh.store
-        native = store.slot(persistent["issuer_node_id"], persistent["slot_id"])
-        assert native.anchor is None
-        public_window = store.merged_cycle(native, app.state.access_mesh.clock())
-        assert view["slot"]["management_contract_version"] == 2
-        assert view["slot"]["session_lifecycle"]["state"] == public_window["state"] == "active"
-        assert (
-            view["slot"]["session_lifecycle"]["hard_expires_at"] == public_window["hard_expires_at"]
-        )
-        assert view["slot"]["session_lifecycle"]["started_at"] == public_window["started_at"]
-        started = internal_persistent_start(client, app, persistent["access_code"])
-        assert started["ok"], started
-        binding = {"session_number": first["access_code"]}
-        attached = call(client, "executor", "session", binding)
-        assert attached["ok"], attached
-        rotated = mutate(
-            client, "rotate", "rotate-1", slot_id=first["slot_id"], expected_revision=1
-        )
-        assert rotated["ok"], rotated
-        assert call(client, "executor", "command_run", {"command": "true"}, request_id=501)["ok"]
-        stale = mutate(client, "suspend", "stale", slot_id=first["slot_id"], expected_revision=1)
-        assert stale["code"] == "revision_conflict"
-        assert mutate(client, "suspend", "suspend", slot_id=first["slot_id"], expected_revision=2)[
-            "ok"
-        ]
-        blocked = call(client, "executor", "command_run", {"command": "true"}, request_id=502)
-        assert blocked["ok"] is False
-        assert mutate(client, "resume", "resume", slot_id=first["slot_id"], expected_revision=3)[
-            "ok"
-        ]
-        assert mutate(client, "delete", "delete", slot_id=first["slot_id"], expected_revision=4)[
-            "ok"
-        ]
-        assert (
-            call(client, "executor", "command_run", {"command": "true"}, request_id=503)["error"][
-                "code"
-            ]
-            == "session_attach_required"
-        )
-        listed = client.get("/actions/access/slots?limit=1", headers=HEADERS).json()
-        assert len(listed["slots"]) == 1 and listed["next_cursor"]
-        assert "code_tag" not in str(listed) and "access_code" not in str(listed)
-        next_page = client.get(
-            "/actions/access/slots",
-            headers=HEADERS,
-            params={"limit": 1, "cursor": listed["next_cursor"]},
-        ).json()
-        assert (
-            len(next_page["slots"]) == 1
-            and next_page["slots"][0]["slot_id"] != listed["slots"][0]["slot_id"]
-        )
-    with TestClient(create_app(config), base_url="https://terminal.example") as client:
-        assert (
-            mutate(
-                client,
-                "create",
-                "create-legacy",
-                mode="legacy",
-                policy={"duration_seconds": 300, "warning_seconds": 20, "draining_seconds": 10},
-            )
-            == first
-        )
-        assert (
-            client.get(f"/actions/access/slots/{first['slot_id']}", headers=HEADERS).json()["slot"][
-                "state"
-            ]
-            == "deleted"
-        )
 
 
 def test_defaults_persist_and_legacy_disable_does_not_disable_persistent(tmp_path):

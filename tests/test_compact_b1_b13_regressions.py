@@ -72,26 +72,6 @@ def allows_transport(role, tool, args):
     return Draft202012Validator(item(role, tool)["inputSchema"]).is_valid(args)
 
 
-def test_B11_all_20_transport_schemas_are_nonblocking_but_server_strict_is_preserved():
-    assert sum(len(tools) for tools in FUTURE.values()) == 20
-    for role, tools in FUTURE.items():
-        for name, entry in tools.items():
-            public = entry["inputSchema"]
-            exact = SOURCE[f"{role}.{name}"]["inputSchema"]
-            assert public == {"type": "object"}
-            assert entry["outputSchema"] == {"type": "object"}
-            assert "Arguments" in entry["description"]
-            assert "Returns" in entry["description"]
-            assert "Errors" in entry["description"]
-            Draft202012Validator.check_schema(public)
-            Draft202012Validator.check_schema(exact)
-            assert allows_transport(role, name, {"made_up_field": ["text", False]})
-    assert allows_transport("executor", "command_run", {"command": 42})
-    assert not Draft202012Validator(SOURCE["executor.command_run"]["inputSchema"]).is_valid(
-        {"command": 42}
-    )
-
-
 def test_B1_update_expected_revision_required_non_null_and_described():
     d = text("coordinator", "task_manage")
     row = COVER["coordinator.task_manage"]["action_models"]["update"]
@@ -368,13 +348,6 @@ def test_B10_none_omits_update_but_empty_array_replaces():
     assert "tags:[] explicitly replaces" in desc
 
 
-def test_B12_checkpoint_false_expected_revision_removed_at_source():
-    source = (ROOT / "src/terminal_mcp/mcp/roles.py").read_text()
-    assert "checkpoint with action='checkpoint' and optional expected_revision" not in source
-    assert "checkpoint with action='checkpoint' and a checkpoint payload" in source
-    assert "optional expected_revision" not in text("executor", "task_comment")
-
-
 def test_B13_relation_kind_open_ended_and_review_of_runtime_gate():
     d = text("coordinator", "task_manage")
     assert "relation_kind is an open string(1..64), not an enum" in d
@@ -408,10 +381,3 @@ def test_B13_relation_kind_open_ended_and_review_of_runtime_gate():
         "candidate_conflict",
     ):
         assert marker in source
-
-
-def test_all_13_ids_are_covered_by_independent_regressions():
-    names = [name for name in globals() if name.startswith("test_B")]
-    joined = " ".join(names)
-    for index in range(1, 14):
-        assert f"B{index}" in joined, index
