@@ -95,7 +95,7 @@ targets=(
   tests/test_task_revision_side_effects.py
   tests/test_task_checkpoint_append_boundary.py
   tests/test_task_qa_public_state.py
-  tests/test_persistent_standalone_messaging.py
+  tests/test_persistent_message_atomic.py
   tests/test_access_mesh_outbox.py
   tests/test_qa_mesh_start_authority.py
   tests/test_fleet_control_hardening.py

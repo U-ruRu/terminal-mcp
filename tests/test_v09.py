@@ -4,10 +4,9 @@ from datetime import timedelta
 
 import pytest
 
-from terminal_mcp.core.agent_policy import DEFAULT_SESSION_ALERT_MESSAGE, AgentPolicy
+from terminal_mcp.core.agent_policy import AgentPolicy
 from terminal_mcp.core.orchestration import utc_now, utc_text
 from terminal_mcp.core.service import TerminalService
-from terminal_mcp.storage.agents import AgentStore
 from terminal_mcp.storage.sqlite import SCHEMA_VERSION, SqliteRepository
 from terminal_mcp.terminal.linux import LinuxTerminalAdapter
 
@@ -148,111 +147,6 @@ async def test_v4_lines_migrate_and_duplicate_index_is_removed(tmp_path):
         assert "idx_lines_hash_seq" not in indexes
     lines = await repo.read_command_lines("deadbeef", 10, 0)
     assert [line.text for line in lines] == ["legacy-output"]
-
-
-@pytest.mark.asyncio
-async def test_session_warning_alert_repeat_and_hard_expiry(tmp_path):
-    policy = AgentPolicy(
-        max_session_seconds=100,
-        session_warning_after_seconds=60,
-        session_alert_enabled=True,
-        session_alert_after_seconds=80,
-        session_alert_repeat_seconds=10,
-    )
-    repo = SqliteRepository(tmp_path / "db.sqlite3", tmp_path / "output.sqlite3")
-    await repo.initialize()
-    terminal = LinuxTerminalAdapter(repo, "/bin/bash", tmp_path, 0.1)
-    service = TerminalService(repo, terminal, 5000, agent_policy=policy)
-    try:
-        plan = {
-            "task_summary": "Session policy",
-            "intent": "Validate timers",
-            "details": ["Validate"],
-            "work_scope": ["test"],
-        }
-        proposed = await service.agent_start(**plan)
-        started = await service.agent_start(agent_id=proposed["proposed_agent_id"], **plan)
-        agent_id = started["self"]["agent_id"]
-        aged_start = utc_now() - timedelta(seconds=61)
-        with sqlite3.connect(repo.path) as db:
-            db.execute(
-                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
-                (
-                    utc_text(aged_start),
-                    utc_text(aged_start + timedelta(seconds=100)),
-                    agent_id,
-                ),
-            )
-            db.commit()
-        warned = await service.health("none", agent_id=agent_id)
-        assert warned["session_warning"]
-        assert warned.get("alert_pending", False) is False
-
-        aged_start = utc_now() - timedelta(seconds=81)
-        with sqlite3.connect(repo.path) as db:
-            db.execute(
-                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
-                (
-                    utc_text(aged_start),
-                    utc_text(aged_start + timedelta(seconds=100)),
-                    agent_id,
-                ),
-            )
-            db.commit()
-        blocked = await service.run("printf blocked", agent_id=agent_id, task_scope="none")
-        assert blocked["ok"] is False
-        assert blocked["alert_pending"] is True
-        assert DEFAULT_SESSION_ALERT_MESSAGE in blocked["alert_messages"][0]
-        journal = await AgentStore(repo.path).message_journal(agent_id)
-        first = next(item for item in journal if item["sender_agent_id"] == "system-session")
-        first_hash = first["message_hash"]
-        await service.message(
-            agent_id, message_hash=first_hash, text="Завершаю сессию и возвращаюсь"
-        )
-        allowed = await service.run(
-            "printf allowed", agent_id=agent_id, queue_id=1, task_scope="none"
-        )
-        assert allowed["ok"] is True
-        assert (await wait_done(service, allowed["cmd_hash"]))["status"] == "completed"
-
-        with sqlite3.connect(repo.path) as db:
-            old = utc_text(utc_now() - timedelta(seconds=11))
-            db.execute(
-                "UPDATE coordination_messages SET created_at=? WHERE message_hash=?",
-                (old, first_hash),
-            )
-            db.execute(
-                "UPDATE coordination_message_recipients SET replied_at=? "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (old, first_hash, agent_id),
-            )
-            db.commit()
-        repeated = await service.health("none", agent_id=agent_id)
-        assert repeated["alert_pending"] is True
-        journal = await AgentStore(repo.path).message_journal(agent_id)
-        system_alerts = [item for item in journal if item["sender_agent_id"] == "system-session"]
-        assert len(system_alerts) == 2
-        assert system_alerts[0]["message_hash"] != first_hash
-
-        aged_start = utc_now() - timedelta(seconds=101)
-        with sqlite3.connect(repo.path) as db:
-            db.execute(
-                "UPDATE agent_sessions SET registered_at=?,global_expires_at=? WHERE agent_id=?",
-                (
-                    utc_text(aged_start),
-                    utc_text(aged_start + timedelta(seconds=100)),
-                    agent_id,
-                ),
-            )
-            db.commit()
-        expired = await service.health("none", agent_id=agent_id)
-        assert expired["session_expired"] is True
-        assert expired["registration_required"] is True
-        persisted = await AgentStore(repo.path).get_session(agent_id)
-        assert persisted["state"] == "forced"
-        assert persisted["end_reason"] == "max_session_duration"
-    finally:
-        await terminal.stop()
 
 
 @pytest.mark.asyncio

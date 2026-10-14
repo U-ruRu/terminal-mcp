@@ -379,6 +379,7 @@ def test_concurrent_refresh_and_unsubscribe_leave_pin_transactionally_consistent
                 store.save_subscription(
                     sub_id=sub_id,
                     principal=record["principal_id"],
+                    subscriber_agent_id=record["subscriber_agent_id"],
                     credential_id=record["credential_id"],
                     auth_mode=record["auth_mode"],
                     name="message.received",

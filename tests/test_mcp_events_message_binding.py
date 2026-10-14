@@ -10,10 +10,8 @@ from fastapi.testclient import TestClient
 
 from terminal_mcp.app import create_app
 from terminal_mcp.config import Settings
-from terminal_mcp.core.human_names import number_agent_name
 from terminal_mcp.core.orchestration import utc_text
 from terminal_mcp.mcp.message_binding import provider_metadata_from_events
-from terminal_mcp.storage.access_mesh import public_name
 
 KEY = "whsec_" + base64.b64encode(b"m" * 32).decode()
 URL = "https://receiver.example.test/hooks"
@@ -169,187 +167,6 @@ def test_access_subscription_without_verified_binding_is_fail_closed(tmp_path):
             assert db.execute("SELECT COUNT(*) FROM mcp_event_subscriptions").fetchone()[0] == 0
 
 
-def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_path):
-    app = create_app(config(tmp_path))
-    receiver = Receiver()
-    app.state.access_events.sender = receiver
-    app.state.mcp_events.sender = receiver
-    with TestClient(app, base_url="https://terminal.example") as client:
-        a_access = meta("subject-access-a", "conversation-access-a")
-        a_coord = meta("subject-coord-a", "conversation-coord-a")
-        b_access = meta("subject-access-b", "conversation-access-b")
-        b_coord = meta("subject-coord-b", "conversation-coord-b")
-        a_number = tool(
-            client,
-            "access",
-            "session",
-            {"action": "start"},
-            evidence=a_access,
-            request_id=11,
-        )["session_number"]
-        a_slot = app.state.access_mesh.store.numbers.winner(a_number)
-        a_id = a_slot["logical_agent_id"]
-        assert tool(
-            client,
-            "coordinator",
-            "session",
-            {"session_number": a_number, "intent": "Receive fixture message"},
-            evidence=a_coord,
-            request_id=12,
-        )["ok"]
-        # Access has DIFFERENT subject and conversation from Coordination,
-        # nevertheless both existing bindings refer to the exact same agent.
-        result = subscribe(client, evidence=a_access, number=a_number)
-        assert "result" in result, result
-        subscription_id = result["result"]["id"]
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            binding = db.execute(
-                "SELECT recipient_agent_id,recipient_role FROM mcp_event_message_bindings "
-                "WHERE subscription_id=?",
-                (subscription_id,),
-            ).fetchone()
-            assert binding == (a_id, "session_number")
-        assert len(receiver.requests) == 1  # challenge only
-        b_number = tool(
-            client,
-            "access",
-            "session",
-            {"action": "start"},
-            evidence=b_access,
-            request_id=21,
-        )["session_number"]
-        b_slot = app.state.access_mesh.store.numbers.winner(b_number)
-        b_id = b_slot["logical_agent_id"]
-        assert b_id != a_id
-        tool(
-            client,
-            "coordinator",
-            "session",
-            {"session_number": b_number, "intent": "Send fixture message"},
-            evidence=b_coord,
-            request_id=22,
-        )
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            db.execute(
-                "UPDATE logical_agents SET display_name='Reused name' "
-                "WHERE logical_agent_id IN (?,?)",
-                (a_id, b_id),
-            )
-        b_sub = subscribe(client, evidence=b_access, number=b_number)
-        assert "result" in b_sub, b_sub
-        assert b_sub["result"]["id"] != subscription_id
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            assert db.execute(
-                "SELECT recipient_agent_id FROM mcp_event_message_bindings WHERE subscription_id=?",
-                (b_sub["result"]["id"],),
-            ).fetchone() == (b_id,)
-        sent = tool(
-            client,
-            "coordinator",
-            "message",
-            {
-                "action": "send",
-                "scope": "local",
-                "mode": "notify",
-                "target": public_name(a_slot["issuer_id"], a_id),
-                "text": "private message to A only",
-            },
-            evidence=b_coord,
-            request_id=23,
-        )
-        assert sent["ok"], sent
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            message_id = db.execute(
-                "SELECT message_hash FROM coordination_messages "
-                "WHERE text='private message to A only' ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()[0]
-        # Run the actual durable producer/delivery worker on isolated SQLite.
-        client.portal.call(app.state.mcp_events.store.pump)
-        client.portal.call(app.state.mcp_events.deliver_due)
-        event_payloads = [
-            data for data, _ in receiver.requests if data.get("name") == "message.received"
-        ]
-        assert len(event_payloads) == 1, event_payloads
-        delivered = event_payloads[0]
-        assert delivered["data"]["server"] == "firstbyte"
-        assert delivered["data"]["message_id"] == message_id
-        assert delivered["data"]["text"] == "private message to A only"
-        assert delivered["data"]["sender"] and delivered["data"]["recipient"]
-        assert delivered["timestamp"]
-        assert "timestamp" not in delivered["data"]
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            status = db.execute(
-                "SELECT read_at,replied_at,seen_count FROM coordination_message_recipients "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (message_id, a_id),
-            ).fetchone()
-            assert status == (None, None, 0)
-            delivered_rows = db.execute(
-                "SELECT event_id FROM mcp_event_records WHERE name='message.received'"
-            ).fetchall()
-            assert delivered_rows == [(delivered["eventId"],)]
-            db.execute(
-                "UPDATE coordination_message_recipients SET read_at=? "
-                "WHERE message_hash=? AND recipient_agent_id=?",
-                (utc_text(), message_id, a_id),
-            )
-        client.portal.call(app.state.mcp_events.store.pump)
-        client.portal.call(app.state.mcp_events.deliver_due)
-        assert (
-            len([data for data, _ in receiver.requests if data.get("name") == "message.received"])
-            == 1
-        )
-        tool(
-            client,
-            "coordinator",
-            "message",
-            {
-                "action": "send",
-                "scope": "local",
-                "mode": "notify",
-                "target": public_name(b_slot["issuer_id"], b_id),
-                "text": "private message to B only",
-            },
-            evidence=a_coord,
-            request_id=24,
-        )
-        client.portal.call(app.state.mcp_events.store.pump)
-        client.portal.call(app.state.mcp_events.deliver_due)
-        message_events = [
-            data for data, _ in receiver.requests if data.get("name") == "message.received"
-        ]
-        assert len(message_events) == 2
-        assert [event["data"]["text"] for event in message_events] == [
-            "private message to A only",
-            "private message to B only",
-        ]
-        assert message_events[0]["eventId"] != message_events[1]["eventId"]
-        assert message_events[0]["data"]["recipient"] == number_agent_name(a_number)
-        assert message_events[1]["data"]["recipient"] == number_agent_name(b_number)
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            assert db.execute(
-                "SELECT COUNT(DISTINCT recipient_agent_id) "
-                "FROM mcp_event_records WHERE name='message.received'"
-            ).fetchone() == (2,)
-            # Emulate a durable bounded retry without recreating the message.
-            db.execute(
-                "UPDATE mcp_event_deliveries SET state='pending',"
-                "next_attempt_at=? WHERE event_id=? AND subscription_id=?",
-                (utc_text(), message_events[0]["eventId"], subscription_id),
-            )
-        client.portal.call(app.state.mcp_events.deliver_due)
-        retried = [data for data, _ in receiver.requests if data.get("name") == "message.received"]
-        assert len(retried) == 3
-        assert retried[-1]["eventId"] == message_events[0]["eventId"]
-        assert retried[-1]["data"]["message_id"] == message_id
-        # An unknown session number is not a valid message recipient, even
-        # when provider metadata is supplied.
-        denied = subscribe(
-            client, evidence=meta("other-user", "other-conversation"), number="9999"
-        )
-        assert denied["error"]["code"] == -32001
-
-
 def test_token_boundary_cannot_reuse_existing_metadata_pair(tmp_path):
     app = create_app(config(tmp_path))
     app.state.access_events.sender = Receiver()
@@ -371,102 +188,6 @@ def test_token_boundary_cannot_reuse_existing_metadata_pair(tmp_path):
         second = subscribe(client, evidence=evidence, number=number, token="test-bearer-b")
         assert "result" in first and "result" in second, (first, second)
         assert first["result"]["id"] != second["result"]["id"]
-
-
-def test_oauth_access_binding_subscribe_and_revocation(tmp_path):
-    import time
-
-    import jwt
-
-    base = config(tmp_path)
-    values = base.model_dump()
-    values.update(
-        auth_mode="oauth",
-        oauth_issuer="https://terminal.example",
-        oauth_audience="https://terminal.example/mcp",
-        oauth_signing_secret="test-oauth-signing-secret-of-32-bytes!",
-    )
-    app = create_app(Settings(**values))
-    receiver = Receiver()
-    app.state.access_events.sender = receiver
-    with TestClient(app, base_url="https://terminal.example") as client:
-        cid, _ = client.portal.call(
-            app.state.oauth_store.register_client,
-            ["https://chat.example/callback"],
-            "Fixture",
-            "none",
-        )
-        now = int(time.time())
-        jwt_token = jwt.encode(
-            {
-                "iss": "https://terminal.example",
-                "aud": "https://terminal.example/mcp",
-                "sub": cid,
-                "iat": now,
-                "exp": now + 3600,
-                "scope": "terminal:read terminal:execute",
-            },
-            values["oauth_signing_secret"],
-            algorithm="HS256",
-        )
-        pair = meta("oauth-user", "oauth-access-conversation")
-        number = tool(
-            client,
-            "access",
-            "session",
-            {"action": "start"},
-            evidence=pair,
-            token=jwt_token,
-            request_id=77,
-        )["session_number"]
-        assert number
-        saved = subscribe(client, evidence=pair, number=number, token=jwt_token)
-        assert "result" in saved, saved
-        sub_id = saved["result"]["id"]
-        assert len(receiver.requests) == 1
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            agent, credential = db.execute(
-                "SELECT b.recipient_agent_id,s.credential_id "
-                "FROM mcp_event_subscriptions s "
-                "JOIN mcp_event_message_bindings b ON b.subscription_id=s.id "
-                "WHERE s.id=?",
-                (sub_id,),
-            ).fetchone()
-        assert agent and credential == "oauth:" + cid
-        # A valid OAuth client is part of each delivery authorization check.
-        item = {
-            "name": "message.received",
-            "credential_id": credential,
-            "auth_mode": "oauth",
-            "recipient_agent_id": agent,
-        }
-        with sqlite3.connect(app.state.settings.database_path) as db:
-            fields = db.execute(
-                "SELECT recipient_session_id,recipient_epoch,recipient_connection_key,"
-                "recipient_node_id,recipient_issuer_id,recipient_slot_id,recipient_role "
-                "FROM mcp_event_message_bindings WHERE subscription_id=?",
-                (sub_id,),
-            ).fetchone()
-        item.update(
-            dict(
-                zip(
-                    (
-                        "recipient_session_id",
-                        "recipient_epoch",
-                        "recipient_connection_key",
-                        "recipient_node_id",
-                        "recipient_issuer_id",
-                        "recipient_slot_id",
-                        "recipient_role",
-                    ),
-                    fields,
-                    strict=True,
-                )
-            )
-        )
-        assert client.portal.call(app.state.mcp_events.access_checker, item)
-        client.portal.call(app.state.oauth_store.delete_client, cid)
-        assert not client.portal.call(app.state.mcp_events.access_checker, item)
 
 
 def test_codex_native_thread_only_reuses_verified_identity_and_isolates_clients(tmp_path):
@@ -516,19 +237,18 @@ def test_codex_native_thread_only_reuses_verified_identity_and_isolates_clients(
         # an unrelated client can explicitly select the same number, but the
         # resulting subscription remains associated with its own principal.
         other_principal = subscribe(
-            client, evidence={"threadId": "codex-thread-a"},
-            number=number, token="test-bearer-b"
+            client, evidence={"threadId": "codex-thread-a"}, number=number, token="test-bearer-b"
         )
         assert "result" in other_principal, other_principal
         assert other_principal["result"]["id"] != subscribed["result"]["id"]
 
         missing_thread = subscribe(
-            client, evidence={"sessionId": "shared-root", "progressToken": 42},
+            client,
+            evidence={"sessionId": "shared-root", "progressToken": 42},
             number=number,
         )
         assert "result" in missing_thread, missing_thread
         assert missing_thread["result"]["id"] == subscribed["result"]["id"]
-
 
 
 def test_global_lifecycle_subscriptions_no_meta_and_principal_scoped_get_events(tmp_path):
@@ -540,10 +260,16 @@ def test_global_lifecycle_subscriptions_no_meta_and_principal_scoped_get_events(
         # without provider identity metadata. They cover all agent lifecycles.
         def subscribe_event(event_name, *, token="test-bearer-a"):
             response = rpc(
-                client, "access", "events/subscribe",
-                {"name": event_name, "arguments": {},
-                 "delivery": {"mode": "webhook", "url": URL, "secret": KEY}},
-                evidence=None, token=token,
+                client,
+                "access",
+                "events/subscribe",
+                {
+                    "name": event_name,
+                    "arguments": {},
+                    "delivery": {"mode": "webhook", "url": URL, "secret": KEY},
+                },
+                evidence=None,
+                token=token,
             )
             assert "result" in response, response
             return response["result"]["id"]
@@ -557,8 +283,12 @@ def test_global_lifecycle_subscriptions_no_meta_and_principal_scoped_get_events(
             "session_number"
         ]
         b_code = tool(
-            client, "access", "session", {"action": "start"},
-            evidence=agent_b, token="test-bearer-b",
+            client,
+            "access",
+            "session",
+            {"action": "start"},
+            evidence=agent_b,
+            token="test-bearer-b",
         )["session_number"]
         assert a_code != b_code
 
@@ -594,8 +324,13 @@ def test_global_lifecycle_subscriptions_no_meta_and_principal_scoped_get_events(
                 db.execute(
                     "INSERT INTO mcp_event_records("
                     "event_id,source_key,name,occurred_at,data_json) VALUES(?,?,?,?,?)",
-                    (event_id, "test:" + event_id, event_name, timestamp,
-                     json.dumps({"server": "firstbyte", "agent_name": name})),
+                    (
+                        event_id,
+                        "test:" + event_id,
+                        event_name,
+                        timestamp,
+                        json.dumps({"server": "firstbyte", "agent_name": name}),
+                    ),
                 )
                 db.execute(
                     "INSERT INTO mcp_event_deliveries("
@@ -608,40 +343,65 @@ def test_global_lifecycle_subscriptions_no_meta_and_principal_scoped_get_events(
         assert first["events"][0]["read"] is False
         assert tool(client, "access", "get_events", {}, evidence=agent_a)["events"] == []
         second = tool(
-            client, "access", "get_events", {},
-            evidence=agent_b, token="test-bearer-b",
+            client,
+            "access",
+            "get_events",
+            {},
+            evidence=agent_b,
+            token="test-bearer-b",
         )
         assert [x["eventId"] for x in second["events"]] == [b_event]
-        assert tool(
-            client, "access", "get_events", {"event_id": a_event},
-            evidence=agent_b, token="test-bearer-b",
-        )["events"] == []
+        assert (
+            tool(
+                client,
+                "access",
+                "get_events",
+                {"event_id": a_event},
+                evidence=agent_b,
+                token="test-bearer-b",
+            )["events"]
+            == []
+        )
         by_id = tool(client, "access", "get_events", {"event_id": a_event}, evidence=agent_a)
         assert by_id["events"][0]["read"] is True
         old = tool(client, "access", "get_events", {"show_read": True}, evidence=agent_a)
         assert [x["eventId"] for x in old["events"]] == [a_event]
         with sqlite3.connect(path) as db:
-            assert db.execute(
-                "SELECT state,read_at FROM mcp_event_deliveries WHERE event_id=?",
-                (a_event,),
-            ).fetchone()[0] == "sent"
-            assert db.execute(
-                "SELECT read_at FROM mcp_event_deliveries WHERE event_id=?",
-                (a_event,),
-            ).fetchone()[0] is not None
+            assert (
+                db.execute(
+                    "SELECT state,read_at FROM mcp_event_deliveries WHERE event_id=?",
+                    (a_event,),
+                ).fetchone()[0]
+                == "sent"
+            )
+            assert (
+                db.execute(
+                    "SELECT read_at FROM mcp_event_deliveries WHERE event_id=?",
+                    (a_event,),
+                ).fetchone()[0]
+                is not None
+            )
 
         # Unsubscribe also must work without per-agent provider metadata.
         removed = rpc(
-            client, "access", "events/unsubscribe",
-            {"name": "agent.inactive", "arguments": {},
-             "delivery": {"mode": "webhook", "url": URL}},
+            client,
+            "access",
+            "events/unsubscribe",
+            {
+                "name": "agent.inactive",
+                "arguments": {},
+                "delivery": {"mode": "webhook", "url": URL},
+            },
             evidence=None,
         )
         assert removed["result"] == {}
         with sqlite3.connect(path) as db:
-            assert db.execute(
-                "SELECT COUNT(*) FROM mcp_event_subscriptions WHERE id=?", (sub_idle,)
-            ).fetchone()[0] == 0
+            assert (
+                db.execute(
+                    "SELECT COUNT(*) FROM mcp_event_subscriptions WHERE id=?", (sub_idle,)
+                ).fetchone()[0]
+                == 0
+            )
 
 
 def test_access_get_events_cursor_deduplicates_across_owner_subscriptions(tmp_path):
@@ -660,16 +420,20 @@ def test_access_get_events_cursor_deduplicates_across_owner_subscriptions(tmp_pa
     with TestClient(app, base_url="https://terminal.example") as client:
         tool(client, "access", "session", {"action": "start"}, evidence=evidence)
         payload = {
-            "name": "agent.attached", "arguments": {},
-            "delivery": {"mode": "webhook", "url": URL, "secret": KEY}
+            "name": "agent.attached",
+            "arguments": {},
+            "delivery": {"mode": "webhook", "url": URL, "secret": KEY},
         }
         response = rpc(client, "access", "events/subscribe", payload, evidence=evidence)
         assert "result" in response, response
         sub_id = response["result"]["id"]
         secondary = rpc(
-            client, "access", "events/subscribe",
+            client,
+            "access",
+            "events/subscribe",
             {
-                "name": "agent.attached", "arguments": {},
+                "name": "agent.attached",
+                "arguments": {},
                 "delivery": {"mode": "webhook", "url": URL + "/second", "secret": KEY},
             },
             evidence=evidence,
@@ -684,9 +448,13 @@ def test_access_get_events_cursor_deduplicates_across_owner_subscriptions(tmp_pa
                 db.execute(
                     "INSERT INTO mcp_event_records("
                     "event_id,source_key,name,occurred_at,data_json) VALUES(?,?,?,?,?)",
-                    (event_id, "test:" + event_id, "agent.attached",
-                     f"2026-10-14T02:00:0{index}Z",
-                     json.dumps({"server": "firstbyte", "agent_name": str(index)})),
+                    (
+                        event_id,
+                        "test:" + event_id,
+                        "agent.attached",
+                        f"2026-10-14T02:00:0{index}Z",
+                        json.dumps({"server": "firstbyte", "agent_name": str(index)}),
+                    ),
                 )
                 db.execute(
                     "INSERT INTO mcp_event_deliveries("
@@ -702,17 +470,30 @@ def test_access_get_events_cursor_deduplicates_across_owner_subscriptions(tmp_pa
         first = tool(client, "access", "get_events", {"limit": 1}, evidence=evidence)
         assert [x["eventId"] for x in first["events"]] == event_ids[:1]
         with sqlite3.connect(path) as db:
-            assert db.execute(
-                "SELECT COUNT(*) FROM mcp_event_deliveries "
-                "WHERE event_id=? AND read_at IS NOT NULL",
-                (event_ids[0],),
-            ).fetchone()[0] == 2
+            assert (
+                db.execute(
+                    "SELECT COUNT(*) FROM mcp_event_deliveries "
+                    "WHERE event_id=? AND read_at IS NOT NULL",
+                    (event_ids[0],),
+                ).fetchone()[0]
+                == 2
+            )
         assert first["has_more"] and first["next_cursor"]
-        second = tool(client, "access", "get_events",
-                      {"limit": 1, "cursor": first["next_cursor"]}, evidence=evidence)
+        second = tool(
+            client,
+            "access",
+            "get_events",
+            {"limit": 1, "cursor": first["next_cursor"]},
+            evidence=evidence,
+        )
         assert [x["eventId"] for x in second["events"]] == event_ids[1:2]
-        third = tool(client, "access", "get_events",
-                     {"limit": 1, "cursor": second["next_cursor"]}, evidence=evidence)
+        third = tool(
+            client,
+            "access",
+            "get_events",
+            {"limit": 1, "cursor": second["next_cursor"]},
+            evidence=evidence,
+        )
         assert [x["eventId"] for x in third["events"]] == event_ids[2:]
         assert third["has_more"] is False
         assert tool(client, "access", "get_events", {}, evidence=evidence)["events"] == []

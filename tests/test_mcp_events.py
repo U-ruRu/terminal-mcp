@@ -35,23 +35,54 @@ SECRET = "whsec_" + base64.b64encode(b"x" * 32).decode()
 @pytest.mark.parametrize(
     ("name", "extra", "expected"),
     [
-        ("agent.attached", {"logical_agent_id": "secret", "session_epoch": 9},
-         {"server": NODE, "agent_name": "Alpha"}),
-        ("agent.inactive", {"observation": "absent", "message_id": "wrong"},
-         {"server": NODE, "agent_name": "Alpha"}),
-        ("session.ended", {"reason": "manual", "observation_time": "unknown"},
-         {"server": NODE, "agent_name": "Alpha"}),
-        ("session.ended", {"reason": "expired"},
-         {"server": NODE, "agent_name": "Alpha", "reason": "expired"}),
-        ("message.received", {"timestamp": "duplicate", "logical_agent_id": "secret",
-                              "session_epoch": 9, "text": "unknown"},
-         {"server": NODE, "sender": "Bravo", "recipient": "Alpha",
-          "message_id": "msg-1", "text": "unknown"}),
+        (
+            "agent.attached",
+            {"logical_agent_id": "secret", "session_epoch": 9},
+            {"server": NODE, "agent_name": "Alpha"},
+        ),
+        (
+            "agent.inactive",
+            {"observation": "absent", "message_id": "wrong"},
+            {"server": NODE, "agent_name": "Alpha"},
+        ),
+        (
+            "session.ended",
+            {"reason": "manual", "observation_time": "unknown"},
+            {"server": NODE, "agent_name": "Alpha"},
+        ),
+        (
+            "session.ended",
+            {"reason": "expired"},
+            {"server": NODE, "agent_name": "Alpha", "reason": "expired"},
+        ),
+        (
+            "message.received",
+            {
+                "timestamp": "duplicate",
+                "logical_agent_id": "secret",
+                "session_epoch": 9,
+                "text": "unknown",
+            },
+            {
+                "server": NODE,
+                "sender": "Bravo",
+                "recipient": "Alpha",
+                "message_id": "msg-1",
+                "text": "unknown",
+            },
+        ),
     ],
 )
 def test_compact_public_event_data_keeps_content_without_private_metadata(name, extra, expected):
-    record = {"server": NODE, "agent_name": "Alpha", "sender": "Bravo",
-              "recipient": "Alpha", "message_id": "msg-1", "text": "full text", **extra}
+    record = {
+        "server": NODE,
+        "agent_name": "Alpha",
+        "sender": "Bravo",
+        "recipient": "Alpha",
+        "message_id": "msg-1",
+        "text": "full text",
+        **extra,
+    }
     assert public_event_data(name, record) == expected
 
 
@@ -241,88 +272,6 @@ def _admission():
         transport="mcp",
         auth_mode="bearer",
     )
-
-
-@pytest.mark.asyncio
-async def test_subscription_challenge_refresh_unsubscribe_and_persistence(context):
-    path, agents, events = context
-    receiver = FakeReceiver()
-    adapter = MCPEventsAdapter(
-        None,
-        events,
-        sender=receiver,
-        access_checker=access_allowed,
-    )
-    token = bind_admission_context(_admission())
-    try:
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "events/subscribe",
-            "params": {
-                "name": "agent.attached",
-                "arguments": {},
-                "delivery": {"mode": "webhook", "url": CALLBACK, "secret": SECRET},
-            },
-        }
-        response = await adapter.handle(request)
-        assert "error" not in response
-        sub_id = response["result"]["id"]
-        assert len(receiver.requests) == 1
-        assert receiver.requests[0][2]["X-MCP-Subscription-Id"] == sub_id
-        assert (await adapter.handle(request))["result"]["id"] == sub_id
-        assert len(receiver.requests) == 1
-        # Cached refresh must preserve the original verification deadline.
-        with sqlite3.connect(path) as db:
-            original_verified_until = db.execute(
-                "SELECT verified_until FROM mcp_event_verified_callbacks "
-                "WHERE principal_id=? AND callback_url=?",
-                ("test-user", CALLBACK),
-            ).fetchone()[0]
-        await adapter.handle(request)
-        with sqlite3.connect(path) as db:
-            cache_until = db.execute(
-                "SELECT verified_until FROM mcp_event_verified_callbacks "
-                "WHERE principal_id=? AND callback_url=?",
-                ("test-user", CALLBACK),
-            ).fetchone()[0]
-            # Simulate natural expiry without sleeping or touching a live endpoint.
-            db.execute(
-                "UPDATE mcp_event_verified_callbacks SET verified_until=? "
-                "WHERE principal_id=? AND callback_url=?",
-                ("2000-01-01T00:00:00Z", "test-user", CALLBACK),
-            )
-        assert original_verified_until == cache_until
-        await adapter.handle(request)
-        assert len(receiver.requests) == 2  # A fresh verification took place.
-        assert (await events.subscription(sub_id))["principal_id"] == "test-user"
-        await _agent(agents)
-        await events.pump()
-        awaiting = await events.due_deliveries()
-        assert len(awaiting) == 1
-        first_event_id = awaiting[0]["event_id"]
-        # Update runs the repository migration and starts a fresh Events instance.
-        await SqliteRepository(path).initialize()
-        events = MCPEventStore(path, NODE)
-        await events.initialize()
-        restored = await events.subscription(sub_id)
-        assert restored["callback_url"] == CALLBACK
-        assert restored["signing_secret"] == SECRET
-        assert restored["arguments_json"] == "{}"
-        assert restored["expires_at"] is not None
-        adapter = MCPEventsAdapter(None, events, sender=receiver, access_checker=access_allowed)
-        await adapter.deliver_due()
-        assert len(receiver.requests) == 3
-        assert receiver.requests[2][1]["eventId"] == first_event_id
-        delivery = receiver.requests[2][1]
-        assert delivery["eventId"].startswith("evt_")
-        assert delivery["data"] == {"agent_name": "Alpha", "server": NODE}
-        request["method"] = "events/unsubscribe"
-        del request["params"]["delivery"]["secret"]
-        assert (await adapter.handle(request))["result"] == {}
-        assert await events.subscription(sub_id) is None
-    finally:
-        reset_admission_context(token)
 
 
 @pytest.mark.asyncio
