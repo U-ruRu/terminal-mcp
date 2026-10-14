@@ -297,3 +297,42 @@ async def test_managed_join_auto_proof_cross_node_attach_with_distinct_bootstrap
                 issuer_node_id="bacloud", access_code="4731",
             )
         assert getattr(denied.value, "code", "") == "access_mesh_untrusted_issuer"
+
+@pytest.mark.asyncio
+async def test_owned_replication_client_disables_keepalive_and_preserves_delivery(
+    tmp_path, monkeypatch
+):
+    """The internal HTTPX transport reconnects while events still replicate."""
+    routes = Routes()
+    original_client = httpx.AsyncClient
+    options = []
+    clients = []
+
+    def make_client(*args, **kwargs):
+        options.append(kwargs)
+        client = original_client(*args, transport=routes, **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+    source, replication = await node(tmp_path, "firstbyte", "bacloud", routes, None)
+    target, _ = await node(tmp_path, "bacloud", "firstbyte", routes, None)
+    issued = await source.issue(actor(), code="1234")
+
+    try:
+        await replication.tick()
+        assert len(clients) == 1
+        assert options[0]["timeout"] == 1.0
+        assert options[0]["limits"].max_keepalive_connections == 0
+        assert replication.peer_health["bacloud"]["status"] == "healthy"
+        assert target.store.slot("firstbyte", issued["slot_id"]) is not None
+        assert not source.store.pending_outbox(peer_node_id="bacloud")
+
+        await source.change(
+            actor(), slot_id=issued["slot_id"], kind="SlotSuspended", expected_revision=1
+        )
+        await replication.tick()
+        assert target.store.slot("firstbyte", issued["slot_id"]).revision == 2
+    finally:
+        await replication.stop()
+    assert clients[0].is_closed
