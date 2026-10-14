@@ -608,7 +608,12 @@ class AccessMeshReplication:
         if peer.instance_id not in self.store.trusted_issuers:
             raise AccessMeshError("access_mesh_untrusted_peer")
         if self.client is None:
-            self.client = httpx.AsyncClient(timeout=min(3.0, self.config.request_timeout_seconds))
+            # HTTPS frontends can stall on reused idle connections. Replication
+            # remains retryable; avoid pooling connections across requests.
+            self.client = httpx.AsyncClient(
+                timeout=min(3.0, self.config.request_timeout_seconds),
+                limits=httpx.Limits(max_keepalive_connections=0),
+            )
             self._owned_client = True
         async with self.client.stream(
             "POST",
