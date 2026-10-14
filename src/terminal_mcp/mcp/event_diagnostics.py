@@ -56,6 +56,76 @@ def emit(method: str, stage: str, code: str, cid: str, *, enabled=False) -> None
         pass
 
 
+# Only metadata SHAPE is diagnostic: never raw values, signatures, arbitrary
+# header values, opaque conversation IDs, callback addresses or credentials.
+_META_KNOWN_KEYS = (
+    "openai/subject",
+    "openai/session",
+    "openai/organization",
+    "threadId",
+    "sessionId",
+    "callId",
+    "progressToken",
+)
+
+
+def metadata_shape(params: object) -> dict[str, object]:
+    """Bounded classification of incoming Events params._meta (no raw values)."""
+    if not isinstance(params, dict):
+        return {"params_type": "other"}
+    meta = params.get("_meta")
+    fields = {}
+    if isinstance(meta, dict):
+        for key in _META_KNOWN_KEYS:
+            if key in meta:
+                value = meta[key]
+                fields[key] = (
+                    "string" if isinstance(value, str)
+                    else "null" if value is None
+                    else "object" if isinstance(value, dict)
+                    else "array" if isinstance(value, list)
+                    else "other"
+                )
+    return {
+        "params_type": "object",
+        "meta_type": (
+            "missing" if "_meta" not in params
+            else "object" if isinstance(meta, dict)
+            else "null" if meta is None
+            else "other"
+        ),
+        "recognized_fields": fields,
+        "other_meta_keys": min(
+            sum(key not in _META_KNOWN_KEYS for key in meta), 100
+        ) if isinstance(meta, dict) else 0,
+        "top_level_meta_present": "meta" in params,
+        "arguments_session_number_present": (
+            isinstance(params.get("arguments"), dict)
+            and "session_number" in params["arguments"]
+        ),
+    }
+
+
+def emit_metadata_shape(method: str, params: object, cid: str, *, enabled=False) -> None:
+    """Opt-in event subscription diagnostics, independent of identity resolution."""
+    if not diagnostics_enabled(enabled) or method not in {
+        "events/subscribe", "events/unsubscribe"
+    }:
+        return
+    try:
+        values = {
+            "correlation_id": (
+                cid if re.fullmatch(r"ev_[a-f0-9]{16}", cid) else "unknown"
+            ),
+            "method": method,
+            **metadata_shape(params),
+        }
+        _LOG.info("tmcp_events_metadata %s", json.dumps(values, separators=(",", ":")))
+    except Exception:
+        # Never let diagnostics affect subscription results.
+        pass
+
+
 _CALLBACK_RESULTS = frozenset(
     {
         "verified",

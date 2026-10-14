@@ -110,6 +110,7 @@ def build_access_mcp(
                 raise AccessMeshError("subscriber_identity_missing")
             return await event_store.get_events(
                 slot.logical_agent_id,
+                principal_id=actor.principal_id,
                 event_id=request.event_id,
                 limit=request.limit,
                 cursor=request.cursor,

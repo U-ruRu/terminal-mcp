@@ -103,14 +103,14 @@ class Receiver:
         return 202, b""
 
 
-def subscribe(client, *, evidence, token="test-bearer-a"):
+def subscribe(client, *, evidence, number=None, token="test-bearer-a"):
     return rpc(
         client,
         "access",
         "events/subscribe",
         {
             "name": "message.received",
-            "arguments": {},
+            "arguments": {"session_number": number} if number is not None else {},
             "delivery": {"mode": "webhook", "url": URL, "secret": KEY},
         },
         evidence=evidence,
@@ -157,11 +157,14 @@ def test_access_subscription_without_verified_binding_is_fail_closed(tmp_path):
                     evidence=meta(),
                 )["result"]["capabilities"]
             )
-        unknown = subscribe(client, evidence=meta())
+        unknown = subscribe(client, evidence=meta(), number="9999")
         assert unknown["error"]["code"] == -32001
         assert receiver.requests == []  # reject BEFORE external challenge
-        missing = subscribe(client, evidence=None)
+        missing = subscribe(client, evidence=None, number="9999")
         assert missing["error"]["code"] == -32001
+        # Provider metadata does not replace a required session-number selector.
+        no_number = subscribe(client, evidence=meta())
+        assert no_number["error"]["code"] == -32602
         with sqlite3.connect(app.state.settings.database_path) as db:
             assert db.execute("SELECT COUNT(*) FROM mcp_event_subscriptions").fetchone()[0] == 0
 
@@ -196,7 +199,7 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
         )["ok"]
         # Access has DIFFERENT subject and conversation from Coordination,
         # nevertheless both existing bindings refer to the exact same agent.
-        result = subscribe(client, evidence=a_access)
+        result = subscribe(client, evidence=a_access, number=a_number)
         assert "result" in result, result
         subscription_id = result["result"]["id"]
         with sqlite3.connect(app.state.settings.database_path) as db:
@@ -205,7 +208,7 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
                 "WHERE subscription_id=?",
                 (subscription_id,),
             ).fetchone()
-            assert binding == (a_id, "access")
+            assert binding == (a_id, "session_number")
         assert len(receiver.requests) == 1  # challenge only
         b_number = tool(
             client,
@@ -232,7 +235,7 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
                 "WHERE logical_agent_id IN (?,?)",
                 (a_id, b_id),
             )
-        b_sub = subscribe(client, evidence=b_access)
+        b_sub = subscribe(client, evidence=b_access, number=b_number)
         assert "result" in b_sub, b_sub
         assert b_sub["result"]["id"] != subscription_id
         with sqlite3.connect(app.state.settings.database_path) as db:
@@ -339,9 +342,11 @@ def test_access_issue_other_connector_attach_subscribe_and_local_delivery(tmp_pa
         assert len(retried) == 3
         assert retried[-1]["eventId"] == message_events[0]["eventId"]
         assert retried[-1]["data"]["message_id"] == message_id
-        # A new OAuth-bearing connector identity with the same public label
-        # cannot consume the A session without having the exact Access binding.
-        denied = subscribe(client, evidence=meta("other-user", "other-conversation"))
+        # An unknown session number is not a valid message recipient, even
+        # when provider metadata is supplied.
+        denied = subscribe(
+            client, evidence=meta("other-user", "other-conversation"), number="9999"
+        )
         assert denied["error"]["code"] == -32001
 
 
@@ -359,10 +364,13 @@ def test_token_boundary_cannot_reuse_existing_metadata_pair(tmp_path):
             request_id=1,
         )["session_number"]
         assert number
-        # Different authenticated OAuth/bearer principal, identical metadata,
-        # must produce a different connection key and is not authorized.
-        denied = subscribe(client, evidence=evidence, token="test-bearer-b")
-        assert denied["error"]["code"] == -32001
+        # The explicit number is a routing selector. Distinct authenticated
+        # principals receive distinct subscription identities even for this
+        # same number and identical optional provider metadata.
+        first = subscribe(client, evidence=evidence, number=number)
+        second = subscribe(client, evidence=evidence, number=number, token="test-bearer-b")
+        assert "result" in first and "result" in second, (first, second)
+        assert first["result"]["id"] != second["result"]["id"]
 
 
 def test_oauth_access_binding_subscribe_and_revocation(tmp_path):
@@ -412,7 +420,7 @@ def test_oauth_access_binding_subscribe_and_revocation(tmp_path):
             request_id=77,
         )["session_number"]
         assert number
-        saved = subscribe(client, evidence=pair, token=jwt_token)
+        saved = subscribe(client, evidence=pair, number=number, token=jwt_token)
         assert "result" in saved, saved
         sub_id = saved["result"]["id"]
         assert len(receiver.requests) == 1
@@ -495,7 +503,7 @@ def test_codex_native_thread_only_reuses_verified_identity_and_isolates_clients(
         )
         assert resolved["ok"] and resolved["agent_name"]
 
-        subscribed = subscribe(client, evidence=native_meta)
+        subscribed = subscribe(client, evidence=native_meta, number=number)
         assert "result" in subscribed, subscribed
         with sqlite3.connect(app.state.settings.database_path) as db:
             binding = db.execute(
@@ -504,60 +512,64 @@ def test_codex_native_thread_only_reuses_verified_identity_and_isolates_clients(
             ).fetchone()
         assert binding == (logical_agent_id,)
 
-        # Same thread from another verified OAuth client has a distinct connection.
+        # Provider metadata is not used as an implicit session-number selector:
+        # an unrelated client can explicitly select the same number, but the
+        # resulting subscription remains associated with its own principal.
         other_principal = subscribe(
-            client, evidence={"threadId": "codex-thread-a"}, token="test-bearer-b"
+            client, evidence={"threadId": "codex-thread-a"},
+            number=number, token="test-bearer-b"
         )
-        assert "error" in other_principal
-        assert other_principal["error"]["code"] == -32001
+        assert "result" in other_principal, other_principal
+        assert other_principal["result"]["id"] != subscribed["result"]["id"]
 
-        # Root session alone cannot identify which child agent sent a request.
         missing_thread = subscribe(
-            client, evidence={"sessionId": "shared-root", "progressToken": 42}
+            client, evidence={"sessionId": "shared-root", "progressToken": 42},
+            number=number,
         )
-        assert "error" in missing_thread
-        assert missing_thread["error"]["code"] == -32001
+        assert "result" in missing_thread, missing_thread
+        assert missing_thread["result"]["id"] == subscribed["result"]["id"]
 
 
 
-def test_access_lifecycle_subscriptions_and_get_events_use_logical_agent_identity(tmp_path):
+def test_global_lifecycle_subscriptions_no_meta_and_principal_scoped_get_events(tmp_path):
     app = create_app(config(tmp_path))
     receiver = Receiver()
     app.state.access_events.sender = receiver
     with TestClient(app, base_url="https://terminal.example") as client:
-        agent_a, agent_b = meta("owner-a", "conversation-a"), meta("owner-b", "conversation-b")
-        a_code = tool(client, "access", "session", {"action": "start"}, evidence=agent_a)[
-            "session_number"
-        ]
-        b_code = tool(client, "access", "session", {"action": "start"}, evidence=agent_b)[
-            "session_number"
-        ]
-        store = app.state.access_mesh.store
-        a_number = store.numbers.winner(a_code)
-        b_number = store.numbers.winner(b_code)
-        a_id = store.slot(a_number["issuer_id"], a_number["slot_id"]).logical_agent_id
-        b_id = store.slot(b_number["issuer_id"], b_number["slot_id"]).logical_agent_id
-        assert a_id != b_id
-
-        def subscribe_event(event_name, evidence):
+        # Global lifecycle subscriptions are valid BEFORE session start and
+        # without provider identity metadata. They cover all agent lifecycles.
+        def subscribe_event(event_name, *, token="test-bearer-a"):
             response = rpc(
                 client, "access", "events/subscribe",
                 {"name": event_name, "arguments": {},
                  "delivery": {"mode": "webhook", "url": URL, "secret": KEY}},
-                evidence=evidence,
+                evidence=None, token=token,
             )
             assert "result" in response, response
             return response["result"]["id"]
 
-        sub_a = subscribe_event("agent.attached", agent_a)
-        sub_b = subscribe_event("session.ended", agent_b)
-        unauth = rpc(
-            client, "access", "events/subscribe",
-            {"name": "agent.inactive", "arguments": {},
-             "delivery": {"mode": "webhook", "url": URL, "secret": KEY}},
-            evidence=meta("not-registered", "elsewhere"),
-        )
-        assert unauth["error"]["code"] == -32001
+        sub_a = subscribe_event("agent.attached")
+        sub_b = subscribe_event("session.ended", token="test-bearer-b")
+        sub_idle = subscribe_event("agent.inactive")
+
+        agent_a, agent_b = meta("owner-a", "conversation-a"), meta("owner-b", "conversation-b")
+        a_code = tool(client, "access", "session", {"action": "start"}, evidence=agent_a)[
+            "session_number"
+        ]
+        b_code = tool(
+            client, "access", "session", {"action": "start"},
+            evidence=agent_b, token="test-bearer-b",
+        )["session_number"]
+        assert a_code != b_code
+
+        # Upgrade a historically agent-owned lifecycle subscription in place.
+        slot = app.state.access_mesh.store.numbers.winner(a_code)
+        with sqlite3.connect(app.state.mcp_events.store.path) as db:
+            db.execute(
+                "UPDATE mcp_event_subscriptions SET subscriber_agent_id=? WHERE id=?",
+                (slot["logical_agent_id"], sub_a),
+            )
+        client.portal.call(app.state.mcp_events.store.initialize)
 
         a_event, b_event = "evt_" + "a" * 32, "evt_" + "b" * 32
         path = app.state.mcp_events.store.path
@@ -566,44 +578,48 @@ def test_access_lifecycle_subscriptions_and_get_events_use_logical_agent_identit
             assert db.execute(
                 "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
                 (sub_a,),
-            ).fetchone() == (a_id,)
+            ).fetchone() == (None,)
             assert db.execute(
                 "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
                 (sub_b,),
-            ).fetchone() == (b_id,)
-            for event_id, event_name, subscriber, name in (
+            ).fetchone() == (None,)
+            assert db.execute(
+                "SELECT subscriber_agent_id FROM mcp_event_subscriptions WHERE id=?",
+                (sub_idle,),
+            ).fetchone() == (None,)
+            for event_id, event_name, subscription, name in (
                 (a_event, "agent.attached", sub_a, "A"),
                 (b_event, "session.ended", sub_b, "B"),
             ):
-                data = {"server": "firstbyte", "agent_name": name}
                 db.execute(
                     "INSERT INTO mcp_event_records("
                     "event_id,source_key,name,occurred_at,data_json) VALUES(?,?,?,?,?)",
-                    (event_id, "test:" + event_id, event_name,
-                     timestamp, json.dumps(data)),
+                    (event_id, "test:" + event_id, event_name, timestamp,
+                     json.dumps({"server": "firstbyte", "agent_name": name})),
                 )
                 db.execute(
                     "INSERT INTO mcp_event_deliveries("
                     "event_id,subscription_id,state,next_attempt_at) VALUES(?,?,?,?)",
-                    (event_id, subscriber, "sent", timestamp),
+                    (event_id, subscription, "sent", timestamp),
                 )
 
         first = tool(client, "access", "get_events", {}, evidence=agent_a)
-        assert first["ok"] and [item["eventId"] for item in first["events"]] == [a_event]
-        assert first["events"][0]["data"]["agent_name"] == "A"
+        assert first["ok"] and [x["eventId"] for x in first["events"]] == [a_event]
         assert first["events"][0]["read"] is False
         assert tool(client, "access", "get_events", {}, evidence=agent_a)["events"] == []
-        assert [item["eventId"] for item in tool(
-            client, "access", "get_events", {}, evidence=agent_b
-        )["events"]] == [b_event]
-        assert tool(client, "access", "get_events",
-                    {"event_id": a_event}, evidence=agent_b)["events"] == []
-        by_id = tool(client, "access", "get_events",
-                     {"event_id": a_event}, evidence=agent_a)
+        second = tool(
+            client, "access", "get_events", {},
+            evidence=agent_b, token="test-bearer-b",
+        )
+        assert [x["eventId"] for x in second["events"]] == [b_event]
+        assert tool(
+            client, "access", "get_events", {"event_id": a_event},
+            evidence=agent_b, token="test-bearer-b",
+        )["events"] == []
+        by_id = tool(client, "access", "get_events", {"event_id": a_event}, evidence=agent_a)
         assert by_id["events"][0]["read"] is True
-        old = tool(client, "access", "get_events",
-                   {"show_read": True}, evidence=agent_a)
-        assert [item["eventId"] for item in old["events"]] == [a_event]
+        old = tool(client, "access", "get_events", {"show_read": True}, evidence=agent_a)
+        assert [x["eventId"] for x in old["events"]] == [a_event]
         with sqlite3.connect(path) as db:
             assert db.execute(
                 "SELECT state,read_at FROM mcp_event_deliveries WHERE event_id=?",
@@ -613,6 +629,19 @@ def test_access_lifecycle_subscriptions_and_get_events_use_logical_agent_identit
                 "SELECT read_at FROM mcp_event_deliveries WHERE event_id=?",
                 (a_event,),
             ).fetchone()[0] is not None
+
+        # Unsubscribe also must work without per-agent provider metadata.
+        removed = rpc(
+            client, "access", "events/unsubscribe",
+            {"name": "agent.inactive", "arguments": {},
+             "delivery": {"mode": "webhook", "url": URL}},
+            evidence=None,
+        )
+        assert removed["result"] == {}
+        with sqlite3.connect(path) as db:
+            assert db.execute(
+                "SELECT COUNT(*) FROM mcp_event_subscriptions WHERE id=?", (sub_idle,)
+            ).fetchone()[0] == 0
 
 
 def test_access_get_events_cursor_deduplicates_across_owner_subscriptions(tmp_path):

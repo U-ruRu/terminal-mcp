@@ -87,6 +87,7 @@ def test_number_catalog_and_other_schemas_unchanged():
             "type": "string", "pattern": "^[0-9]{4}$", "minLength": 4, "maxLength": 4
         }},
         "additionalProperties": False,
+        "required": ["session_number"],
     }
     for name in ("agent.attached", "agent.inactive", "session.ended"):
         assert events[name]["inputSchema"] == {

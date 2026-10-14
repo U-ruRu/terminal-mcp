@@ -271,3 +271,38 @@ async def test_stale_dispatch_gate_keeps_retry_state_and_never_calls_callback(ca
     assert attempts == [("PRIVATE_EVENT", "PRIVATE_SUBSCRIPTION", None)] * 2
     assert "tmcp_events_diag" not in caplog.text
     assert "tmcp_events_error" not in caplog.text
+
+def test_metadata_shape_logging_is_switchable_and_never_exposes_values(caplog):
+    probe = event_diagnostics.emit_metadata_shape
+    params = {
+        "name": "message.received",
+        "arguments": {"session_number": "1234"},
+        "_meta": {
+            "openai/subject": "SECRET-USER-SUBJECT",
+            "openai/session": "SECRET-CONVERSATION",
+            "custom-field": "SECRET-OTHER-VALUE",
+            "threadId": None,
+        },
+    }
+    enabled = {"value": False}
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        probe("events/subscribe", params, "ev_" + "a" * 16, enabled=lambda: enabled["value"])
+        assert "tmcp_events_metadata" not in caplog.text
+        enabled["value"] = True
+        probe("events/subscribe", params, "ev_" + "a" * 16, enabled=lambda: enabled["value"])
+    records = [record for record in caplog.records if "tmcp_events_metadata" in record.message]
+    assert len(records) == 1
+    payload = json.loads(records[0].message.split("tmcp_events_metadata ", 1)[1])
+    assert payload["recognized_fields"] == {
+        "openai/subject": "string",
+        "openai/session": "string",
+        "threadId": "null",
+    }
+    assert payload["meta_type"] == "object"
+    assert payload["other_meta_keys"] == 1
+    assert payload["arguments_session_number_present"] is True
+    for forbidden in ("SECRET-USER-SUBJECT", "SECRET-CONVERSATION", "SECRET-OTHER-VALUE", "1234"):
+        assert forbidden not in caplog.text
+    assert event_diagnostics.metadata_shape({})["meta_type"] == "missing"
+    assert event_diagnostics.metadata_shape({"_meta": None})["meta_type"] == "null"
+    assert event_diagnostics.metadata_shape({"_meta": "opaque"})["meta_type"] == "other"

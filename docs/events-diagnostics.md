@@ -32,6 +32,22 @@ emitted only after removal commits. `tmcp_events_callback` contains bounded resp
 status, timing, sizes and header-presence booleans. Neither mode logs callback URLs, request/response
 bodies, challenges, payload data, authorization headers, signing keys or arbitrary exception text.
 
+For events/subscribe and events/unsubscribe, the same opt-in flag also emits
+tmcp_events_metadata. The entry contains the existing server correlation ID and
+only the structure of request metadata: whether params._meta is absent, null,
+an object or another type; recognized field names and value types; the number
+of other metadata keys; and whether a session_number argument is present.
+It never logs raw openai/subject, openai/session, threadId, unknown metadata
+values, session numbers, credentials or message content.
+
+New message.received registrations require four-digit arguments.session_number,
+even if _meta is present. Old subscriptions with empty arguments may still be
+removed with events/unsubscribe. Lifecycle subscriptions (agent.attached,
+agent.inactive, session.ended) remain global and require arguments={} but no
+per-agent provider metadata. Their webhooks apply to all agents. The get_events
+fallback exposes global lifecycle events through a shared read-once inbox for
+the authenticated principal; message subscriptions remain agent-bound.
+
 Minimal `tmcp_events_error` warning records remain available with detailed logging disabled for
 worker/internal failures, callback-verification failures and failed delivery attempts. These include
 only fixed failure categories, a server correlation ID and a bounded HTTP status when available.
