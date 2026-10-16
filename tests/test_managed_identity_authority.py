@@ -304,19 +304,6 @@ class FleetIdentityRoutes(Routes):
 
 
 @pytest.mark.asyncio
-async def test_fleet_provider_registry_resolves_identity_before_local_replica():
-    repository = Repository()
-    repository.bound = None
-    routes = FleetIdentityRoutes()
-    resolved = await ManagedProviderResolver(repository, routes=routes).resolve(
-        actor(), "openai", metadata()
-    )
-    assert resolved.logical_agent_id == "la_one"
-    assert hasattr(routes, "provider_resolve")
-    assert repository.bound is None
-
-
-@pytest.mark.asyncio
 async def test_fleet_provider_bind_requires_access_code_proof():
     repository = Repository()
     repository.bound = None

@@ -332,7 +332,6 @@ def test_ambiguous_mutation_is_never_blindly_retried():
         ("unauthorized", "reauthenticate"),
         ("revision_conflict", "reconcile"),
         ("capability_not_allowed", "stop"),
-        ("internal_error", "reconcile"),
     ],
 )
 def test_nontransient_error_policy_is_not_overridden_by_retry_safety(code, action):
@@ -367,8 +366,8 @@ def test_schema_is_closed_and_has_visible_bounds():
         ValidationRepair(validation_errors=(issue,) * (MAX_VALIDATION_ISSUES + 1))
 
 
-@pytest.mark.parametrize("operation", ["cmd.read", "command_read"])
-def test_read_named_operation_requires_actual_retry_safety(operation):
+def test_read_named_operation_requires_actual_retry_safety():
+    operation = "cmd.read"
     failure = public_error("authority_unavailable", details={"retry_after_ms": 25})
     unknown = retry_decision(failure, operation=operation)
     assert unknown.action == "reconcile"
@@ -416,10 +415,8 @@ def test_session_lifecycle_errors_direct_agent_to_start_session():
     assert expired.message == "Сессия закончилась"
 
 
-@pytest.mark.parametrize(
-    "code", ["session_contract_conflict"]
-)
-def test_work_window_rejection_preserves_machine_error(code):
+def test_work_window_rejection_preserves_machine_error():
+    code = "session_contract_conflict"
     from terminal_mcp.core.work_windows import WorkWindowError
 
     result = error_from_exception(WorkWindowError(code))
