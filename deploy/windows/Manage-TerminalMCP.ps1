@@ -47,7 +47,16 @@ function Protect-Directory([string]$Path) {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Wait-Healthy {
+    foreach ($line in [IO.File]::ReadLines((Join-Path $Root 'config\terminal-mcp.env'))) {
+        if ($line -match '^TERMINAL_MCP_HOST=(.*)$') {
+            $ListenHost = $Matches[1].Trim().Trim('"').Trim("'")
+        } elseif ($line -match '^TERMINAL_MCP_PORT=(.*)$') {
+            $Port = [int]$Matches[1].Trim().Trim('"').Trim("'")
+        }
+    }
     $healthHost = if ($ListenHost -in '0.0.0.0','127.0.0.1') { '127.0.0.1' } else { $ListenHost }
+    if ($healthHost -eq '::') { $healthHost = '::1' }
+    if ($healthHost.Contains(':')) { $healthHost = "[$healthHost]" }
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         try {
@@ -93,6 +102,7 @@ try {
         $old = $state.currentPython
         $state.currentPython = $state.previousPython
         $state.previousPython = $old
+        $state.commit = (Get-Item -LiteralPath $state.currentPython).Directory.Parent.Parent.Name
         $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
         return
     }
@@ -105,6 +115,11 @@ try {
     $existing = Get-Service TerminalMCP -ErrorAction SilentlyContinue
     if ($Action -eq 'Install' -and $existing) { throw 'Use Update for an installed service.' }
     if ($Action -eq 'Update' -and -not $existing) { throw 'Install the service first.' }
+    $previousPython = $null
+    if ($existing) {
+        $oldState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        $previousPython = $oldState.currentPython
+    }
     if (-not $existing) {
         if (-not $PublicUrl) { throw 'PublicUrl is required for installation.' }
         if ($WinSWSha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'WinSW checksum is required.' }
@@ -122,9 +137,14 @@ try {
     $archive = Join-Path $release 'source.tar'
     Invoke-Checked 'git' @('-C',$SourcePath,'archive','--format=tar',"--output=$archive",$ExpectedCommit)
     Invoke-Checked 'tar.exe' @('-xf',$archive,'-C',$sourceCopy)
-    Invoke-Checked $Python @((Join-Path $sourceCopy 'scripts\release_version.py'),
+    $versionArguments = @((Join-Path $sourceCopy 'scripts\release_version.py'),
         '--source',$sourceCopy,'--sha',$ExpectedCommit,'--stamp',
         '--output',(Join-Path $release 'RELEASE_META.json'))
+    if ($previousPython) {
+        $previousVenv = (Get-Item -LiteralPath $previousPython).Directory.Parent.FullName
+        $versionArguments += @('--prior-package',(Join-Path $previousVenv 'Lib\site-packages\terminal_mcp'))
+    }
+    Invoke-Checked $Python $versionArguments
     Invoke-Checked $Python @('-m','venv',(Join-Path $release 'venv'))
     $runtime = Join-Path $release 'venv\Scripts\python.exe'
     Invoke-Checked $runtime @('-m','pip','install',"$sourceCopy`[compact`]")
@@ -134,27 +154,28 @@ try {
             '--root',$Root,'--public-url',$PublicUrl,'--host',$ListenHost,'--port',"$Port")
         Copy-Item -LiteralPath $WinSWPath -Destination $wrapper
     }
-    $previousPython = $null
     $backup = $null
-    if ($existing) {
-        $oldState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-        $previousPython = $oldState.currentPython
-        Invoke-Checked $wrapper @('stop')
-        $backup = Join-Path $Root ('backups\' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
-        Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','backup',
-            '--root',$Root,'--output',$backup)
-    }
-    Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','render',
-        '--root',$Root,'--python',$runtime,'--output',$xmlPath)
-    if (-not $existing) { Invoke-Checked $wrapper @('install') }
+    $activated = $false
     try {
+        if ($existing) {
+            Invoke-Checked $wrapper @('stop')
+            $backup = Join-Path $Root ('backups\' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
+            Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','backup',
+                '--root',$Root,'--output',$backup)
+        }
+        Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','render',
+            '--root',$Root,'--python',$runtime,'--output',$xmlPath)
+        if (-not $existing) { Invoke-Checked $wrapper @('install') }
         Invoke-Checked $wrapper @('start')
+        $activated = $true
         Wait-Healthy
     } catch {
         if ($previousPython) {
             & $wrapper stop | Out-Null
-            Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','check-rollback',
-                '--root',$Root,'--output',$backup)
+            if ($activated) {
+                Invoke-Checked $runtime @('-m','terminal_mcp.deployment.windows','check-rollback',
+                    '--root',$Root,'--output',$backup)
+            }
             Invoke-Checked $previousPython @('-m','terminal_mcp.deployment.windows','render',
                 '--root',$Root,'--python',$previousPython,'--output',$xmlPath)
             Invoke-Checked $wrapper @('start')
