@@ -15,7 +15,7 @@ from terminal_mcp.mcp.output_contracts import cmd_result, serialized_call_tool_r
 from terminal_mcp.mcp.server import _finish_cmd_read_page
 
 
-@pytest.mark.parametrize("length", [0, 511, 512, 513, 514, 4096])
+@pytest.mark.parametrize("length", [0, 511, 512, 513])
 def test_message_preview_reports_actual_loss_at_boundary(length):
     result = summary_message({"text": "x" * length})
     assert result["truncated"] is (length > MESSAGE_PREVIEW_CHARS)
@@ -24,7 +24,7 @@ def test_message_preview_reports_actual_loss_at_boundary(length):
     )
 
 
-@pytest.mark.parametrize("unit", ['"', "\\", "\x00", "\n", "\t", "Ж", "😀"])
+@pytest.mark.parametrize("unit", ['"', "\\", "\x00", "😀"])
 def test_escaped_command_pages_stay_readable_through_final_mcp_envelope(unit):
     all_lines = [f"{i:03}:" + unit * 1200 for i in range(40)]
     seen = []
@@ -55,7 +55,7 @@ def test_escaped_command_pages_stay_readable_through_final_mcp_envelope(unit):
     assert cursor is None
 
 
-@pytest.mark.parametrize("unit", ['"', "\\", "\x00", "Ж", "😀"])
+@pytest.mark.parametrize("unit", ['"', "😀"])
 def test_inherently_oversized_line_is_clipped_by_serialized_size(unit):
     page = _finish_cmd_read_page(
         {

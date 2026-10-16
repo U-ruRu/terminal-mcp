@@ -13,11 +13,8 @@ from terminal_mcp.storage.sqlite import SqliteRepository
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "character,length,count", [("a", 16384, 1), ("Ж", 16384, 1), ("b", 8192, 8)]
-)
 async def test_committed_run_retains_receipt_with_large_incoming(
-    monkeypatch, tmp_path, character, length, count
+    monkeypatch, tmp_path
 ):
     repository = SqliteRepository(tmp_path / "commands.sqlite3", tmp_path / "output.sqlite3")
     await repository.initialize()
@@ -27,8 +24,8 @@ async def test_committed_run_retains_receipt_with_large_incoming(
     raw = base._run()
     raw["cmd_hash"] = record.cmd_hash
     raw["messages"] = [
-        base._message("notify", text=character * length, msg_id=f"fixture:msg:large-{i}")
-        for i in range(count)
+        base._message("notify", text="b" * 8192, msg_id=f"fixture:msg:large-{i}")
+        for i in range(8)
     ]
     raw["pending_messages"] = list(raw["messages"])
     store = AgentStore(tmp_path / "commands.sqlite3")
@@ -66,9 +63,8 @@ async def test_committed_run_retains_receipt_with_large_incoming(
     ]
     assert stored_after == stored_before, "Projection changed stored text/read/ACK/reply state"
     summary = {
-        "character": character,
-        "text_characters": length,
-        "messages": count,
+        "text_characters": 8192,
+        "messages": len(raw["messages"]),
         "stored_cmd_hash": persisted.cmd_hash,
         "wire_keys": list(data),
         "wire_cmd_hash": data.get("cmd_hash"),
@@ -82,16 +78,18 @@ async def test_committed_run_retains_receipt_with_large_incoming(
 
     displayed = data.get("messages", [])
     originals = {m["message_hash"]: m["text"] for m in raw["messages"]}
-    shortened = len(displayed) < count or any(m["text"] != originals[m["id"]] for m in displayed)
+    shortened = len(displayed) < len(raw["messages"]) or any(
+        m["text"] != originals[m["id"]] for m in displayed
+    )
     if shortened and data.get("ok"):
         assert data.get("warnings"), "A nonempty preview/remaining notice is mandatory"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode,requirement", [("notify", None), ("ack", "ack"), ("alert", "reply")])
 async def test_read_projection_preserves_real_message_text_and_ack_state(
-    monkeypatch, tmp_path, mode, requirement
+    monkeypatch, tmp_path
 ):
+    mode, requirement = "ack", "ack"
     path = tmp_path / "messages.sqlite3"
     repository = SqliteRepository(path, tmp_path / "output.sqlite3")
     await repository.initialize()

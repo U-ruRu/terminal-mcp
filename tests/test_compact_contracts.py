@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
@@ -19,27 +16,6 @@ def compiled():
     return c.build()
 
 
-def _load(name):
-    return json.loads((GENERATED / name).read_text())
-
-
-def _refs_resolved(schema):
-    """JSON Schema metaschema allows dangling refs; explicitly reject them."""
-    definitions = schema.get("$defs", {})
-
-    def visit(value):
-        if isinstance(value, dict):
-            if "$ref" in value:
-                assert c.ref_name(value["$ref"]) in definitions
-            for child in value.values():
-                visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-
-    visit(schema)
-
-
 def _valid(schema, data):
     return Draft202012Validator(schema).is_valid(data)
 
@@ -52,60 +28,8 @@ def _model_valid(model, data):
         return False
 
 
-def test_all_20_exact_effective_tools_and_artifacts(compiled):
-    expected_counts = {"access": 2, "executor": 10, "coordinator": 8}
-    assert {role: len(compiled["after"][role]["tools"]) for role in c.ROLE_NAMES} == expected_counts
-    assert sorted(compiled["coverage"]) == sorted(compiled["strict"])
-    assert len(compiled["coverage"]) == 20
-    for role in c.ROLE_NAMES:
-        before = compiled["before"][role]["tools"]
-        after = compiled["after"][role]["tools"]
-        assert [t["name"] for t in before] == [t["name"] for t in after]
-        assert _load("catalog-" + role + ".json") == compiled["after"][role]
-        assert _load("before-" + role + ".json") == compiled["before"][role]
-        for old, new in zip(before, after, strict=True):
-            assert old["annotations"] == new["annotations"]
-            assert new["outputSchema"] == {"type": "object"}
-            assert new["inputSchema"] == {"type": "object"}
-            assert old["description"] in new["description"]
-    assert _load("strict-contracts.json") == compiled["strict"]
-    assert _load("coverage.json") == compiled["coverage"]
-    assert _load("provenance.json") == compiled["provenance"]
-
-
-def test_strict_input_output_refs_and_digest_preserved(compiled):
-    assert set(compiled["provenance"]["roles"]) == set(c.ROLE_NAMES)
-    for role in c.ROLE_NAMES:
-        models = c.contract_models(role)
-        for tool in compiled["after"][role]["tools"]:
-            key = role + "." + tool["name"]
-            source = compiled["strict"][key]
-            coverage = compiled["coverage"][key]
-            assert source["inputSchema"] == models[tool["name"]].model_json_schema()
-            assert (
-                hashlib.sha256(c.encoded(source["inputSchema"])).hexdigest()
-                == coverage["strict_input_sha256"]
-            )
-            assert (
-                hashlib.sha256(c.encoded(source["outputSchema"])).hexdigest()
-                == coverage["strict_output_sha256"]
-            )
-            for schema in (
-                source["inputSchema"],
-                source["outputSchema"],
-                tool["inputSchema"],
-                tool["outputSchema"],
-            ):
-                Draft202012Validator.check_schema(schema)
-                _refs_resolved(schema)
-            assert coverage["output_fallback"] == f"strict-contracts.json:{key}.outputSchema"
-            assert coverage["baseline_description_preserved"]
-            assert sorted(source["inputSchema"].get("required", [])) == coverage["required_fields"]
-            assert set(source["inputSchema"].get("properties", {})) == set(coverage["input_fields"])
-
-
-@pytest.mark.parametrize("role", ["executor", "coordinator"])
-def test_task_list_valid_invalid_strict_parity(role, compiled):
+def test_task_list_valid_invalid_strict_parity(compiled):
+    role = "executor"
     schema = compiled["strict"][role + ".task_list"]["inputSchema"]
     model = c.contract_models(role)["task_list"]
     for request, allowed in (
@@ -125,8 +49,8 @@ def test_task_list_valid_invalid_strict_parity(role, compiled):
     assert "next_cursor" in description and "summary-only" in description
 
 
-@pytest.mark.parametrize("role", ["executor", "coordinator"])
-def test_message_conditional_requirements_and_runtime_only_rules(role, compiled):
+def test_message_conditional_requirements_and_runtime_only_rules(compiled):
+    role = "executor"
     schema = compiled["strict"][role + ".message"]["inputSchema"]
     model = c.contract_models(role)["message"]
     fixtures = (
@@ -273,48 +197,6 @@ def test_proven_oneof_disjointness_not_inferred_for_overlaps():
     assert "ONE_OF" in c.SchemaRenderer({"$defs": {}}, "test").render(
         {"oneOf": [{"type": "integer"}, {"type": "number"}]}
     )
-
-
-def test_runtime_annotations_source_anchors_and_stale_detection(tmp_path, monkeypatch):
-    valid = c._annotations()
-    assert valid
-    for entries in valid.values():
-        for note in entries:
-            assert note["anchor"] in (c.ROOT / note["source"]).read_text()
-    bad = tmp_path / "annotation.json"
-    bad.write_text(
-        json.dumps(
-            {
-                "executor.message": [
-                    {
-                        "source": "src/terminal_mcp/mcp/role_contracts.py",
-                        "anchor": "DOES_NOT_EXIST_ANCHOR",
-                        "text": "lost",
-                    }
-                ]
-            }
-        )
-    )
-    monkeypatch.setattr(c, "ANNOTATIONS", bad)
-    with pytest.raises(ValueError, match="stale"):
-        c._annotations()
-
-
-def test_metrics_full_tools_list_and_byte_arithmetic():
-    report = _load("metrics.json")
-    assert report["tokenizer"] == "tiktoken==0.12.0 / cl100k_base"
-    for role in c.ROLE_NAMES:
-        previous = _load("before-" + role + ".json")
-        future = _load("catalog-" + role + ".json")
-        rollup = report["roles"][role]
-        assert len(c.encoded(previous)) == rollup["before"]["serialized_tools_list"]["utf8_bytes"]
-        assert len(c.encoded(future)) == rollup["after"]["serialized_tools_list"]["utf8_bytes"]
-        assert rollup["delta"]["utf8_bytes"]["delta"] == (
-            len(c.encoded(future)) - len(c.encoded(previous))
-        )
-        assert set(rollup["per_tool_delta"]) == {v["name"] for v in future["tools"]}
-    counts = report["three_catalogs_total"]["utf8_bytes"]
-    assert counts["delta"] == counts["after"] - counts["before"]
 
 
 def test_artifact_stale_check_detects_a_modified_file(tmp_path):

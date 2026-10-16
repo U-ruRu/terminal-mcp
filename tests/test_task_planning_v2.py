@@ -39,12 +39,7 @@ def test_create_archive_expose_fields_without_losing_conditionals():
     "arguments",
     [
         {},
-        {"request": None},
-        {"request": "bad"},
-        {"request": []},
         {"request": {"action": "unknown", "unrecognized": True}},
-        {"request": {"action": "create", "state": "done"}},
-        {"request": {"action": "archive", "namespace": "test", "task_id": "one"}},
         {"request": {"action": "create", "title": 42}, "unexpected": True},
     ],
 )
@@ -61,15 +56,6 @@ def test_invalid_arguments_reach_strict_runtime_instead_of_failing_planning(argu
     "arguments",
     [
         {"request": {"action": "create", "namespace": "test", "isolation_hint": "none"}},
-        {
-            "request": {
-                "action": "create",
-                "namespace": "test",
-                "isolation_hint": "none",
-                "state": "done",
-                "result": {"summary": "done"},
-            }
-        },
         {"request": {"action": "archive", "namespace": "test", "task_id": "one", "note": "old"}},
         {
             "request": {

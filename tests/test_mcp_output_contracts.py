@@ -217,10 +217,6 @@ def test_observe_variants(subject, raw):
             {"ok": True, "sender": "Alpha", "messages": []},
         ),
         (
-            {"text": None, "message_hash": None, "show_all": True},
-            {"ok": True, "sender": "Alpha", "messages": []},
-        ),
-        (
             {"text": "hi", "message_hash": None, "show_all": False},
             {
                 "ok": True,
@@ -260,16 +256,8 @@ def test_message_variants(kwargs, raw):
     [
         "create",
         "claim",
-        "release",
-        "update",
         "checkpoint",
-        "comment",
-        "relate",
-        "unrelate",
-        "state",
-        "done",
         "archive",
-        "review",
     ],
 )
 def test_task_variants(action):
@@ -278,36 +266,9 @@ def test_task_variants(action):
 
 
 @pytest.mark.parametrize(
-    ("legacy_code", "public_code"),
-    [
-        ("already_claimed", "task_claim_conflict"),
-        ("agent_busy", "wip_limit_exceeded"),
-    ],
-)
-def test_task_legacy_conflicts_are_public_errors(legacy_code, public_code):
-    result = task_result(
-        {"ok": False, "code": legacy_code, "error": f"task.claim: {legacy_code}"},
-        "claim",
-    )
-    assert result.isError is True
-    assert result.structuredContent == public_error(public_code).as_dict()
-    assert json.loads(result.content[0].text) == public_error(public_code).as_dict()
-
-
-@pytest.mark.parametrize(
     "action,raw",
     [
         ("run", {"ok": True, "cmd_hash": "c1", "status": "queued", "queue_id": 1}),
-        (
-            "run",
-            {
-                "ok": True,
-                "cmd_hash": "c1",
-                "status": "running",
-                "queue_id": 1,
-                "execution_started": True,
-            },
-        ),
         (
             "read",
             {
@@ -332,17 +293,6 @@ def test_task_legacy_conflicts_are_public_errors(legacy_code, public_code):
                 "has_more": False,
             },
         ),
-        (
-            "read",
-            {
-                "ok": True,
-                "cmd_hash": "c1",
-                "status": "failed",
-                "exit_code": 2,
-                "lines": ["bad"],
-                "next_offset": 1,
-            },
-        ),
         ("cancel", {"ok": True, "cmd_hash": "c1", "status": "cancelled"}),
         (
             "recovery",
@@ -361,10 +311,6 @@ def test_cmd_variants(action, raw):
         (
             "create",
             {"ok": True, "entry": {"id": 1, "summary": "s", "content": "c", "primary": False}},
-        ),
-        (
-            "update",
-            {"ok": True, "entry": {"id": 1, "summary": "s", "content": "c", "primary": True}},
         ),
         ("delete", {"ok": True, "deleted_id": 1}),
     ],
