@@ -239,6 +239,7 @@ async def test_legacy_peer_message_request_is_terminally_rejected_without_queue(
     assert result == {
         "ok": False,
         "code": "feature_disabled",
+        "error": "feature_disabled",
         "outcome": "not_committed",
     }
     old_discovery = await local.handle_peer("bacloud", "recipients", {"after": "", "limit": 100})

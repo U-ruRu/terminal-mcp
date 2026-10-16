@@ -178,7 +178,6 @@ COMPONENT_MODULES = frozenset(
 )
 PLATFORM_MODULES = frozenset(
     {
-        "test_access_mesh_alert_ack_contract.py",
         "test_access_mesh_mcp_runtime.py",
         "test_access_mesh_operator_http.py",
         "test_access_mesh_repeat_end_qa.py",
