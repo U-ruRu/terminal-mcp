@@ -4,6 +4,7 @@
 complete candidate acceptance and node probes. Run it using the project's
 installed test environment (`.[test,compact]`) and a checkout of the intended source.
 It prints an external `report.json` path; results never disappear into terminal output.
+The runner supplies sanitized temporary paths to pytest; session hooks retain this isolated configuration.
 
 The repository's [AGENTS.md](../AGENTS.md) defines the lightweight agent workflow:
 find and reuse existing behavior checks before adding a named missing regression,

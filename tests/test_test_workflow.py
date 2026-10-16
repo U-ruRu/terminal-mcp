@@ -380,6 +380,14 @@ def test_isolated_runs_do_not_inherit_runtime_or_pytest_filters(tmp_path, monkey
     assert "PYTHONOPTIMIZE" not in a
     for name in workflow.STATE_PATHS:
         assert a["TERMINAL_MCP_" + name] != b["TERMINAL_MCP_" + name]
+    from conftest import pytest_sessionstart
+
+    monkeypatch.setenv("TMCP_TEST_INHERIT_SERVER_ENV", a["TMCP_TEST_INHERIT_SERVER_ENV"])
+    monkeypatch.setenv("TERMINAL_MCP_OUTPUT_CACHE_PATH", a["TERMINAL_MCP_OUTPUT_CACHE_PATH"])
+    pytest_sessionstart(None)
+    import os
+
+    assert os.environ["TERMINAL_MCP_OUTPUT_CACHE_PATH"] == a["TERMINAL_MCP_OUTPUT_CACHE_PATH"]
     assert a["PYTHONHASHSEED"] == "0"
     assert a["TMPDIR"] == str(first)
     assert b["TMPDIR"] == str(second)

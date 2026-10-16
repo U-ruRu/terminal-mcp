@@ -92,6 +92,8 @@ def isolate(root: Path, data: Path, output: Path) -> dict[str, str]:
             "TEMP": str(data),
             "TMCP_PROFILE_PATH": str(output / "profile.json"),
             "TMCP_PREPARATION_STATS_PATH": str(output / "preparation.json"),
+            # conftest retains these sanitized, external paths through collection.
+            "TMCP_TEST_INHERIT_SERVER_ENV": "1",
         }
     )
     return env
