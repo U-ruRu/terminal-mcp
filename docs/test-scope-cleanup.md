@@ -300,3 +300,39 @@ collection totals in this document remain historical, not M3 acceptance evidence
 Static current inventory: 269 test modules, 1818 test functions; 187 source files
 (182 Python modules and five assets), with 114 owner routes and 73 explicit unknown
 routes. No full suite or full collection was run for this transfer.
+
+## Kilo-18 atomic-half audit (2026-10-16)
+
+The test-only worker audited the M3 starting revision `502c093b6e79d7e4e8d3dece209c977a6b042768`
+against the request to reduce the 2,973 collected pytest cases to at most 1,450.
+The exact starting collection was recorded with
+`PYTHONPATH=src /workspace/terminal-mcp/.venv-test/bin/python -m pytest --collect-only -q`
+and completed with 2,973 cases in 11.18 seconds. The requested reduction would
+remove at least 1,523 cases.
+
+No test or parameter case was removed in this audit. The inspected high-cardinality
+groups did not establish 1,523 redundant or retired cases:
+
+| Inspected group | Cases | Current obligation that prevents treating it as duplicate |
+|---|---:|---|
+| `tests/test_public_errors.py::test_registered_codes_are_stable_bounded_and_serializable` | 257 | Every current `ERROR_SPECS` code gets its own wire-policy assertion (message, outcome, retry policy, bounded serialization, and round trip). Removing rows loses a registered public code; folding rows into a loop is expressly disallowed and loses case-level failure localization. |
+| `tests/test_managed_session_policy.py::test_pure_policy_exhaustively_classifies_draining` and `::test_pure_policy_expiry_never_admits_new_work` | 56 | The same current non-operator operations are checked at two distinct lifecycle boundaries. Draining finalization admission and expiry admission are separate properties. |
+| `tests/test_task_mcp_contract.py` action cases and `tests/test_mcp_output_contracts.py::test_task_variants` | 23 | Request validation and output action literals cover current action-specific public schemas; the latter also distinguishes the claim snapshot output path. |
+| `tests/test_compact_close_independent.py` cross products | 31 | Modes, Unicode/escaped text profiles, and command operations exercise different output budgets, receipt statuses, refusal codes, and inbox state. A smaller Cartesian sample would omit interactions without evidence that they are equivalent. |
+| Deployment, provider identity, work-window, authority, migration and durable-recovery parameter tables | varies | Spot checks found explicit accepted/rejected values, migration versions, and commit/recovery states. These are current boundaries, not repeated test setup alone. |
+
+This audit adds zero tests and removes zero tests: before 2,973, after 2,973;
+removed 0, added 0. There is therefore no removal mapping or test-owner registry
+change. The prior cleanup packets listed above already account for the verified
+retired aliases, unreachable fleet-scope transport, and superseded composite checks.
+The supported legacy slot kind and `/mcp` compatibility endpoint remain out of
+scope for retirement. No case was moved into a loop, skipped, xfailed, deselected,
+or hidden by a path or name change.
+
+The target of at most 1,450 is not met. Reaching it would require dropping at least
+1,523 collected current cases without a demonstrated duplication or retirement
+basis. That conflicts with the request to preserve the listed current contract
+boundaries and not delete arbitrarily. This is an explicit uncovered optimization
+request for the coordinator to reassess against the current contract; it is not
+reported as a successful half-suite reduction. The candidate full test run and the
+coordinator's immutable baseline outcome belong in the worker evidence handoff.
