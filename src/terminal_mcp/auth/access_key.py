@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from terminal_mcp.auth.foundation import AuthFoundationError
+from terminal_mcp.platform_paths import IS_WINDOWS
 
 _MAGIC = b"TMC-ACCESS-KEY-v1\x00"
 _KEY_BYTES = 32
@@ -22,14 +23,19 @@ class AccessVerifierKeyStore:
 
     def _read(self) -> bytes:
         try:
-            raw = self.path.read_bytes()
+            if IS_WINDOWS:
+                from terminal_mcp.platform_windows import read_private
+
+                raw = read_private(self.path)
+            else:
+                raw = self.path.read_bytes()
         except FileNotFoundError as exc:
             raise AuthFoundationError("access verifier key is missing") from exc
         expected = len(_MAGIC) + _KEY_BYTES
         if len(raw) != expected or not raw.startswith(_MAGIC):
             raise AuthFoundationError("access verifier key is corrupt")
         try:
-            mode = self.path.stat().st_mode & 0o777
+            mode = 0 if IS_WINDOWS else self.path.stat().st_mode & 0o777
         except OSError as exc:
             raise AuthFoundationError("access verifier key is unreadable") from exc
         if mode & 0o077:
@@ -42,6 +48,10 @@ class AccessVerifierKeyStore:
         if not allow_create:
             raise AuthFoundationError("access verifier key is missing for existing Access state")
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if IS_WINDOWS:
+            from terminal_mcp.platform_windows import secure_path
+
+            secure_path(self.path.parent)
         key = os.urandom(_KEY_BYTES)
         payload = _MAGIC + key
         try:

@@ -1,10 +1,9 @@
 # Architecture B: application scheduler and ExecutionPort v1
 
-The deployment still has one API/application process. `app.py` explicitly composes
-`CommandScheduler` with `InProcessExecutionAdapter`. The old `LinuxTerminalAdapter`
-constructor remains a source-compatibility composition, not a second implementation.
-A separate privileged executor, IPC, migration and rollback orchestration belong to
-Architecture C/D; this change does not claim those scenarios have been deployed.
+The API/application process composes `CommandScheduler` with the `ExecutionPort`
+selected by `terminal/composition.py`. `LinuxTerminalAdapter` provides the existing
+Linux constructor compatibility. Platform setup is defined in
+[Windows node](../windows.md) and [split-service cutover](../architecture-split-service-cutover.md).
 
 ## Authority and ownership
 

@@ -307,6 +307,7 @@ def test_current_source_inventory_has_visible_routes_and_no_missing_test_layer()
 def test_platform_tests_cannot_enter_component_or_integration_feedback(tmp_path):
     write(tmp_path, "tests/test_read_contract.py")
     write(tmp_path, "tests/test_execution_port_native.py")
+    write(tmp_path, "qa/windows/test_execution.py")
     assert test_plan.component_plan(tmp_path, ["commands"])["tests"] == [
         "tests/test_read_contract.py",
     ]
@@ -315,6 +316,9 @@ def test_platform_tests_cannot_enter_component_or_integration_feedback(tmp_path)
     ]
     assert test_plan.platform_plan(tmp_path, ["linux"])["tests"] == [
         "tests/test_execution_port_native.py",
+    ]
+    assert test_plan.platform_plan(tmp_path, ["windows"])["tests"] == [
+        "qa/windows/test_execution.py",
     ]
 
 
@@ -389,7 +393,7 @@ def test_isolated_runs_do_not_inherit_runtime_or_pytest_filters(tmp_path, monkey
         ["component", "invalid", "--plan"],
         ["node"],
         ["dev", "--timeout", "0", "--plan"],
-        ["platform", "windows", "--plan"],
+        ["platform", "darwin", "--plan"],
     ],
 )
 def test_invalid_or_narrowed_acceptance_commands_are_blocked(argv):

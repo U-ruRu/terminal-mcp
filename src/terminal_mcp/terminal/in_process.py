@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import pwd
 import secrets
 import signal
 import time
@@ -162,6 +161,8 @@ class InProcessExecutionAdapter:
         self.output_transports.clear()
 
     async def health(self):
+        import pwd
+
         uid = os.geteuid()
         return {
             "user": pwd.getpwuid(uid).pw_name,
@@ -186,6 +187,8 @@ class InProcessExecutionAdapter:
         return True
 
     def _drop_privileges(self):
+        import pwd
+
         account = pwd.getpwnam(self.user)
 
         def drop_privileges():
@@ -314,7 +317,7 @@ class InProcessExecutionAdapter:
             )
         except TimeoutError:
             error = timeout_error
-            os.killpg(process.pid, signal.SIGKILL)
+            self._kill_capture(process)
             output, _ = await communication
         except asyncio.CancelledError:
             await self._terminate_native(process, self.grace)
@@ -323,6 +326,7 @@ class InProcessExecutionAdapter:
             raise
         finally:
             self.capture_processes.discard(process)
+            self._release_capture(process)
         status = "completed" if process.returncode == 0 and error is None else "failed"
         timestamp = datetime.now(UTC).strftime("%H:%M:%S")
         lines = [
@@ -337,3 +341,9 @@ class InProcessExecutionAdapter:
             "ok": status == "completed",
             "duration_ms": round((time.monotonic() - started) * 1000),
         }
+
+    def _kill_capture(self, process):
+        os.killpg(process.pid, signal.SIGKILL)
+
+    def _release_capture(self, process):
+        pass

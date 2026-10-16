@@ -1,11 +1,14 @@
 import json
 import math
+import os
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from terminal_mcp.platform_paths import CONFIG_DIR, ENV_FILE, IS_WINDOWS, PROGRAM_DATA
 
 
 class Settings(BaseSettings):
@@ -15,10 +18,18 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8080"
     console_public_base_url: str = "https://terminal-console.solvenger.app"
     console_allowed_origins: str = ""
-    env_file_path: Path = Path("/etc/terminal-mcp/terminal-mcp.env")
-    database_path: Path = Path("./data/terminal-mcp.sqlite3")
-    auth_database_path: Path = Path("./data/auth.sqlite3")
-    output_cache_path: Path = Path("./data/output.sqlite3")
+    env_file_path: Path = ENV_FILE
+    database_path: Path = (
+        PROGRAM_DATA / "data/terminal-mcp.sqlite3"
+        if IS_WINDOWS
+        else Path("./data/terminal-mcp.sqlite3")
+    )
+    auth_database_path: Path = (
+        PROGRAM_DATA / "data/auth.sqlite3" if IS_WINDOWS else Path("./data/auth.sqlite3")
+    )
+    output_cache_path: Path = (
+        PROGRAM_DATA / "data/output.sqlite3" if IS_WINDOWS else Path("./data/output.sqlite3")
+    )
     output_line_max_bytes: int = 4 * 1024 * 1024
     output_command_max_bytes: int = 8 * 1024 * 1024
     output_retention_target_bytes: int = 192 * 1024 * 1024
@@ -28,9 +39,16 @@ class Settings(BaseSettings):
     execution_mode: Literal["in_process", "unix"] = "in_process"
     executor_socket_path: Path = Path("/run/terminal-mcp/executor.sock")
     executor_rpc_timeout_sec: float = 10.0
-    shell: str = "/bin/bash"
-    cwd: Path = Path("/")
-    terminal_user: str = "root"
+    shell: str = (
+        str(
+            Path(os.environ.get("SystemRoot", "C:/Windows"))
+            / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        )
+        if IS_WINDOWS
+        else "/bin/bash"
+    )
+    cwd: Path = PROGRAM_DATA / "work" if IS_WINDOWS else Path("/")
+    terminal_user: str = "current" if IS_WINDOWS else "root"
     health_command: str = ""
     auth_mode: str = "none"
     mcp_auth_mode: str = ""
@@ -38,6 +56,8 @@ class Settings(BaseSettings):
     bearer_tokens: str = ""
     bearer_credentials_json: str = "[]"
     oauth_users_json: str = "[]"
+    oauth_username_file: Path | None = None
+    oauth_password_file: Path | None = None
     admin_username: str = "admin"
     admin_password: str = "change-me"
     admin_session_secret: str = "change-me-session-secret"
@@ -58,8 +78,12 @@ class Settings(BaseSettings):
     console_ws_batch_size: int = 100
     max_read_lines: int = 5000
     cancel_grace_sec: float = 2.0
-    runtime_config_path: Path = Path("/etc/terminal-mcp/runtime.env")
-    log_path: Path = Path("/var/log/terminal-mcp/terminal-mcp.log")
+    runtime_config_path: Path = CONFIG_DIR / "runtime.env"
+    log_path: Path = (
+        PROGRAM_DATA / "logs/terminal-mcp.log"
+        if IS_WINDOWS
+        else Path("/var/log/terminal-mcp/terminal-mcp.log")
+    )
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 8081
     agent_idle_ttl_sec: int = 300
@@ -84,8 +108,8 @@ class Settings(BaseSettings):
     fleet_instance_id: str = ""
     fleet_signing_private_key: str = ""
     fleet_peers_json: str = "[]"
-    fleet_peer_transports_path: str = "/etc/terminal-mcp/fleet-peer-transports.json"
-    mesh_vpn_state_dir: str = "/etc/terminal-mcp/mesh-vpn"
+    fleet_peer_transports_path: str = str(CONFIG_DIR / "fleet-peer-transports.json")
+    mesh_vpn_state_dir: str = str(CONFIG_DIR / "mesh-vpn")
     fleet_replication_interval_sec: float = 5.0
     fleet_request_timeout_sec: float = 3.0
     fleet_legacy_replication_enabled: bool = True
@@ -154,6 +178,10 @@ class Settings(BaseSettings):
         timeout = self.executor_rpc_timeout_sec
         if not math.isfinite(timeout) or not 0 < timeout <= 300:
             raise ValueError("executor_rpc_timeout_sec must be finite and in (0, 300]")
+        if IS_WINDOWS:
+            if self.execution_mode != "in_process":
+                raise ValueError("Windows execution requires in_process mode")
+            return self
         path = str(self.executor_socket_path)
         if (
             not self.executor_socket_path.is_absolute()

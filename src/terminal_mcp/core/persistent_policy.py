@@ -213,7 +213,12 @@ class PersistentPolicyController:
         mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
         fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
         try:
-            os.fchmod(fd, mode)
+            if os.name == "nt":
+                from terminal_mcp.platform_windows import secure_path
+
+                secure_path(Path(temp_name))
+            else:
+                os.fchmod(fd, mode)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()

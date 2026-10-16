@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "terminal-mcp"
 dynamic = ["version"]
-description = "Durable MCP service for asynchronous Linux terminal commands"
+description = "Durable MCP service for asynchronous Linux and Windows terminal commands"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
   "pydantic-settings>=2.7,<3",
   "PyJWT[crypto]>=2.10,<3",
   "python-multipart>=0.0.20,<1",
+  "pywin32>=308; sys_platform == 'win32'",
   "uvicorn[standard]>=0.34,<1",
 ]
 

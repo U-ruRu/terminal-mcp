@@ -110,7 +110,7 @@ def _filesystem(path: str | os.PathLike[str]) -> dict[str, object]:
         if used_percent is not None:
             result["used_percent"] = used_percent
         return result
-    except (OSError, ValueError):
+    except (AttributeError, OSError, ValueError):
         return _unavailable()
 
 

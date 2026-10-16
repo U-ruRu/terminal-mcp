@@ -269,7 +269,7 @@ def _run_isolated(
             "libc": list(platform.libc_ver()),
         },
         "dependencies": dependencies,
-        "load_start": os.getloadavg(),
+        "load_start": os.getloadavg() if hasattr(os, "getloadavg") else None,
     }
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(
@@ -336,7 +336,7 @@ def _run_isolated(
             "phase_seconds": profile.get("phase_seconds"),
         },
         resource=profile.get("resource"),
-        load_end=os.getloadavg(),
+        load_end=os.getloadavg() if hasattr(os, "getloadavg") else None,
     )
     report["files"] = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
@@ -411,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
             plan = {"scope": "full", "tests": ["tests"], "reasons": ["All tests, no filters"]}
         elif args.mode == "platform":
             if args.changed_from:
-                raise ValueError("platform is an explicit linux batch; use --plan to inspect it")
+                raise ValueError("platform is an explicit host batch; use --plan to inspect it")
             plan = platform_plan(ROOT, args.components)
         elif args.changed_from:
             if args.components:

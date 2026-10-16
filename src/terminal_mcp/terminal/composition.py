@@ -7,9 +7,18 @@ The application scheduler owns the lifecycle and durable queue in both topologie
 
 from terminal_mcp.config import Settings
 from terminal_mcp.core.execution import ExecutionPort, ExecutionPortError
+from terminal_mcp.platform_paths import IS_WINDOWS
 
 
 def build_execution(settings: Settings) -> ExecutionPort:
+    if IS_WINDOWS:
+        if settings.execution_mode != "in_process":
+            raise ExecutionPortError("execution_mode_invalid")
+        from terminal_mcp.terminal.windows import WindowsExecutionAdapter
+
+        return WindowsExecutionAdapter(
+            settings.shell, settings.cwd, settings.cancel_grace_sec, settings.terminal_user
+        )
     if settings.execution_mode == "unix":
         try:
             from terminal_mcp.terminal.ipc import UnixExecutionAdapter

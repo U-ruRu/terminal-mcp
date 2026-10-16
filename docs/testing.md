@@ -27,6 +27,10 @@ python scripts/test.py integration events
 python scripts/test.py platform linux --plan
 python scripts/test.py platform linux
 
+# Native Windows PowerShell, Job Objects, ACL and app boundaries.
+python scripts/test.py platform windows --plan
+python scripts/test.py platform windows
+
 # Inspect affected selection, including committed, staged, unstaged and untracked changes.
 python scripts/test.py dev --changed-from <full-base-sha> --plan
 python scripts/test.py dev --changed-from <full-base-sha>

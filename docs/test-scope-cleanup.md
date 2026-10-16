@@ -331,3 +331,9 @@ high-cardinality modules still need owner-by-owner review. No compatibility
 guarantee is removed based on a filename: the README-supported legacy slot kind
 and `/mcp` endpoint remain current. The retired fleet-scope message transport
 remains rejected by its current local-only guard tests.
+# Windows platform scope
+
+`platform windows` выбирает native acceptance из `qa/windows`. Параметр отказа
+`windows` в проверке неизвестной платформы заменён на `darwin`; позитивная проверка
+выбора Windows добавлена в существующую проверку изоляции платформенных слоёв.
+Контракты Linux сохраняют существующие selectors.
