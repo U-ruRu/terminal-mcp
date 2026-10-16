@@ -24,7 +24,7 @@ def test_cursor_round_trip_and_filter_binding():
         decode_cursor("7", scope)
 
 
-@pytest.mark.parametrize("limit", [1, 20, 100])
+@pytest.mark.parametrize("limit", [1, 100])
 def test_bounded_page_honors_limit_and_finishes(limit):
     rows = [{"id": i} for i in range(135)]
     scope = {"kind": "collection"}

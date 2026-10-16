@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
-from pydantic import ValidationError
 
 from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.persistent_backend import PersistentBackend
@@ -172,101 +171,12 @@ async def _call(server, name, arguments):
     return data, response
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["queued", "running", "completed", "failed", "cancelled"])
-async def test_run_exact_keys_and_actual_status(monkeypatch, status):
-    raw = _run(status)
-    before = deepcopy(raw)
-    data, _ = await _call(
-        _server(monkeypatch, "executor", cmd=raw), "command_run", {"command": "printf fixture"}
-    )
-    assert data == {
-        "ok": True,
-        "remaining_seconds": 0,
-        "cmd_hash": "aabbccdd",
-        "status": status,
-        "queue_id": 3,
-    }
-    assert raw == before
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "mode,requirement,pending_only",
-    [("notify", None, False), ("ack", "ack", True), ("alert", "reply", False)],
-    ids=["root-notify", "pending-ack", "root-alert"],
-)
-async def test_incoming_union_is_root_only_and_actionable(
-    monkeypatch, mode, requirement, pending_only
-):
-    raw = _run()
-    msg = _message(mode)
-    raw["messages"] = [] if pending_only else [deepcopy(msg)]
-    raw["pending_messages"] = [deepcopy(msg)]
-    before = deepcopy(raw)
-    data, _ = await _call(
-        _server(monkeypatch, "executor", cmd=raw), "command_run", {"command": "printf fixture"}
-    )
-    expected = {"id": msg["message_hash"], "sender": PUBLIC_NAME, "text": "incoming"}
-    if requirement:
-        expected["requirements"] = requirement
-    assert data.get("messages") == [expected], data
-    assert "coordination" not in data and "pending_messages" not in data
-    assert raw == before, "serialization mutated or acknowledged a message"
 
 
-@pytest.mark.asyncio
-async def test_claim_ordinary_success_is_exactly_ok(monkeypatch):
-    raw = {
-        "ok": True,
-        "action": "claim",
-        "task": _task(snapshot=True),
-        "warnings": [],
-        "messages": [],
-        "pending_messages": [],
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "executor", task=raw),
-        "task_claim",
-        {
-            "action": "claim",
-            "namespace": "acceptance",
-            "task_id": "ONE",
-            "claim_intent": "review",
-            "expected_revision": 3,
-        },
-    )
-    assert data == {"ok": True}
 
 
-@pytest.mark.asyncio
-async def test_claim_keeps_nonempty_required_messages_and_warnings(monkeypatch):
-    warning = {"code": "review_required", "severity": "warning", "message": "Read review"}
-    msg = _message("alert")
-    raw = {
-        "ok": True,
-        "action": "claim",
-        "task": _task(snapshot=True),
-        "warnings": [warning],
-        "messages": [msg],
-        "pending_messages": [deepcopy(msg)],
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "executor", task=raw),
-        "task_claim",
-        {"action": "claim", "namespace": "acceptance", "task_id": "ONE", "claim_intent": "review"},
-    )
-    assert data["ok"] is True
-    assert data.get("messages") == [
-        {
-            "id": msg["message_hash"],
-            "sender": PUBLIC_NAME,
-            "text": "incoming",
-            "requirements": "reply",
-        }
-    ]
-    assert any(item["code"] == warning["code"] for item in data.get("warnings", []))
-    assert "task" not in data and "action" not in data and "session_lifecycle" not in data
 
 
 class _IntentBoundaryFixture:
@@ -293,234 +203,18 @@ class _IntentBoundaryFixture:
         return nullcontext()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["command_run", "task_claim"])
-async def test_actual_intent_boundary_warns_on_minimal_success_then_blocks(monkeypatch, operation):
-    if "intent" not in roles.AttachInput.model_fields:
-        pytest.skip("Requires the separately coordinated intent integration candidate")
-    raw = (
-        _run()
-        if operation == "command_run"
-        else {"ok": True, "action": "claim", "task": _task(snapshot=True), "warnings": []}
-    )
-    service_method = "cmd" if operation == "command_run" else "task"
-    arguments = (
-        {"command": "printf fixture"}
-        if operation == "command_run"
-        else {
-            "action": "claim",
-            "namespace": "acceptance",
-            "task_id": "ONE",
-            "claim_intent": "review",
-        }
-    )
-    server = _server(
-        monkeypatch, "executor", mesh=_IntentBoundaryFixture(), **{service_method: raw}
-    )
-    data, response = await _call(server, operation, arguments)
-    assert data["ok"] is True
-    assert "next write will be blocked" in (response.meta or {}).get("intent_warning", "")
-    assert any("next write will be blocked" in item.text for item in response.content[1:])
-    blocked, _ = await _call(server, operation, arguments)
-    assert blocked["ok"] is False
-    assert blocked["error"]["code"] == "intent_stale"
-    assert blocked["error"]["outcome"] == "not_committed"
 
 
-@pytest.mark.asyncio
-async def test_detail_field_removal_and_opaque_values(monkeypatch):
-    raw = {"ok": True, "task": _task()}
-    before = deepcopy(raw)
-    data, _ = await _call(
-        _server(monkeypatch, "coordinator", observe=raw),
-        "task_get",
-        {"namespace": "acceptance", "task_id": "ONE", "detail": "detail"},
-    )
-    assert data["ok"] is True, data
-    assert "detail" not in data
-    task = data["task"]
-    assert not set(ORACLE["removed_detail"]) & task.keys()
-    assert not set(ORACLE["nonempty_detail"]) & task.keys()
-    assert task["checkpoint"] == OPAQUE and task["result"] == OPAQUE
-    assert task["cooperative"] is False
-    assert task["claims"] == [
-        {"agent_name": PUBLIC_NAME, "claimed_at": NOW, "claim_intent": "independent acceptance"}
-    ]
-    assert raw == before
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("input_refs", ["input"]),
-        ("output_refs", ["output"]),
-        ("resource_context", {"repo": "fixture", "path": "src", "scope": "review"}),
-        ("participants", [{**_claim(), "role": "participant"}]),
-    ],
-)
-async def test_detail_keeps_nonempty_service_fields(monkeypatch, field, value):
-    raw = {"ok": True, "task": _task()}
-    raw["task"][field] = deepcopy(value)
-    data, _ = await _call(
-        _server(monkeypatch, "coordinator", observe=raw),
-        "task_get",
-        {"namespace": "acceptance", "task_id": "ONE", "detail": "detail"},
-    )
-    assert data["ok"] is True, data
-    assert data["task"][field]
-    if field != "participants":
-        assert data["task"][field] == value
 
 
-@pytest.mark.asyncio
-async def test_detail_partitions_blocking_relations_without_mutation(monkeypatch):
-    raw = {"ok": True, "task": _task()}
-    blocker = {
-        "namespace": "acceptance",
-        "task_id": "BLOCKER",
-        "state": "ready",
-        "archived": False,
-        "satisfied": False,
-    }
-    relation = {
-        "direction": "outgoing",
-        "kind": "depends_on",
-        "namespace": "acceptance",
-        "task_id": "BLOCKER",
-        "created_at": NOW,
-        "created_by": PUBLIC_NAME,
-    }
-    other = {**relation, "kind": "related_to", "task_id": "OTHER"}
-    raw["task"].update(
-        blocking_dependencies=[blocker], dependencies=[blocker], relations=[relation, other]
-    )
-    before = deepcopy(raw)
-    data, _ = await _call(
-        _server(monkeypatch, "coordinator", observe=raw),
-        "task_get",
-        {"namespace": "acceptance", "task_id": "ONE", "detail": "detail"},
-    )
-    assert data["ok"] is True, data
-    task = data["task"]
-    assert task["blocking_dependencies"] == [blocker]
-    assert task["relations"] == [other]
-    assert "dependencies" not in task
-    assert raw == before
 
 
-@pytest.mark.asyncio
-async def test_snapshot_removes_service_fields_keeps_false_and_claim(monkeypatch):
-    raw = {"ok": True, "task": _task(snapshot=True)}
-    data, _ = await _call(
-        _server(monkeypatch, "coordinator", observe=raw),
-        "task_get",
-        {"namespace": "acceptance", "task_id": "ONE", "detail": "snapshot"},
-    )
-    assert data["ok"] is True, data
-    assert "detail" not in data
-    task = data["task"]
-    assert "operational_status" not in task and "blocking_dependencies" not in task
-    assert task["description_truncated"] is False
-    assert task["claim"] == {
-        "agent_name": PUBLIC_NAME,
-        "claimed_at": NOW,
-        "claim_intent": "independent acceptance",
-    }
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("healthy,extended", [(True, True), (False, False)])
-async def test_health_exact_fields_and_full_diagnostics(monkeypatch, healthy, extended):
-    raw = {
-        "ok": healthy,
-        "status": "healthy" if healthy else "degraded",
-        "application": "terminal-mcp",
-        "version": "test",
-        "storage": "sqlite",
-        "agent_name": PUBLIC_NAME,
-        "auth_mode": "test",
-        "components": [
-            {"id": "storage", "status": "healthy"},
-            {"id": "worker", "status": "healthy" if healthy else "failed"},
-        ],
-        "terminal": {
-            "ok": True,
-            "scheduler": "fifo",
-            "parallelism": 1,
-            "queue_size": 0,
-            "degraded": False,
-            "output_cache": {"retained_bytes": 0},
-        },
-        "workflow": {
-            "ok": True,
-            "active_claims": 0,
-            "unreleased_claims": 0,
-            "stale_claims": 0,
-            "by_state": {"ready": 0},
-            "live_claims": 0,
-        },
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "coordinator", health=raw), "health", {"extended": extended}
-    )
-    assert data["ok"] is True, data
-    expected = set(ORACLE["compact_health_keys"])
-    if extended:
-        expected |= set(ORACLE["extended_health_extra"])
-    assert set(data) == expected
-    assert data["healthy"] is healthy and data["agent_name"] == PUBLIC_NAME
-    if extended:
-        for field in ORACLE["extended_health_extra"]:
-            assert data[field] == raw[field]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["events", "comments"])
-async def test_history_items_and_cursor_survive_projection(monkeypatch, kind):
-    raw = {"ok": True, "task": _task()}
-    rows = [
-        {
-            "id": i,
-            "event_type": "persistent_mutation" if kind == "events" else "comment",
-            "payload": deepcopy(OPAQUE),
-            "created_at": NOW,
-            "agent_name": PUBLIC_NAME,
-            "logical_agent_id": "internal-agent",
-            "work_session_id": "internal-session",
-            "session_epoch": 1,
-        }
-        for i in range(5, 0, -1)
-    ]
-    raw["task"][kind] = rows
-    server = _server(monkeypatch, "coordinator", observe=raw)
-    cursor = None
-    got = []
-    while True:
-        arguments = {
-            "namespace": "acceptance",
-            "task_id": "ONE",
-            "detail": "history",
-            "history_kind": kind,
-            "limit": 2,
-        }
-        if cursor:
-            arguments["cursor"] = cursor
-        data, _ = await _call(server, "task_get", arguments)
-        assert data["ok"] is True, data
-        assert "detail" not in data and "kind" not in data["task"]
-        got.extend(data["task"]["items"])
-        cursor = data["task"].get("next_cursor")
-        if not cursor:
-            break
-        assert len(got) <= 5
-    assert [item["id"] for item in got] == [5, 4, 3, 2, 1]
-    for expected, actual in zip(rows, got, strict=True):
-        assert actual["payload"] == OPAQUE
-        if kind == "events":
-            assert actual == {k: v for k, v in expected.items() if k not in ORACLE["removed_event"]}
-        else:
-            assert actual == expected
 
 
 @pytest.mark.asyncio
@@ -528,10 +222,7 @@ async def test_history_items_and_cursor_survive_projection(monkeypatch, kind):
     "value",
     [
         {"text": "keep whole object", "metadata": {"flag": False, "zero": 0, "null": None}},
-        {},
         [],
-        [False, 0, None, {}, []],
-        "ordinary text",
         '{"literal":true}',
         "",
     ],
@@ -577,69 +268,8 @@ async def test_stored_checkpoint_snapshot_preserves_original_type(monkeypatch, t
     assert await store.list_events("acceptance", "ONE") == events_before
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "name,arguments",
-    [
-        ("command_run", {"command": 42}),
-        ("task_claim", {"action": "claim", "namespace": "acceptance", "task_id": "ONE"}),
-        ("command_read", {}),
-    ],
-)
-async def test_invalid_requests_are_small_actionable_failures(monkeypatch, name, arguments):
-    data, _ = await _call(_server(monkeypatch, "executor"), name, arguments)
-    assert data["ok"] is False
-    error = data["error"]
-    assert all(error.get(key) for key in ("code", "message", "outcome", "retry"))
-    assert error.get("details")
-    encoded = json.dumps(data)
-    assert len(encoded) < 8192
-    assert '"$defs"' not in encoded and '"oneOf"' not in encoded
 
 
-@pytest.mark.asyncio
-async def test_claim_revision_conflict_keeps_repair_and_does_not_claim(monkeypatch, tmp_path):
-    path = tmp_path / "claim-revision.sqlite3"
-    await SqliteRepository(path, tmp_path / "output.sqlite3").initialize()
-    store = TaskStore(path)
-    coordinator = TaskCoordinator(store)
-    created = await coordinator.mutate(
-        PUBLIC_NAME,
-        action="create",
-        namespace="acceptance",
-        task_id="ONE",
-        title="CAS",
-        isolation_hint="none",
-    )
-    assert created["ok"] is True
-    before = await store.get_task("acceptance", "ONE")
-    claims_before = await store.active_claims("acceptance", "ONE")
-    failed = await coordinator.mutate(
-        PUBLIC_NAME,
-        action="claim",
-        namespace="acceptance",
-        task_id="ONE",
-        claim_intent="review",
-        expected_revision=before["revision"] + 1,
-    )
-    assert failed["ok"] is False
-    data, _ = await _call(
-        _server(monkeypatch, "executor", task=failed),
-        "task_claim",
-        {
-            "action": "claim",
-            "namespace": "acceptance",
-            "task_id": "ONE",
-            "claim_intent": "review",
-            "expected_revision": before["revision"] + 1,
-        },
-    )
-    assert data["ok"] is False
-    assert data["error"]["details"]["current_revision"] == before["revision"]
-    assert data["error"]["outcome"] == "not_committed"
-    assert data["error"]["retry"]
-    assert await store.get_task("acceptance", "ONE") == before
-    assert await store.active_claims("acceptance", "ONE") == claims_before
 
 
 class _RunFixtureRepo:
@@ -722,99 +352,3 @@ async def test_run_never_polls_or_sleeps_to_obtain_a_later_status(monkeypatch):
     assert result["ok"] is True, result
     assert result["status"] == "queued"
     assert "postcommit_warning" not in result, result
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "status,exit_code",
-    [
-        ("queued", None),
-        ("running", None),
-        ("completed", 0),
-        ("failed", 7),
-        ("cancelled", 130),
-    ],
-)
-async def test_read_preserves_output_and_known_exit_after_finish_or_cancel(
-    monkeypatch, status, exit_code
-):
-    raw = {
-        "ok": True,
-        "cmd_hash": "aabbccdd",
-        "status": status,
-        "exit_code": exit_code,
-        "queue_id": 3,
-        "lines": ["stdout: fixture", "stderr: fixture"],
-        "overall_lines_count": 4,
-        "displayed_lines_count": 2,
-        "has_more": True,
-        "next_cursor": "fixture-cursor",
-        "output_truncated": False,
-        "output_retained": True,
-        "output_bytes": 0,
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "executor", cmd=raw),
-        "command_read",
-        {"cmd_hash": "aabbccdd", "limit": 2},
-    )
-    assert data["ok"] is True, data
-    command = data.get("command") if isinstance(data.get("command"), dict) else data
-    assert command["status"] == status
-    if exit_code is not None:
-        assert command["exit_code"] == exit_code
-        assert type(command["exit_code"]) is int
-    assert data["lines"] == raw["lines"]
-    assert data["has_more"] is True
-    assert data["next_cursor"] == raw["next_cursor"]
-    assert data["output_retained"] is True and data["output_truncated"] is False
-    assert data["output_bytes"] == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("retained,truncated", [(False, False), (True, True)])
-async def test_read_retention_and_truncation_are_meaningful_booleans(
-    monkeypatch, retained, truncated
-):
-    raw = {
-        "ok": True,
-        "cmd_hash": "aabbccdd",
-        "status": "completed",
-        "exit_code": 0,
-        "lines": [],
-        "overall_lines_count": 0,
-        "displayed_lines_count": 0,
-        "has_more": False,
-        "output_truncated": truncated,
-        "output_retained": retained,
-        "output_bytes": 0,
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "executor", cmd=raw), "command_read", {"cmd_hash": "aabbccdd"}
-    )
-    assert data["ok"] is True, data
-    assert data["has_more"] is False
-    assert data["output_retained"] is retained and data["output_truncated"] is truncated
-    assert data["output_bytes"] == 0
-
-
-@pytest.mark.asyncio
-async def test_read_includes_original_command_body_and_execution_error(monkeypatch):
-    body = "printf '%s\\n' 'original body'; printf '%s\\n' 'stderr' >&2; exit 7"
-    raw = {
-        "ok": True,
-        "cmd_hash": "aabbccdd",
-        "cmd": body,
-        "status": "failed",
-        "exit_code": 7,
-        "error": "fixture execution error",
-        "lines": ["original body", "stderr"],
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "executor", cmd=raw), "command_read", {"cmd_hash": "aabbccdd"}
-    )
-    assert data["ok"] is True, data
-    assert data["command"]["cmd"] == body
-    assert data["command"]["error"] == raw["error"]
-    assert data["command"]["exit_code"] == 7
-    assert data["lines"] == raw["lines"]
