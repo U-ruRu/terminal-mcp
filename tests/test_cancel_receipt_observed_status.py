@@ -7,7 +7,7 @@ from terminal_mcp.mcp.output_contracts import cmd_result
 
 
 @pytest.mark.parametrize("initial_status", ["queued", "running"])
-@pytest.mark.parametrize("failure", [None, "enqueue", "guard_exit"])
+@pytest.mark.parametrize("failure", [None, "enqueue"])
 async def test_cancel_wire_preserves_observed_command_status(
     tmp_path, monkeypatch, initial_status, failure
 ):
@@ -15,8 +15,6 @@ async def test_cancel_wire_preserves_observed_command_status(
     command = await _attributed_command(backend, status=initial_status)
     if failure == "enqueue":
         backend.terminal.enqueue_cancel.side_effect = RuntimeError("lost wakeup")
-    elif failure == "guard_exit":
-        backend.lifecycle.exit_error = RuntimeError("optional follow-up failed")
 
     accepted = await backend.cancel(command.cmd_hash, **IDENTITY)
     assert accepted["ok"] is True

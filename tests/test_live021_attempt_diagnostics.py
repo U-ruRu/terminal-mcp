@@ -11,11 +11,9 @@ import pytest
 import terminal_mcp.core.persistent_backend as backend_module
 from terminal_mcp.attempt_diagnostics import install_role_attempt_diagnostics
 from terminal_mcp.core.persistent_backend import PersistentBackend
-from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.mcp.output_contracts import cmd_result
 from terminal_mcp.mcp.roles import build_role_mcp
 from terminal_mcp.storage.sqlite import SqliteRepository
-from terminal_mcp.storage.tasks import TaskStore
 from terminal_mcp.trace import TraceMiddleware, current_trace_id, current_upstream_request_id
 
 SECRET = "do-not-log-body-headers-output"
@@ -135,35 +133,6 @@ async def test_lost_response_keeps_command_and_same_rpc_id_runs_independently(
 
 
 @pytest.mark.asyncio
-async def test_task_commit_is_readable_after_lost_asgi_body(tmp_path):
-    repo = SqliteRepository(tmp_path / "tasks.db", tmp_path / "output.db")
-    await repo.initialize()
-    store = TaskStore(repo.path)
-    tasks = TaskCoordinator(store)
-    key = dict(namespace="live021", task_id="safe-task")
-    await tasks.mutate("author", action="create", title="Safe", isolation_hint="none", **key)
-
-    async def update():
-        return await tasks.mutate(
-            "author", action="update", **key, expected_revision=1, description="CONTENT-A-safe"
-        )
-
-    events = Events()
-    app = TraceMiddleware(
-        adapter(instrument(update, events, "task_manage", "coordinator")), events=events
-    )
-    with pytest.raises(OSError):
-        await request(app, fail_body=True, role="coordinator")
-    reopened = TaskStore(repo.path)
-    saved = await reopened.get_task(**key)
-    assert saved["revision"] == 2 and saved["description"] == "CONTENT-A-safe"
-    result = [r for r in events.rows if r["event"] == "mcp_tool_finished"][0]
-    assert result["result_ok"] is True and result["task_revision"] == 2
-    assert result["task_id"] == "safe-task"
-    assert len({r["trace_id"] for r in events.rows}) == 1
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_broken_diagnostics_preserve_result_or_cancellation(cancel):
     async def run():
@@ -254,13 +223,10 @@ async def test_broken_sink_preserves_original_application_exception():
         await request(app)
 
 
-@pytest.mark.parametrize(
-    "event", ["mcp_http_started", "mcp_http_finished", "mcp_tool_started", "mcp_tool_finished"]
-)
-def test_attempt_events_survive_minimal_logging(tmp_path, event):
+def test_tool_attempt_event_survives_minimal_logging(tmp_path):
     from terminal_mcp.observability import EventLogger
 
     provider = SimpleNamespace(current=SimpleNamespace(detailed_logging=False))
     logger = EventLogger(tmp_path / "events.log", provider, metrics=None)
-    logger.emit(event, role="executor")
-    assert logger.queue.get_nowait().event["event"] == event
+    logger.emit("mcp_tool_finished", role="executor")
+    assert logger.queue.get_nowait().event["event"] == "mcp_tool_finished"

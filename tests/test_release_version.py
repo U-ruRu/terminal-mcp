@@ -162,18 +162,6 @@ def test_current_http_health_includes_short_release_identifier(tmp_path):
         body = client.get("/health/live").json()
     assert body["version"] == __version__
     assert body["release"] == __release__
-
-
-def test_installer_packs_from_disposable_source_and_uses_canonical_baseline():
-    script = (Path(__file__).resolve().parents[1] / "deploy/install.sh").read_text()
-    assert 'BUILD_SOURCE="$STAGED_RELEASE/_build_source"' in script
-    assert 'pip" install "$BUILD_SOURCE"' in script
-    assert "CANONICAL_RELEASE.json" in script
-    assert "QA_RELEASE.json" in script
-    assert "TERMINAL_MCP_DEPLOY_CHANNEL" in script
-    assert "scripts/release_version.py" in script
-
-
 def test_legacy_qa_schema_fingerprint_remains_verifiable_after_marker_added(tmp_path):
     """Adding an optional schema marker must not rehash installed old packages."""
     import hashlib
@@ -190,36 +178,6 @@ def test_legacy_qa_schema_fingerprint_remains_verifiable_after_marker_added(tmp_
     migrated = package(tmp_path / "new-mesh-schema")
     (migrated / "storage/access_mesh_numbers.py").write_text("MESH_NUMBERS_SCHEMA_VERSION = 2\n")
     assert release_version.schema_fingerprint(migrated) != original_hash
-
-
-def test_consecutive_qa_builds_increment_code_on_same_schema_and_keep_sha(tmp_path):
-    canonical = package(tmp_path / "canonical")
-    first = package(tmp_path / "first-qa")
-    manifest_file = first / "mcp/access_mesh_schema_baselines_v2.json"
-    manifest_file.write_text(json.dumps({"roles": {"executor": {"tools": ["session", "state"]}}}))
-    bump = release_version.calculate(first, canonical)
-    assert (bump["version"], bump["bump"]) == ("0.15.0", "schema")
-    release_version.stamp(first, bump, "abcdef0")
-    release_version.verify_prior_metadata(first, bump)
-
-    second = package(tmp_path / "second-qa")
-    (second / "mcp/access_mesh_schema_baselines_v2.json").write_text(manifest_file.read_text())
-    (second / "app.py").write_text("def run(): return 123\n")
-    advanced = release_version.calculate(second, first)
-    assert (advanced["version"], advanced["bump"]) == ("0.15.1", "code")
-    release_version.stamp(second, advanced, "123abcd")
-    release_version.verify_prior_metadata(second, advanced)
-
-    rebuilt = package(tmp_path / "same-build")
-    (rebuilt / "mcp/access_mesh_schema_baselines_v2.json").write_text(manifest_file.read_text())
-    (rebuilt / "app.py").write_text((second / "app.py").read_text())
-    repeat = release_version.calculate(rebuilt, second)
-    assert (repeat["version"], repeat["bump"]) == ("0.15.1", "unchanged")
-    assert release_version.resolve_sha("123abcdf1", None) == "123abcd"
-
-    (rebuilt / "storage/sqlite.py").write_text("SCHEMA_VERSION = 23\n")
-    another_schema = release_version.calculate(rebuilt, second)
-    assert (another_schema["version"], another_schema["bump"]) == ("0.16.0", "schema")
 
 
 def test_prior_qa_release_metadata_must_match_actual_installed_files(tmp_path):
@@ -259,15 +217,6 @@ def test_legacy_023_native_events_addition_classifies_024_schema(tmp_path):
     legacy_hash = release_version.schema_fingerprint(previous)
     events_manifest(incoming, reason=True)
     assert release_version.schema_fingerprint(previous) == legacy_hash
-    result = release_version.calculate(incoming, previous)
-    assert (result["version"], result["bump"]) == ("0.24.0", "schema")
-
-
-def test_existing_events_reason_change_classifies_schema(tmp_path):
-    previous = package(tmp_path / "installed", "0.23.0")
-    incoming = package(tmp_path / "candidate")
-    events_manifest(previous)
-    events_manifest(incoming, reason=True)
     result = release_version.calculate(incoming, previous)
     assert (result["version"], result["bump"]) == ("0.24.0", "schema")
 

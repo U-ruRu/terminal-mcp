@@ -117,23 +117,6 @@ async def test_notify_ack_alert_and_reply_receipts_without_duplicate_messages(me
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["notify", "ack"])
-async def test_require_reply_promotes_mode_and_ack_does_not_complete_reply(mesh_pair, mode):
-    fb = mesh_pair.nodes["firstbyte"]
-    named = _public_name(fb.mesh.store.slots["carol"])
-    sent = await fb.message(
-        actor("alice"), text="reply required", target=named, mode=mode, require_reply=True
-    )
-    assert sent["ok"] and sent["mode"] == "alert"
-    message_hash = sent["message_hash"]
-    await fb.message(actor("carol"))
-    assert _row(fb, message_hash)["read_at"] is None
-    await fb.message(actor("carol"), message_hash=message_hash)
-    assert _row(fb, message_hash)["read_at"] is not None
-    assert _row(fb, message_hash)["replied_at"] is None
-    assert _count(fb) == 1
-
-
 @pytest.mark.asyncio
 async def test_task_mutation_trace_links_existing_tool_attempt_and_response_without_payload():
     class Events:

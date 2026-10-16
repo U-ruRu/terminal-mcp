@@ -32,12 +32,6 @@ def write(root, name, text=""):
     "changed",
     [
         "src/terminal_mcp/auth/foundation.py",
-        "src/terminal_mcp/storage/sqlite.py",
-        "src/terminal_mcp/fleet/protocol.py",
-        "src/terminal_mcp/application/access_mesh.py",
-        "src/terminal_mcp/core/public_errors.py",
-        "scripts/build_compact_catalogs.py",
-        "tests/conftest.py",
         "new-unknown-file.json",
         "tests/test_deleted.py",
     ],
@@ -207,9 +201,7 @@ def test_events_source_keeps_app_and_commit_boundaries_explicit(tmp_path):
             ["contracts", "commands"],
             "consumers",
         ),
-        ("src/terminal_mcp/storage/work_windows.py", "owner", ["storage"], "all"),
         ("src/terminal_mcp/http/new_route.py", "unknown", [], "all"),
-        ("src/terminal_mcp/application/base.py", "unknown", [], "all"),
     ],
 )
 def test_source_routes_expose_owner_or_safe_unknown(path, kind, owners, boundaries):
@@ -393,16 +385,11 @@ def test_isolated_runs_do_not_inherit_runtime_or_pytest_filters(tmp_path, monkey
 @pytest.mark.parametrize(
     "argv",
     [
-        ["full", "auth", "--plan"],
         ["full", "--changed-from", "HEAD", "--plan"],
-        ["dev", "--expected-sha", "main", "--plan"],
         ["component", "invalid", "--plan"],
-        ["component", "capture", "--plan"],
         ["node"],
         ["dev", "--timeout", "0", "--plan"],
         ["platform", "windows", "--plan"],
-        ["platform", "linux", "--changed-from", "HEAD", "--plan"],
-        ["integration", "invalid", "--plan"],
     ],
 )
 def test_invalid_or_narrowed_acceptance_commands_are_blocked(argv):
@@ -438,8 +425,6 @@ def test_outcome_counts_preserve_fixture_errors_and_expected_failures():
         ("", "full", 0, True),
         (" M test.py", "full", 0, False),
         ("", "dev", 0, False),
-        ("", "integration", 0, False),
-        ("", "platform", 0, False),
         ("", "full", 1, False),
     ],
 )

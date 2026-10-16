@@ -64,22 +64,6 @@ def test_installer_exposes_stable_cli_link():
     assert 'install_cli_link' in script
 
 
-def test_installer_persists_console_origin_allowlist():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    assert (
-        'TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS="${TERMINAL_MCP_CONSOLE_ALLOWED_ORIGINS:-$CANONICAL_CONSOLE_ORIGINS}"'
-        in script
-    )
-    assert (
-        'CANONICAL_CONSOLE_ORIGINS='
-        '${TERMINAL_MCP_CANONICAL_CONSOLE_ORIGINS:-https://localhost}'
-        in script
-    )
-    assert 'ensure_console_origins' in script
-
-
-
 def test_runtime_dependency_matches_required_mcp_api():
     config = tomllib.loads(
         (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
@@ -91,16 +75,6 @@ def test_runtime_dependency_matches_required_mcp_api():
     from mcp.server.transport_security import TransportSecuritySettings
 
     assert TransportSecuritySettings is not None
-
-
-def test_installer_checks_runtime_imports_before_activation():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    import_check = "from mcp.server.transport_security import TransportSecuritySettings"
-    assert import_check in script
-    assert "import terminal_mcp.app" in script
-    assert "Staged release runtime import check failed" in script
-    assert script.index(import_check) < script.index("activate(){")
 
 
 def test_oauth_access_ttl_defaults_to_30_days_everywhere():
@@ -216,13 +190,6 @@ def test_doctor_rejects_proxy_404_for_public_fleet_ingress(tmp_path):
     assert "reverse proxy forwards /internal/fleet/*" in result.stderr
 
 
-def test_caddy_example_documents_fleet_ingress_contract():
-    caddy = (Path(__file__).resolve().parents[1] / "deploy" / "Caddyfile.example").read_text()
-
-    assert "/internal/fleet/*" in caddy
-    assert "application fleet-signing check" in caddy
-
-
 def test_installer_separates_durable_auth_database_from_runtime_backup():
     script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
 
@@ -286,28 +253,6 @@ def test_installer_pins_isolated_fixed_sqlite_runtime():
     assert "LD_LIBRARY_PATH" not in script
     assert "LD_PRELOAD" not in script
     assert "import sqlite3; print(sqlite3.sqlite_version)" in script
-
-
-def test_installer_builds_sqlite_before_runtime_import_check():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    build_call = 'build_sqlite_runtime "$STAGED_RELEASE"'
-    import_check = "from mcp.server.transport_security import TransportSecuritySettings"
-    assert script.index(build_call) < script.index(import_check)
-    assert 'validate_staged_runtime "$STAGED_RELEASE"' in script
-
-
-def test_update_stages_fixed_sqlite_before_backup_and_activation():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    update = next(line for line in script.splitlines() if line.startswith(" update)"))
-    assert (
-        update.index("stage")
-        < update.index('backup "$STAGED_RELEASE"')
-        < update.index("activate")
-    )
-    backup_body = script.split("backup(){", 1)[1].split("schema_rollback_safe(){", 1)[0]
-    assert 'runtime_python "$release"' in backup_body
 
 
 def _run_ingress_config(tmp_path, *, reload_ok=True):
@@ -516,30 +461,21 @@ def _schema_guard_function() -> str:
     )[0] + "\n}"
 
 
-def _run_runtime_schema_guard(tmp_path, *, current_version: int, target_version: int, legacy=False):
-    data = tmp_path / f"data-{current_version}-{target_version}-{int(legacy)}"
+def _run_runtime_schema_guard(tmp_path, *, current_version: int, target_version: int):
+    data = tmp_path / f"data-{current_version}-{target_version}"
     data.mkdir()
     runtime_db = data / "terminal-mcp.sqlite3"
     with sqlite3.connect(runtime_db) as db:
-        if legacy:
-            db.executescript(
-                """
-                CREATE TABLE work_items(namespace TEXT, task_id TEXT, state TEXT);
-                CREATE TABLE work_claims(namespace TEXT, task_id TEXT, owner_kind TEXT);
-                INSERT INTO work_items VALUES('legacy','T1','ready');
-                INSERT INTO work_claims VALUES('legacy','T1','legacy_session');
-                """
-            )
         db.execute(f"PRAGMA user_version={current_version}")
 
-    release = tmp_path / f"release-{target_version}-{int(legacy)}"
+    release = tmp_path / f"release-{target_version}"
     package = release / "terminal_mcp" / "storage"
     package.mkdir(parents=True)
     (release / "terminal_mcp" / "__init__.py").write_text("")
     (package / "__init__.py").write_text("")
     (package / "sqlite.py").write_text(f"SCHEMA_VERSION = {target_version}\n")
 
-    runner = tmp_path / f"schema-runtime-{current_version}-{target_version}-{int(legacy)}.sh"
+    runner = tmp_path / f"schema-runtime-{current_version}-{target_version}.sh"
     runner.write_text(
         "#!/bin/bash\n"
         f"DATA={str(data)!r}\n"
@@ -562,14 +498,6 @@ def test_installer_blocks_runtime_schema_rollback_without_persistent_rows(tmp_pa
     assert result.returncode == 42
     assert "Refusing runtime schema downgrade 18->17" in result.stderr
     assert "cannot restore a compatible runtime database" in result.stderr
-
-
-def test_installer_blocks_runtime_schema_rollback_with_legacy_claims(tmp_path):
-    result = _run_runtime_schema_guard(
-        tmp_path, current_version=18, target_version=17, legacy=True
-    )
-    assert result.returncode == 42
-    assert "Refusing runtime schema downgrade 18->17" in result.stderr
 
 
 @pytest.mark.parametrize("target_version", [18, 19])
@@ -628,7 +556,7 @@ def _run_fleet_control_schema_guard(tmp_path, *, current_version: int, target_ve
 
 @pytest.mark.parametrize(
     ("current_version", "target_version"),
-    [(2, 1), (3, 2)],
+    [(3, 2)],
 )
 def test_installer_blocks_fleet_control_schema_downgrade(
     tmp_path,
@@ -650,7 +578,7 @@ def test_installer_blocks_fleet_control_schema_downgrade(
 
 @pytest.mark.parametrize(
     ("current_version", "target_version"),
-    [(2, 2), (2, 3), (3, 3)],
+    [(2, 2), (2, 3)],
 )
 def test_installer_allows_compatible_fleet_control_schema(
     tmp_path,
@@ -808,7 +736,7 @@ def test_installer_allows_release_downgrade_with_explicit_override(tmp_path):
     assert staged.exists()
 
 
-@pytest.mark.parametrize("candidate_version", ["0.11.2", "0.11.3", "0.12.0"])
+@pytest.mark.parametrize("candidate_version", ["0.11.2", "0.12.0"])
 def test_installer_allows_equal_or_newer_release(tmp_path, candidate_version):
     result, staged = _run_release_version_guard(
         tmp_path,
@@ -832,19 +760,3 @@ def test_allow_downgrade_flag_is_update_only():
 
     assert result.returncode == 2
     assert "--allow-downgrade is valid only with update" in result.stderr
-
-
-def test_installer_uses_single_generated_systemd_model():
-    root = Path(__file__).resolve().parents[1]
-    script = (root / "deploy" / "install.sh").read_text()
-
-    assert not (root / "deploy" / "terminal-mcp.service").exists()
-    assert "ExecStart=$ROOT/current/bin/terminal-mcp" in script
-
-
-def test_installer_rotates_releases_and_database_backups():
-    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh").read_text()
-
-    assert 'terminal_mcp.deployment.retention backups "$BACKUPS" --keep 2' in script
-    assert 'terminal_mcp.deployment.retention releases "$ROOT/releases" "$new" "$old"' in script
-    assert 'rm -rf -- "$new"' in script

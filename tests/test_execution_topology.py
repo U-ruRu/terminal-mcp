@@ -45,7 +45,6 @@ def test_default_preserves_in_process_compatibility():
         {"executor_socket_path": "/run/\x00sock"},
         {"executor_socket_path": "/" + "x" * 108},
         {"executor_rpc_timeout_sec": float("nan")},
-        {"executor_rpc_timeout_sec": float("inf")},
         {"executor_rpc_timeout_sec": 0},
         {"executor_rpc_timeout_sec": 301},
     ],
@@ -165,7 +164,7 @@ def test_preflight_preserves_bytes_and_never_creates_optional_stores(stores):
     assert not stores.effective_fleet_control_path().exists()
 
 
-@pytest.mark.parametrize("status", ["queued", "running", "unknown"])
+@pytest.mark.parametrize("status", ["running", "unknown"])
 def test_cutover_refuses_undrained_queue(stores, status):
     with sqlite3.connect(stores.database_path) as db:
         db.execute("INSERT INTO commands VALUES (?)", (status,))

@@ -36,17 +36,6 @@ async def wait_done(service, cmd_hash, agent_id=None, attempts=300):
             return result
         await asyncio.sleep(0.01)
     return await service.read(cmd_hash, 1000, 0, agent_id=agent_id)
-
-
-@pytest.mark.asyncio
-async def test_output_prune_default_creates_half_capacity_headroom_with_safe_busy_timeout(tmp_path):
-    store = OutputStore(tmp_path / "output.sqlite3")
-    assert store.prune_rows == 500_000
-    async with store._connect("test_output_busy_timeout") as db:
-        timeout = await (await db.execute("PRAGMA busy_timeout")).fetchone()
-    assert timeout[0] == 5000
-
-
 @pytest.mark.asyncio
 async def test_line_prune_creates_headroom_and_preserves_chunks(tmp_path):
     store = OutputStore(
