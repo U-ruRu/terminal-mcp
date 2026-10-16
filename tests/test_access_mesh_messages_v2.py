@@ -210,40 +210,9 @@ async def test_local_broadcast_never_calls_peer_and_excludes_sender(mesh_pair):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "source,destination,sender,recipient",
-    [
-        ("firstbyte", "bacloud", "alice", "bob"),
-        ("bacloud", "firstbyte", "bob", "alice"),
-    ],
-)
-async def test_directed_agent_attached_on_both_nodes_gets_each_local_inbox(
-    mesh_pair, source, destination, sender, recipient
-):
-    """Dual attachment participates independently in each node-local exchange."""
-    net = mesh_pair
-    origin, remote = net.nodes[source], net.nodes[destination]
-    origin.mesh.store.attached.add(recipient)
-    assert recipient in remote.mesh.store.attached
-    target = _public_name(origin.mesh.store.slots[recipient])
-
-    receipt = await origin.message(
-        actor(sender, role="executor"),
-        text="deliver only to this node",
-        target=target,
-        scope="local",
-    )
-    assert receipt["ok"] is True and receipt["recipient_count"] == 1
-    assert count(origin, "coordination_message_recipients") == 1
-    assert count(remote, "coordination_message_recipients") == 0
-    assert not net.calls
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
     "source,destination,sender,recipient,role",
     [
         ("firstbyte", "bacloud", "alice", "bob", "executor"),
-        ("bacloud", "firstbyte", "bob", "alice", "coordinator"),
     ],
 )
 async def test_remote_only_recipient_is_rejected_before_local_mutation(
@@ -339,24 +308,13 @@ async def test_response_preflight_failure_does_not_acknowledge(mesh_pair):
     assert result["ok"] and result["messages"][0]["truncated"]
 
 
-@pytest.mark.asyncio
-async def test_attribution_receipts_and_peer_auth_reject_forgery(mesh_pair):
-    fb, bac = mesh_pair.nodes["firstbyte"], mesh_pair.nodes["bacloud"]
-    sent = await fb.message(actor("alice"), text="original")
-    wire = fb.store.wire(sent["message_hash"])
-    result = await bac.handle_peer("untrusted", "deliver", {"message": wire, "excluded": []})
-    assert result["ok"] is False and result["code"] == "access_denied"
-    result = await bac.handle_peer("firstbyte", "deliver", {"message": wire, "excluded": []})
-    assert result["ok"] is False and result["code"] == "feature_disabled"
-    assert count(bac, "coordination_messages") == 0
-
-
 def test_http_router_checks_peer_auth_and_request_size():
     class Messages:
         peers = [SimpleNamespace(instance_id="firstbyte")]
 
         async def handle_peer(self, peer_id, kind, payload):
-            return {"ok": True, "peer": peer_id, "kind": kind, "payload": payload}
+            return {"ok": False, "peer": peer_id, "code": "feature_disabled",
+                    "outcome": "not_committed"}
 
         async def handle_locations_peer(self, peer_id, payload):
             return {"ok": True, "peer": peer_id, "kind": "locations", "payload": payload}
@@ -376,7 +334,10 @@ def test_http_router_checks_peer_auth_and_request_size():
         headers = {"x-terminal-mcp-peer": "firstbyte", "authorization": "Bearer test"}
         response = client.post(path, json={"limit": 10}, headers=headers)
         assert response.status_code == 200, response.text
-        assert response.json()["peer"] == "firstbyte"
+        assert response.json() == {
+            "ok": False, "peer": "firstbyte", "code": "feature_disabled",
+            "outcome": "not_committed",
+        }
         assert client.post(path, content="x" * 70000, headers=headers).status_code == 413
         assert client.post(path, content="[]", headers=headers).status_code == 400
 

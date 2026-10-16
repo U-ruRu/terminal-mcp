@@ -20,6 +20,10 @@ def test_observe_only_named_attached_agents_and_four_fields(tmp_path):
         assert call(
             client, "coordinator", "session", {"session_number": started["session_number"]}
         ) == {"ok": True}
+        async def unavailable_address_book():
+            raise AssertionError("overview must use the local attached-agent projection")
+
+        app.state.access_mesh.messages.active_agent_locations = unavailable_address_book
         result = call(client, "coordinator", "agent_observe", {})
         assert result["ok"] and len(result["agents"]) == 1
         view = result["agents"][0]

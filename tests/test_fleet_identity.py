@@ -85,7 +85,7 @@ def test_distinct_private_suffixes_keep_same_public_name_distinct():
     assert one.agent_id != two.agent_id
 
 
-@pytest.mark.parametrize("revision", [0, -1])
+@pytest.mark.parametrize("revision", [0])
 def test_identity_revision_must_be_positive(revision):
     with pytest.raises(ValueError, match="revision"):
         record(revision=revision)

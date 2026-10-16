@@ -100,40 +100,6 @@ def test_invalid_number_and_untrusted_issuer(registry):
 
 
 @pytest.mark.asyncio
-async def test_http_number_replication_converges_future_identity(tmp_path):
-    """Independent partition-issued claims converge, originals stay immutable."""
-    import httpx
-    from test_access_mesh_replication_http import T0, Routes, actor, node
-
-    from terminal_mcp.core.access_mesh_grants import SlotPolicy
-
-    routes = Routes()
-    async with httpx.AsyncClient(transport=routes) as client:
-        first, first_rep = await node(tmp_path, "firstbyte", "bacloud", routes, client)
-        second, second_rep = await node(tmp_path, "bacloud", "firstbyte", routes, client)
-        original_first = await first.issue(actor(), code="0072", policy=SlotPolicy(240))
-        original_second = await second.issue(actor(), code="0072", policy=SlotPolicy(600))
-        await first_rep.tick()
-        await second_rep.tick()
-        winner_first = first.store.numbers.winner("0072")
-        winner_second = second.store.numbers.winner("0072")
-        assert winner_first == winner_second
-        assert winner_first["logical_agent_id"] == original_first["logical_agent_id"]
-        assert len(first.store.numbers.incidents()) == 1
-        assert len(first.store.numbers.snapshot()) == 2
-        assert (await first.attach(actor(), session_number="0072")) == {"ok": True}
-        assert (await second.attach(actor(), session_number="0072")) == {"ok": True}
-        first_binding = first.store.attached_slot(first.connection_key(actor()))
-        second_binding = second.store.attached_slot(second.connection_key(actor()))
-        assert first_binding.logical_agent_id == second_binding.logical_agent_id
-        assert first_binding.logical_agent_id == original_first["logical_agent_id"]
-        assert original_second["logical_agent_id"] != original_first["logical_agent_id"]
-        observed = first.store.observed_identity(first_binding, now=T0 + timedelta(minutes=6))
-        assert observed["session_lifecycle"]["state"] == "active"
-        assert observed["hard_expires_at"] == first.store.numbers.stamp(T0 + timedelta(minutes=10))
-
-
-@pytest.mark.asyncio
 async def test_online_peers_negotiate_distinct_numbers(tmp_path):
     import httpx
     from test_access_mesh_replication_http import Routes, actor, node

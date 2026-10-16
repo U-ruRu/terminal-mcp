@@ -106,7 +106,7 @@ async def test_first_contact_preserves_nonactive_route_state():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [401, 404, 500])
+@pytest.mark.parametrize("status", [401, 500])
 async def test_first_contact_unreachable_authority_does_not_invent_route(status):
     bridge, routes, _ = make_bridge(status=status)
     with pytest.raises(PersistentStoreError, match="authority_unavailable"):

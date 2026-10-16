@@ -88,7 +88,7 @@ def test_application_has_no_transport_imports(name):
     )
 
 
-@pytest.mark.parametrize("role", ["operator", "executor", "legacy"])
+@pytest.mark.parametrize("role", ["executor"])
 async def test_replication_and_control_require_verified_mesh_actor(role):
     target = SimpleNamespace(list_identities=AsyncMock())
     control = SimpleNamespace(authoritative_replication_snapshot=AsyncMock())

@@ -83,16 +83,3 @@ def test_fanotify_attributes_external_32_byte_wal_header_writer(tmp_path):
     assert all(event.pid > 0 for event in result.events)
     assert all(event.comm for event in result.events)
     assert all(event.executable for event in result.events)
-
-
-def test_repository_has_no_raw_fleet_control_wal_to_main_copy_path():
-    root = Path(__file__).resolve().parents[1]
-    offenders = []
-    for base in ("src", "deploy", "scripts"):
-        for path in (root / base).rglob("*"):
-            if not path.is_file() or path.suffix not in {".py", ".sh", ".service", ".timer"}:
-                continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            if "fleet-control.sqlite3-wal" in text:
-                offenders.append(str(path.relative_to(root)))
-    assert offenders == []

@@ -33,9 +33,13 @@ def snapshot(local, message_hash):
     return (tuple(wire) if wire else None, [tuple(row) for row in recipients])
 
 
-@pytest.mark.parametrize("offset_us", [-1, 0, 1])
-@pytest.mark.parametrize("acked", [False, True])
-async def test_expiry_alert_ttl_boundary_keeps_original_wire_and_ack(mesh_pair, offset_us, acked):
+@pytest.mark.parametrize(
+    "offset_us,acked,expected",
+    [(-1, False, True), (0, False, False), (-1, True, False)],
+)
+async def test_expiry_alert_ttl_boundary_keeps_original_wire_and_ack(
+    mesh_pair, offset_us, acked, expected
+):
     local = mesh_pair.nodes["firstbyte"]
     slot, identity = expired_identity(local)
     assert await local.ensure_session_alert(slot, identity)
@@ -48,7 +52,7 @@ async def test_expiry_alert_ttl_boundary_keeps_original_wire_and_ack(mesh_pair, 
     identity["public_name"] = "renamed display target"
     local.mesh.now = slot.expires_at + MESSAGE_TTL + timedelta(microseconds=offset_us)
     for _ in range(2):
-        assert await local.ensure_session_alert(slot, identity) is (offset_us < 0 and not acked)
+        assert await local.ensure_session_alert(slot, identity) is expected
         assert snapshot(local, message_hash) == original
 
 

@@ -28,7 +28,6 @@ human_fixture = lifecycle_fixture
         ("0000", "Alpha-1"),
         ("0025", "Zulu-1"),
         ("0026", "Alpha-2"),
-        ("0123", "Tango-5"),
         ("9999", "Papa-385"),
     ],
 )

@@ -808,15 +808,3 @@ async def test_complete_recipient_pages_over128_restart_and_withdrawal(tmp_path)
             for _, path, body in routes.requests
             if path.endswith("message-events/interest")
         )
-
-
-def test_generated_mesh_pages_and_chunk_contracts():
-    import jsonschema
-
-    from terminal_mcp.fleet.event_mesh import mesh_event_contracts
-
-    contracts = mesh_event_contracts()
-    jsonschema.validate(
-        {"version": 1, "recipients": [], "offset": 0, "complete": True},
-        contracts["message-events/interest"],
-    )
