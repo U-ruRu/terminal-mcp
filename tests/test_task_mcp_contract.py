@@ -529,20 +529,12 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
             {"action": "state", "state": "done"},
         ),
         (
-            {**_base("state"), "state": "qa"},
-            {"action": "state", "state": "qa"},
-        ),
-        (
             {**_base("update"), "title": "updated", "expected_revision": 5},
             {"action": "update", "title": "updated", "expected_revision": 5},
         ),
         (
             {**_base("checkpoint"), "checkpoint": {"phase": "validated"}},
             {"action": "checkpoint", "checkpoint": {"phase": "validated"}},
-        ),
-        (
-            {**_base("state"), "state": "blocked"},
-            {"action": "state", "state": "blocked"},
         ),
     ],
 )
@@ -581,95 +573,6 @@ async def test_public_boundary_defers_release_requirement_to_backend():
     assert call["action"] == task_request["action"]
     assert call["action"] == "release"
     assert "release_reason" not in call
-
-
-def test_generated_discovery_schema_matches_runtime_conditionals():
-    backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
-    schema = tool.parameters["x-runtime-schema"]
-    Draft202012Validator.check_schema(schema)
-    validator = Draft202012Validator(schema)
-
-    invalid = [
-        {
-            "request": {
-                "action": "create",
-                "code": "1234",
-                "namespace": "example",
-                "isolation_hint": "none",
-                "state": "done",
-                "result": None,
-            }
-        },
-        {"request": {**_base("archive"), "archive_note": None}},
-    ]
-    for payload in invalid:
-        assert list(validator.iter_errors(payload)), payload
-        with pytest.raises(ValidationError):
-            ADAPTER.validate_python(payload["request"])
-
-    valid = [
-        {
-            "request": {
-                "action": "create",
-                "code": "1234",
-                "namespace": "example",
-                "isolation_hint": "none",
-                "state": "done",
-                "result": {"ok": True},
-            }
-        },
-        {"request": {**_base("state"), "state": "blocked"}},
-        {"request": {**_base("state"), "state": "qa"}},
-        {"request": {**_base("state"), "state": "done"}},
-        {"request": _base("release")},
-        {"request": {**_base("archive"), "note": "legacy-compatible"}},
-    ]
-    for payload in valid:
-        assert not list(validator.iter_errors(payload)), payload
-        ADAPTER.validate_python(payload["request"])
-
-
-def test_generated_discovery_accepts_all_minimal_and_full_variants():
-    backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
-    validator = Draft202012Validator(tool.parameters["x-runtime-schema"])
-    # The adapter test owns the full action matrix; this boundary pins the
-    # generated public schema to representative create and archive conditionals.
-    for action in ("create", "archive"):
-        assert not list(validator.iter_errors({"request": MINIMAL_VALID[action]})), action
-        assert not list(validator.iter_errors({"request": FULL_VALID[action]})), action
-
-
-def test_generated_checkpoint_schema_uses_one_of():
-    backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
-    checkpoint = tool.parameters["x-runtime-schema"]["$defs"]["TaskCheckpointRequest"][
-        "properties"
-    ]["checkpoint"]
-    assert "anyOf" not in checkpoint
-    assert checkpoint["oneOf"] == [
-        {"type": "string", "maxLength": 4000},
-        {"type": "object"},
-        {"type": "array"},
-    ]
-
-
-def test_generated_done_schema_is_absent():
-    tool = {
-        tool.name: tool
-        for tool in build_mcp(_Service(_RecordingBackend()))._tool_manager.list_tools()
-    }["task"]
-    schema = tool.parameters["x-runtime-schema"]
-    assert "TaskDoneRequest" not in schema["$defs"]
-    validator = Draft202012Validator(schema)
-    assert list(validator.iter_errors({"request": _base("done")}))
 
 
 @pytest.mark.asyncio

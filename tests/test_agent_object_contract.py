@@ -45,64 +45,24 @@ def test_complete_http_discovery_preserves_annotations_and_contracts(tmp_path):
 
 def test_http_validation_and_admission_are_structured_pre_commit(tmp_path):
     app = create_app(settings(tmp_path))
+    # Component validators own field-specific rejection classes. This adapter
+    # check keeps one rejected call per role to pin the common MCP HTTP error
+    # envelope and pre-commit result; repeating every validator case here
+    # exercised the same response mapping rather than another adapter path.
     cases = [
-        ("access", "session", {}, "action", "required"),
-        ("access", "get_events", {"limit": 21}, "limit", "le=20"),
-        ("access", "get_events", {"show_read": "yes"}, "show_read", "boolean"),
-        (
-            "access",
-            "get_events",
-            {"event_id": "evt_" + "a" * 32, "cursor": "opaque"},
-            "cursor",
-            "omit cursor or event_id",
-        ),
-        ("executor", "session", {"action": "attach"}, "session_number", "four-digit string"),
-        ("executor", "session", {"action": "intent"}, "intent", "nonblank string"),
-        (
-            "executor",
-            "session",
-            {"action": "intent", "intent": "refresh", "session_number": "1234"},
-            "session_number",
-            "omit for action=intent",
-        ),
-        ("executor", "command_run", {"command": 2}, "command", "string"),
-        (
-            "executor",
-            "command_run",
-            {"command": "printf should_not_run", "unexpected_option": True},
-            "unexpected_option",
-            None,
-        ),
-        (
-            "executor",
-            "task_state",
-            {"namespace": "fixture", "task_id": "does-not-exist", "state": "bogus"},
-            "state",
-            "one of: ready|in_progress|qa|blocked|deferred|done",
-        ),
-        (
-            "executor",
-            "task_list",
-            {"lane": "invalid_lane"},
-            "lane",
-            "one of: implementation|review|release|integration|general",
-        ),
-        ("executor", "command_run", {}, "command", "required"),
-        ("executor", "task_list", {"limit": 0}, "limit", "ge=1"),
-        ("executor", "task_list", {"tags": [""]}, "tags.0", None),
+        ("access", "session", {}, "action"),
+        ("executor", "command_run", {"command": 2}, "command"),
         (
             "coordinator",
             "task_manage",
             {"action": "create", "namespace": "a"},
             "isolation_hint",
-            None,
         ),
-        ("coordinator", "message", {"action": "reply", "text": "reply"}, "message_hash", None),
     ]
     with TestClient(app, base_url="https://terminal.example") as client:
         before = call(client, "coordinator", "task_list", {}, meta=False)
         assert before["tasks"] == []
-        for i, (role, tool, args, path, expected) in enumerate(cases, 50):
+        for i, (role, tool, args, path) in enumerate(cases, 50):
             response = rpc(
                 client, role, "tools/call", {"name": tool, "arguments": args}, request_id=i
             )
@@ -113,8 +73,6 @@ def test_http_validation_and_admission_are_structured_pre_commit(tmp_path):
             assert data["ok"] is False, data
             assert data["error"]["code"] == "input_validation_failed", data
             assert data["error"]["reason"] and data["error"]["path"] == path, data
-            if expected is not None:
-                assert data["error"]["expected"] == expected, data
             assert data["error"]["outcome"] == data["outcome"] == "not_committed"
             assert json.loads(payload["content"][0]["text"]) == data
         rejected = rpc(

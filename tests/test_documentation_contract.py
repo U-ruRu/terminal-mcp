@@ -37,6 +37,13 @@ EXAMPLES = [
     (index, kind, json.loads(payload))
     for index, (kind, payload) in enumerate(EXAMPLE_PATTERN.findall(REFERENCE.read_text()), 1)
 ]
+# The reference repeats these exact request payloads under adjacent prose; one
+# runtime validation per distinct model/input pair keeps the same contract check.
+_unique_examples = {}
+for example in EXAMPLES:
+    index, kind, payload = example
+    _unique_examples.setdefault((kind, json.dumps(payload, sort_keys=True)), example)
+EXAMPLES_TO_VALIDATE = tuple(_unique_examples.values())
 
 
 def test_packaged_terminal_operations_skill_matches_sources() -> None:
@@ -53,7 +60,9 @@ def test_packaged_terminal_operations_skill_matches_sources() -> None:
 
 
 @pytest.mark.parametrize(
-    "index,kind,payload", EXAMPLES, ids=[f"example-{v[0]}-{v[1]}" for v in EXAMPLES]
+    "index,kind,payload",
+    EXAMPLES_TO_VALIDATE,
+    ids=[f"example-{v[0]}-{v[1]}" for v in EXAMPLES_TO_VALIDATE],
 )
 def test_documented_json_examples_validate_in_authoritative_runtime_models(index, kind, payload):
     models = {

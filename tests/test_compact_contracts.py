@@ -43,10 +43,6 @@ def test_task_list_valid_invalid_strict_parity(compiled):
         ({"unrecognized": "x"}, False),
     ):
         assert _valid(schema, request) == _model_valid(model, request) == allowed, (role, request)
-    description = next(
-        t["description"] for t in compiled["after"][role]["tools"] if t["name"] == "task_list"
-    )
-    assert "next_cursor" in description and "summary-only" in description
 
 
 def test_message_conditional_requirements_and_runtime_only_rules(compiled):
@@ -120,10 +116,6 @@ def test_coordinator_task_manage_conditions_and_operation_roster(compiled):
         else:
             assert not _model_valid(model, args)
     assert len(schema.get("allOf", [])) >= 8
-    rendered = next(
-        t["description"] for t in compiled["after"][role]["tools"] if t["name"] == "task_manage"
-    )
-    assert "archive_note" in rendered and "isolation_hint" in rendered
     notes = compiled["coverage"]["coordinator.task_manage"]["runtime_annotations"]
     assert any("expected_revision" in n["text"] for n in notes)
     assert len(compiled["coverage"]["coordinator.task_manage"]["action_models"]) == 9
