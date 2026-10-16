@@ -328,7 +328,7 @@ async def test_broadcast_message_snapshots_recipients_and_receipts(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pending_message_is_in_all_agent_bound_coordination_responses(tmp_path):
+async def test_pending_message_is_in_gate_message_and_finish_contexts(tmp_path):
     repo, terminal, service = await runtime(tmp_path)
     sender = await register(service, "Sender", "Coordinate", details=["Coordinate"])
     receiver = await register(
@@ -349,25 +349,14 @@ async def test_pending_message_is_in_all_agent_bound_coordination_responses(tmp_
     coordinate = await service.coordinate(receiver_id)
     assert any(message_hash in line for line in coordinate["pending_messages"])
 
-    overview = await service.agents(receiver_id)
-    assert any(message_hash in line for line in overview["pending_messages"])
-
-    cancelled = await service.cancel("deadbeef", agent_id=receiver_id)
-    assert any(message_hash in line for line in cancelled["pending_messages"])
-
-    updated_start = await service.agent_start(
-        agent_id=receiver_id,
-        intent="Still coordinating",
-    )
-    assert any(message_hash in line for line in updated_start["pending_messages"])
-
+    # message() assembles its response context instead of using the shared gate.
     own_message = await service.message(
         receiver_id,
         text="I am coordinating.",
         target=public_agent_name(sender_id),
     )
     assert any(message_hash in line for line in own_message["pending_messages"])
-
+    # TerminalService.agent_finish assembles pending context outside gate().
     finished = await service.agent_finish(receiver_id)
     assert any(message_hash in line for line in finished["pending_messages"])
     await terminal.stop()

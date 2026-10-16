@@ -3,7 +3,6 @@
 import re
 
 from terminal_mcp.core.orchestration import (
-    CROCKFORD,
     NATO_WORDS,
     generate_agent_id,
     normalize_preview,
@@ -25,9 +24,8 @@ def test_public_session_ref_uses_full_identity_without_exposing_suffix():
 
 def test_generated_agent_id_has_current_call_sign_and_suffix():
     agent_id = generate_agent_id()
-    word, suffix = agent_id.rsplit("-", 1)
+    word = agent_id.rsplit("-", 1)[0]
     assert word in NATO_WORDS
-    assert len(suffix) == 8 and all(ch in CROCKFORD for ch in suffix)
     assert re.fullmatch("[A-Za-z-]+-[0-9A-HJKMNP-TV-Z]{8}", agent_id)
 
 

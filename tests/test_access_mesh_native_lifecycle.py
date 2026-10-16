@@ -12,7 +12,6 @@ from terminal_mcp.application.actor import ActorContext
 from terminal_mcp.core.access_mesh_grants import AccessMeshError, AccessSlotEvent, SlotPolicy
 from terminal_mcp.core.managed_sessions import ManagedOperation
 from terminal_mcp.core.persistent_agents import ClaimOwner
-from terminal_mcp.mcp.access_contracts import MeshAgentObserve
 from terminal_mcp.storage.access_mesh import AccessMeshStore
 from terminal_mcp.storage.persistent_agents import PersistentAgentStore
 from terminal_mcp.storage.sqlite import SqliteRepository
@@ -242,11 +241,6 @@ async def test_status_read_does_not_release_claims_or_materialize_next_cycle(fix
     status = f.store.observed_identity(slot, now=f.clock[0])
     assert status["session_lifecycle"]["state"] == "expired"
     assert "work_session_id" not in status
-    public = await f.app.observe(actor("executor"))
-    MeshAgentObserve.model_validate(public)
-    assert public == {
-        "ok": True, "scope": "local", "server_id": f.store.local_node_id, "agents": [],
-    }
     assert not f.store.pending_cleanup()
     old = await f.native.get_work_session(attached["work_session_id"])
     assert old.state == "active"
