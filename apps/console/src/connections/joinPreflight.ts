@@ -1,13 +1,20 @@
 import type { ManagedFleetControlReadModel } from '../api/models'
 
-/** Safe, read-only gate. A foreign active authority must never be silently rehomed. */
+/** A namespace is public metadata; enrollment authenticates the transition. */
+export function isAutonomous(target: ManagedFleetControlReadModel): boolean {
+  return target.controlNodeId === target.nodeId
+    && target.nodes.every((node) => node.state === 'detached'
+      || (node.nodeId === target.nodeId && !node.meshId))
+    && !target.meshes.some((mesh) => mesh.adopted)
+}
+
 export function joinPreflightError(
   target: ManagedFleetControlReadModel,
   destination: ManagedFleetControlReadModel,
-): 'fleet_id_mismatch' | 'management_contract_mismatch' | 'already_managed_by_other_authority' | null {
-  if (target.fleetId !== destination.fleetId) return 'fleet_id_mismatch'
+): 'namespace_transition_unsupported' | 'management_contract_mismatch' | 'already_managed_by_other_authority' | null {
+  if (target.fleetId !== destination.fleetId && !target.namespaceTransitionSupported) return 'namespace_transition_unsupported'
   if (target.schemaVersion !== destination.schemaVersion) return 'management_contract_mismatch'
-  if (target.managed && target.controlNodeId !== destination.controlNodeId) {
+  if (target.managed && target.controlNodeId !== destination.controlNodeId && !isAutonomous(target)) {
     return 'already_managed_by_other_authority'
   }
   return null
