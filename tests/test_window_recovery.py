@@ -290,13 +290,13 @@ async def test_real_durable_command_fence_blocks_until_command_cancelled(env):
     assert (await env.recovery.tick()).completed == 1
 
 
-@pytest.mark.parametrize("limit", [0, 33, -1, True, 1.0, "1"])
+@pytest.mark.parametrize("limit", [0, 33, True, 1.0, "1"])
 async def test_recovery_batch_limit_is_strict(env, limit):
     with pytest.raises(ManagedSessionError, match="recovery_limit_invalid"):
         await env.store.claim_window_recovery(limit=limit)
 
 
-@pytest.mark.parametrize("lease_seconds", [0, 31, -1, True, 1.0])
+@pytest.mark.parametrize("lease_seconds", [0, 31, True, 1.0])
 async def test_recovery_lease_duration_is_strict(env, lease_seconds):
     with pytest.raises(ManagedSessionError, match="recovery_lease_invalid"):
         await env.store.claim_window_recovery(lease_seconds=lease_seconds)

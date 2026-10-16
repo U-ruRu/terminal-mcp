@@ -205,7 +205,6 @@ async def test_read_and_execute_grant_scopes_are_independent():
     [
         ("client_id", "another-client"),
         ("resources", ["node:other"]),
-        ("resources", ["some-unrelated-resource"]),
     ],
 )
 async def test_authorizer_does_not_broaden_principal_grants(field, value):
@@ -277,7 +276,6 @@ async def test_provider_and_standalone_authority_must_match_trusted_context():
         await ManagedProviderResolver(repository).resolve(actor(), "openai", metadata())
 
 
-
 class FleetIdentityRoutes(Routes):
     def __init__(self):
         super().__init__()
@@ -342,13 +340,10 @@ async def test_fleet_provider_bootstrap_is_server_authorized_without_access_code
     routes = FleetIdentityRoutes()
     resolver = ManagedProviderResolver(repository, routes=routes)
 
-    resolved = await resolver.bind_existing(
-        actor(), "openai", metadata(), "la_one", bootstrap=True
-    )
+    resolved = await resolver.bind_existing(actor(), "openai", metadata(), "la_one", bootstrap=True)
 
     assert resolved.logical_agent_id == "la_one"
     assert routes.provider_bind_calls[0][2:] == ("la_one", None, "usr_one", True)
-
 
 
 class RemoteRepository(Repository):

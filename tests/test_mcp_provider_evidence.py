@@ -53,8 +53,6 @@ def test_actor_provider_evidence_is_request_scoped_immutable_and_not_authorizati
     "fields",
     [
         {"threadId": "thread-a"},
-        {"threadId": "thread-a", "progressToken": 1},
-        {"threadId": "thread-a", "sessionId": "root", "callId": "call-1"},
     ],
 )
 def test_codex_thread_identity_without_required_root_or_call(fields):

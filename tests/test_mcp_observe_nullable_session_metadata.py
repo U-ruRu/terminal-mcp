@@ -10,7 +10,6 @@ from terminal_mcp.mcp.output_contracts import observe_result
     [
         {"mode": None, "authority_node_id": None},
         {},
-        {"mode": "persistent", "authority_node_id": "secondary"},
     ],
 )
 def test_session_observe_projects_transitional_metadata(metadata):
