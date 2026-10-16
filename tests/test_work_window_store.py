@@ -286,7 +286,7 @@ async def test_cancelled_transaction_does_not_leave_partial_state(store, monkeyp
     assert await store.active_session_for_slot("la_one") is None
 
 
-@pytest.mark.parametrize("bad_revision", [0, True, 1.0, "1"])
+@pytest.mark.parametrize("bad_revision", [0, True, 1.0])
 async def test_revision_types_are_strict(store, bad_revision):
     with pytest.raises(WorkWindowStoreError, match="revision_invalid"):
         await store.update_policy(

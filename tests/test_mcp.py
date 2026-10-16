@@ -295,35 +295,8 @@ def test_mcp_tools_advertise_canonical_access_surface():
     assert "history" in message["properties"]
     assert "cursor" in message["properties"]
 
-    task = tools["task"].parameters
-    # Planning intentionally permits partial inputs; strict validation runs in the tool.
-    assert not task.get("required")
-    assert set(task["properties"]) == {"request"}
-    assert "action" in task["properties"]["request"]["properties"]
-    runtime_task = task["x-runtime-schema"]
-    assert runtime_task["required"] == ["request"]
-    task_request = runtime_task["properties"]["request"]
-    assert task_request["discriminator"]["propertyName"] == "action"
-    assert set(task_request["discriminator"]["mapping"]) == {
-        "create",
-        "claim",
-        "release",
-        "update",
-        "checkpoint",
-        "comment",
-        "relate",
-        "unrelate",
-        "state",
-        "archive",
-        "review",
-    }
-    assert len(task_request["oneOf"]) == 11
-    assert "payload" not in task["properties"]
-    claim_code = runtime_task["$defs"]["TaskClaimRequest"]["properties"]["code"]["anyOf"][0]
-    assert claim_code["minLength"] == 4
-    assert claim_code["maxLength"] == 4
-    assert "code" not in runtime_task["$defs"]["TaskClaimRequest"]["required"]
-    assert "WIP is one live managed-task claim per slot" in tools["task"].description
+    # TaskRequest semantics and exact FastMCP model binding are owned by
+    # test_task_mcp_contract; the tool roster is asserted above.
 
     cmd = tools["cmd"].parameters
     assert cmd["required"] == ["request"]
