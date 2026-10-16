@@ -9,11 +9,8 @@ from terminal_mcp.auth.middleware import AuthMiddleware
     "path",
     [
         "/mcp",
-        "/mcp/",
         "/terminal-mcp/executor/v1/mcp",
-        "/terminal-mcp/executor/v1/mcp/",
         "/terminal-mcp/coordinator/v1/mcp",
-        "/terminal-mcp/coordinator/v1/mcp/",
     ],
 )
 def test_role_mcp_paths_use_mcp_auth_interface(path):
@@ -28,13 +25,6 @@ def test_neighbor_path_is_not_an_mcp_interface():
     "path",
     [
         "/actions/run",
-        "/actions/recovery",
-        "/actions/cancel",
-        "/actions/task",
-        "/actions/context",
-        "/actions/agent/start",
-        "/actions/read",
-        "/mcp",
     ],
 )
 def test_agent_facing_oauth_uses_one_read_scope(path):

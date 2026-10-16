@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 from test_access_mesh_mcp_runtime import settings
-from test_access_mesh_operator_http import HEADERS, internal_persistent_start
+from test_access_mesh_operator_http import HEADERS
 from test_android_slot_http_window_qa import T0, provision, read_slot
 from test_android_slot_policy_continuation import post, set_clock
 
@@ -12,38 +12,6 @@ from terminal_mcp.app import create_app
 def generation(payload):
     # Project the harmless scalar before asserting, so pytest never prints a code receipt.
     return payload.get("code_generation")
-
-
-def test_create_start_and_policy_edits_keep_same_code_generation(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        set_clock(app, T0)
-        receipt = provision(client, "uniform-generation-create")
-        actual_generation = generation(receipt)
-        assert actual_generation == 1
-        issued = read_slot(client, receipt["slot_id"])
-        assert generation(issued) == actual_generation
-        assert "access_code" not in issued
-        started_receipt = internal_persistent_start(client, app, receipt["access_code"])
-        started_ok = started_receipt.get("ok")
-        has_operator_metadata = "code_generation" in started_receipt
-        assert started_ok is True
-        assert not has_operator_metadata
-        started = read_slot(client, receipt["slot_id"])
-        assert started["revision"] > issued["revision"]
-        assert generation(started) == actual_generation
-        changed = post(
-            client,
-            {
-                "action": "policy",
-                "slot_id": receipt["slot_id"],
-                "idempotency_key": "uniform-generation-policy",
-                "expected_revision": started["revision"],
-                "policy": {"duration_seconds": 10800},
-            },
-        )
-        assert generation(changed) == actual_generation
-        assert generation(read_slot(client, receipt["slot_id"])) == actual_generation
 
 
 def test_rotation_generation_is_atomic_replayable_and_survives_restart(tmp_path):

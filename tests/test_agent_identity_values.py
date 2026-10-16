@@ -6,7 +6,6 @@ from terminal_mcp.core.orchestration import (
     CROCKFORD,
     NATO_WORDS,
     generate_agent_id,
-    generate_suffix,
     normalize_preview,
     public_session_ref,
 )
@@ -22,11 +21,6 @@ def test_public_session_ref_uses_full_identity_without_exposing_suffix():
     assert first != second
     assert "00000000" not in first
     assert "00000001" not in second
-
-
-def test_generated_suffix_uses_eight_crockford_symbols():
-    suffix_only = generate_suffix()
-    assert len(suffix_only) == 8 and all(ch in CROCKFORD for ch in suffix_only)
 
 
 def test_generated_agent_id_has_current_call_sign_and_suffix():

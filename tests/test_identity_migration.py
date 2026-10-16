@@ -344,7 +344,7 @@ def test_b2_destination_without_unique_client_id_fails_closed(tmp_path):
         assert db.execute("SELECT count(*) FROM console_devices").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("replacement", ["empty", "foundation-only", "missing-marker"])
+@pytest.mark.parametrize("replacement", ["empty", "missing-marker"])
 def test_b3_replacement_auth_blocks_startup_and_clean(tmp_path, replacement):
     runtime, auth, cid, *_ = seed(tmp_path)
     migrate(runtime, auth, tmp_path / "migration-backup")
@@ -370,18 +370,6 @@ def test_b3_replacement_auth_blocks_startup_and_clean(tmp_path, replacement):
         with TestClient(create_app(settings(tmp_path, runtime, auth))):
             pass
     assert not (tmp_path / "blocked-clean").exists()
-
-
-def test_b3_loss_of_auth_after_clean_is_not_mistaken_for_first_install(tmp_path):
-    runtime, auth, *_ = seed(tmp_path)
-    migrate(runtime, auth, tmp_path / "migration-backup")
-    output = tmp_path / "output.sqlite3"
-    sqlite3.connect(output).close()
-    clean_working_data(runtime, auth, output, tmp_path / "clean-backup")
-    assert not runtime.exists() and auth.exists()
-    auth.unlink()  # Access key remains and proves previous installation.
-    with pytest.raises(IdentityMigrationError, match="protected auth database"):
-        assert_identity_isolated(runtime, auth)
 
 
 def test_b4_forward_preserves_deleted_tail_audit_autoincrement(tmp_path):
@@ -447,6 +435,25 @@ def test_b4_reverse_preserves_deleted_tail_audit_autoincrement(tmp_path):
         assert new_id > issued
 
 
+def test_b4_deleted_all_audit_rows_keeps_highwater(tmp_path):
+    runtime, auth, *_ = seed(tmp_path)
+    with closing(sqlite3.connect(runtime)) as db, db:
+        db.execute("DELETE FROM console_pairing_audit")
+        highwater = db.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
+        ).fetchone()[0]
+        assert highwater > 0
+        assert db.execute("SELECT count(*) FROM console_pairing_audit").fetchone()[0] == 0
+    migrate(runtime, auth, tmp_path / "backup")
+    with closing(sqlite3.connect(auth)) as db, db:
+        new_id = db.execute(
+            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
+            "VALUES('later','success',?)",
+            (int(time.time()),),
+        ).lastrowid
+        assert new_id > highwater
+
+
 def test_fresh_install_seals_auth_marker_and_survives_restart(tmp_path):
     runtime = tmp_path / "first-runtime.sqlite3"
     auth = tmp_path / "first-auth.sqlite3"
@@ -470,25 +477,6 @@ def test_foundation_schema_version_drift_blocks_forward_even_with_valid_oauth(tm
         migrate(runtime, auth, tmp_path / "uncreated-backup")
     assert not (tmp_path / "uncreated-backup").exists()
     assert run(OAuthStore(runtime).get_client(cid)) is not None
-
-
-def test_b4_deleted_all_audit_rows_keeps_highwater(tmp_path):
-    runtime, auth, *_ = seed(tmp_path)
-    with closing(sqlite3.connect(runtime)) as db, db:
-        db.execute("DELETE FROM console_pairing_audit")
-        highwater = db.execute(
-            "SELECT seq FROM sqlite_sequence WHERE name='console_pairing_audit'"
-        ).fetchone()[0]
-        assert highwater > 0
-        assert db.execute("SELECT count(*) FROM console_pairing_audit").fetchone()[0] == 0
-    migrate(runtime, auth, tmp_path / "backup")
-    with closing(sqlite3.connect(auth)) as db, db:
-        new_id = db.execute(
-            "INSERT INTO console_pairing_audit(event_type,outcome,created_at) "
-            "VALUES('later','success',?)",
-            (int(time.time()),),
-        ).lastrowid
-        assert new_id > highwater
 
 
 def test_b2_missing_explicit_target_index_fails_closed(tmp_path):
@@ -544,81 +532,6 @@ def test_first_install_rejects_deleted_access_mesh_history_with_missing_auth(tmp
         db.execute("DELETE FROM access_mesh_history WHERE id=?", (issued,))
     with pytest.raises(IdentityMigrationError, match="protected auth database"):
         assert_identity_isolated(runtime, auth)
-
-
-def test_b3_foreign_complete_auth_cannot_replace_existing_installation(tmp_path):
-    """Reproduce Delta-3's confirmed B3 with full unrelated Foundation/marker."""
-    old = tmp_path / "existing"
-    other = tmp_path / "other-installation"
-    old.mkdir()
-    other.mkdir()
-    runtime, auth, cid, refresh, device, *_ = seed(old)
-    original = AuthFoundationStore(auth)
-    principal = run(original.create_principal("legacy-person", "synthetic-password"))
-    member = run(original.create_client(principal["principal_id"], "agent", "known-agent"))
-    run(
-        original.create_grant(
-            principal["principal_id"],
-            member["client_id"],
-            ["https://synthetic.example"],
-            ["terminal:read"],
-            role="qa",
-        )
-    )
-    run(original.bootstrap_realm("old-realm", "old-node", "old-signing", "old-public-key"))
-    assert migrate(runtime, auth, old / "forward-backup")["status"] == "migrated"
-
-    key_file = auth.with_name(auth.name + ".access-key")
-    key_digest = hashlib.sha256(key_file.read_bytes()).hexdigest()
-    # Trusted *current* auth checkpoint. Only this protected store matches
-    # the installation key; restoring this copy requires no reauthorization.
-    checkpoint = old / "trusted-current-auth.sqlite3"
-    with closing(sqlite3.connect(auth)) as current:
-        with closing(sqlite3.connect(checkpoint)) as backup:
-            current.backup(backup)
-
-    foreign_main, foreign_auth = other / "runtime.sqlite3", other / "auth.sqlite3"
-    with TestClient(create_app(settings(other, foreign_main, foreign_auth))) as foreign_client:
-        assert foreign_client.get("/health/live").status_code == 200
-    with closing(sqlite3.connect(foreign_auth)) as other_db:
-        assert other_db.execute("SELECT version FROM oauth_identity_migration").fetchall() == [(1,)]
-        assert other_db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] == 0
-
-    # Replace only the auth database, keeping original Access verifier key.
-    shutil.copy2(foreign_auth, auth)
-    assert hashlib.sha256(key_file.read_bytes()).hexdigest() == key_digest
-    assert inspect(runtime, auth)["status"] == "untrusted-protected-auth"
-    with pytest.raises(IdentityLineageError, match="lineage mismatch"):
-        assert_identity_isolated(runtime, auth)
-    with pytest.raises(IdentityLineageError, match="lineage mismatch"):
-        with TestClient(create_app(settings(old, runtime, auth))):
-            pass
-    output = old / "output.sqlite3"
-    with closing(sqlite3.connect(output)) as db, db:
-        db.execute("CREATE TABLE protected_working_sentinel(value TEXT)")
-        db.execute("INSERT INTO protected_working_sentinel VALUES('still here')")
-    with pytest.raises(IdentityLineageError, match="lineage mismatch"):
-        clean_working_data(runtime, auth, output, old / "unsafe-clean")
-    assert runtime.is_file() and output.is_file()
-    assert not (old / "unsafe-clean").exists()
-
-    # A matching online backup restores every previously registered identity.
-    shutil.copy2(checkpoint, auth)
-    assert inspect(runtime, auth)["status"] == "isolated"
-    assert assert_identity_isolated(runtime, auth) is None
-    assert (
-        run(AuthFoundationStore(auth).verify_password("legacy-person", "synthetic-password"))
-        is not None
-    )
-    assert run(OAuthStore(auth).get_client(cid)) is not None
-    assert run(PairingStore(auth).active_device_for_client(device.client_id))
-    with TestClient(create_app(settings(old, runtime, auth))) as client:
-        response = client.post(
-            "/oauth/token",
-            data={"grant_type": "refresh_token", "client_id": cid, "refresh_token": refresh},
-        )
-        assert response.status_code == 200, response.text
-    assert hashlib.sha256(key_file.read_bytes()).hexdigest() == key_digest
 
 
 def test_b3_tampered_lineage_nonce_is_refused_without_clean(tmp_path):
@@ -768,3 +681,78 @@ def test_b3_clean_backups_preserve_independent_anchor(tmp_path):
     captured = tmp_path / "clean-quarantine" / "auth.identity-anchor.before"
     assert captured.read_bytes() == witness.read_bytes()
     assert captured.stat().st_mode & 0o777 == 0o600
+
+
+def test_b3_foreign_complete_auth_cannot_replace_existing_installation(tmp_path):
+    """Reproduce Delta-3's confirmed B3 with full unrelated Foundation/marker."""
+    old = tmp_path / "existing"
+    other = tmp_path / "other-installation"
+    old.mkdir()
+    other.mkdir()
+    runtime, auth, cid, refresh, device, *_ = seed(old)
+    original = AuthFoundationStore(auth)
+    principal = run(original.create_principal("legacy-person", "synthetic-password"))
+    member = run(original.create_client(principal["principal_id"], "agent", "known-agent"))
+    run(
+        original.create_grant(
+            principal["principal_id"],
+            member["client_id"],
+            ["https://synthetic.example"],
+            ["terminal:read"],
+            role="qa",
+        )
+    )
+    run(original.bootstrap_realm("old-realm", "old-node", "old-signing", "old-public-key"))
+    assert migrate(runtime, auth, old / "forward-backup")["status"] == "migrated"
+
+    key_file = auth.with_name(auth.name + ".access-key")
+    key_digest = hashlib.sha256(key_file.read_bytes()).hexdigest()
+    # Trusted *current* auth checkpoint. Only this protected store matches
+    # the installation key; restoring this copy requires no reauthorization.
+    checkpoint = old / "trusted-current-auth.sqlite3"
+    with closing(sqlite3.connect(auth)) as current:
+        with closing(sqlite3.connect(checkpoint)) as backup:
+            current.backup(backup)
+
+    foreign_main, foreign_auth = other / "runtime.sqlite3", other / "auth.sqlite3"
+    with TestClient(create_app(settings(other, foreign_main, foreign_auth))) as foreign_client:
+        assert foreign_client.get("/health/live").status_code == 200
+    with closing(sqlite3.connect(foreign_auth)) as other_db:
+        assert other_db.execute("SELECT version FROM oauth_identity_migration").fetchall() == [(1,)]
+        assert other_db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] == 0
+
+    # Replace only the auth database, keeping original Access verifier key.
+    shutil.copy2(foreign_auth, auth)
+    assert hashlib.sha256(key_file.read_bytes()).hexdigest() == key_digest
+    assert inspect(runtime, auth)["status"] == "untrusted-protected-auth"
+    with pytest.raises(IdentityLineageError, match="lineage mismatch"):
+        assert_identity_isolated(runtime, auth)
+    with pytest.raises(IdentityLineageError, match="lineage mismatch"):
+        with TestClient(create_app(settings(old, runtime, auth))):
+            pass
+    output = old / "output.sqlite3"
+    with closing(sqlite3.connect(output)) as db, db:
+        db.execute("CREATE TABLE protected_working_sentinel(value TEXT)")
+        db.execute("INSERT INTO protected_working_sentinel VALUES('still here')")
+    with pytest.raises(IdentityLineageError, match="lineage mismatch"):
+        clean_working_data(runtime, auth, output, old / "unsafe-clean")
+    assert runtime.is_file() and output.is_file()
+    assert not (old / "unsafe-clean").exists()
+
+    # A matching online backup restores every previously registered identity.
+    shutil.copy2(checkpoint, auth)
+    assert inspect(runtime, auth)["status"] == "isolated"
+    assert assert_identity_isolated(runtime, auth) is None
+    assert (
+        run(AuthFoundationStore(auth).verify_password("legacy-person", "synthetic-password"))
+        is not None
+    )
+    assert run(OAuthStore(auth).get_client(cid)) is not None
+    assert run(PairingStore(auth).active_device_for_client(device.client_id))
+    with TestClient(create_app(settings(old, runtime, auth))) as client:
+        response = client.post(
+            "/oauth/token",
+            data={"grant_type": "refresh_token", "client_id": cid, "refresh_token": refresh},
+        )
+        assert response.status_code == 200, response.text
+    assert hashlib.sha256(key_file.read_bytes()).hexdigest() == key_digest

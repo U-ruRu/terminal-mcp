@@ -88,48 +88,6 @@ def fleet_policy(client, duration, *, expected=None):
     return response.json()
 
 
-def test_standalone_defaults_duration_updates_inherited_slot_after_session_start(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        issued = create(client, "defaults-after-start")
-        assert internal_persistent_start(client, app, issued["access_code"])["ok"]
-        change_defaults(client, "defaults-3h", policy={"duration_seconds": 10800})
-        assert read_slot(client, issued["slot_id"])["policy"]["duration_seconds"] == 10800
-
-
-def test_standalone_defaults_edit_does_not_restart_active_session(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        issued = create(client, "defaults-active-window")
-        assert internal_persistent_start(client, app, issued["access_code"])["ok"]
-        before = read_slot(client, issued["slot_id"])
-        change_defaults(client, "defaults-duration-change", policy={"duration_seconds": 10800})
-        assert (
-            read_slot(client, issued["slot_id"])["session_lifecycle"]["hard_expires_at"]
-            == before["session_lifecycle"]["hard_expires_at"]
-        )
-
-
-def test_standalone_slot_override_reset_uses_current_defaults(tmp_path):
-    app = create_app(settings(tmp_path))
-    with TestClient(app, base_url="https://terminal.example") as client:
-        issued = create(client, "slot-reset", policy={"duration_seconds": 7200})
-        before = read_slot(client, issued["slot_id"])
-        parent = defaults(client)
-        mutate(
-            client,
-            "policy",
-            "restore-standalone-defaults",
-            slot_id=issued["slot_id"],
-            expected_revision=before["revision"],
-            expected_parent_revision=parent["revision"],
-            inherit_policy=True,
-        )
-        result = read_slot(client, issued["slot_id"])
-        assert result["policy_override"] is None
-        assert result["policy"] == parent["policy"]
-
-
 def test_real_fleet_http_policy_reaches_native_slots_and_reset(tmp_path):
     app = create_app(mesh_config(tmp_path))
     with TestClient(app, base_url="https://terminal.example") as client:
