@@ -409,3 +409,45 @@ under `qa/windows` remains in its separate platform selection and is not counted
 as a Linux full-suite execution. The obsolete `0043a3c` acceptance was cancelled
 when the canonical update was discovered; a fresh full gate must cover the exact
 merged commit. No stale pre-merge gate is accepted as proof for the merge.
+
+
+## 2026-10-17 property-owner consolidation
+
+Base canonical `e8f136a`: **2,151 collected cases**. This pass produces
+**2,108 cases** (net **-43**, including parametrized cases). Exact node-ID diff:
+58 removed, 15 added or renamed. All six `test_deployment_windows.py` cases and
+the native Windows QA files are unchanged. Original target remains at most
+1,486 of 2,973: **622 additional net removals are still required**. This pass
+is not completion of the 50% target or of atomic conversion of the whole suite.
+
+Count command: `PYTHONPATH=src /workspace/terminal-mcp/.venv-test/bin/python -m pytest --collect-only -q`.
+No collection rules, skip/xfail markers, runner, dependencies, fixtures or
+production sources are changed. Old parameter matrices were not moved into loops.
+
+| Property | Authoritative retained owner | Removed repetition |
+|---|---|---|
+| Transactional stale revision rejection | Five real write-path race cases in `test_task_revision_side_effects` now compare all task/claim/event/relation/review rows against the committed competing writer. One pure coordinator preflight test checks actual forwarded error fields and that the handler is not called. | Five direct-store examples and five coordinator/store journeys are replaced by shared preflight plus the retained five transaction cases. |
+| Workflow state survives a content edit | New minimal `test_content_update_preserves_nondefault_workflow_state` checks a QA-state task after a title update. Public state permission/CAS and checkpoint append owners remain. | Two combined active/terminal update-and-state journeys; the genuinely uncovered content/state property is kept once, without claims or multiple transitions. |
+| Ownership fence and committed receipts | `done`, ordinary update, and both relation write stores remain fenced; update/state/done receipts and the distinct side-stream functions remain checked. | Repeated fields/actions using the same fenced store or committed-record path. |
+| Checkpoint is append-only, not create replay | `test_checkpoint_request_id_does_not_deduplicate_appends_across_restart` and `test_checkpoint_append_still_requires_live_gate_and_never_invents_a_key`. | Replay-key/value and successor-cycle matrices that all received no checkpoint replay key. Create replay/identity tests remain independent. |
+| Task input, permissive planning, transport forwarding | Canonical TaskRequest validity/bounds and model-binding owners; minimal planning-vs-runtime, native MCP role rejection, HTTP schema reference and structured-error forwarding checks. | Schema-field restatements, equivalent documented example inputs, repeated facade validation and valid-plan journeys. Compatibility task schema assertions in `test_mcp` also defer to the exact shared TaskToolArguments owner. |
+| Window duration/phase and strict numbers | Pure phase-boundary table; signed extension/open and shortening/expired changes; positive duration and nonnegative threshold integer guards; SQLite contract/role-version and revision tests. | Two repeated phase outputs through the same recomputation, repeated `_thresholds` coercion fields, one equivalent noninteger revision input, and a binding/budget constructor journey whose actual `require_contract` call is covered by storage tests. |
+
+The integrator corrected two review issues: the coordinator stub now projects
+fields from the actual implementation instead of returning a hard-coded conflict;
+the invalid-action error path is `request` (union discrimination), rather than
+the missing-field path from the old fixture. Neither changes application code.
+
+Focused runtime checks: task owners/related regressions **65 passed**;
+wire/role/schema checks **97 passed**; windows/metadata **64 passed**.
+Temporary fault probes (outside the repository) separately removed preflight,
+removed transactional revision guards for each of five stores, and reset task
+state after a content update. **All seven selected tests detected the intended
+fault**, while their normal versions pass. These probes are not part of the
+collection count, do not modify live data, and do not replace full acceptance.
+
+Exact node IDs, per-property worker handoffs, the integrator's corrections,
+fault-probe evidence and the full exact-commit acceptance report are under
+`/workspace/tmcp-property-owners-evidence-20261017/` on Secondary. Re-fetch origin
+before publication; merge parallel platform work and rerun the full gate if the
+candidate changes. No deployment is part of this test-cleanup pass.
