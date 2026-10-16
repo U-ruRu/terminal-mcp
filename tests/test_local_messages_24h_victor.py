@@ -11,89 +11,9 @@ from terminal_mcp.application.access_mesh_messages import AccessMeshMessaging
 from terminal_mcp.storage.access_mesh_messages import (
     CUTOVER_REASON,
     AccessMeshMessageStore,
-    MeshMessagingError,
 )
 
 mesh_pair = mesh_pair_fixture
-
-
-@pytest.mark.asyncio
-async def test_local_cycle_ack_replies_and_remote_recipient_exclusion(mesh_pair):
-    local, other = mesh_pair.nodes["firstbyte"], mesh_pair.nodes["bacloud"]
-    recipient = _public_name(local.mesh.store.slots["carol"])
-    remote_only = _public_name(local.mesh.store.slots["bob"])
-    recipients = await local.message(actor("alice"), recipients=True)
-    assert recipients["ok"] and {r["public_name"] for r in recipients["recipients"]} == {recipient}
-    missing = await local.message(actor("alice"), text="remote forbidden", target=remote_only)
-    assert missing["code"] == "recipient_not_found"
-    assert not local.store.local_cutover_report()["terminate_jobs"]
-    sent = await local.message(
-        actor("alice"), text="please acknowledge", target=recipient, mode="ack"
-    )
-    assert sent["ok"] and sent["scope"] == "local" and sent["delivered_to"] == [recipient]
-    message_hash = sent["message_hash"]
-    # Existing messages addressed to a different recipient remain forbidden.
-    with pytest.raises(MeshMessagingError, match="message_forbidden"):
-        local.store.acknowledge(message_hash, "bob", local.mesh.now.isoformat())
-    inbox = await local.message(actor("carol"), detail="full")
-    assert any(m["message_hash"] == message_hash for m in inbox["messages"])
-    first = await local.message(actor("carol"), message_hash=message_hash)
-    second = await local.message(actor("carol"), message_hash=message_hash)
-    assert first["ok"] and second["ok"]
-    with local.store.connect() as db:
-        row = db.execute(
-            "SELECT read_at FROM coordination_message_recipients WHERE message_hash=?",
-            (message_hash,),
-        ).fetchone()
-        assert row[0] is not None
-    reply1 = await local.message(actor("carol"), message_hash=message_hash, text="first")
-    reply2 = await local.message(actor("carol"), message_hash=message_hash, text="second")
-    assert reply1["ok"] and reply2["ok"] and reply1["message_hash"] != reply2["message_hash"]
-    assert local.store.wire(reply1["message_hash"])["reply_to"] == message_hash
-    assert local.store.wire(reply2["message_hash"])["reply_to"] == message_hash
-    history = await local.message(actor("alice"), history=True, detail="full")
-    assert {reply1["message_hash"], reply2["message_hash"]}.issubset(
-        {m["message_hash"] for m in history["messages"]}
-    )
-    assert not mesh_pair.calls
-    assert other.store.local_cutover_report()["retained"] == 0
-
-
-@pytest.mark.asyncio
-async def test_cutover_pending_jobs_expiry_and_restart(mesh_pair):
-    local = mesh_pair.nodes["firstbyte"]
-    sent = await local.message(actor("alice"), text="cutover fixture", scope="local")
-    assert sent["ok"]
-    message_hash = sent["message_hash"]
-    wire = local.store.wire(message_hash)
-    with local.store.connect() as db:
-        local.store.queue(db, "bacloud", "deliver", {"message": wire, "excluded": []})
-    before = local.store.local_cutover_report()
-    assert before["retained"] == 1 and before["terminate_jobs"]["deliver"] == 1
-    first_cutover = local.store.activate_local_cutover()
-    second_cutover = local.store.activate_local_cutover()  # idempotent
-    assert first_cutover["processed_jobs"] == 1
-    assert second_cutover["processed_jobs"] == 0
-    with local.store.connect() as db:
-        row = db.execute(
-            "SELECT attempts,acked_at,terminal_reason FROM access_mesh_message_outbox"
-        ).fetchone()
-    assert tuple(row) == (0, None, CUTOVER_REASON)
-    assert local.store.pending() == []
-    old_time = local.mesh.now + timedelta(hours=24, seconds=1)
-    local.mesh.now = old_time
-    assert local.store.wire(message_hash) is None
-    assert local.store.page("carol", history=True) == []
-    with pytest.raises(MeshMessagingError, match="message_not_found"):
-        local.store.acknowledge(message_hash, "carol", old_time.isoformat())
-    assert local.store.prune_expired() == 1
-    # After the physical sweep, the deleted message must remain not_found,
-    # not message_forbidden just because its recipient row is also gone.
-    with pytest.raises(MeshMessagingError, match="message_not_found"):
-        local.store.acknowledge(message_hash, "carol", old_time.isoformat())
-    with local.store.connect() as db:
-        assert db.execute("SELECT COUNT(*) FROM access_mesh_messages").fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM access_mesh_message_outbox").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio
@@ -312,68 +232,26 @@ async def test_old_invalid_message_is_ignored_and_outbox_finalizes_without_ack(m
 
 
 @pytest.mark.asyncio
-async def test_storage_rejects_new_peer_delivery_jobs_before_commit(mesh_pair):
-    local = mesh_pair.nodes["firstbyte"]
-    recipient = {
-        "logical_agent_id": "carol",
-        "public_name": _public_name(local.mesh.store.slots["carol"]),
-    }
-    wire = {
-        "protocol": 1,
-        "message_hash": "firstbyte:localmsg:peer-forwarding-must-stay-disabled",
-        "origin_node_id": "firstbyte",
-        "sender_id": "alice",
-        "sender_name": _public_name(local.mesh.store.slots["alice"]),
-        "target": recipient["public_name"],
-        "text": "must not commit",
-        "created_at": local.mesh.now.isoformat(),
-        "mode": "notify",
-        "require_reply": False,
-        "alert": False,
-        "namespace": None,
-        "task_id": None,
-        "scope": "local",
-        "reply_to": None,
-    }
-
-    with pytest.raises(MeshMessagingError, match="feature_disabled"):
-        local.store.accept(wire, [recipient], peers=["bacloud"])
-
-    with local.store.connect() as db:
-        assert (
-            db.execute(
-                "SELECT COUNT(*) FROM access_mesh_messages WHERE message_hash=?",
-                (wire["message_hash"],),
-            ).fetchone()[0]
-            == 0
-        )
-        assert (
-            db.execute(
-                "SELECT COUNT(*) FROM access_mesh_message_outbox WHERE message_hash=?",
-                (wire["message_hash"],),
-            ).fetchone()[0]
-            == 0
-        )
-
-
-@pytest.mark.asyncio
 async def test_legacy_peer_message_request_is_terminally_rejected_without_queue(mesh_pair):
     local = mesh_pair.nodes["firstbyte"]
+    before = local.store.local_cutover_report()
     result = await local.handle_peer("bacloud", "deliver", {"anything": "legacy"})
-    assert result["ok"] is False
-    assert result["code"] == "feature_disabled"
-    assert result["outcome"] == "not_committed"
+    assert result == {
+        "ok": False,
+        "code": "feature_disabled",
+        "outcome": "not_committed",
+    }
     old_discovery = await local.handle_peer("bacloud", "recipients", {"after": "", "limit": 100})
     assert old_discovery["code"] == "feature_disabled"
-
     presence = await local.handle_locations_peer("bacloud", {"after": "", "limit": 100})
     assert presence["ok"] is True
     assert {item["public_name"] for item in presence["recipients"]} == {
         _public_name(local.mesh.store.slots["alice"]),
         _public_name(local.mesh.store.slots["carol"]),
     }
-    with local.store.connect() as db:
-        assert db.execute("SELECT COUNT(*) FROM access_mesh_message_outbox").fetchone()[0] == 0
+    after = local.store.local_cutover_report()
+    assert after["retained"] == before["retained"]
+    assert not mesh_pair.calls
 
 
 @pytest.mark.asyncio

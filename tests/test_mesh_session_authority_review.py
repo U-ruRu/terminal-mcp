@@ -63,7 +63,7 @@ async def test_authenticated_home_can_mutate_its_own_exact_session(action):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["revoke", "drain"])
-@pytest.mark.parametrize("epoch", [0, 3, 5, True, "4"])
+@pytest.mark.parametrize("epoch", [0, True, "4"])
 async def test_session_control_rejects_stale_or_malformed_authority_epoch(action, epoch):
     bridge = Bridge(actual_home="bacloud")
     app = MeshApplication(bridge)

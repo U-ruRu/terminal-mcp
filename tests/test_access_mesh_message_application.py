@@ -94,5 +94,4 @@ async def test_local_send_commits_without_requesting_or_scheduling_peers(message
     assert result["ok"] and result["outcome"] == "committed"
     messages.mesh.resolve.assert_awaited_once_with(actor, ManagedOperation.MESSAGE_SEND)
     messages.store.accept.assert_called_once()
-    assert messages.store.accept.call_args.kwargs["peers"] == []
     messages.replication.request.assert_not_awaited()

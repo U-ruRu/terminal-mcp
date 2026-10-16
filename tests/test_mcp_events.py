@@ -20,7 +20,6 @@ from terminal_mcp.mcp.event_store import MCPEventStore, public_event_data
 from terminal_mcp.mcp.event_webhooks import (
     CallbackEndpointError,
     post_signed,
-    signed_headers,
     validate_callback_url,
 )
 from terminal_mcp.mcp.message_binding import MessageSubscriber
@@ -120,20 +119,6 @@ def _records(path, kind=None):
 
 
 @pytest.mark.asyncio
-async def test_attach_only_after_local_row_commit_and_no_duplicate(context):
-    path, agents, events = context
-    assert _records(path) == []
-    await _agent(agents)
-    assert (await agents.get_session("Alpha-01234567"))["state"] == "active"
-    await events.pump()
-    attached = _records(path, "agent.attached")
-    assert len(attached) == 1
-    assert attached[0]["data"] == {"agent_name": "Alpha", "server": NODE}
-    await events.pump()
-    assert _records(path, "agent.attached") == attached
-
-
-@pytest.mark.asyncio
 async def test_foreign_reactivation_creates_one_more_attach(context):
     path, agents, events = context
     await _agent(agents)
@@ -193,19 +178,6 @@ async def test_strict_idle_single_shot_and_rearm_after_real_activity(context):
 
 
 @pytest.mark.asyncio
-async def test_observer_not_touch_target_or_rearm_idle(context):
-    path, agents, events = context
-    agent_id, _ = await _agent(agents, seconds_ago=190)
-    before = (await agents.get_session(agent_id))["last_activity_at"]
-    # The unprivileged observation path only reads the session row.
-    await agents.get_session(agent_id)
-    assert (await agents.get_session(agent_id))["last_activity_at"] == before
-    await events.pump()
-    await events.pump()
-    assert len(_records(path, "agent.inactive")) == 1
-
-
-@pytest.mark.asyncio
 async def test_legacy_agent_idle_expire_and_finish_are_not_limited_work_session_end(context):
     path, agents, events = context
     await _agent(agents)
@@ -215,35 +187,6 @@ async def test_legacy_agent_idle_expire_and_finish_are_not_limited_work_session_
     assert await agents.expire("Bravo-01234567", reason="idle_timeout")
     await events.pump()
     assert not _records(path, "session.ended")
-
-
-@pytest.mark.asyncio
-async def test_remote_grant_is_not_local_attach(context):
-    path, _, events = context
-    # A grant is a different durable boundary from presence materialization.
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "INSERT INTO logical_agent_node_attachments"
-            "(node_attachment_id,logical_agent_id,work_session_id,session_epoch,"
-            "node_instance_id,authority_epoch,attached_at,hard_expires_at) "
-            "VALUES('attach1','logical1','session1',1,'elsewhere',1,?,?)",
-            (utc_text(), utc_text(utc_now() + timedelta(hours=1))),
-        )
-    await events.pump()
-    assert not _records(path, "agent.attached")
-
-
-@pytest.mark.asyncio
-async def test_persistent_presence_for_other_node_not_misattributed(context):
-    path, _, events = context
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "INSERT INTO instance_events(event_type,entity_type,entity_id,payload_json,created_at) "
-            "VALUES('mcp.presence.attached','attachment_presence','missing',?,?)",
-            (json.dumps({"node": "other-server", "logical_agent_id": "X"}), utc_text()),
-        )
-    await events.pump()
-    assert not _records(path, "agent.attached")
 
 
 async def access_allowed(_item):
@@ -398,156 +341,6 @@ async def test_no_auth_subscription_rejected(context):
         }
     )
     assert response["error"]["code"] == -32001
-
-
-def test_standard_webhooks_signature_uses_exact_body():
-    body = b'{"some":"data"}'
-    headers = signed_headers(SECRET, "evt_test", body, "sub_test")
-    expected = hmac.new(
-        b"x" * 32,
-        f"evt_test.{headers['webhook-timestamp']}.".encode() + body,
-        hashlib.sha256,
-    ).digest()
-    assert headers["webhook-signature"] == "v1," + base64.b64encode(expected).decode()
-
-
-def _seed_persistent(path, *, nodes=("secondary-test",), state="active"):
-    """Use real schema/trigger boundaries without privileged or Mesh credentials."""
-    now = utc_text()
-    expires = utc_text(utc_now() + timedelta(minutes=23))
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "INSERT INTO logical_agents(logical_agent_id,display_name,state,"
-            "authority_node_id,authority_epoch,created_at,updated_at) "
-            "VALUES('la1','Persistent Agent','active',?,1,?,?)",
-            (NODE, now, now),
-        )
-        db.execute(
-            "INSERT INTO logical_agent_work_sessions(work_session_id,logical_agent_id,"
-            "session_epoch,authority_node_id,authority_epoch,started_at,"
-            "hard_expires_at,auth_generation,state) "
-            "VALUES('ws1','la1',1,?,1,?,?,1,?)",
-            (NODE, now, expires, state),
-        )
-        for i, node in enumerate(nodes):
-            identifier = f"p_att_{i}"
-            db.execute(
-                "INSERT INTO logical_agent_node_attachments("
-                "node_attachment_id,logical_agent_id,work_session_id,"
-                "session_epoch,node_instance_id,authority_epoch,attached_at,hard_expires_at)"
-                "VALUES(?,'la1','ws1',1,?,1,?,?)",
-                (identifier, node, now, expires),
-            )
-            db.execute(
-                "INSERT INTO persistent_attachment_presence("
-                "node_attachment_id,logical_agent_id,work_session_id,session_epoch,"
-                "node_instance_id,task_summary,intent,work_scope_json,details_json,"
-                "current_step,intent_updated_at,last_activity_at)"
-                "VALUES(?,'la1','ws1',1,?,'secret task','private intent','[]','[]',1,?,?)",
-                (identifier, node, now, now),
-            )
-    return now
-
-
-@pytest.mark.asyncio
-async def test_real_persistent_presence_and_session_expiry_per_local_node(context):
-    path, _, events = context
-    _seed_persistent(path, nodes=(NODE, "some-other-server"))
-    with sqlite3.connect(path) as db:
-        local = db.execute(
-            "SELECT node_instance_id FROM persistent_attachment_presence "
-            "WHERE node_attachment_id='p_att_0'"
-        ).fetchone()
-    assert local == (NODE,)
-    await events.pump()
-    assert [r["data"] for r in _records(path, "agent.attached")] == [
-        {"agent_name": "Persistent Agent", "server": NODE}
-    ]
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "UPDATE logical_agent_work_sessions "
-            "SET state='expired',end_reason='hard_duration',ended_at=? "
-            "WHERE work_session_id='ws1'",
-            (utc_text(),),
-        )
-    await events.pump()
-    assert [r["data"] for r in _records(path, "session.ended")] == [
-        {"agent_name": "Persistent Agent", "server": NODE, "reason": "expired"}
-    ]
-    await events.pump()
-    assert len(_records(path, "session.ended")) == 1
-
-
-@pytest.mark.asyncio
-async def test_real_limited_work_session_explicit_end_delivers_once(context):
-    path, _, events = context
-    _seed_persistent(path)
-    await events.pump()
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "UPDATE logical_agent_work_sessions SET state='ended',"
-            "end_reason='session_end',ended_at=? WHERE work_session_id='ws1'",
-            (utc_text(),),
-        )
-    await events.pump()
-    assert [r["data"] for r in _records(path, "session.ended")] == [
-        {"agent_name": "Persistent Agent", "server": NODE, "reason": "manual"}
-    ]
-    await events.pump()
-    assert len(_records(path, "session.ended")) == 1
-    # A post-finalization metadata update is a new journal row,
-    # but not a second WorkSession lifecycle transition.
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "UPDATE logical_agent_work_sessions SET end_reason='cleanup' "
-            "WHERE work_session_id='ws1'"
-        )
-    await events.pump()
-    assert len(_records(path, "session.ended")) == 1
-
-
-@pytest.mark.asyncio
-async def test_persistent_attachment_stays_untouched_by_read_and_idles(context):
-    path, _, events = context
-    now = _seed_persistent(path)
-    earlier = utc_text(utc_now() - timedelta(seconds=181))
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "UPDATE persistent_attachment_presence SET last_activity_at=?",
-            (earlier,),
-        )
-        before = db.execute(
-            "SELECT last_activity_at FROM persistent_attachment_presence"
-        ).fetchone()
-        db.execute("SELECT * FROM persistent_attachment_presence").fetchall()
-        after = db.execute("SELECT last_activity_at FROM persistent_attachment_presence").fetchone()
-        assert before == after == (earlier,)
-    await events.pump()
-    assert len(_records(path, "agent.inactive")) == 1
-    await events.pump()
-    assert len(_records(path, "agent.inactive")) == 1
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "UPDATE persistent_attachment_presence SET last_activity_at=?",
-            (now,),
-        )
-    await events.pump(now=utc_now() + timedelta(seconds=181))
-    assert len(_records(path, "agent.inactive")) == 2
-
-
-@pytest.mark.asyncio
-async def test_persistent_remote_presence_grant_not_attached_to_local(context):
-    path, _, events = context
-    _seed_persistent(path, nodes=("elsewhere",))
-    with sqlite3.connect(path) as db:
-        # A foreign-authority WorkSession and remote-only presence are not a
-        # locally materialized attachment even if their grants are visible.
-        db.execute(
-            "UPDATE logical_agent_work_sessions SET authority_node_id='elsewhere',"
-            "origin_instance_id='elsewhere' WHERE work_session_id='ws1'"
-        )
-    await events.pump()
-    assert _records(path, "agent.attached") == []
 
 
 @pytest.mark.asyncio

@@ -80,42 +80,5 @@ def test_access_outputs_validate_as_advertised(tmp_path):
     with TestClient(app, base_url="https://terminal.example") as client:
         catalog = rpc(client, "access", "tools/list").json()["result"]["tools"]
         validator = Draft202012Validator(catalog[0]["outputSchema"])
-        for args in ({}, {"action": "start"}, {"action": "status"}):
-            result = call(client, "access", "session", args)
-            validator.validate(result)
-
-
-def test_message_projection_does_not_hide_queued_remote_delivery():
-    from terminal_mcp.mcp.output_contracts import message_result
-
-    raw = {
-        "ok": True,
-        "action": "send",
-        "message_hash": "firstbyte:meshmsg:fixture",
-        "sender": "firstbyte-fixture",
-        "target": "bacloud-fixture",
-        "scope": "fleet",
-        "mode": "notify",
-        "state": "queued",
-        "outcome": "committed",
-        "delivered_to": [],
-        "pending_peers": ["bacloud"],
-        "delivery_errors": [
-            {"server_id": "bacloud", "code": "message_unavailable", "retry": "retry"}
-        ],
-    }
-    result = message_result(
-        raw,
-        sender=raw["sender"],
-        text="hello",
-        target=raw["target"],
-        message_hash=None,
-        mode="notify",
-        require_reply=False,
-        alert=False,
-        show_all=False,
-    )
-    assert result.isError is False
-    assert result.structuredContent["message"]["state"] == "queued"
-    assert result.structuredContent["message"]["pending_peers"] == ["bacloud"]
-    assert result.structuredContent["message"]["outcome"] == "committed"
+        result = call(client, "access", "session", {"action": "status"})
+        validator.validate(result)

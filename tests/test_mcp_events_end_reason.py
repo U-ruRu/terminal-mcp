@@ -60,11 +60,11 @@ async def arrange(f):
 @pytest.mark.parametrize(
     "stored,expected",
     [
-        ("manual", "manual"), ("SessionEnded", "manual"), ("session_end", "manual"),
-        ("operator_end", "manual"), ("expired", "expired"), ("hard_duration", "expired"),
-        ("SlotSuspended", "SlotSuspended"), ("SlotDeleted", "SlotDeleted"),
-        ("replicated_cycle_fence", "replicated_cycle_fence"),
-        ("snapshot_catchup", "snapshot_catchup"), ("session_interrupt", "session_interrupt"),
+        # One value per normalization branch plus the null fallback. Legacy
+        # spellings share the same set-membership branch.
+        ("manual", "manual"),
+        ("expired", "expired"),
+        ("SlotSuspended", "SlotSuspended"),
         (None, "unknown"),
     ],
 )

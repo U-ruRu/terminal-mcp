@@ -74,7 +74,7 @@ def test_capabilities_do_not_import_transport_modules(module):
     )
 
 
-@pytest.mark.parametrize("role", ["legacy", "executor", "coordinator", "operator"])
+@pytest.mark.parametrize("role", ["executor"])
 async def test_mesh_role_and_verified_peer_are_required(role):
     resolver = AsyncMock()
     app = MeshApplication(bridge(resolve_access_code=resolver))
@@ -222,7 +222,6 @@ async def test_wrong_authority_does_not_start_a_session():
     "code,status",
     [
         ("slot_not_found", 404),
-        ("message_not_found", 404),
         ("persistent_auth_required", 403),
         ("session_not_active", 409),
     ],

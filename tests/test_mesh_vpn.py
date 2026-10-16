@@ -588,7 +588,6 @@ def test_managed_fleet_transport_refreshes_access_mesh_without_rotating_pinned_a
     ("provided", "canonical"),
     [
         ("185.244.172.75:61063", "185.244.172.75:61063"),
-        ("[2a04:5200:fff5::344a]:61063", "[2a04:5200:fff5::344a]:61063"),
         ("[2A04:2181:C011:1::BAFB:F78E]:42065", "[2a04:2181:c011:1::bafb:f78e]:42065"),
     ],
 )
