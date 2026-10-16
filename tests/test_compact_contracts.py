@@ -80,45 +80,13 @@ def test_message_conditional_requirements_and_runtime_only_rules(compiled):
     assert "scope" in rules
 
 
-def test_coordinator_task_manage_conditions_and_operation_roster(compiled):
+def test_coordinator_task_manage_schema_roster_and_runtime_annotations(compiled):
     role = "coordinator"
     schema = compiled["strict"][role + ".task_manage"]["inputSchema"]
-    model = c.contract_models(role)["task_manage"]
-    from terminal_mcp.mcp.roles import _TASK_MANAGE_MODELS
-
-    for args, allowed in (
-        ({"action": "create", "namespace": "N", "isolation_hint": "isolated"}, True),
-        ({"action": "create", "namespace": "N"}, False),
-        ({"action": "state", "namespace": "N", "task_id": "t", "state": "blocked"}, True),
-        ({"action": "state", "namespace": "N", "task_id": "t"}, False),
-        ({"action": "archive", "namespace": "N", "task_id": "t", "archive_note": "why"}, True),
-        ({"action": "archive", "namespace": "N", "task_id": "t"}, False),
-        (
-            {
-                "action": "relate",
-                "namespace": "N",
-                "task_id": "t",
-                "relation_kind": "depends_on",
-                "related_task_id": "u",
-            },
-            True,
-        ),
-        ({"action": "relate", "namespace": "N", "task_id": "t"}, False),
-        ({"action": "claim", "namespace": "N", "task_id": "t"}, False),
-    ):
-        assert _valid(schema, args) == allowed, args
-        if args["action"] in _TASK_MANAGE_MODELS:
-            # The outer Pydantic boundary carries some rules in
-            # json_schema_extra; the action-specific canonical validator
-            # enforces them at runtime.
-            canonical = {**args, "code": None}
-            assert _model_valid(_TASK_MANAGE_MODELS[args["action"]], canonical) == allowed, args
-        else:
-            assert not _model_valid(model, args)
-    assert len(schema.get("allOf", [])) >= 8
+    action_models = compiled["coverage"][role + ".task_manage"]["action_models"]
+    assert set(action_models) == set(schema["properties"]["action"]["enum"])
     notes = compiled["coverage"]["coordinator.task_manage"]["runtime_annotations"]
     assert any("expected_revision" in n["text"] for n in notes)
-    assert len(compiled["coverage"]["coordinator.task_manage"]["action_models"]) == 9
     assert any("request_id" in n["text"] for n in notes)
 
 

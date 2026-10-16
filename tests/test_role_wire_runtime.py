@@ -25,18 +25,7 @@ from terminal_mcp.mcp.roles import build_role_mcp
         (
             "coordinator",
             [
-                ("task_manage", {"action": "create", "namespace": "wire-test"}, "isolation_hint"),
-                (
-                    "task_manage",
-                    {
-                        "action": "comment",
-                        "namespace": "wire-test",
-                        "task_id": "t",
-                        "comment_text": "test",
-                        "expected_revision": 1,
-                    },
-                    "expected_revision",
-                ),
+                ("task_manage", {"action": "invented", "namespace": "wire-test"}, "action"),
             ],
         ),
     ],

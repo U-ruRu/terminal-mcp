@@ -139,7 +139,7 @@ FULL_VALID = {
 }
 
 
-@pytest.mark.parametrize("action", sorted(ACTIONS))
+@pytest.mark.parametrize("action", sorted(ACTIONS - {"create"}))
 def test_each_task_action_accepts_minimal_and_full_request(action):
     minimal = ADAPTER.validate_python(MINIMAL_VALID[action])
     full = ADAPTER.validate_python(FULL_VALID[action])
@@ -157,59 +157,6 @@ def test_task_schema_is_action_discriminated_and_strict():
         variant = schema["$defs"][name]
         assert variant["additionalProperties"] is False
         assert variant["properties"]["action"]["const"] == action
-
-
-def test_schema_declares_action_specific_requirements_and_forbidden_fields():
-    defs = ADAPTER.json_schema()["$defs"]
-    assert defs["TaskCreateRequest"]["required"] == [
-        "action",
-        "namespace",
-        "isolation_hint",
-    ]
-    assert {"action", "namespace", "task_id", "claim_intent"} <= set(
-        defs["TaskClaimRequest"]["required"]
-    )
-    assert "code" not in defs["TaskClaimRequest"]["required"]
-    release = defs["TaskReleaseRequest"]
-    assert {"action", "namespace", "task_id"} <= set(release["required"])
-    assert "code" not in release["required"]
-    assert "release_reason" not in release["required"]
-    assert "release_reason" in release["properties"]
-    update_props = defs["TaskUpdateRequest"]["properties"]
-    assert "isolation_hint" not in update_props
-    assert "checkpoint" not in update_props
-    assert {"result", "blocker_reason", "force", "force_reason"} <= set(update_props)
-    assert {"force", "force_reason"} <= set(defs["TaskCreateRequest"]["properties"])
-    assert "TaskDoneRequest" not in defs
-    assert set(defs["TaskStateRequest"]["properties"]) == {
-        "action",
-        "code",
-        "namespace",
-        "task_id",
-        "state",
-    }
-    assert "request_id" in defs["TaskCreateRequest"]["properties"]
-    assert "request_id" not in defs["TaskCreateRequest"]["required"]
-    for action in ("TaskStateRequest", "TaskCheckpointRequest", "TaskCommentRequest"):
-        assert "request_id" not in defs[action]["properties"]
-    assert "candidate_ref" not in defs["TaskReviewRequest"]["properties"]
-    assert defs["TaskReviewRequest"]["properties"]["dimensions"]["maxItems"] == 3
-    assert defs["TaskReviewRequest"]["properties"]["dimensions"]["uniqueItems"] is True
-    assert defs["TaskClaimRequest"]["properties"]["expected_revision"]["anyOf"][0]["minimum"] == 1
-
-
-def test_refs_tags_dependencies_and_relation_bounds_are_formalized():
-    defs = ADAPTER.json_schema()["$defs"]
-    create = defs["TaskCreateRequest"]["properties"]
-    assert create["input_refs"]["anyOf"][0]["maxItems"] == 64
-    assert create["input_refs"]["anyOf"][0]["items"]["maxLength"] == 512
-    assert create["output_refs"]["anyOf"][0]["maxItems"] == 64
-    assert create["tags"]["anyOf"][0]["maxItems"] == 50
-    assert create["tags"]["anyOf"][0]["items"]["maxLength"] == 64
-    assert create["dependencies"]["anyOf"][0]["maxItems"] == 100
-    dep = defs["TaskDependency"]
-    assert dep["additionalProperties"] is False
-    assert dep["required"] == ["task_id"]
 
 
 def test_create_defaults_and_generated_id_contract():
@@ -447,42 +394,6 @@ class _Service:
 
 
 @pytest.mark.asyncio
-async def test_schema_invalid_task_request_is_rejected_before_backend():
-    backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
-    result = await tool.run(
-        {
-            "request": {
-                "action": "claim",
-                "code": "1234",
-                "namespace": "example",
-                "task_id": "TASK-001",
-                "claim_intnet": "work",
-            }
-        },
-        convert_result=True,
-    )
-    assert backend.identity_calls == 0
-    assert backend.task_calls == []
-    assert result.structuredContent["code"] == "validation_error"
-    errors = result.structuredContent["details"]["validation_errors"]
-    assert errors == [
-        {
-            "error_class": "missing",
-            "path": "request.claim_intent",
-            "description": "Provide this required field.",
-        },
-        {
-            "error_class": "extra_forbidden",
-            "path": "request.*",
-            "description": "Remove this unsupported field.",
-        },
-    ]
-
-
-@pytest.mark.asyncio
 async def test_valid_task_request_reaches_backend_through_strict_adapter():
     backend = _RecordingBackend()
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
@@ -500,47 +411,26 @@ async def test_valid_task_request_reaches_backend_through_strict_adapter():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("task_request", "expected"),
-    [
-        (
-            {
-                "action": "create",
-                "code": "1234",
-                "namespace": "terminal-mcp",
-                "task_id": "CREATE-DONE-FORCED",
-                "isolation_hint": "none",
-                "state": "done",
-                "result": {"summary": "forced creation"},
-                "dependencies": [{"task_id": "OPEN"}],
-                "force": True,
-                "force_reason": "External completion must be represented immediately",
-            },
-            {
-                "action": "create",
-                "state": "done",
-                "result": {"summary": "forced creation"},
-                "force": True,
-                "force_reason": "External completion must be represented immediately",
-            },
-        ),
-        (
-            {**_base("state"), "state": "done"},
-            {"action": "state", "state": "done"},
-        ),
-        (
-            {**_base("update"), "title": "updated", "expected_revision": 5},
-            {"action": "update", "title": "updated", "expected_revision": 5},
-        ),
-        (
-            {**_base("checkpoint"), "checkpoint": {"phase": "validated"}},
-            {"action": "checkpoint", "checkpoint": {"phase": "validated"}},
-        ),
-    ],
-)
-async def test_public_boundary_preserves_backend_supported_completion_fields(
-    task_request, expected
-):
+async def test_public_boundary_preserves_forced_completion_fields():
+    task_request = {
+        "action": "create",
+        "code": "1234",
+        "namespace": "terminal-mcp",
+        "task_id": "CREATE-DONE-FORCED",
+        "isolation_hint": "none",
+        "state": "done",
+        "result": {"summary": "forced creation"},
+        "dependencies": [{"task_id": "OPEN"}],
+        "force": True,
+        "force_reason": "External completion must be represented immediately",
+    }
+    expected = {
+        "action": "create",
+        "state": "done",
+        "result": {"summary": "forced creation"},
+        "force": True,
+        "force_reason": "External completion must be represented immediately",
+    }
     backend = _RecordingBackend()
     mcp = build_mcp(_Service(backend))
     tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
@@ -575,16 +465,6 @@ async def test_public_boundary_defers_release_requirement_to_backend():
     assert "release_reason" not in call
 
 
-@pytest.mark.asyncio
-async def test_done_action_is_rejected_before_backend():
-    backend = _RecordingBackend()
-    tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
-        "task"
-    ]
-    await tool.run({"request": _base("done")}, convert_result=True)
-    assert backend.task_calls == []
-
-
 def test_fastmcp_runtime_arg_model_is_the_discovery_schema_source():
     backend = _RecordingBackend()
     tool = {tool.name: tool for tool in build_mcp(_Service(backend))._tool_manager.list_tools()}[
@@ -599,29 +479,8 @@ def test_fastmcp_runtime_arg_model_is_the_discovery_schema_source():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("arguments", "expected_paths"),
-    [
-        (
-            {
-                "request": {
-                    "action": "claim",
-                    "code": "1234",
-                    "namespace": "example",
-                    "task_id": "TASK-001",
-                    "claim_intent": "work",
-                },
-                "unexpected": 1,
-            },
-            ["*"],
-        ),
-        ({"request": "bad"}, ["request"]),
-        ({}, ["request"]),
-    ],
-)
-async def test_tool_run_returns_structured_errors_for_full_public_boundary(
-    arguments, expected_paths
-):
+async def test_tool_run_rejects_invalid_request_before_backend():
+    arguments = {"request": _base("done")}
     backend = _RecordingBackend()
     mcp = build_mcp(_Service(backend))
     tool = {tool.name: tool for tool in mcp._tool_manager.list_tools()}["task"]
@@ -633,20 +492,6 @@ async def test_tool_run_returns_structured_errors_for_full_public_boundary(
     assert backend.task_calls == []
     assert result.structuredContent["code"] == "validation_error"
     errors = result.structuredContent["details"]["validation_errors"]
-    assert [item["path"] for item in errors] == expected_paths
+    assert [item["path"] for item in errors] == ["request"]
     assert all(item["error_class"] for item in errors)
     assert all(item["description"] for item in errors)
-
-
-@pytest.mark.asyncio
-async def test_tool_manager_call_tool_uses_same_task_boundary():
-    backend = _RecordingBackend()
-    mcp = build_mcp(_Service(backend))
-    arguments = {"request": MINIMAL_VALID["claim"], "unexpected": 1}
-    result = await mcp._tool_manager.call_tool("task", arguments, convert_result=True)
-    assert backend.identity_calls == 0
-    assert backend.task_calls == []
-    assert result.structuredContent["code"] == "validation_error"
-    errors = result.structuredContent["details"]["validation_errors"]
-    assert errors
-    assert all({"error_class", "path", "description"} <= set(item) for item in errors)

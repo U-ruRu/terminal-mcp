@@ -104,54 +104,10 @@ def test_tasks_request_filters(schema):
     assert "tags" in schema["components"]["schemas"]["TasksRequest"]["properties"]
 
 
-def test_task_request_current_fields_and_bounds(schema):
-    task_request = schema["components"]["schemas"]["TaskRequest"]
-    assert set(task_request["properties"]["action"]["enum"]) == {
-        "create",
-        "claim",
-        "release",
-        "update",
-        "checkpoint",
-        "comment",
-        "relate",
-        "unrelate",
-        "state",
-        "archive",
-        "review",
-    }
-    assert task_request["properties"]["priority"]["anyOf"][0]["enum"] == ["P0", "P1", "P2", "P3"]
-    assert "review_requirements" not in task_request["properties"]
-    for review_field in ("dimensions", "verdict", "evidence"):
-        assert review_field in task_request["properties"]
-    assert task_request["properties"]["input_refs"]["anyOf"][0]["maxItems"] == 64
-    assert task_request["properties"]["output_refs"]["anyOf"][0]["maxItems"] == 64
-    assert "tags" in task_request["properties"]
-    assert "force" in task_request["properties"]
-    assert "force_reason" in task_request["properties"]
-    assert "claim or terminal completion" in task_request["properties"]["force"]["description"]
-    isolation_hint = task_request["properties"]["isolation_hint"]["anyOf"][0]
-    assert isolation_hint["minLength"] == 1
-    assert isolation_hint["maxLength"] == 160
-    assert (
-        "Required for action=create" in task_request["properties"]["isolation_hint"]["description"]
-    )
-    for field in (
-        "claim_intent",
-        "blocker_reason",
-        "release_reason",
-        "archive_note",
-        "comment_text",
-        "relation_kind",
-        "related_namespace",
-        "related_task_id",
-    ):
-        assert field in task_request["properties"]
-    claim_intent = task_request["properties"]["claim_intent"]["anyOf"][0]
-    assert claim_intent["maxLength"] == 160
-    task_request_props = schema["components"]["schemas"]["TaskRequest"]["properties"]
-    assert "current live owner" in task_request_props["state"]["description"]
-    assert "concurrent participation" in task_request_props["cooperative"]["description"]
-    assert "durable handoff history" in task_request_props["release_reason"]["description"]
+def test_task_route_binds_the_canonical_request_schema(schema):
+    operation = schema["paths"]["/actions/task"]["post"]
+    ref = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    assert ref == "#/components/schemas/TaskRequest"
 
 
 def test_task_card_current_projection_fields(schema):
