@@ -708,7 +708,9 @@ class PersistentLifecycleCoordinator:
         self._available()
         current = now or utc_now()
         reconciled = []
-        for slot in await self.store.list_slots():
+        for slot in await self.store.due_session_slots(
+            authority_node_id=self.authority_node_id, now=utc_text(current)
+        ):
             mesh = getattr(self, "access_mesh", None)
             if mesh is not None and mesh.store.slot_for_agent(slot.logical_agent_id) is not None:
                 continue

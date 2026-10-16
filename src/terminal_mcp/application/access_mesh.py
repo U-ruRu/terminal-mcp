@@ -80,6 +80,10 @@ class AccessMeshApplication:
         self._scan_after = ""
         self._scan_error: str | None = None
         self.last_error: str | None = None
+        self._maintenance_snapshot: tuple | None = None
+        self._maintenance_observed_at: datetime | None = None
+        self._maintenance_deadline: datetime | None = None
+        self._scan_deadline: datetime | None = None
 
     def local_parent_policy(self):
         return {
@@ -548,6 +552,7 @@ class AccessMeshApplication:
         # including cleanup, has succeeded rather than clearing on a good page.
         if not self._scan_after:
             self._scan_error = None
+            self._scan_deadline = None
         try:
             slots = await asyncio.to_thread(self.store.local_slots, after=self._scan_after)
             for attached_slot in slots:
@@ -559,6 +564,18 @@ class AccessMeshApplication:
                     identity = await asyncio.to_thread(
                         self.store.local_identity, slot, now=self.clock()
                     )
+                    # Materialization and expiry Alerts have effects at the
+                    # deadline/rearm, not on every remaining-seconds change.
+                    cycle = identity.get("session_lifecycle") or {}
+                    now = self.clock()
+                    for field in ("hard_expires_at", "rearm_at"):
+                        value = cycle.get(field)
+                        if value is not None:
+                            boundary = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                            if boundary > now and (
+                                self._scan_deadline is None or boundary < self._scan_deadline
+                            ):
+                                self._scan_deadline = boundary
                     if self.messages is not None:
                         await self.messages.ensure_session_alert(slot, identity)
                 except Exception as exc:
@@ -573,6 +590,31 @@ class AccessMeshApplication:
             raise
         if not self._scan_after:
             self.last_error = self._scan_error
+            self._maintenance_deadline = self._scan_deadline
+
+    async def _maintenance_tick(self) -> None:
+        """Keep the one-second change/deadline bound without redoing idle cycles."""
+        now = self.clock()
+        previous = self._maintenance_observed_at
+        self._maintenance_observed_at = now
+        if previous is not None and now < previous:
+            self._maintenance_snapshot = None
+        signature = await asyncio.to_thread(self.store.lifecycle_signature)
+        if not self._scan_after:
+            if (
+                signature == self._maintenance_snapshot
+                and not self.last_error
+                and (self._maintenance_deadline is None or now < self._maintenance_deadline)
+            ):
+                # Fencing can finish without an Access mutation (e.g. a command
+                # exits). Preserve its existing independent bounded retry.
+                await self.cleanup()
+                return
+            # Retain the pre-sweep snapshot across every page. A change to an
+            # earlier page during the sweep must cause another pass, not be
+            # acknowledged merely because we visited a later page afterwards.
+            self._maintenance_snapshot = signature
+        await self.tick()
 
     async def health_components(self) -> dict:
         pending = await asyncio.to_thread(self.store.pending_cleanup, limit=1)
@@ -600,7 +642,9 @@ class AccessMeshApplication:
             return
         self._stop.clear()
         await asyncio.to_thread(self.store.initialize_command_journal)
-        await self.tick()
+        self._scan_after = ""
+        self._maintenance_snapshot = None
+        await self._maintenance_tick()
         self._task = asyncio.create_task(self._loop(), name="access-mesh-local-lifecycle")
 
     async def stop(self) -> None:
@@ -615,7 +659,7 @@ class AccessMeshApplication:
                 await asyncio.wait_for(self._stop.wait(), timeout=1.0)
             except TimeoutError:
                 try:
-                    await self.tick()
+                    await self._maintenance_tick()
                 except Exception as exc:
                     self.last_error = getattr(exc, "code", type(exc).__name__)
                     _LOG.warning("Access Mesh lifecycle tick failed: %s", self.last_error)

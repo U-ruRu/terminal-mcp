@@ -998,6 +998,50 @@ class AccessMeshStore(LocalAccessMesh):
             ).fetchone()
             return row[0] if row else None
 
+    def lifecycle_signature(self) -> tuple:
+        """Read the inputs to local maintenance in one consistent snapshot.
+
+        Watch attached identities and all their possible number-group winners,
+        including cross-process start/end/policy changes. Command/output history,
+        activity timestamps and unrelated remote slots cannot change a cycle.
+        This is a private change detector, never cached authorization state.
+        """
+        watched = """WITH attached AS (
+            SELECT DISTINCT issuer_id,slot_id FROM access_mesh_attachments
+        ), watched_numbers AS (
+            SELECT DISTINCT c.number FROM access_mesh_number_claims c
+            JOIN attached a USING(issuer_id,slot_id)
+        ), watched_slots AS (
+            SELECT issuer_id,slot_id FROM attached
+            UNION SELECT issuer_id,slot_id FROM access_mesh_number_claims
+              WHERE number IN (SELECT number FROM watched_numbers)
+        ) """
+        queries = (
+            "SELECT DISTINCT issuer_id,slot_id,logical_agent_id "
+            "FROM access_mesh_attachments ORDER BY issuer_id,slot_id,logical_agent_id",
+            "SELECT s.* FROM access_mesh_slot_replicas s "
+            "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY issuer_id,slot_id",
+            "SELECT * FROM access_mesh_number_claims "
+            "WHERE number IN (SELECT number FROM watched_numbers) ORDER BY issuer_id,slot_id",
+            "SELECT * FROM access_mesh_number_starts "
+            "WHERE number IN (SELECT number FROM watched_numbers) ORDER BY event_id",
+            "SELECT * FROM access_mesh_number_ends "
+            "WHERE number IN (SELECT number FROM watched_numbers) ORDER BY event_id",
+            "SELECT l.* FROM access_mesh_local_sessions l "
+            "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY issuer_id,slot_id",
+            "SELECT s.work_session_id,s.state FROM logical_agent_work_sessions s "
+            "JOIN access_mesh_local_sessions l USING(work_session_id) "
+            "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY s.work_session_id",
+            "SELECT job_id,logical_agent_id,work_session_id,session_epoch,reason,release_claims "
+            "FROM access_mesh_cleanup_jobs WHERE completed_at IS NULL ORDER BY job_id",
+        )
+        with self._connect() as db:
+            db.execute("BEGIN")
+            rows = tuple(
+                tuple(tuple(row) for row in db.execute(watched + query)) for query in queries
+            )
+        return tuple(sorted(self.trusted_issuers)), rows
+
     def local_slots(self, *, after: str = "", limit: int = 50) -> list[SlotSnapshot]:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise AccessMeshError("access_mesh_invalid_limit")

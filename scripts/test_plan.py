@@ -27,7 +27,7 @@ COMPONENTS = {
         "*actor*",
         "*android_slot_read_scope*",
     ),
-    "mesh": ("*mesh*", "*fleet*", "*remote*", "*access*", "*session_number*"),
+    "mesh": ("*mesh*", "*fleet*", "*remote*", "*access*", "*session_number*", "*idle_maintenance*"),
     "storage": (
         "*storage*",
         "*sqlite*",
@@ -72,6 +72,7 @@ COMPONENTS = {
         "*lifecycle*",
         "*android*",
         "*session*",
+        "*idle_maintenance*",
     ),
     "events": ("*event*", "*message*"),
     "tasks": ("*task*", "*claim*"),
@@ -104,6 +105,7 @@ COMPONENT_MODULES = frozenset(
     {
         "test_access_mesh_message_application.py",
         "test_access_mesh_message_storage.py",
+        "test_idle_maintenance.py",
         "test_agent_context_freshness.py",
         "test_agent_identity_values.py",
         "test_agent_expiry_policy.py",

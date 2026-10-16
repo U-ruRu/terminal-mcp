@@ -476,6 +476,37 @@ class PersistentAgentStore:
         if row:
             raise PersistentStoreError("managed_session_required")
 
+    async def due_session_slots(
+        self, *, authority_node_id: str, now: str
+    ) -> list[PersistentSlot]:
+        """Select maintenance work without visiting historical or managed slots.
+
+        The session is re-read under the coordinator's operation guard before
+        fencing. This query is an eligibility filter, not execution authority.
+        """
+        async with self._connect("persistent_session_due") as db:
+            rows = await (
+                await db.execute(
+                    """SELECT DISTINCT a.logical_agent_id,a.display_name,a.state,
+                              a.authority_node_id,a.authority_epoch,a.slot_revision,
+                              a.selector_generation,a.auth_generation,a.created_at,
+                              a.updated_at,a.deleted_at,a.tombstone_reason
+                       FROM logical_agent_work_sessions s
+                       JOIN logical_agents a USING(logical_agent_id)
+                       WHERE a.state<>'deleted' AND a.authority_node_id=?
+                         AND s.state IN ('active','stopping')
+                         AND (s.state='stopping' OR
+                              julianday(s.hard_expires_at)<=julianday(?))
+                         AND NOT EXISTS (
+                           SELECT 1 FROM logical_agent_work_windows w
+                           WHERE w.logical_agent_id=a.logical_agent_id
+                             AND w.superseded_at IS NULL)
+                       ORDER BY a.created_at,a.logical_agent_id""",
+                    (authority_node_id, now),
+                )
+            ).fetchall()
+        return [self._slot(row) for row in rows]
+
     async def has_managed_window(self, logical_agent_id: str) -> bool:
         async with self._connect("managed_window_exists") as db:
             row = await (
