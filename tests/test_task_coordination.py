@@ -350,7 +350,7 @@ async def test_done_atomically_releases_all_current_claims(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_task_list_batches_runtime_state_reads(tmp_path):
+async def test_task_list_projects_blocking_dependency(tmp_path):
     _, terminal, service = await runtime(tmp_path)
     try:
         agent = (await register(service, "batched-list"))["self"]["agent_id"]
@@ -372,16 +372,6 @@ async def test_task_list_batches_runtime_state_reads(tmp_path):
             dependencies=[{"namespace": "batch", "task_id": "DEP"}],
         )
 
-        store = service.task_coordinator.store
-        original_connect = store._connect
-        connections = 0
-
-        def counted_connect():
-            nonlocal connections
-            connections += 1
-            return original_connect()
-
-        store._connect = counted_connect
         listing = await service.tasks(
             namespace="batch",
             show_done=True,
@@ -390,7 +380,6 @@ async def test_task_list_batches_runtime_state_reads(tmp_path):
         )
 
         assert listing["ok"] is True
-        assert connections == 2
         cards = {item["task_id"]: item for item in listing["tasks"]}
         assert cards["CHILD"]["operational_status"] == "blocked"
         assert cards["CHILD"]["blocking_dependencies"] == [

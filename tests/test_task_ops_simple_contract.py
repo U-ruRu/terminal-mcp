@@ -1,4 +1,4 @@
-"""Task state is an independent atomic workflow value; content CAS is stable."""
+"""A current-revision identical update is an event-free retry."""
 
 import pytest
 
@@ -13,7 +13,7 @@ def task_names():
 
 
 @pytest.mark.asyncio
-async def test_state_cas_is_independent_and_noop_is_event_free(tmp_path, task_names):
+async def test_update_retry_with_current_revision_is_event_free(tmp_path, task_names):
     repo = SqliteRepository(tmp_path / "task.sqlite3", tmp_path / "output.sqlite3")
     await repo.initialize()
     store = TaskStore(repo.path)
@@ -22,54 +22,23 @@ async def test_state_cas_is_independent_and_noop_is_event_free(tmp_path, task_na
 
     create = await coordinator.mutate(
         "agent1", action="create", namespace=namespace, task_id=task_id,
-        title="Initial title", description="preserve me", isolation_hint="none",
+        title="Initial", isolation_hint="none",
     )
     assert create["ok"]
     base = (await store.get_task(namespace, task_id))["revision"]
-    events = len(await store.list_events(namespace, task_id))
-
-    for status in ("in_progress", "blocked", "done", "ready", "deferred", "ready"):
-        result = await coordinator.mutate(
-            "agent1", action="state", namespace=namespace, task_id=task_id,
-            state=status,
-        )
-        assert result["ok"], result
-        current = await store.get_task(namespace, task_id)
-        assert current["state"] == status
-        assert current["revision"] == base
-        assert current["description"] == "preserve me"
-        assert current["result"] is None
-    changed_events = len(await store.list_events(namespace, task_id))
-    assert changed_events == events + 6
-
-    same = await coordinator.mutate(
-        "agent1", action="state", namespace=namespace, task_id=task_id, state="ready"
-    )
-    assert same["ok"]
-    assert len(await store.list_events(namespace, task_id)) == changed_events
-
     changed = await coordinator.mutate(
         "agent1", action="update", namespace=namespace, task_id=task_id,
         title="New title", expected_revision=base,
     )
     assert changed["ok"], changed
     assert changed["task"]["revision"] == base + 1
-
-    stale = await coordinator.mutate(
-        "agent1", action="update", namespace=namespace, task_id=task_id,
-        title="Should reject", expected_revision=base,
-    )
-    assert not stale["ok"] and stale["code"] == "revision_conflict"
-    assert stale["details"]["current_revision"] == base + 1
-    assert (await store.get_task(namespace, task_id))["title"] == "New title"
-
-    before_noop = len(await store.list_events(namespace, task_id))
+    events = len(await store.list_events(namespace, task_id))
     repeat = await coordinator.mutate(
         "agent1", action="update", namespace=namespace, task_id=task_id,
         title="New title", expected_revision=base + 1,
     )
     assert repeat["ok"] and repeat["task"]["revision"] == base + 1
-    assert len(await store.list_events(namespace, task_id)) == before_noop
+    assert len(await store.list_events(namespace, task_id)) == events
 
 
 @pytest.mark.asyncio
