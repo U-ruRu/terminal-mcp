@@ -227,7 +227,7 @@ async def test_comment_append_remains_valid_during_unrelated_revision_change(cas
     [
         ("claim", {"claim_intent": "first claim"}, "claim"),
         ("release", {"release_reason": "handoff"}, "release_claim_mutation"),
-        ("comment", {"comment_text": "Committed comment"}, "add_event"),
+        ("comment", {"comment_text": "Committed comment"}, "append_comment"),
         ("relate", {"related_task_id": "other", "relation_kind": "related"}, "add_relation"),
         ("unrelate", {"related_task_id": "other", "relation_kind": "related"}, "remove_relation"),
         ("review", {"dimensions": ["A"], "verdict": "NON_BLOCKING"}, "upsert_reviews"),
@@ -243,33 +243,31 @@ async def test_side_stream_receipt_survives_all_postcommit_projection_failures(
         await store.update_task("atomic", "task", output_refs=["artifact:review-candidate"])
     original = getattr(store, method)
     committed = None
+    failure_installed = False
 
     async def unavailable(*args, **kwargs):
         raise AssertionError("post-commit database/projection read")
 
     async def committed_then_unavailable(*args, **kwargs):
-        nonlocal committed
-        assert kwargs["capture_task"] is True
+        nonlocal committed, failure_installed
+        if action != "comment":
+            assert kwargs["capture_task"] is True
         committed = await original(*args, **kwargs)
         monkeypatch.setattr(store, "get_task", unavailable)
         monkeypatch.setattr(coordinator, "_decorate", unavailable)
+        failure_installed = True
         return committed
 
     monkeypatch.setattr(store, method, committed_then_unavailable)
     result = await coordinator.mutate(
         "owner", action=action, namespace="atomic", task_id="task", **fields
     )
+    assert failure_installed
     assert result["ok"], result
-    if action == "comment":
-        # Append-only comment acknowledgement does not carry a mutable
-        # TaskSnapshot and never rereads the task after commit.
-        assert committed is None
-        assert any(event[0] == "comment" for event in audit(store))
-    else:
-        assert result["task"]["revision"] == committed["revision"]
-        assert result["task"]["state"] == committed["state"] == "in_progress"
-        assert result["task"]["checkpoint"] == {"keep": 1}
-        assert result["task"]["result"] == {"evidence": "keep"}
+    assert result["task"]["revision"] == committed["revision"]
+    assert result["task"]["state"] == committed["state"] == "in_progress"
+    assert result["task"]["checkpoint"] == {"keep": 1}
+    assert result["task"]["result"] == {"evidence": "keep"}
 
 
 @pytest.mark.asyncio

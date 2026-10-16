@@ -414,10 +414,10 @@ merged commit. No stale pre-merge gate is accepted as proof for the merge.
 ## 2026-10-17 property-owner consolidation
 
 Base canonical `e8f136a`: **2,151 collected cases**. This pass produces
-**2,108 cases** (net **-43**, including parametrized cases). Exact node-ID diff:
-58 removed, 15 added or renamed. All six `test_deployment_windows.py` cases and
+**2,109 cases** (net **-42**, including parametrized cases). Exact node-ID diff:
+59 removed, 17 added or renamed. All six `test_deployment_windows.py` cases and
 the native Windows QA files are unchanged. Original target remains at most
-1,486 of 2,973: **622 additional net removals are still required**. This pass
+1,486 of 2,973: **623 additional net removals are still required**. This pass
 is not completion of the 50% target or of atomic conversion of the whole suite.
 
 Count command: `PYTHONPATH=src /workspace/terminal-mcp/.venv-test/bin/python -m pytest --collect-only -q`.
@@ -451,3 +451,20 @@ fault-probe evidence and the full exact-commit acceptance report are under
 `/workspace/tmcp-property-owners-evidence-20261017/` on Secondary. Re-fetch origin
 before publication; merge parallel platform work and rerun the full gate if the
 candidate changes. No deployment is part of this test-cleanup pass.
+
+
+### Additional receipt review
+
+The old checkpoint failure case patched `update_task_mutation`, although the
+current checkpoint handler calls `append_checkpoint`; it never installed its
+post-commit failure. A new atomic test patches the real append and asserts that
+the failure was installed. The comment receipt case likewise now patches
+`append_comment` instead of the no-longer-used `add_event`, and every retained
+receipt case asserts the injected boundary was actually reached.
+
+This restores one collected checkpoint case: final net reduction is **42**, not
+the preliminary 43. The normal append/receipt group passes **30 tests**. Two
+additional fault probes discard committed append snapshots; both corrected
+checkpoint/comment tests detect that regression. Together with the earlier seven
+probes, all **nine** intended faults are detected. The interrupted `1c747a8`
+full run is superseded; release acceptance must use the corrected final SHA.

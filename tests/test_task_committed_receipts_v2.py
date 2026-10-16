@@ -185,3 +185,34 @@ async def test_receipt_keeps_its_revision_when_later_writer_commits_before_respo
     assert result["task"]["state"] == "done"
     current = await store.get_task("receipt", "one")
     assert current["revision"] == 3 and current["title"] == "Later writer"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_receipt_survives_failed_postcommit_read(case, monkeypatch):
+    store, coordinator = case
+    await store.create_task("receipt", "one", "Checkpoint owner")
+    append_checkpoint = store.append_checkpoint
+    failure_installed = False
+
+    async def unavailable(*args, **kwargs):
+        raise AssertionError("post-commit read must not replace a committed receipt")
+
+    async def commit_then_disable_reads(*args, **kwargs):
+        nonlocal failure_installed
+        record = await append_checkpoint(*args, **kwargs)
+        monkeypatch.setattr(store, "get_task", unavailable)
+        monkeypatch.setattr(coordinator, "_decorate", unavailable)
+        failure_installed = True
+        return record
+
+    monkeypatch.setattr(store, "append_checkpoint", commit_then_disable_reads)
+    result = await coordinator.mutate(
+        "agent",
+        action="checkpoint",
+        namespace="receipt",
+        task_id="one",
+        checkpoint={"progress": 7},
+    )
+    assert failure_installed
+    assert result["ok"] is True
+    assert (result["task"]["checkpoint"], result["task"]["revision"]) == ({"progress": 7}, 1)
