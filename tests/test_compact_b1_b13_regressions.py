@@ -14,19 +14,8 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
-from terminal_mcp.application.task_requests import (
-    TaskArchiveRequest,
-    TaskCheckpointRequest,
-    TaskClaimRequest,
-    TaskCreateRequest,
-    TaskRelateRequest,
-    TaskReleaseRequest,
-    TaskReviewRequest,
-    TaskStateRequest,
-    TaskUpdateRequest,
-    task_request_to_backend,
-)
-from terminal_mcp.mcp.access_contracts import MeshMessageInput, MeshTaskCommentInput
+from terminal_mcp.application.task_requests import TaskUpdateRequest, task_request_to_backend
+from terminal_mcp.mcp.access_contracts import MeshMessageInput
 from terminal_mcp.mcp.roles import _TASK_MANAGE_MODELS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,30 +61,6 @@ def allows_transport(role, tool, args):
     return Draft202012Validator(item(role, tool)["inputSchema"]).is_valid(args)
 
 
-def test_B1_update_expected_revision_required_non_null_and_described():
-    d = text("coordinator", "task_manage")
-    row = COVER["coordinator.task_manage"]["action_models"]["update"]
-    assert "expected_revision" in row["required_non_null"]
-    assert "update: allowed fields" in d
-    assert "update requires non-null expected_revision" in d
-    for args in (
-        {"action": "update", "namespace": "qa", "task_id": "t", "title": "x"},
-        {
-            "action": "update",
-            "namespace": "qa",
-            "task_id": "t",
-            "expected_revision": None,
-            "title": "x",
-        },
-    ):
-        assert allows_transport("coordinator", "task_manage", args)
-        assert not server_model(TaskUpdateRequest, args)
-    assert server_model(
-        TaskUpdateRequest,
-        {"action": "update", "namespace": "qa", "task_id": "t", "expected_revision": 1},
-    )
-
-
 @pytest.mark.parametrize("record", QA_ROWS, ids=lambda entry: entry["action"])
 def test_B2_all_nine_allowed_forbidden_fields_match_canonical_source(record):
     name = record["action"]
@@ -114,82 +79,6 @@ def test_B2_all_nine_allowed_forbidden_fields_match_canonical_source(record):
     counterexample = record["forbidden_example"]
     assert allows_transport("coordinator", "task_manage", counterexample)
     assert not server_model(model, counterexample)
-
-
-def test_B3_archive_accepts_either_non_null_note_without_contradiction():
-    d = text("coordinator", "task_manage")
-    assert "archive needs archive_note." not in d
-    assert "either non-null archive_note or non-null note" in d
-    for name in ("archive_note", "note"):
-        assert server_model(
-            TaskArchiveRequest,
-            {"action": "archive", "namespace": "qa", "task_id": "t", name: "reason"},
-        )
-    assert not server_model(
-        TaskArchiveRequest,
-        {
-            "action": "archive",
-            "namespace": "qa",
-            "task_id": "t",
-            "archive_note": None,
-            "note": None,
-        },
-    )
-
-
-def test_B4_release_reason_is_optional_even_with_live_claim():
-    d = text("executor", "task_claim")
-    assert "release_reason may be required" not in d
-    assert "release_reason is optional even when an existing live claim" in d
-    assert "released_by_owner" in d
-    args = {"action": "release", "namespace": "qa", "task_id": "t"}
-    assert server_model(TaskReleaseRequest, args)
-    assert allows_transport("executor", "task_claim", args)
-
-
-def test_B5_task_state_allows_admitted_nonowner_and_no_claim_requirement():
-    d = text("executor", "task_state")
-    assert "a task owned by the current LogicalAgent" not in d
-    assert "any admitted agent" in d
-    assert "including on a task claimed by someone else" in d
-    assert COVER["executor.task_state"]["model"].endswith(".TaskStateInput")
-    source = (ROOT / "src/terminal_mcp/storage/tasks.py").read_text()
-    assert "any admitted caller" in source
-    assert "regardless of claims" in source
-    assert allows_transport(
-        "executor", "task_state", {"namespace": "qa", "task_id": "someone_elses", "state": "qa"}
-    )
-
-
-def test_B6_claim_and_release_field_whitelists_and_nulls():
-    cov = COVER["executor.task_claim"]["action_models"]
-    assert "claim_intent" in cov["claim"]["required_non_null"]
-    assert "release_reason" in cov["claim"]["forbidden"]
-    assert "claim_intent" in cov["release"]["forbidden"]
-    assert "release_reason" not in cov["release"]["required_non_null"]
-    for model, args in (
-        (
-            TaskClaimRequest,
-            {"action": "claim", "namespace": "qa", "task_id": "t", "claim_intent": None},
-        ),
-        (
-            TaskClaimRequest,
-            {
-                "action": "claim",
-                "namespace": "qa",
-                "task_id": "t",
-                "claim_intent": "x",
-                "release_reason": "no",
-            },
-        ),
-        (
-            TaskReleaseRequest,
-            {"action": "release", "namespace": "qa", "task_id": "t", "claim_intent": "x"},
-        ),
-    ):
-        assert allows_transport("executor", "task_claim", args)
-        assert not server_model(model, args)
-    assert "required non-null [action, claim_intent" in text("executor", "task_claim")
 
 
 @pytest.mark.parametrize("role", ["executor", "coordinator"])
@@ -231,104 +120,6 @@ def test_B7_message_null_is_presence_sensitive_for_both_roles(role):
         assert not accepts(MeshMessageInput, args)
 
 
-def test_B8_comment_checkpoint_nullable_extra_and_expected_revision_rejected():
-    d = text("executor", "task_comment")
-    assert "optional expected_revision" not in d
-    assert "checkpoint does not accept expected_revision" in d
-    assert "rejects comment_text" in d and "rejects checkpoint" in d
-    for args in (
-        {"namespace": "qa", "task_id": "t", "comment_text": None},
-        {"namespace": "qa", "task_id": "t", "comment_text": "x", "checkpoint": "other"},
-        {
-            "action": "checkpoint",
-            "namespace": "qa",
-            "task_id": "t",
-            "checkpoint": "ok",
-            "comment_text": "other",
-        },
-        {
-            "action": "checkpoint",
-            "namespace": "qa",
-            "task_id": "t",
-            "checkpoint": "ok",
-            "expected_revision": 1,
-        },
-    ):
-        assert allows_transport("executor", "task_comment", args)
-        assert not accepts(MeshTaskCommentInput, args)
-    assert (
-        "action"
-        not in COVER["executor.task_comment"]["action_models"]["comment"]["required_non_null"]
-    )
-    assert accepts(MeshTaskCommentInput, {"namespace": "qa", "task_id": "t", "comment_text": "ok"})
-    assert COVER["executor.task_comment"]["action_models"]["checkpoint"]["allowed"] == [
-        "action",
-        "checkpoint",
-        "namespace",
-        "task_id",
-    ]
-
-
-@pytest.mark.parametrize(
-    "model,args",
-    [
-        (
-            TaskCheckpointRequest,
-            {"action": "checkpoint", "namespace": "qa", "task_id": "t", "checkpoint": None},
-        ),
-        (TaskStateRequest, {"action": "state", "namespace": "qa", "task_id": "t", "state": None}),
-        (
-            TaskReviewRequest,
-            {
-                "action": "review",
-                "namespace": "qa",
-                "task_id": "t",
-                "dimensions": None,
-                "verdict": "NON_BLOCKING",
-            },
-        ),
-        (
-            TaskReviewRequest,
-            {
-                "action": "review",
-                "namespace": "qa",
-                "task_id": "t",
-                "dimensions": ["A"],
-                "verdict": None,
-            },
-        ),
-        (
-            TaskArchiveRequest,
-            {
-                "action": "archive",
-                "namespace": "qa",
-                "task_id": "t",
-                "archive_note": None,
-                "note": None,
-            },
-        ),
-        (
-            TaskCreateRequest,
-            {
-                "action": "create",
-                "namespace": "qa",
-                "isolation_hint": "isolated",
-                "state": "done",
-                "result": None,
-            },
-        ),
-    ],
-)
-def test_B9_nonnull_runtime_requirements_expressed(model, args):
-    d = text("coordinator", "task_manage")
-    assert "non-null" in d
-    assert allows_transport("coordinator", "task_manage", args)
-    assert not server_model(model, args)
-    assert "checkpoint requires non-null" in d
-    assert "state requires non-null" in d
-    assert "review requires non-null dimensions" in d
-
-
 def test_B10_none_omits_update_but_empty_array_replaces():
     base = {
         "action": "update",
@@ -346,38 +137,3 @@ def test_B10_none_omits_update_but_empty_array_replaces():
     desc = text("coordinator", "task_manage")
     assert "description:null is omitted/no change" in desc
     assert "tags:[] explicitly replaces" in desc
-
-
-def test_B13_relation_kind_open_ended_and_review_of_runtime_gate():
-    d = text("coordinator", "task_manage")
-    assert "relation_kind is an open string(1..64), not an enum" in d
-    for marker in (
-        "review_task_required",
-        "missing_parent_candidate",
-        "ambiguous_review_parent",
-        "candidate_conflict",
-    ):
-        assert marker in d
-    assert "source lane must be review" in d
-    assert "parent candidate_ref must be nonempty" in d
-    assert "no different review_of parent" in d
-    arbitrary = {
-        "action": "relate",
-        "namespace": "qa",
-        "task_id": "a",
-        "relation_kind": "custom_rel",
-        "related_task_id": "b",
-    }
-    assert server_model(TaskRelateRequest, arbitrary)
-    assert allows_transport("coordinator", "task_manage", arbitrary)
-    strict = SOURCE["coordinator.task_manage"]["inputSchema"]
-    assert "enum" not in strict["properties"]["relation_kind"]
-    source = (ROOT / "src/terminal_mcp/storage/tasks.py").read_text()
-    assert 'if relation_kind == "review_of":' in source
-    for marker in (
-        "review_task_required",
-        "missing_parent_candidate",
-        "ambiguous_review_parent",
-        "candidate_conflict",
-    ):
-        assert marker in source

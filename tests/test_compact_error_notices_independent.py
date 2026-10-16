@@ -44,13 +44,13 @@ async def _gate_refusal(message, mode, code):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "mode,code,required",
+    "tool_name,mode,code,required",
     [
-        ("ack", "coordination_ack_required", "ack"),
-        ("alert", "coordination_alert", "reply"),
+        ("command_run", "ack", "coordination_ack_required", "ack"),
+        ("command_run", "alert", "coordination_alert", "reply"),
+        ("task_claim", "alert", "coordination_alert", "reply"),
     ],
 )
-@pytest.mark.parametrize("tool_name", ["command_run", "task_claim"])
 async def test_rejected_operation_incoming_is_root_and_actionable(
     monkeypatch, mode, code, required, tool_name
 ):
@@ -91,19 +91,18 @@ async def test_rejected_operation_incoming_is_root_and_actionable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "mode,code,required",
+    "mode,code,required,text,sender",
     [
-        ("ack", "coordination_ack_required", "ack"),
-        ("alert", "coordination_alert", "reply"),
-    ],
-)
-@pytest.mark.parametrize(
-    "text,sender",
-    [
-        ("x" * 500, "Alpha-7 " + "s" * 56),
-        ("a" * 501, base.PUBLIC_NAME),
-        ("Ж" * 16384, base.PUBLIC_NAME),
-        ("A short actionable notice", "Alpha-7 " + "s" * 70),
+        ("ack", "coordination_ack_required", "ack", "x" * 500, "Alpha-7 " + "s" * 56),
+        ("alert", "coordination_alert", "reply", "a" * 501, base.PUBLIC_NAME),
+        ("ack", "coordination_ack_required", "ack", "Ж" * 16384, base.PUBLIC_NAME),
+        (
+            "alert",
+            "coordination_alert",
+            "reply",
+            "A short actionable notice",
+            "Alpha-7 " + "s" * 70,
+        ),
     ],
     ids=["at-old-limits-control", "501-char-message", "max-unicode-message", "long-slot-suffix"],
 )

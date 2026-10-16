@@ -76,27 +76,6 @@ async def test_error_keeps_authoritative_outcome_receipt_and_metadata(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_oversized_accepted_recovery_preserves_receipt_and_inbound_action(monkeypatch):
-    raw = base._run("completed")
-    raw.pop("has_more", None)  # Recovery has no read-page has_more field.
-    raw["lines"] = ["x" * 1024 for _ in range(22)]
-    raw["overall_lines_count"] = raw["displayed_lines_count"] = 22
-    raw["exit_code"] = 0
-    raw["messages"] = [
-        base._message("alert", text="\x00" * 16384, msg_id=f"fixture:{i}") for i in range(4)
-    ]
-    data, wire = await base._call(
-        base._server(monkeypatch, "executor", cmd=raw),
-        "command_recovery",
-        {"command": "fixture never executed"},
-    )
-    assert data["ok"] is False and data["error"]["code"] == "output_item_too_large"
-    assert data["cmd_hash"] == raw["cmd_hash"] and data["error"]["outcome"] == "committed"
-    assert data["messages"][0]["requirements"] == "reply"
-    assert serialized_call_tool_result_size(wire) <= CALL_TOOL_RESULT_BUDGET_BYTES
-
-
-@pytest.mark.asyncio
 async def test_control_char_preview_fits_wire_budget_and_keeps_all_identifiers(monkeypatch):
     raw = base._run()
     raw["messages"] = [

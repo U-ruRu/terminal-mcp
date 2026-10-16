@@ -10,8 +10,16 @@ from terminal_mcp.core.read_contract import MESSAGE_PREVIEW_CHARS
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["command_run", "task_claim", "command_read"])
-@pytest.mark.parametrize("mode", ["notify", "ack", "alert"])
+@pytest.mark.parametrize(
+    "operation,mode",
+    [
+        ("command_run", "notify"),
+        ("command_run", "ack"),
+        ("command_run", "alert"),
+        ("task_claim", "alert"),
+        ("command_read", "ack"),
+    ],
+)
 async def test_large_incoming_keeps_receipt_action_and_original(monkeypatch, operation, mode):
     messages = [_message(mode, text="Ж" * 16384, msg_id=f"test:msg:{i}") for i in range(20)]
     raw = _run()

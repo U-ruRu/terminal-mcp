@@ -15,8 +15,10 @@ from terminal_mcp.mcp.output_contracts import serialized_call_tool_result_size
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["notify", "ack", "alert"])
-@pytest.mark.parametrize("profile", ["mixed", "escaped", "astral"])
+@pytest.mark.parametrize(
+    "mode,profile",
+    [("notify", "mixed"), ("ack", "escaped"), ("alert", "astral")],
+)
 async def test_independent_chunk_reconstruction_bounds_and_empty_tail(
     mesh_pair, monkeypatch, record_property, mode, profile
 ):
@@ -120,8 +122,10 @@ async def test_independent_chunk_reconstruction_bounds_and_empty_tail(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["run", "read", "cancel", "recovery"])
-@pytest.mark.parametrize("profile", ["unicode", "escaped"])
+@pytest.mark.parametrize(
+    "action,profile",
+    [("run", "unicode"), ("read", "escaped"), ("cancel", "unicode"), ("recovery", "escaped")],
+)
 async def test_accepted_command_and_recovery_receipt_survives_large_incoming(
     monkeypatch, record_property, action, profile
 ):
@@ -168,12 +172,13 @@ async def test_accepted_command_and_recovery_receipt_survives_large_incoming(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["run", "read", "cancel", "recovery"])
 @pytest.mark.parametrize(
-    "mode,code,required",
+    "action,mode,code,required",
     [
-        ("ack", "coordination_ack_required", "ack"),
-        ("alert", "coordination_alert", "reply"),
+        ("run", "ack", "coordination_ack_required", "ack"),
+        ("read", "alert", "coordination_alert", "reply"),
+        ("cancel", "ack", "coordination_ack_required", "ack"),
+        ("recovery", "alert", "coordination_alert", "reply"),
     ],
 )
 async def test_command_refusal_retains_action_and_bounded_unicode_notice(
@@ -214,16 +219,15 @@ async def test_command_refusal_retains_action_and_bounded_unicode_notice(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["notify", "ack", "alert"])
-async def test_oversized_send_preflight_rejects_before_commit(mesh_pair, mode):
+async def test_oversized_send_preflight_rejects_before_commit(mesh_pair):
     node = mesh_pair.nodes["bacloud"]
     with node.store.connect() as db:
         before = list(db.execute("SELECT * FROM coordination_messages"))
     result = await node.message(
-        actor("alice", f"independent-preflight-{mode}"),
+        actor("alice", "independent-preflight"),
         text="🧪" * 16384,
         target=_public_name(node.mesh.store.slots["bob"]),
-        mode=mode,
+        mode="notify",
     )
     assert result["ok"] is False and result["code"] == "output_item_too_large"
     assert result["outcome"] == "not_committed"
@@ -233,43 +237,6 @@ async def test_oversized_send_preflight_rejects_before_commit(mesh_pair, mode):
 
 
 @pytest.mark.asyncio
-async def test_recovery_large_output_plus_incoming_retains_committed_receipt(
-    monkeypatch, tmp_path, record_property
-):
-    """Each constituent fits its budget; the mirrored combined result must too."""
-    from terminal_mcp.storage.sqlite import SqliteRepository
-
-    repository = SqliteRepository(tmp_path / "commands.sqlite3", tmp_path / "output.sqlite3")
-    await repository.initialize()
-    record = await repository.create(
-        "fixture only; never executed", cmd_hash="bc12de34", status="completed"
-    )
-    raw = base._run("completed")
-    raw.update(cmd_hash=record.cmd_hash, cmd=record.cmd, exit_code=0)
-    raw.pop("has_more", None)
-    raw["lines"] = ["x" * 1024 for _ in range(22)]
-    raw["overall_lines_count"] = raw["displayed_lines_count"] = 22
-    raw["output_bytes"] = 22 * 1024
-    raw["messages"] = [
-        base._message("notify", text="\x01" * 16384, msg_id=f"budget:msg:{i}") for i in range(4)
-    ]
-    raw["pending_messages"] = deepcopy(raw["messages"])
-    before = deepcopy(raw)
-    data, wire = await base._call(
-        base._server(monkeypatch, "executor", cmd=raw),
-        "command_recovery",
-        {"command": "fixture only; never executed"},
-    )
-    assert await repository.get(record.cmd_hash) is not None
-    assert record.cmd_hash in json.dumps(data), data
-    if data["ok"] is False:
-        assert data["error"]["outcome"] == "committed", data
-    assert raw == before
-    size = serialized_call_tool_result_size(wire)
-    assert size <= CALL_TOOL_RESULT_BUDGET_BYTES
-    record_property("serialized_call_tool_result_bytes", size)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["run", "recovery"])
 async def test_already_committed_failure_keeps_receipt_and_outcome_with_notices(

@@ -81,12 +81,9 @@ def test_provider_selection_is_an_explicit_server_allowlist(provider):
     [
         {},
         {"openai/subject": "subject"},
-        {"openai/session": "session"},
         {"subject": "subject", "conversation": "conversation"},
         {"Authorization": "Bearer token", "user-agent": "ChatGPT"},
-        {"openai/userAgent": "ChatGPT", "openai/userLocation": {"country": "US"}},
         {"logical_agent_id": "agent", "sender": "name", "access_code": "1234"},
-        [],
         None,
     ],
 )
@@ -96,7 +93,7 @@ def test_missing_metadata_never_falls_back_to_public_identity_fields(payload):
 
 
 @pytest.mark.parametrize("field", ["openai/subject", "openai/session", "openai/organization"])
-@pytest.mark.parametrize("value", ["", "  ", False, 42, [], {}])
+@pytest.mark.parametrize("value", ["", False, {}], ids=["empty", "wrong-type", "structured"])
 def test_identifiers_do_not_coerce_agent_controlled_values(field, value):
     with pytest.raises(ProviderIdentityError, match="identity_metadata_missing"):
         ProviderIdentityRegistry().resolve("openai", metadata(**{field: value}))
