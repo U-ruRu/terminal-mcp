@@ -21,6 +21,7 @@ from pathlib import Path
 
 from terminal_mcp.auth.access_key import AccessVerifierKeyStore
 from terminal_mcp.auth.foundation import AUTH_SCHEMA_VERSION, AuthFoundationError
+from terminal_mcp.platform_paths import IS_WINDOWS
 
 
 class IdentityMigrationError(RuntimeError):
@@ -241,9 +242,14 @@ def _anchor_nonce(auth: Path) -> str:
     """Read only: the immutable installation witness outside auth.sqlite3."""
     path = _anchor_path(auth)
     try:
-        if path.stat().st_mode & 0o077:
-            raise IdentityLineageError("protected installation anchor permissions are insecure")
-        raw = path.read_bytes()
+        if IS_WINDOWS:
+            from terminal_mcp.platform_windows import read_private
+
+            raw = read_private(path)
+        else:
+            if path.stat().st_mode & 0o077:
+                raise IdentityLineageError("protected installation anchor permissions are insecure")
+            raw = path.read_bytes()
     except FileNotFoundError as exc:
         raise IdentityLineageError("protected installation anchor is missing") from exc
     except OSError as exc:
@@ -271,6 +277,11 @@ def _create_anchor(auth: Path, nonce: str) -> None:
         out.write(payload)
         out.flush()
         os.fsync(out.fileno())
+    if IS_WINDOWS:
+        from terminal_mcp.platform_windows import secure_path
+
+        secure_path(path)
+        return
     parent_fd = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(parent_fd)

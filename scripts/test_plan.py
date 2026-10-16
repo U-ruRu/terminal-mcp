@@ -121,6 +121,7 @@ COMPONENT_MODULES = frozenset(
         "test_auth_config.py",
         "test_auth_path_policy.py",
         "test_backup_manifest.py",
+        "test_deployment_windows.py",
         "test_command_run_fast_path.py",
         "test_compact_contracts.py",
         "test_execution_port.py",
@@ -415,8 +416,17 @@ def component_plan(root: Path, names: list[str], *, integration: bool = False) -
 
 
 def platform_plan(root: Path, names: list[str]) -> dict:
+    if names == ["windows"]:
+        return {
+            "scope": "platform",
+            "platform": "windows",
+            "tests": sorted(
+                p.relative_to(root).as_posix() for p in (root / "qa/windows").glob("test_*.py")
+            ),
+            "reasons": ["Native Windows PowerShell, Job Object, ACL and app boundaries"],
+        }
     if names != ["linux"]:
-        raise ValueError("platform requires linux")
+        raise ValueError("platform requires linux or windows")
     return {
         "scope": "platform",
         "platform": "linux",

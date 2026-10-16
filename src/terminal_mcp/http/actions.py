@@ -240,7 +240,7 @@ class TaskRequest(AgentRequest):
 
 
 class RunRequest(AgentRequest):
-    cmd: str = Field(min_length=1, description="Shell script passed to /bin/bash -s through stdin.")
+    cmd: str = Field(min_length=1, description="Script supplied to the configured shell through stdin.")
     queue_id: int | None = Field(default=None, ge=1)
     task_scope: str = Field(
         min_length=1,

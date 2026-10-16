@@ -383,3 +383,29 @@ candidate acceptance evidence are kept in
 The Windows implementer was notified. The integrator re-fetches the remote
 canonical branch before merging and publishing; cleanup does not supersede
 parallel platform changes. Full candidate acceptance is required before publish.
+
+# Windows platform scope
+
+`platform windows` выбирает native acceptance из `qa/windows`. Параметр отказа
+`windows` в проверке неизвестной платформы заменён на `darwin`; позитивная проверка
+выбора Windows добавлена в существующую проверку изоляции платформенных слоёв.
+Контракты Linux сохраняют существующие selectors.
+
+
+### Integration with the concurrent Windows branch
+
+Before publication, origin advanced from `4334540` to `e5fd8e4`, adding Windows
+execution/deployment and runner fixes. The feature branch merged that canonical
+head; the only conflict was this append-only audit document, resolved by
+retaining both sections. Windows source, scripts, native QA and new tests remain
+byte-identical to the incoming canonical versions.
+
+The updated canonical collection is **2,173** cases; the combined candidate is
+**2,151**, preserving all six net new tests from the parallel Windows work.
+The cleanup remains net **-22** versus current canonical (including the prior
+three-case feature tranche), or **-19** for this follow-up alone. The original
+1,486-case acceptance threshold remains **665 cases away**. Native Windows QA
+under `qa/windows` remains in its separate platform selection and is not counted
+as a Linux full-suite execution. The obsolete `0043a3c` acceptance was cancelled
+when the canonical update was discovered; a fresh full gate must cover the exact
+merged commit. No stale pre-merge gate is accepted as proof for the merge.

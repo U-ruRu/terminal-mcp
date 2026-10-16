@@ -4,6 +4,7 @@
 complete candidate acceptance and node probes. Run it using the project's
 installed test environment (`.[test,compact]`) and a checkout of the intended source.
 It prints an external `report.json` path; results never disappear into terminal output.
+The runner supplies sanitized temporary paths to pytest; session hooks retain this isolated configuration.
 
 The repository's [AGENTS.md](../AGENTS.md) defines the lightweight agent workflow:
 find and reuse existing behavior checks before adding a named missing regression,
@@ -26,6 +27,10 @@ python scripts/test.py integration events
 # Explicit Linux shell, Unix IPC and kernel-dependent checks.
 python scripts/test.py platform linux --plan
 python scripts/test.py platform linux
+
+# Native Windows PowerShell, Job Objects, ACL and app boundaries.
+python scripts/test.py platform windows --plan
+python scripts/test.py platform windows
 
 # Inspect affected selection, including committed, staged, unstaged and untracked changes.
 python scripts/test.py dev --changed-from <full-base-sha> --plan

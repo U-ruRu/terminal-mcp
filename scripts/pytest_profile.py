@@ -3,13 +3,15 @@
 import collections
 import json
 import os
-import resource
 import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
+
+if sys.platform != "win32":
+    import resource
 
 START = time.perf_counter()
 REPORTS = []
@@ -111,8 +113,18 @@ def pytest_sessionfinish(session, exitstatus):
         p: sum(r["seconds"] for r in REPORTS if r["phase"] == p)
         for p in ("setup", "call", "teardown")
     }
-    own = resource.getrusage(resource.RUSAGE_SELF)
-    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    usage = None
+    if sys.platform != "win32":
+        own = resource.getrusage(resource.RUSAGE_SELF)
+        children = resource.getrusage(resource.RUSAGE_CHILDREN)
+        usage = {
+            "user_cpu": own.ru_utime,
+            "system_cpu": own.ru_stime,
+            "max_rss_kib": own.ru_maxrss,
+            "children_user_cpu": children.ru_utime,
+            "children_system_cpu": children.ru_stime,
+            "children_max_rss_kib": children.ru_maxrss,
+        }
     result = {
         "schema": 1,
         "exit_code": int(exitstatus),
@@ -125,14 +137,7 @@ def pytest_sessionfinish(session, exitstatus):
         "reports": REPORTS,
         "fixture_setup_inclusive": dict(FIXTURES),
         "samples": [{"stack": list(k), "samples": v} for k, v in SAMPLES.most_common(120)],
-        "resource": {
-            "user_cpu": own.ru_utime,
-            "system_cpu": own.ru_stime,
-            "max_rss_kib": own.ru_maxrss,
-            "children_user_cpu": children.ru_utime,
-            "children_system_cpu": children.ru_stime,
-            "children_max_rss_kib": children.ru_maxrss,
-        },
-        "load_end": os.getloadavg(),
+        "resource": usage,
+        "load_end": os.getloadavg() if hasattr(os, "getloadavg") else None,
     }
     Path(os.environ["TMCP_PROFILE_PATH"]).write_text(json.dumps(result, indent=2) + "\n")

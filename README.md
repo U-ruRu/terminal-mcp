@@ -2,7 +2,9 @@
 
 Native Access Events: [public session-number message routing](docs/mcp-events-session-number.md).
 
-`terminal-mcp` — Python-сервис управляемого доступа к Linux-терминалу через MCP, HTTP Actions и Console.
+`terminal-mcp` — Python-сервис управляемого доступа к Linux и Windows через MCP, HTTP Actions и Console.
+
+Windows runtime, служба и VPN-шлюз: [Windows node](docs/windows.md).
 
 Текущая версия приложения: **0.14.4**. В публичных контрактах Executor и Coordinator операция `session` поддерживает только `attach` с обязательным `session_number`. Основной контракт: **Distributed Multi-Issuer Access Mesh V2**.
 

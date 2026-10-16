@@ -11,13 +11,14 @@ import uvicorn
 
 from terminal_mcp.auth.pairing import PAIRING_DEFAULT_TTL_SEC, PairingStore
 from terminal_mcp.config import Settings
+from terminal_mcp.platform_paths import ENV_FILE
 
 
 def _local_settings() -> Settings:
     """Load the installed instance env when CLI is invoked from a shell."""
 
     env_path = Path(
-        os.environ.get("TERMINAL_MCP_ENV_FILE_PATH", "/etc/terminal-mcp/terminal-mcp.env")
+        os.environ.get("TERMINAL_MCP_ENV_FILE_PATH", str(ENV_FILE))
     )
     if env_path.is_file():
         return Settings(_env_file=env_path)

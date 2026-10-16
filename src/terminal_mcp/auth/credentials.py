@@ -7,8 +7,10 @@ import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
-OAUTH_USERNAME_FILE = Path("/etc/terminal-mcp/credentials/oauth-username")
-OAUTH_PASSWORD_FILE = Path("/etc/terminal-mcp/credentials/oauth-password")
+from terminal_mcp.platform_paths import CREDENTIAL_DIR, IS_WINDOWS
+
+OAUTH_USERNAME_FILE = CREDENTIAL_DIR / "oauth-username"
+OAUTH_PASSWORD_FILE = CREDENTIAL_DIR / "oauth-password"
 
 
 class OAuthCredentialFileError(RuntimeError):
@@ -19,13 +21,22 @@ def _read_oauth_credential(path: Path, label: str) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = None
     try:
-        fd = os.open(path, flags)
+        if IS_WINDOWS:
+            from terminal_mcp.platform_windows import open_private_fd
+
+            fd = open_private_fd(path)
+        else:
+            fd = os.open(path, flags)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise OAuthCredentialFileError(
                 f"{label} credential path must be a regular file: {path}"
             )
-        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o077:
+        if IS_WINDOWS:
+            from terminal_mcp.platform_windows import check_private_fd
+
+            check_private_fd(fd)
+        elif info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o077:
             raise OAuthCredentialFileError(
                 f"{label} credential file must be root-owned and inaccessible "
                 f"to group/other: {path}"
@@ -94,8 +105,12 @@ class CredentialManager:
         return any(hmac.compare_digest(token, value) for value in values if value)
 
     def oauth_user_valid(self, username: str, password: str) -> bool:
-        expected_username = _read_oauth_credential(OAUTH_USERNAME_FILE, "OAuth username")
-        expected_password = _read_oauth_credential(OAUTH_PASSWORD_FILE, "OAuth password")
+        expected_username = _read_oauth_credential(
+            self.settings.oauth_username_file or OAUTH_USERNAME_FILE, "OAuth username"
+        )
+        expected_password = _read_oauth_credential(
+            self.settings.oauth_password_file or OAUTH_PASSWORD_FILE, "OAuth password"
+        )
         return hmac.compare_digest(username.encode(), expected_username) and hmac.compare_digest(
             password.encode(), expected_password
         )
@@ -144,13 +159,19 @@ class CredentialManager:
         self._update(**{attr: json.dumps(items, separators=(",", ":"))})
 
     def update_runtime(self, cwd: str, user: str, health_command: str) -> None:
-        import pwd
         from pathlib import Path
 
         path = Path(cwd).resolve()
         if not path.is_dir():
             raise ValueError("cwd must be an existing directory")
-        pwd.getpwnam(user)
+        if IS_WINDOWS:
+            from terminal_mcp.platform_windows import validate_service_user
+
+            validate_service_user(user)
+        else:
+            import pwd
+
+            pwd.getpwnam(user)
         self._update(cwd=path, terminal_user=user, health_command=health_command.strip())
 
     def _update(self, **values) -> None:
@@ -193,6 +214,10 @@ class CredentialManager:
                 for key in sorted(existing):
                     stream.write(f"{key}={json.dumps(str(existing[key]))}\n")
             os.chmod(temporary, 0o600)
+            if IS_WINDOWS:
+                from terminal_mcp.platform_windows import secure_path
+
+                secure_path(Path(temporary))
             os.replace(temporary, path)
         finally:
             if os.path.exists(temporary):
