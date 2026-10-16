@@ -331,3 +331,55 @@ high-cardinality modules still need owner-by-owner review. No compatibility
 guarantee is removed based on a filename: the README-supported legacy slot kind
 and `/mcp` endpoint remain current. The retired fleet-scope message transport
 remains rejected by its current local-only guard tests.
+
+
+## 2026-10-17 follow-up: shared owners and smaller scenarios
+
+Base canonical: `4334540`. The previous feature tranche `a65b32e` had
+2,164 collected cases. This follow-up has **2,145**: 19 fewer than that
+tranche and 22 fewer than the 2,167-case canonical baseline. Compared with
+the original 2,973-case acceptance baseline, the 1,486-case target remains
+**659 cases away**. This is a partial cleanup, not completion of that target
+or a claim that all remaining scenarios are atomic.
+
+The command remains `PYTHONPATH=src /workspace/terminal-mcp/.venv-test/bin/python
+-m pytest --collect-only -q` (one shell command, including parametrized cases).
+No test discovery rules, skip/xfail markers, production code, fixtures,
+dependencies, or platform code were changed by these cleanup commits.
+
+| Removed repetition | Retained property owner |
+|---|---|
+| Four generated task-schema/example tests | Strict action matrix and exact FastMCP runtime/schema parity in `test_task_mcp_contract.py`; action-specific requirements and rejected runtime inputs remain. |
+| Three byte-identical documented JSON inputs | One identical input for the same model remains in `test_documentation_contract.py`; distinct JSON/model inputs still collect separately. |
+| Repeated Executor/Coordinator session-schema checks | `test_three_effective_role_contracts_match_reviewed_manifest` pins all role schemas and annotations. |
+| Stale-authority app example | `test_gate_rechecks_current_slot_authority_in_same_snapshot[authority_epoch-2]` retains the actual gate invariant. |
+| Four per-module import checks | `test_application_modules_never_import_inbound_transports_or_sql_drivers` covers the complete application package. |
+| Synthetic cancellation raised from a transaction body | `test_actual_task_cancellation_rolls_back_and_releases_writer` cancels a real task, proves both context and activity rollback, and verifies a subsequent writer. RuntimeError rollback remains independent. |
+| Repeated nonfinite busy timeout | NaN still exercises `math.isfinite` rejection, with separate finite bounds retained. |
+| Pairing source grep and repeated CLI journey | Actual list/revoke CLI, absent remote pairing surface, credential invalidation, and existing database bytes/mode preservation remain with focused owners. |
+| Repeated code-only version change | Code-only version increment and independent schema-significance cases remain in `test_release_version.py`. |
+| Two repeated task wrapper state values | Strict state/action models and the retained completion-field mapping case. |
+
+The current Execution name `command_read` was incorrectly called old in the
+previous audit. Its retry-safety parameter is restored alongside compatibility
+name `cmd.read`; the test now checks only unknown-outcome safety. Generic
+pre-commit rejection/idempotency proof remains with the retry-policy owner.
+This restores one case, so 20 removed repetitions produce net -19.
+
+Other count-neutral simplifications remove repeated direct-plus-HTTP checks,
+source wording checks, and private connection-count assertions. The task CAS
+journey now directly tests an identical property-update retry producing no event;
+state/CAS/ownership checks remain in their narrower owners. No formerly separate
+parametrized cases were moved into loops to lower collection counts.
+
+Focused runtime checks on the normal Secondary environment: A 77 passed;
+B 61 passed; C 69 passed; D 85 passed; read/identity review 70 passed.
+The isolated worker environment could collect but stalled on several async
+runtime tests; no skips were added, and those modules were rerun normally.
+Exact node IDs (including renames), ownership manifests, validation logs and
+candidate acceptance evidence are kept in
+`/workspace/tmcp-test-reduction-phase2-20261017/`.
+
+The Windows implementer was notified. The integrator re-fetches the remote
+canonical branch before merging and publishing; cleanup does not supersede
+parallel platform changes. Full candidate acceptance is required before publish.
