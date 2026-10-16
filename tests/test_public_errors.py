@@ -316,7 +316,6 @@ def test_ambiguous_mutation_is_never_blindly_retried():
         decision = retry_decision(value, operation=operation)
         assert decision.action == "reconcile"
         assert decision.retry_after_ms is None
-    assert retry_decision(value, operation="cmd.read").action == "reconcile"
     assert retry_decision(value, operation="observe").retry_after_ms == 1500
     assert retry_decision(value, operation="cmd.run", outcome="rejected").action == "retry"
     assert (
@@ -366,18 +365,11 @@ def test_schema_is_closed_and_has_visible_bounds():
         ValidationRepair(validation_errors=(issue,) * (MAX_VALIDATION_ISSUES + 1))
 
 
-def test_read_named_operation_requires_actual_retry_safety():
-    operation = "cmd.read"
+@pytest.mark.parametrize("operation", ["cmd.read", "command_read"])
+def test_read_named_operation_requires_actual_retry_safety(operation):
     failure = public_error("authority_unavailable", details={"retry_after_ms": 25})
-    unknown = retry_decision(failure, operation=operation)
-    assert unknown.action == "reconcile"
-    assert unknown.retry_after_ms is None
-    # Proof comes from server-side adapter semantics, never an agent input flag.
-    proven = retry_decision(failure, operation=operation, idempotency_guaranteed=True)
-    assert proven.action == "retry"
-    assert proven.retry_after_ms == 25
-    rejected = retry_decision(failure, operation=operation, outcome="rejected")
-    assert rejected.action == "retry"
+    decision = retry_decision(failure, operation=operation)
+    assert (decision.action, decision.retry_after_ms) == ("reconcile", None)
 
 
 def test_coordination_error_keeps_only_bounded_next_action_messages():

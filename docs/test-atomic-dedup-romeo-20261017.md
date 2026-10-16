@@ -41,10 +41,13 @@ Exact node ID diff and trace inventory:
 
 3. Reduced
    'test_public_errors::test_read_named_operation_requires_actual_retry_safety'
-   to one current public operation, 'cmd.read'. Both 'cmd.read' and the
-   old 'command_read' spelling took the same strict unknown-outcome branch;
-   the canonical MCP request name remains checked for rejection,
-   proven idempotency and known pre-commit rejection.
+   initially to one spelling, 'cmd.read'. A follow-up review corrected this:
+   'command_read' is the current Execution tool, while 'cmd.read' is the
+   compatibility operation. Both spellings are now retained in a short
+   unknown-outcome regression. Explicit proof of idempotency and pre-commit
+   rejection remain checked by 'test_ambiguous_mutation_is_never_blindly_retried'.
+   This restoration adds one collected case relative to the historical count
+   recorded above; the follow-up ledger records the aggregate current count.
 
 4. Replaced a redundant single-case parametrize decorator on
    'test_work_window_rejection_preserves_machine_error' with its literal
