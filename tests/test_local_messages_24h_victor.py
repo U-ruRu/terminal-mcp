@@ -49,7 +49,6 @@ async def test_all_local_modes_support_inbox_idempotent_ack_reply_and_history(me
     hashes = {item["message_hash"] for item in history["messages"]}
     assert {message_hash, reply["message_hash"]}.issubset(hashes)
     assert not mesh_pair.calls
-    assert local.store.pending() == []
 
 
 @pytest.mark.asyncio

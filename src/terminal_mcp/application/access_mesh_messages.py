@@ -112,19 +112,6 @@ class MeshWireMessage(_Strict):
         return self
 
 
-class MeshDelivery(_Strict):
-    message: MeshWireMessage
-    excluded: list[str] = Field(max_length=MAX_RECIPIENTS + 1)
-
-
-class MeshReceipt(_Strict):
-    message_hash: str = Field(min_length=1, max_length=128)
-    agent_id: str = Field(min_length=1, max_length=160)
-    read_at: str | None = Field(default=None, max_length=40)
-    replied_at: str | None = Field(default=None, max_length=40)
-    reply_message_hash: str | None = Field(default=None, max_length=128)
-
-
 class MeshRecipientsQuery(_Strict):
     after: str = Field(default="", max_length=160)
     limit: int = Field(default=100, ge=1, le=100)
@@ -157,7 +144,6 @@ class AccessMeshMessaging:
         self.store = AccessMeshMessageStore(
             agent_store.path, mesh_runtime.store.local_node_id, now_provider=mesh_runtime.clock
         )
-        self._flush_lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._task = None
         self.last_error = None
@@ -335,12 +321,8 @@ class AccessMeshMessaging:
                 raise MeshMessagingError("output_item_too_large")
         return list(records.values())
 
-    async def _targets(self, wire, excluded=()):
-        """Resolve current local attachments and eligible subscription holds.
-
-        The excluded argument remains only for older internal callers; local
-        delivery never carries peer-delivery exclusion metadata.
-        """
+    async def _targets(self, wire):
+        """Resolve current local attachments and eligible subscription holds."""
         recipients = await self._local_recipients()
         if wire["namespace"] is not None:
             claims = await self.mesh.task_store.active_claims(wire["namespace"], wire["task_id"])
@@ -576,7 +558,6 @@ class AccessMeshMessaging:
         message_hash = f"{self.node_id}:localmsg:{suffix}"
         existing = await asyncio.to_thread(self.store.wire, message_hash)
         if existing is not None:
-            await self.flush_for_call(message_hash=message_hash)
             return await asyncio.to_thread(self.store.receipt, message_hash)
         wire = MeshWireMessage.model_validate(
             {
@@ -588,9 +569,8 @@ class AccessMeshMessaging:
         ).model_dump()
         if len(canonical(wire).encode()) > MAX_WIRE_BYTES - 8192:
             raise MeshMessagingError("output_item_too_large")
-        recipients = await self._targets(wire, ())
-        peers = []  # Node-local messages never schedule remote delivery.
-        if not recipients and not peers:
+        recipients = await self._targets(wire)
+        if not recipients:
             raise MeshMessagingError(
                 "no_active_recipients" if wire["target"] == "broadcast" else "recipient_not_found"
             )
@@ -604,12 +584,9 @@ class AccessMeshMessaging:
             self.store.accept,
             wire,
             recipients,
-            peers=peers,
             reply_author=identity["logical_agent_id"] if reply_to else None,
         )
         try:
-            if peers:
-                await self.flush_for_call(message_hash=message_hash)
             receipt = await asyncio.to_thread(self.store.receipt, message_hash)
         except Exception:
             logging.getLogger(__name__).warning(
@@ -944,14 +921,6 @@ class AccessMeshMessaging:
         if len(canonical(payload).encode()) > MAX_WIRE_BYTES:
             return _failure("output_item_too_large")
         return _failure("feature_disabled", outcome="not_committed")
-
-    async def flush_for_call(self, *, message_hash):
-        """Compatibility no-op after retirement of peer message transport."""
-        await self.flush(message_hash=message_hash)
-
-    async def flush(self, *, message_hash=None):
-        """Remote message/receipt transport is retired; no network retries."""
-        return
 
     async def tick(self):
         # Read-time expiry is authoritative; physical pruning runs even if

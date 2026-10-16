@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 import sqlite3
@@ -135,25 +134,6 @@ class AccessMeshMessageStore:
             ).fetchone()
         return row[0] if row else None
 
-    @staticmethod
-    def queue(db, peer_id, kind, payload):
-        data = canonical(payload)
-        # Legacy insertion helper retained only for migration fixtures and
-        # diagnostics. The active acceptance path rejects non-empty peers.
-        if len(data.encode("utf-8")) > 64 * 1024:
-            raise MeshMessagingError("output_item_too_large")
-        db.execute(
-            "INSERT OR IGNORE INTO access_mesh_message_outbox"
-            "(peer_id,kind,event_key,payload_json,message_hash) VALUES(?,?,?,?,?)",
-            (
-                peer_id,
-                kind,
-                hashlib.sha256(data.encode()).hexdigest(),
-                data,
-                payload.get("message_hash") or payload["message"]["message_hash"],
-            ),
-        )
-
     def wire(self, message_hash):
         if not message_hash.startswith(self.local_prefix):
             return None
@@ -178,43 +158,13 @@ class AccessMeshMessageStore:
         if row is None or wire_row is None or not unexpired(json.loads(wire_row[0]), self.clock()):
             raise MeshMessagingError("message_not_found")
         receipt = json.loads(row[0])
-        remote = db.execute(
-            "SELECT agent_id,public_name,peer_id,state FROM access_mesh_message_delivery_receipts "
-            "WHERE message_hash=? ORDER BY agent_id",
-            (message_hash,),
-        ).fetchall()
         recipients = {item["logical_agent_id"]: item for item in receipt["deliveries"]}
-        recipients.update(
-            {
-                row["agent_id"]: {
-                    "logical_agent_id": row["agent_id"],
-                    "public_name": row["public_name"],
-                    "server_id": row["peer_id"],
-                    "state": row["state"],
-                }
-                for row in remote
-            }
-        )
-        pending = db.execute(
-            "SELECT DISTINCT peer_id,last_error FROM access_mesh_message_outbox "
-            "WHERE message_hash=? AND kind='deliver' AND acked_at IS NULL "
-            "AND terminal_at IS NULL ORDER BY peer_id",
-            (message_hash,),
-        ).fetchall()
         receipt["deliveries"] = list(recipients.values())
         receipt["delivered_to"] = [item["public_name"] for item in recipients.values()]
         receipt["recipient_count"] = len(recipients)
-        receipt["pending_peers"] = [row["peer_id"] for row in pending]
-        receipt["delivery_errors"] = [
-            {"server_id": row["peer_id"], "code": "message_unavailable", "retry": "retry"}
-            for row in pending
-            if row["last_error"]
-        ]
-        receipt["state"] = (
-            "partial"
-            if pending and recipients
-            else ("queued" if pending else "delivered" if recipients else "no_recipients")
-        )
+        receipt["pending_peers"] = []
+        receipt["delivery_errors"] = []
+        receipt["state"] = "delivered" if recipients else "no_recipients"
         return receipt
 
     def receipt(self, message_hash):
@@ -223,17 +173,15 @@ class AccessMeshMessageStore:
 
     def _acceptance_receipt_tx(self, db, message_hash):
         receipt = self._receipt_tx(db, message_hash)
-        # An inbound peer must receive its full delivery proof within the HTTP
-        # budget. Reject transactionally rather than committing unacknowledgeable
-        # obligations and returning an oversized response forever on every retry.
+        # Keep the committed local receipt within the public response budget.
         if len(canonical(receipt).encode("utf-8")) > 64 * 1024:
             raise MeshMessagingError("output_item_too_large")
         return receipt
 
-    def accept(self, wire, recipients, *, peers=(), excluded=(), reply_author=None):
-        """Commit one node-local message; peer forwarding is permanently retired."""
+    def accept(self, wire, recipients, *, reply_author=None):
+        """Commit one node-local message and its recipient obligations."""
         message_hash = wire["message_hash"]
-        if peers or not message_hash.startswith(self.local_prefix):
+        if not message_hash.startswith(self.local_prefix):
             raise MeshMessagingError("feature_disabled")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -305,7 +253,7 @@ class AccessMeshMessageStore:
                     "WHERE message_hash=? AND recipient_agent_id=?",
                     (stamp, stamp, message_hash, wire["reply_to"], reply_author),
                 )
-                self._queue_receipt_tx(db, wire["reply_to"], reply_author)
+                self._validate_receipt_recipient(db, wire["reply_to"], reply_author)
             return self._acceptance_receipt_tx(db, message_hash)
 
     def _recipient_tx(self, db, message_hash, agent_id):
@@ -329,10 +277,8 @@ class AccessMeshMessageStore:
         with self.connect() as db:
             return dict(self._recipient_tx(db, message_hash, agent_id))
 
-    def _queue_receipt_tx(self, db, message_hash, agent_id):
-        # Message transport is node-local after cutover. ACK/read/reply on a
-        # retained legacy inbound message must not create a fresh remote job.
-        # Validate the retained recipient while the caller transaction is open.
+    def _validate_receipt_recipient(self, db, message_hash, agent_id):
+        """Validate the local recipient before changing its ACK/reply state."""
         self._recipient_tx(db, message_hash, agent_id)
 
     def acknowledge(self, message_hash, agent_id, stamp):
@@ -358,7 +304,7 @@ class AccessMeshMessageStore:
             )
             # Keep system ACK's reply completion atomic with read.
             # Other alert messages continue to require an actual reply.
-            self._queue_receipt_tx(db, message_hash, agent_id)
+            self._validate_receipt_recipient(db, message_hash, agent_id)
             row = self._recipient_tx(db, message_hash, agent_id)
             return {
                 "ok": True,
@@ -382,7 +328,7 @@ class AccessMeshMessageStore:
                     "WHERE message_hash=? AND recipient_agent_id=?",
                     (stamp, stamp, message_hash, stamp, message_hash, agent_id),
                 )
-                self._queue_receipt_tx(db, message_hash, agent_id)
+                self._validate_receipt_recipient(db, message_hash, agent_id)
 
     def page(
         self,
@@ -576,69 +522,3 @@ class AccessMeshMessageStore:
                     "DELETE FROM coordination_messages WHERE message_hash=?", (message_hash,)
                 )
             return len(ids)
-
-    def pending(self, *, limit=20, message_hash=None):
-        with self.connect() as db:
-            rows = db.execute(
-                "SELECT * FROM access_mesh_message_outbox "
-                "WHERE acked_at IS NULL AND terminal_at IS NULL "
-                + ("AND message_hash=? " if message_hash else "")
-                + "ORDER BY attempts,id LIMIT ?",
-                (message_hash, limit) if message_hash else (limit,),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def finish_delivery(self, job, response, stamp):
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            if job["kind"] == "deliver":
-                for recipient in response["deliveries"]:
-                    db.execute(
-                        "INSERT OR IGNORE INTO access_mesh_message_delivery_receipts"
-                        "(message_hash,agent_id,peer_id,public_name) VALUES(?,?,?,?)",
-                        (
-                            job["message_hash"],
-                            recipient["logical_agent_id"],
-                            job["peer_id"],
-                            recipient["public_name"],
-                        ),
-                    )
-            db.execute(
-                "UPDATE access_mesh_message_outbox SET acked_at=?,last_error=NULL WHERE id=?",
-                (stamp, job["id"]),
-            )
-
-    def failed_delivery(self, job_id, reason):
-        with self.connect() as db:
-            db.execute(
-                "UPDATE access_mesh_message_outbox SET attempts=attempts+1,last_error=? WHERE id=?",
-                (reason[:160], job_id),
-            )
-
-    def apply_receipt(self, peer_id, payload):
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT * FROM access_mesh_message_delivery_receipts "
-                "WHERE message_hash=? AND agent_id=? AND peer_id=?",
-                (payload["message_hash"], payload["agent_id"], peer_id),
-            ).fetchone()
-            if row is None:
-                raise MeshMessagingError("message_forbidden")
-            read_at = row["read_at"] or payload["read_at"]
-            replied_at = row["replied_at"] or payload["replied_at"]
-            db.execute(
-                "UPDATE access_mesh_message_delivery_receipts SET read_at=?,replied_at=?,"
-                "reply_message_hash=COALESCE(reply_message_hash,?),state=? "
-                "WHERE message_hash=? AND agent_id=? AND peer_id=?",
-                (
-                    read_at,
-                    replied_at,
-                    payload["reply_message_hash"],
-                    "replied" if replied_at else "read" if read_at else "delivered",
-                    payload["message_hash"],
-                    payload["agent_id"],
-                    peer_id,
-                ),
-            )
-            return {"ok": True, "message_hash": payload["message_hash"]}

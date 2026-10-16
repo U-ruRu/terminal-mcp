@@ -205,7 +205,6 @@ async def test_local_broadcast_never_calls_peer_and_excludes_sender(mesh_pair):
     assert result["delivered_to"] == [_public_name(fb.mesh.store.slots["carol"])]
     assert not net.calls and count(bac, "coordination_messages") == 0
     assert count(fb, "coordination_message_recipients") == 1
-    assert not fb.store.pending()
 
 
 @pytest.mark.asyncio
