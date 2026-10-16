@@ -1029,7 +1029,12 @@ class AccessMeshStore(LocalAccessMesh):
             "WHERE number IN (SELECT number FROM watched_numbers) ORDER BY event_id",
             "SELECT l.* FROM access_mesh_local_sessions l "
             "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY issuer_id,slot_id",
-            "SELECT s.work_session_id,s.state FROM logical_agent_work_sessions s "
+            "SELECT s.work_session_id,s.state,s.hard_expires_at "
+            "FROM logical_agent_work_sessions s "
+            "JOIN access_mesh_local_sessions l USING(work_session_id) "
+            "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY s.work_session_id",
+            "SELECT a.logical_agent_id,a.state FROM logical_agents a "
+            "JOIN logical_agent_work_sessions s USING(logical_agent_id) "
             "JOIN access_mesh_local_sessions l USING(work_session_id) "
             "JOIN watched_slots w USING(issuer_id,slot_id) ORDER BY s.work_session_id",
             "SELECT job_id,logical_agent_id,work_session_id,session_epoch,reason,release_claims "

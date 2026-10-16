@@ -19,7 +19,7 @@ connections every pass. Durable rearm handling is unchanged.
 
 `AccessMeshStore.lifecycle_signature` reads the inputs to local cycle maintenance
 in a single read transaction. It watches attached identities, their possible
-number-group winners, explicit starts/ends, local materializations and pending
+number-group winners, explicit starts/ends, local materializations, their session-deadline/agent-state mirrors, and pending
 cleanup. Unrelated command/output history and activity timestamps do not invalidate
 it. The signature is process-local and does not change the persisted schema.
 

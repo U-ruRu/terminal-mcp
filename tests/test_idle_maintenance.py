@@ -133,7 +133,9 @@ def signature_store(tmp_path):
             CREATE TABLE access_mesh_number_starts(number,event_id);
             CREATE TABLE access_mesh_number_ends(number,event_id);
             CREATE TABLE access_mesh_local_sessions(issuer_id,slot_id,work_session_id);
-            CREATE TABLE logical_agent_work_sessions(work_session_id,state);
+            CREATE TABLE logical_agent_work_sessions(
+                work_session_id,logical_agent_id,state,hard_expires_at);
+            CREATE TABLE logical_agents(logical_agent_id,state);
             CREATE TABLE access_mesh_cleanup_jobs(job_id,logical_agent_id,work_session_id,
                 session_epoch,reason,release_claims,completed_at);
             CREATE TABLE commands(command);
@@ -141,7 +143,9 @@ def signature_store(tmp_path):
             INSERT INTO access_mesh_slot_replicas VALUES('local','s',1);
             INSERT INTO access_mesh_number_claims VALUES('local','s','0012');
             INSERT INTO access_mesh_local_sessions VALUES('local','s','w');
-            INSERT INTO logical_agent_work_sessions VALUES('w','active');
+            INSERT INTO logical_agent_work_sessions VALUES(
+                'w','a','active','2026-10-17T12:00:00Z');
+            INSERT INTO logical_agents VALUES('a','active');
         """)
     return store
 
@@ -153,8 +157,17 @@ def signature_store(tmp_path):
         "INSERT INTO access_mesh_number_starts VALUES('0012','start')",
         "INSERT INTO access_mesh_number_ends VALUES('0012','end')",
         "UPDATE logical_agent_work_sessions SET state='ended'",
+        "UPDATE logical_agent_work_sessions SET hard_expires_at='2026-10-18T12:00:00Z'",
+        "UPDATE logical_agents SET state='deleted'",
     ],
-    ids=["policy-revision", "manual-start", "shared-end", "cleanup-completed"],
+    ids=[
+        "policy-revision",
+        "manual-start",
+        "shared-end",
+        "cleanup-completed",
+        "session-deadline-mirror",
+        "agent-state-mirror",
+    ],
 )
 def test_lifecycle_signature_observes_an_external_transition(signature_store, mutation):
     before = signature_store.lifecycle_signature()
