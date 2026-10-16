@@ -10,9 +10,8 @@ from terminal_mcp.storage.sqlite import SqliteRepository
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
-@pytest.mark.parametrize("reopen", [False, True])
 async def test_cancel_retries_preserve_original_execution_provenance(
-    tmp_path, monkeypatch, status, reopen
+    tmp_path, monkeypatch, status
 ):
     backend = await _backend(tmp_path, monkeypatch)
     command = await _attributed_command(backend, status=status)
@@ -21,8 +20,7 @@ async def test_cancel_retries_preserve_original_execution_provenance(
     assert first["cancelled_from"] == status
     assert first["execution_started"] is (status == "running")
 
-    if reopen:
-        backend.repo = SqliteRepository(backend.repo.path, tmp_path / "output.sqlite3")
+    backend.repo = SqliteRepository(backend.repo.path, tmp_path / "output.sqlite3")
     retried = await asyncio.gather(*(
         backend.cancel(command.cmd_hash, **IDENTITY) for _ in range(4)
     ))

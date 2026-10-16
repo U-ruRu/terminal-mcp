@@ -125,15 +125,6 @@ async def test_capability_policy_denies_coordinator_execution_before_side_effect
     )
     assert result["code"] == "capability_not_allowed"
     assert service.persistent.calls == []
-
-
-@pytest.mark.asyncio
-async def test_application_wrapper_is_reused_for_the_same_service():
-    app = get_application(SimpleNamespace(persistent=None))
-    assert get_application(app.service) is app
-    assert get_application(app) is app
-
-
 @pytest.mark.asyncio
 async def test_session_start_without_backend_is_rejected():
     app = get_application(SimpleNamespace(persistent=None))

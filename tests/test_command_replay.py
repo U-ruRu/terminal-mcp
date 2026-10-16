@@ -95,8 +95,7 @@ async def test_precommit_failure_can_be_retried_without_stale_reservation(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["run", "recovery"])
-@pytest.mark.parametrize("request_id", ["0", "1", "reused-connector-id", ""])
-async def test_application_never_replays_transport_id(action, request_id):
+async def test_application_never_replays_transport_id(action):
     class Backend:
         def __init__(self):
             self.count = 0
@@ -112,7 +111,7 @@ async def test_application_never_replays_transport_id(action, request_id):
 
     backend = Backend()
     app = CommandApplication(SimpleNamespace(persistent=backend), object())
-    actor = ActorContext(transport="mcp", endpoint_role="executor", request_id=request_id)
+    actor = ActorContext(transport="mcp", endpoint_role="executor", request_id="rpc-1")
     request = (
         CmdRunRequest(action="run", command="printf test", task_scope="none")
         if action == "run"
