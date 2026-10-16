@@ -36,6 +36,8 @@ def package(root: Path, version="0.14.4") -> Path:
 def test_code_only_change_increments_third_digit(tmp_path):
     before = package(tmp_path / "installed")
     after = package(tmp_path / "candidate")
+    events_manifest(before, reason=True)
+    events_manifest(after, reason=True)
     (after / "app.py").write_text("def run(): return 2\n")
     result = release_version.calculate(after, before)
     assert (result["version"], result["bump"]) == ("0.14.5", "code")
@@ -219,16 +221,6 @@ def test_legacy_023_native_events_addition_classifies_024_schema(tmp_path):
     assert release_version.schema_fingerprint(previous) == legacy_hash
     result = release_version.calculate(incoming, previous)
     assert (result["version"], result["bump"]) == ("0.24.0", "schema")
-
-
-def test_events_unchanged_with_code_change_remains_patch(tmp_path):
-    previous = package(tmp_path / "installed", "0.23.0")
-    incoming = package(tmp_path / "candidate")
-    events_manifest(previous, reason=True)
-    events_manifest(incoming, reason=True)
-    (incoming / "app.py").write_text("def run(): return 2\n")
-    result = release_version.calculate(incoming, previous)
-    assert (result["version"], result["bump"]) == ("0.23.1", "code")
 
 
 def test_events_nonsemantic_regeneration_is_stable_and_properties_remain_significant(tmp_path):

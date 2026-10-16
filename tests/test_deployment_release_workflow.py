@@ -237,7 +237,6 @@ def test_plan_status_are_read_only(operation):
     before = sorted(str(p) for p in node.root.rglob("*"))
     assert operation.plan()["mutations"] == 0
     assert operation.status()["phase"] == "absent"
-    assert operation.status()["phase"] == "absent"
     assert not node.calls
     assert before == sorted(str(p) for p in node.root.rglob("*"))
 

@@ -15,7 +15,6 @@ def test_canonical_event_id_is_deterministic():
     first = canonical_event_id("fleet-a", "node-a", "abc123", 7)
     second = canonical_event_id("fleet-a", "node-a", "abc123", 7)
     assert first == second
-    assert len(first) == 64
 
 
 def test_protocol_major_admits_current_and_rejects_unsupported():

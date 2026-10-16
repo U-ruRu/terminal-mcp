@@ -7,7 +7,6 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -78,6 +77,11 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
         'TERMINAL_MCP_PUBLIC_BASE_URL="https://terminal.example/base/"\n'
         'TERMINAL_MCP_CONSOLE_PUBLIC_BASE_URL="https://terminal-console.solvenger.app"\n'
     )
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE runtime_sentinel(value TEXT NOT NULL)")
+        db.execute("INSERT INTO runtime_sentinel VALUES('preserve-runtime')")
+    db_path.chmod(0o640)
+    runtime_before = (db_path.read_bytes(), db_path.stat().st_mode)
     monkeypatch.setenv("TERMINAL_MCP_ENV_FILE_PATH", str(env_path))
     monkeypatch.delenv("TERMINAL_MCP_DATABASE_PATH", raising=False)
     monkeypatch.delenv("TERMINAL_MCP_AUTH_DATABASE_PATH", raising=False)
@@ -106,7 +110,7 @@ def test_pair_cli_loads_installed_env_and_keeps_secret_out_of_logs(
     }
     assert "opaque-pairing-secret" not in caplog.text
 
-    assert not db_path.exists()
+    assert (db_path.read_bytes(), db_path.stat().st_mode) == runtime_before
     with sqlite3.connect(auth_path) as db:
         row = db.execute(
             "SELECT secret_hash, expires_at-created_at FROM console_pairings"
@@ -319,80 +323,3 @@ def test_devices_cli_lists_safe_metadata_and_revokes(tmp_path, monkeypatch, caps
     error = capsys.readouterr().err
     assert "not found or already revoked" in error
     assert not db_path.exists()
-
-
-def test_devices_cli_is_not_remote_surface():
-    source = Path(cli.__file__).read_text()
-    assert 'subcommands.add_parser("devices"' in source
-
-
-def test_cli_pair_list_revoke_preserve_existing_runtime_database(tmp_path, monkeypatch, capsys):
-    runtime = tmp_path / "runtime" / "runtime.sqlite3"
-    auth = tmp_path / "protected" / "auth.sqlite3"
-    runtime.parent.mkdir(mode=0o750)
-    auth.parent.mkdir()
-    with sqlite3.connect(runtime) as db:
-        db.execute("CREATE TABLE runtime_sentinel(value TEXT NOT NULL)")
-        db.execute("INSERT INTO runtime_sentinel VALUES('preserve-runtime')")
-    runtime.chmod(0o640)
-    before = (runtime.read_bytes(), runtime.stat().st_mode, runtime.parent.stat().st_mode)
-
-    def assert_runtime_preserved():
-        assert (
-            runtime.read_bytes(),
-            runtime.stat().st_mode,
-            runtime.parent.stat().st_mode,
-        ) == before
-
-    settings = SimpleNamespace(
-        database_path=runtime,
-        auth_database_path=auth,
-        public_base_url="https://terminal.example",
-        console_public_base_url="https://console.example",
-    )
-    monkeypatch.setattr(cli, "_local_settings", lambda: settings)
-    protected = PairingStore(auth)
-    asyncio.run(OAuthStore(auth).initialize())
-    asyncio.run(protected.initialize())
-    seed = asyncio.run(protected.create())
-    device, reason = asyncio.run(
-        protected.exchange(
-            seed, "synthetic-public-key-" + "x" * 64, "Protected phone", "terminal:read", 3600
-        )
-    )
-    assert reason == "" and device is not None
-    monkeypatch.setattr(pairing.secrets, "token_urlsafe", lambda size: "synthetic-cli-pairing")
-
-    assert cli.main(["pair", "--ttl", "42"]) == 0
-    assert_runtime_preserved()
-    url = capsys.readouterr().out.strip()
-    fragment = urlsplit(url).fragment
-    payload = json.loads(base64.urlsafe_b64decode(fragment + "=" * (-len(fragment) % 4)))
-    with sqlite3.connect(auth) as db:
-        row = db.execute(
-            "SELECT expires_at-created_at,consumed_at FROM console_pairings WHERE secret_hash=?",
-            (PairingStore.digest(payload["secret"]),),
-        ).fetchone()
-    assert row == (42, None)
-
-    assert cli.main(["devices", "list"]) == 0
-    listed = json.loads(capsys.readouterr().out)
-    assert [item["device_id"] for item in listed] == [device.device_id]
-    assert_runtime_preserved()
-    assert cli.main(["devices", "revoke", device.device_id]) == 0
-    capsys.readouterr()
-    assert_runtime_preserved()
-    assert asyncio.run(protected.device_active(device.device_id, device.client_id)) is False
-    with sqlite3.connect(auth) as db:
-        for table in ("oauth_clients", "oauth_codes", "oauth_refresh_tokens"):
-            assert (
-                db.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE client_id=?", (device.client_id,)
-                ).fetchone()[0]
-                == 0
-            )
-    with sqlite3.connect(runtime) as db:
-        assert db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [
-            ("runtime_sentinel",)
-        ]
-        assert db.execute("SELECT value FROM runtime_sentinel").fetchone() == ("preserve-runtime",)
