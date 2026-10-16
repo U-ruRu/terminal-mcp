@@ -16,8 +16,13 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function Invoke-Checked([string]$File, [string[]]$Arguments) {
-    & $File @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Operation failed: $File (exit $LASTEXITCODE)" }
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $File @Arguments 2>&1 | ForEach-Object { $_.ToString() }
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
+    if ($exitCode -ne 0) { throw "Operation failed: $File (exit $exitCode)" }
 }
 function Assert-Administrator {
     $principal = New-Object Security.Principal.WindowsPrincipal(
