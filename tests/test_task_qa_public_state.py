@@ -43,7 +43,7 @@ async def test_public_state_accepts_qa_without_cas_or_owner_and_preserves_revisi
     assert row["state"] == "qa" and row["revision"] == base
     assert len(await store.list_events("qa-check", "one")) == events + 1
     repeat = await coordinator.mutate(
-        "other-agent", action="state", namespace="qa-check", task_id="one", state="deferred"
+        "other-agent", action="state", namespace="qa-check", task_id="one", state="qa"
     )
     assert repeat["ok"]
     assert len(await store.list_events("qa-check", "one")) == events + 1
@@ -89,8 +89,6 @@ async def test_upgrade_old_state_constraint_retains_data_indexes_and_triggers(tm
                 await db.execute("SELECT name FROM sqlite_master WHERE name='ix_demo_state'")
             ).fetchone()
         )[0] == "ix_demo_state"
-
-
 
 
 @pytest.mark.asyncio

@@ -227,32 +227,33 @@ async def test_agents_observer_exposes_intents_commands_and_full_command(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_queue_affinity_parallelism_and_command_survival_after_finish(tmp_path):
+async def test_agent_inherits_its_last_command_queue(tmp_path):
     _, terminal, service = await runtime(tmp_path, workers=2)
     try:
-        first_agent = (await register(service, "First", "Queue one"))["self"]["agent_id"]
-        second_agent = (await register(service, "Second", "Queue two"))["self"]["agent_id"]
+        agent = (await register(service, "Worker", "Queue affinity"))["self"]["agent_id"]
+        await service.run("printf explicit", agent_id=agent, queue_id=2, task_scope="none")
+        inherited = await service.run("printf inherited", agent_id=agent, task_scope="none")
+        assert inherited["queue_id"] == 2
+    finally:
+        await terminal.stop()
 
+
+@pytest.mark.asyncio
+async def test_workers_execute_independently_across_queues(tmp_path):
+    _, terminal, service = await runtime(tmp_path, workers=2)
+    release = tmp_path / "release-slow"
+    try:
         slow = await service.run(
-            "sleep 0.3; printf slow",
-            agent_id=first_agent,
+            "while [ ! -f release-slow ]; do sleep 0.02; done; printf slow",
             queue_id=2,
             task_scope="none",
         )
-        for _ in range(100):
-            if (await service.read(slow["cmd_hash"]))["status"] == "running":
-                break
-            await asyncio.sleep(0.005)
-        inherited = await service.run("printf inherited", agent_id=first_agent, task_scope="none")
-        assert inherited["queue_id"] == 2
-
-        fast = await service.run(
-            "printf fast", agent_id=second_agent, queue_id=1, task_scope="none"
-        )
-        fast_done = await wait_status(service, fast["cmd_hash"], "completed")
-        assert fast_done["status"] == "completed"
+        assert (await wait_status(service, slow["cmd_hash"], "running"))["status"] == "running"
+        fast = await service.run("printf fast", queue_id=1, task_scope="none")
+        assert (await wait_status(service, fast["cmd_hash"], "completed"))["status"] == "completed"
         assert (await service.read(slow["cmd_hash"]))["status"] == "running"
     finally:
+        release.write_text("go")
         await terminal.stop()
 
 
