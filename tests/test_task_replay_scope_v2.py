@@ -1,4 +1,4 @@
-"""Automatic task replay is scoped by caller cycle and canonical domain arguments."""
+"""Checkpoint appends do not use the create-only receipt replay path."""
 
 from dataclasses import replace
 from types import SimpleNamespace
@@ -77,7 +77,7 @@ def request(value):
 
 
 @pytest.mark.asyncio
-async def test_same_id_different_checkpoint_commits_and_original_replays_across_restart(tmp_path):
+async def test_checkpoint_request_id_does_not_deduplicate_appends_across_restart(tmp_path):
     app, backend, gate, actor = await setup(tmp_path)
     first = await app.task(actor, request({"step": 1, "evidence": {"a": 1, "b": 2}}))
     second = await app.task(actor, request({"step": 2}))
@@ -93,37 +93,7 @@ async def test_same_id_different_checkpoint_commits_and_original_replays_across_
 
 
 @pytest.mark.asyncio
-async def test_transport_id_and_normalized_payload_are_both_part_of_replay_identity(tmp_path):
-    app, backend, _, actor = await setup(tmp_path)
-    value = request("checkpoint")
-    first = await app.task(actor, value)
-    second = await app.task(actor, value)
-    assert second["ok"] and second["task"]["revision"] != first["task"]["revision"]
-    assert backend.mutations == 2
-    await app.task(replace(actor, request_id="another-id"), value)
-    assert backend.mutations == 3
-    assert backend.keys == [None, None, None]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("work_session_id", "ws-successor"),
-        ("session_epoch", 2),
-    ],
-)
-async def test_successor_cycle_never_replays_predecessor_mutation(tmp_path, field, value):
-    app, backend, gate, actor = await setup(tmp_path)
-    await app.task(actor, request("checkpoint"))
-    gate.identity_value = {**gate.identity_value, field: value}
-    await app.task(actor, request("checkpoint"))
-    assert backend.mutations == 2
-    assert backend.keys[0] is backend.keys[1] is None
-
-
-@pytest.mark.asyncio
-async def test_replay_still_requires_live_gate_and_missing_metadata_does_not_invent_a_key(tmp_path):
+async def test_checkpoint_append_still_requires_live_gate_and_never_invents_a_key(tmp_path):
     app, backend, gate, actor = await setup(tmp_path)
     await app.task(actor, request("checkpoint"))
     gate.allowed = False

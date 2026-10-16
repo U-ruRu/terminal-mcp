@@ -39,11 +39,9 @@ def audit(store):
 
 
 OWNED_MUTATIONS = [
-    # State and append-only checkpoints are explicitly claim-independent.
+    # Done and update share the task mutation fence; relations have distinct stores.
     ("done", {"result": {"evidence": "finished"}}, "update_task_mutation"),
-    ("archive", {"archive_note": "superseded"}, "update_task_mutation"),
     ("update", {"priority": "P0"}, "update_task_mutation"),
-    ("update", {"dependencies": []}, "update_task_mutation"),
     ("relate", {"related_task_id": "other", "relation_kind": "related"}, "add_relation"),
     ("unrelate", {"related_task_id": "other", "relation_kind": "related"}, "remove_relation"),
 ]

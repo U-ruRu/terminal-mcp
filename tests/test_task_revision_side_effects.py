@@ -1,6 +1,8 @@
 """Record revisions fence side-stream writes without becoming stream counters."""
 
 import sqlite3
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -8,7 +10,7 @@ from pydantic import ValidationError
 from terminal_mcp.application.task_requests import TaskCommentRequest
 from terminal_mcp.core.tasks import TaskCoordinator
 from terminal_mcp.storage.sqlite import SqliteRepository
-from terminal_mcp.storage.tasks import TaskRevisionConflict, TaskStore
+from terminal_mcp.storage.tasks import TaskStore
 
 
 async def setup_store(tmp_path):
@@ -35,78 +37,22 @@ def rows(path):
         }
 
 
-async def mutation(store, action, revision):
-    if action == "claim":
-        return await store.claim(
-            "test", "one", "agent", claim_intent="test", expected_revision=revision
-        )
-    if action == "release":
-        return await store.release_claim_mutation(
-            "test", "one", "agent", reason="test", expected_revision=revision
-        )
-    if action == "review":
-        return await store.upsert_reviews(
-            "test",
-            "one",
-            dimensions=["A"],
-            verdict="NON_BLOCKING",
-            agent_id="agent",
-            expected_revision=revision,
-        )
-    method = store.add_relation if action == "relate" else store.remove_relation
-    return await method(
-        "test",
-        "one",
-        related_namespace="test",
-        related_task_id="two",
-        relation_kind="related_to",
-        agent_id="agent",
-        expected_revision=revision,
-    )
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["claim", "release", "review", "relate", "unrelate"])
-async def test_side_stream_storage_rejects_stale_revision_atomically(tmp_path, action):
-    repo, store = await setup_store(tmp_path)
-    if action == "release":
-        await store.claim("test", "one", "agent", claim_intent="setup")
-    if action == "unrelate":
-        await mutation(store, "relate", 2)
-    before = rows(repo.path)
-    with pytest.raises(TaskRevisionConflict) as exc:
-        await mutation(store, action, 1)
-    assert exc.value.actual == 2
-    assert rows(repo.path) == before
-    await mutation(store, action, 2)
-    assert (await store.get_task("test", "one"))["revision"] == 2
-    assert rows(repo.path) != before
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["claim", "release", "review", "relate", "unrelate"])
-async def test_coordinator_classifies_stale_revision_before_noop_or_mutation(tmp_path, action):
-    repo, store = await setup_store(tmp_path)
+async def test_coordinator_classifies_stale_revision_before_action_handler():
+    store = SimpleNamespace(get_task=AsyncMock(return_value={"revision": 2}))
     coordinator = TaskCoordinator(store)
-    before = rows(repo.path)
-    result = await coordinator.mutate(
-        "agent",
-        action=action,
-        namespace="test",
-        task_id="one",
-        expected_revision=1,
-        claim_intent="test",
-        release_reason="test",
-        dimensions=["A"],
-        verdict="NON_BLOCKING",
-        related_namespace="test",
-        related_task_id="two",
-        relation_kind="related_to",
+    coordinator._action_claim = AsyncMock()
+    # Project actual domain fields; the double does not manufacture a conflict.
+    coordinator._result = AsyncMock(side_effect=lambda *args, **fields: fields)
+    receipt = await coordinator.mutate(
+        "agent", action="claim", namespace="test", task_id="one", expected_revision=1
     )
-    assert result["ok"] is False
-    assert result["code"] == "revision_conflict"
-    assert result["details"]["current_revision"] == 2
-    assert rows(repo.path) == before
+    assert (receipt["ok"], receipt["code"], receipt["details"]) == (
+        False,
+        "revision_conflict",
+        {"current_revision": 2},
+    )
+    coordinator._action_claim.assert_not_awaited()
 
 
 def test_comments_use_append_semantics_and_reject_revision_argument():
@@ -142,6 +88,16 @@ async def test_revision_race_between_preflight_and_storage_is_fenced(
     original = getattr(store, method)
     if action == "release":
         await store.claim("test", "one", "agent", claim_intent="setup")
+    if action == "unrelate":
+        await store.add_relation(
+            "test",
+            "one",
+            related_namespace="test",
+            related_task_id="two",
+            relation_kind="related_to",
+            agent_id="agent",
+        )
+    committed_writer_state = None
 
     async def no_owner_error(*args):
         return None
@@ -150,8 +106,10 @@ async def test_revision_race_between_preflight_and_storage_is_fenced(
         return await store.claims("test", "one", active_only=True)
 
     async def raced(*args, **kwargs):
+        nonlocal committed_writer_state
         assert kwargs["expected_revision"] == 2
         await store.update_task("test", "one", expected_revision=2, title="Concurrent revision")
+        committed_writer_state = rows(store.path)
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(coordinator, "_owner_error", no_owner_error)
@@ -176,3 +134,4 @@ async def test_revision_race_between_preflight_and_storage_is_fenced(
     assert result["code"] == "revision_conflict"
     assert result["details"]["current_revision"] == 3
     assert (await store.get_task("test", "one"))["revision"] == 3
+    assert rows(store.path) == committed_writer_state

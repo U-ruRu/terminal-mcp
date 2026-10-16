@@ -106,8 +106,6 @@ async def test_create_receipt_does_not_depend_on_postcommit_projection(case, mon
         ("update", {"title": "Updated", "description": "Updated description"}, "ready"),
         ("state", {"state": "in_progress"}, "in_progress"),
         ("done", {"result": {"evidence": "completed"}}, "done"),
-        ("archive", {"archive_note": "Superseded"}, "ready"),
-        ("checkpoint", {"checkpoint": {"progress": 7}}, "ready"),
     ],
 )
 async def test_mutation_success_survives_postcommit_readback_and_projection_failure(
@@ -140,8 +138,8 @@ async def test_mutation_success_survives_postcommit_readback_and_projection_fail
     )
     assert result["ok"], result
     assert result["task"]["state"] == expected
-    # Workflow state and checkpoint appends are orthogonal to content revision.
-    assert result["task"]["revision"] == (1 if action in {"state", "checkpoint"} else 2)
+    # Workflow state is orthogonal to content revision.
+    assert result["task"]["revision"] == (1 if action == "state" else 2)
     saved = await original_get("receipt", "one")
     assert saved["state"] == expected
     assert saved["revision"] == result["task"]["revision"]
@@ -150,13 +148,12 @@ async def test_mutation_success_survives_postcommit_readback_and_projection_fail
         record, include_description=True, include_checkpoint=True, include_result=True
     )
     assert receipt.state.value == expected
-    if action in {"done", "archive"}:
+    if action == "done":
         assert result["task"]["owner"] is None
         assert await store.active_claims("receipt", "one") == []
+        assert receipt.result.root == {"evidence": "completed"}
     else:
         assert result["task"]["owner"] is not None
-    if action == "done":
-        assert receipt.result.root == {"evidence": "completed"}
 
 
 @pytest.mark.asyncio

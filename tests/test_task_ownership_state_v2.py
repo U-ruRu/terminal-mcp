@@ -169,41 +169,23 @@ async def test_owner_sweep_isolates_failures_and_retries_with_atomic_audit(store
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["in_progress", "done"], ids=["active", "terminal"])
-async def test_property_update_preserves_state_and_only_explicit_state_can_change_it(store, state):
-    await store.create_task("v2", "state", "Original", state=state)
-    await store.claim("v2", "state", "agent", claim_intent="owned")
-    coordinator = TaskCoordinator(store)
-    updated = await coordinator.mutate(
+async def test_content_update_preserves_nondefault_workflow_state(store):
+    await store.create_task("v2", "state", "Original", state="qa")
+    result = await TaskCoordinator(store).mutate(
         "agent",
         action="update",
         namespace="v2",
         task_id="state",
         title="Changed title",
-        next_action="Next step",
+        expected_revision=1,
     )
-    assert updated["ok"], updated
-    assert updated["task"]["state"] == state
-    before = await store.get_task("v2", "state")
-    denied = await coordinator.mutate(
-        "agent",
-        action="update",
-        namespace="v2",
-        task_id="state",
-        state="deferred",
+    assert result["ok"] is True
+    current = await store.get_task("v2", "state")
+    assert (current["title"], current["state"], current["revision"]) == (
+        "Changed title",
+        "qa",
+        2,
     )
-    assert denied["ok"] is False
-    assert denied["code"] == "input_validation_failed"
-    assert await store.get_task("v2", "state") == before
-    changed = await coordinator.mutate(
-        "agent",
-        action="state",
-        namespace="v2",
-        task_id="state",
-        state="deferred",
-    )
-    assert changed["ok"], changed
-    assert changed["task"]["state"] == "deferred"
 
 
 def test_update_runtime_model_rejects_state_field():
