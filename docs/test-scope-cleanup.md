@@ -300,3 +300,34 @@ collection totals in this document remain historical, not M3 acceptance evidence
 Static current inventory: 269 test modules, 1818 test functions; 187 source files
 (182 Python modules and five assets), with 114 owner routes and 73 explicit unknown
 routes. No full suite or full collection was run for this transfer.
+
+## Kilo-18 atomic-half audit (2026-10-16)
+
+The test-only worker started at M3 revision
+`502c093b6e79d7e4e8d3dece209c977a6b042768`, with 2,973 pytest cases. The current
+candidate collects 2,525 cases: 515 baseline node IDs removed and 67 added, for
+a net reduction of 448. This is substantive progress but remains 1,075 above the
+requested 1,450 ceiling. No source, fixture, skip, xfail, deselection, or
+test-selection rule was changed. Exact before/after node IDs and the delta are in
+the Kilo-18 evidence directory.
+
+| Removal group | Removed | Retained owner/property |
+|---|---:|---|
+| `test_public_errors::test_registered_codes_are_stable_bounded_and_serializable` | 257 | Replaced registry-wide serialization repetition with ten representatives covering catalog kinds and distinct access recovery overrides (`stop`, `start_session`, `session_expired` return-to-chat). Each retained case checks class/recovery, serialization, size, and round trip. The source-code scan still requires every owned public code to be catalogued; component owners retain domain mappings. |
+| `test_public_errors::test_deployed_public_code_survives_legacy_normalization` | 18 | Generic registered-code preservation and unsafe-detail discard are covered by legacy normalization and fail-closed unknown-code tests. Named domain codes remain under their component owners. |
+| Managed-session policy operation tables | 57 | Three draining rows represent read/finalization/new-work branches; four expiry rows represent the two permitted and two denied classes. Exact operation classification sets and the cooldown phase have separate tests. |
+| `test_task_mcp_contract::test_every_variant_rejects_unknown_fields` | 11 | One claim variant checks the shared strict request base; generated action schemas still enforce closed fields for every variant. Per-action accepted/required fields remain tested. |
+| Task ownership v2 state/reason matrices | 41 | Claim/release keeps unleased-active and leased-terminal representatives. Cleanup keeps active and terminal states for one reason, including provenance/data preservation and idempotence. Property updates keep active/terminal representatives; the shared request model rejects one forbidden state value. Distinct expiry/fencing/successor-owner and durable preservation checks remain. |
+| Compact B1-B13 regression assertions | 13 | Removed checks now owned by task request/action schemas, runtime task owners, and the modified minimal `relate` request. Retained B2 source-backed action coverage, B7 role-specific nullability, B9 non-null runtime requirements, and B10 omission versus empty-array semantics. |
+| Compact close/incoming/error-notice cross products | 47 | Explicit pairwise rows retain chunk mode/profile, command/recovery paths, refusal action/mode, operation/mode, and length/Unicode boundaries. Duplicate overflow recovery scenarios were covered by durable SQLite receipt and actionable refusal owners. |
+| Compact response checkpoint and health tables | 7 | Health keeps healthy/full and unhealthy/minimal representatives. Checkpoint snapshots retain object, empty object/list, nested falsy values, ordinary/JSON-like/empty strings. Removed repeated JSON-looking strings whose decoded type is still string. Read notice and run schema duplicates have compact incoming and MCP output schema owners. |
+| Task request boundary/type repetition | 8 | Unsupported checkpoint scalar uses integer and boolean representatives; common unknown-field, release backend-deferral and ToolManager parity checks each retain one representative. Detailed `tool.run` error boundaries and completion-field allowlist cases remain. |
+| Provider identity missing-metadata and invalid-value tables | 21 | Missing metadata retains empty object, public-field-only, auth/public fallback, control-field fallback, and wrong-container representatives. Each required identifier retains empty, wrong-type, and structured values. Positive metadata, namespace/digest and oversize/control/Unicode checks remain. |
+| Remaining public error value tables | 26 | Deployment failure phase/suffix checks retain one phase with three suffixes because catalog policy is generated identically for phases; exception classes in the same mapping branch are grouped, and duplicate invalid revision/retry values are removed while retaining type and bound classes. |
+| `test_compact_failure_budget::test_oversized_accepted_recovery_preserves_receipt_and_inbound_action` | 1 | The close module retains a durable SQLite receipt check for combined large output/incoming content; alert action refusal is covered by current error notice and command refusal tests. |
+
+The audit is not exhaustive: the current count is above target, and remaining
+high-cardinality modules still need owner-by-owner review. No compatibility
+guarantee is removed based on a filename: the README-supported legacy slot kind
+and `/mcp` endpoint remain current. The retired fleet-scope message transport
+remains rejected by its current local-only guard tests.

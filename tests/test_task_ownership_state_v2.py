@@ -39,8 +39,11 @@ def workflow(task):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["ready", "in_progress", "blocked", "deferred", "done"])
-@pytest.mark.parametrize("leased", [False, True])
+@pytest.mark.parametrize(
+    "state,leased",
+    [("ready", False), ("done", True)],
+    ids=["unleased-active", "leased-terminal"],
+)
 async def test_claim_and_release_preserve_all_explicit_workflow_fields(store, state, leased):
     await store.create_task(
         "v2",
@@ -63,11 +66,8 @@ async def test_claim_and_release_preserve_all_explicit_workflow_fields(store, st
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reason", ["expired", "interrupted", "slot_suspended", "slot_deleted"])
-@pytest.mark.parametrize("state", ["ready", "in_progress", "blocked", "deferred", "done"])
-async def test_session_cleanup_preserves_state_even_with_old_automatic_provenance(
-    store, state, reason
-):
+@pytest.mark.parametrize("state", ["in_progress", "done"], ids=["active", "terminal"])
+async def test_session_cleanup_preserves_state_even_with_old_automatic_provenance(store, state):
     await store.create_task(
         "v2",
         "state",
@@ -88,10 +88,10 @@ async def test_session_cleanup_preserves_state_even_with_old_automatic_provenanc
         await db.commit()
     before = workflow(await store.get_task("v2", "state"))
     args = ("la_v2", fields["work_session_id"], fields["session_epoch"])
-    assert await store.release_work_session_claims(*args, reason=reason) == 1
+    assert await store.release_work_session_claims(*args, reason="slot_deleted") == 1
     assert workflow(await store.get_task("v2", "state")) == before
     after = await store.get_task("v2", "state")
-    assert await store.release_work_session_claims(*args, reason=reason) == 0
+    assert await store.release_work_session_claims(*args, reason="slot_deleted") == 0
     assert await store.get_task("v2", "state") == after
     async with aiosqlite.connect(store.path) as db:
         assert (await (await db.execute("SELECT COUNT(*) FROM work_claim_auto_state")).fetchone())[
@@ -169,7 +169,7 @@ async def test_owner_sweep_isolates_failures_and_retries_with_atomic_audit(store
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["ready", "in_progress", "blocked", "deferred", "done"])
+@pytest.mark.parametrize("state", ["in_progress", "done"], ids=["active", "terminal"])
 async def test_property_update_preserves_state_and_only_explicit_state_can_change_it(store, state):
     await store.create_task("v2", "state", "Original", state=state)
     await store.claim("v2", "state", "agent", claim_intent="owned")
@@ -206,8 +206,7 @@ async def test_property_update_preserves_state_and_only_explicit_state_can_chang
     assert changed["task"]["state"] == "deferred"
 
 
-@pytest.mark.parametrize("state", ["ready", "in_progress", "blocked", "deferred", "done", None])
-def test_update_runtime_model_rejects_state_field(state):
+def test_update_runtime_model_rejects_state_field():
     adapter = TypeAdapter(TaskRequest)
     with pytest.raises(ValidationError) as exc:
         adapter.validate_python(
@@ -215,7 +214,7 @@ def test_update_runtime_model_rejects_state_field(state):
                 "action": "update",
                 "namespace": "v2",
                 "task_id": "state",
-                "state": state,
+                "state": "ready",
             }
         )
     assert any(item["type"] == "extra_forbidden" for item in exc.value.errors())

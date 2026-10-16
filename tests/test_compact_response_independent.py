@@ -191,8 +191,11 @@ async def test_run_exact_keys_and_actual_status(monkeypatch, status):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode,requirement", [("notify", None), ("ack", "ack"), ("alert", "reply")])
-@pytest.mark.parametrize("pending_only", [False, True])
+@pytest.mark.parametrize(
+    "mode,requirement,pending_only",
+    [("notify", None, False), ("ack", "ack", True), ("alert", "reply", False)],
+    ids=["root-notify", "pending-ack", "root-alert"],
+)
 async def test_incoming_union_is_root_only_and_actionable(
     monkeypatch, mode, requirement, pending_only
 ):
@@ -427,8 +430,7 @@ async def test_snapshot_removes_service_fields_keeps_false_and_claim(monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("healthy", [True, False])
-@pytest.mark.parametrize("extended", [True, False])
+@pytest.mark.parametrize("healthy,extended", [(True, True), (False, False)])
 async def test_health_exact_fields_and_full_diagnostics(monkeypatch, healthy, extended):
     raw = {
         "ok": healthy,
@@ -524,10 +526,13 @@ async def test_history_items_and_cursor_survive_projection(monkeypatch, kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "value",
-    ORACLE["legacy_checkpoint_values"]
-    + [
+    [
         {"text": "keep whole object", "metadata": {"flag": False, "zero": 0, "null": None}},
         {},
+        [],
+        [False, 0, None, {}, []],
+        "ordinary text",
+        '{"literal":true}',
         "",
     ],
 )
@@ -635,26 +640,6 @@ async def test_claim_revision_conflict_keeps_repair_and_does_not_claim(monkeypat
     assert data["error"]["retry"]
     assert await store.get_task("acceptance", "ONE") == before
     assert await store.active_claims("acceptance", "ONE") == claims_before
-
-
-def test_run_strict_schema_validates_new_shape_and_rejects_removed_fields(monkeypatch):
-    server = _server(monkeypatch, "executor")
-    model = server._tool_manager.get_tool("command_run").fn_metadata.output_model
-    valid = {"ok": True, "remaining_seconds": 0, "cmd_hash": "aabbccdd", "status": "queued"}
-    model.model_validate(valid)
-    for key, value in {
-        "action": "run",
-        "command": {},
-        "identity": {},
-        "coordination": {},
-        "session_lifecycle": {},
-        "lines": [],
-        "exit_code": 0,
-        "execution_started": False,
-        "queue_position": 0,
-    }.items():
-        with pytest.raises(ValidationError):
-            model.model_validate({**valid, key: value})
 
 
 class _RunFixtureRepo:
@@ -811,32 +796,6 @@ async def test_read_retention_and_truncation_are_meaningful_booleans(
     assert data["has_more"] is False
     assert data["output_retained"] is retained and data["output_truncated"] is truncated
     assert data["output_bytes"] == 0
-
-
-@pytest.mark.asyncio
-async def test_read_surfaces_required_incoming_message_without_duplication(monkeypatch):
-    msg = _message("ack")
-    raw = {
-        "ok": True,
-        "cmd_hash": "aabbccdd",
-        "status": "running",
-        "lines": [],
-        "messages": [msg],
-        "pending_messages": [deepcopy(msg)],
-    }
-    data, _ = await _call(
-        _server(monkeypatch, "executor", cmd=raw), "command_read", {"cmd_hash": "aabbccdd"}
-    )
-    assert data["ok"] is True, data
-    assert data.get("messages") == [
-        {
-            "id": msg["message_hash"],
-            "sender": PUBLIC_NAME,
-            "text": "incoming",
-            "requirements": "ack",
-        }
-    ]
-    assert "coordination" not in data and "pending_messages" not in data
 
 
 @pytest.mark.asyncio
