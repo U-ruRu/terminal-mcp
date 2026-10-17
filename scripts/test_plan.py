@@ -26,7 +26,10 @@ COMPONENTS = {
         "*actor*",
         "*android_slot_read_scope*",
     ),
-    "mesh": ("*mesh*", "*fleet*", "*remote*", "*access*", "*session_number*", "*idle_maintenance*"),
+    "mesh": (
+        "*mesh*", "*fleet*", "*remote*", "*access*", "*session_number*",
+        "*idle_maintenance*", "*native_message_admission*",
+    ),
     "storage": (
         "*storage*",
         "*sqlite*",
@@ -248,6 +251,11 @@ SOURCE_COMPONENTS = (
     ("src/terminal_mcp/mcp/event*.py", ("events",)),
     ("src/terminal_mcp/mcp/message_binding.py", ("events",)),
     ("src/terminal_mcp/core/public_errors.py", ("contracts",)),
+    (
+        "src/terminal_mcp/core/native_admission.py",
+        ("slots", "commands", "tasks", "events", "mesh"),
+    ),
+    ("src/terminal_mcp/core/access_policy_windows.py", ("slots", "mesh")),
     ("src/terminal_mcp/core/read_contract.py", ("contracts", "commands")),
     ("src/terminal_mcp/core/agent*.py", ("agents",)),
     ("src/terminal_mcp/core/task*.py", ("tasks",)),
@@ -281,6 +289,8 @@ SHARED_BOUNDARY_INPUTS = (
     "src/terminal_mcp/storage/**",
     "src/terminal_mcp/auth/**",
     "src/terminal_mcp/core/managed_sessions.py",
+    "src/terminal_mcp/core/native_admission.py",
+    "src/terminal_mcp/core/access_policy_windows.py",
     "src/terminal_mcp/core/work_windows.py",
     "src/terminal_mcp/application/managed_sessions.py",
 )

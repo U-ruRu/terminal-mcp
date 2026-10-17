@@ -252,3 +252,25 @@ The former per-agent Mesh revoke/drain facade and its route epochs are retired. 
 `test_persistent_http.py` is replaced by `test_access_slot_native_http.py`: both operator create/delete scenarios now use `/actions/access/mutate`, assert the native numeric identity and verify that deletion retires the registration and number. `test_http_actions_schema` binds the current `/actions/tasks` request schema and rejects reappearance of the retired mutation route. Task ownership fixtures create a real native work session before claiming its lease.
 
 The full runner now gives each test its own fallback state paths. Explicit test configuration, production node-identity checks, migration checks, full-source SHA validation and zero-skip evidence requirements remain intact. Mesh trust, VPN and control test doubles implement the current namespace and transition ports; they do not relax production checks.
+
+
+## Native admission at the final write boundary
+
+Commands, tasks and messages capture the current registration namespace before
+asynchronous preflight and recheck native session authority in the same SQLite
+write transaction. Command launch checks durable attribution again before stdin.
+These checks use the current shared policy window; they do not add a second
+session lifecycle or turn durable task ownership into an expiring lease.
+
+| Obligation | Current test owner |
+| --- | --- |
+| Queued and recovery command writes after end/Move; PID admission and original namespace | `test_persistent_b_fencing.py` |
+| Late task claim after completed end cleanup or Move; unchanged durable claim with `release_on_end=false` | `test_task_mesh_policy_receipts_v2.py` |
+| Late send, reply and normal ACK after end; send and expiry ACK after Move; allowed expiry ACK and draining finalization | `test_native_message_admission.py` |
+| Queue worker submission cannot inherit the first caller's admission context | `test_command_run_fast_path.py` |
+
+The new message module crosses the real application/admission/storage boundary
+and remains integration coverage, owned by Mesh and events. The shared admission
+and policy-window source files declare their consumers and deferred integration
+boundaries. Full acceptance still runs the complete collected suite without
+selection, skips or legacy API restoration.
