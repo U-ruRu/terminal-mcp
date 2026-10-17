@@ -19,18 +19,26 @@ class FakeStore:
 
     def __init__(self):
         self.trusted_issuers = frozenset({"firstbyte"})
+        self.registry_upgrade_pending = False
+        self.install_registry_scope(mesh_id=None, authority_id=self.local_node_id)
+
+    def install_registry_scope(self, *, mesh_id, authority_id):
+        self.registry_mesh_id = mesh_id
+        self.namespace_id = mesh_id or "standalone-firstbyte"
+        self.registry_authority_id = authority_id
+
+    def registry_readiness(self):
+        return {"ready": True, "reason": None}
 
     def sync_parent_defaults(self, parent):
-        return {"policy": asdict(POLICY), "legacy_enabled": True}
+        return {"policy": asdict(POLICY)}
 
 
 def fake_access():
     app = AccessMeshApplication.__new__(AccessMeshApplication)
     app.store = FakeStore()
     app.configured_defaults = POLICY
-    app.configured_legacy_enabled = True
     app.defaults = POLICY
-    app.legacy_enabled = True
     app._issuer_session_lock = asyncio.Lock()
     app._issuer_lock = asyncio.Lock()
     app._bootstrap_trusted_issuers = frozenset(app.store.trusted_issuers)
@@ -61,7 +69,6 @@ def state(
             "warning_after_seconds": 1080,
             "alert_after_seconds": 1170,
             "revision": 2,
-            "legacy_admission_enabled": True,
         },
     }
 
@@ -82,6 +89,10 @@ def test_verified_join_trusts_only_active_same_mesh_members():
     asyncio.run(app.apply_fleet_policy(state(tokyo_mesh="other")))
     assert app.managed_trust_enabled
     assert app.store.trusted_issuers == frozenset({"firstbyte", "bacloud"})
+    assert app.store.registry_mesh_id == "mesh-one"
+    assert app.store.namespace_id == "mesh-one"
+    assert app.store.registry_authority_id == "bacloud"
+    assert app.registry_readiness() == {"ready": True, "reason": None}
 
 
 def test_unverified_authority_cannot_grant_peer_trust():
@@ -89,6 +100,9 @@ def test_unverified_authority_cannot_grant_peer_trust():
     asyncio.run(app.apply_fleet_policy(state(authority="outsider")))
     assert app.store.trusted_issuers == frozenset({"firstbyte"})
     assert not app.managed_trust_enabled
+    assert app.store.registry_mesh_id is None
+    assert app.store.namespace_id == "standalone-firstbyte"
+    assert app.store.registry_authority_id == "firstbyte"
 
 
 def test_leave_restores_standalone_issuer_trust():
@@ -97,3 +111,6 @@ def test_leave_restores_standalone_issuer_trust():
     asyncio.run(app.apply_fleet_policy({"managed": False}))
     assert app.store.trusted_issuers == frozenset({"firstbyte"})
     assert not app.managed_trust_enabled
+    assert app.store.registry_mesh_id is None
+    assert app.store.namespace_id == "standalone-firstbyte"
+    assert app.store.registry_authority_id == "firstbyte"
